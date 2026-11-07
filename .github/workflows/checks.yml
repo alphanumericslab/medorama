@@ -1,0 +1,74 @@
+# Checks of every change, whatever it touches (no path filter, so that they can be required):
+# the privacy check of every commit (tools/git-hooks/check-files, as the pre-commit hook runs it);
+# the tests of tools/ (the privacy check, the screenshot tool's demo-only guard, the demo's
+# generator, the website's link script); Python's lint; the user's manual's static checks.
+name: checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  privacy:
+    # every commit of the pull request (or of the push), each against its parent, so that a file
+    # added and removed again is still caught; then every file of the result
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - name: Every commit
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = pull_request ]; then
+            tools/git-hooks/check-files --commits "$PR_BASE..$PR_HEAD"
+          elif [ -n "$BEFORE" ] && git cat-file -e "$BEFORE^{commit}" 2> /dev/null; then
+            tools/git-hooks/check-files --commits "$BEFORE..$AFTER"
+          else
+            echo "no earlier commit to compare with (a new branch): every file below"
+          fi
+      - name: Every file
+        run: tools/git-hooks/check-files --tree HEAD
+
+  tools:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+      - name: The privacy check (tools/tests/test-check-files.sh)
+        run: bash tools/tests/test-check-files.sh
+      - name: The screenshot tool and the demo's generator (tools/tests/)
+        run: python -B -m unittest discover -s tools/tests -v
+      - name: The website's link script (tools/tests/)
+        run: node --test tools/tests/
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Python - no unused imports or undefined names (pyflakes' rules, ruff)
+        run: |
+          python -m pip install "ruff==0.17.4"
+          ruff check --no-cache --isolated --select F --target-version py39 --exclude sample_data .
+      - name: The user's manual (docs/user-manual/check_manual.py)
+        run: python -B docs/user-manual/check_manual.py

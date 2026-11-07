@@ -1,0 +1,64 @@
+# Coverage-guided fuzzing of what Medorama reads from files and users (cargo-fuzz, libFuzzer):
+#   cp ../../Cargo.lock . && cargo +nightly fuzz run <target> seeds/<target> -- -max_total_time=60
+# Targets: fuzz_targets/ (`cargo fuzz list`); what they found stays in corpus/ and artifacts/
+# (not committed).  This crate is a workspace of its own: the workspace's Cargo.lock, copied in
+# before a build (`make fuzz` and CI do), keeps it on the versions Medorama is built with.
+[package]
+name = "medorama-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+anyhow = "1"
+medorama = { path = ".." }
+recording-engine = { path = "../../libs/engine" }
+
+# not part of medorama's own build
+[workspace]
+
+[[bin]]
+name = "tables"
+path = "fuzz_targets/tables.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wfdb_header"
+path = "fuzz_targets/wfdb_header.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "muse_xml"
+path = "fuzz_targets/muse_xml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dicom"
+path = "fuzz_targets/dicom.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "queries"
+path = "fuzz_targets/queries.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "edf"
+path = "fuzz_targets/edf.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,392 @@
+% Readers and new formats: the design (one reader per format, four data models), the models
+% (recording index, ECG record and its JSON form, DICOM objects, catalog tables), the readers that
+% exist, adding a format of each kind, and the two formats read by code outside the repository.
+% Sources: docs/readers.md; checked against viewers/ecg/readers.js (its header comment),
+% libs/engine/src/sources/mod.rs, medorama/src/formats/mod.rs, medorama/src/server.rs (page!).
+\chapter{Readers and new formats}
+\label{chap:readers}
+
+This chapter explains how Medorama and its viewers read files and databases, and how to add a
+format that they do not read yet. It is written for integrators and contributors who need to
+bring in a new format, and for reviewers who want to know where format-specific code lives.
+Adapters, the separate programs that read licensed recording formats, are described in
+\cref{chap:addons}; the index format in \cref{chap:formats-reference}.
+
+\screenshot{readers.pdf}{Readers: one per format, each producing one of four data
+models.}{fig:readers-models}
+
+\section{The design}
+\label{sec:readers-design}
+
+Every file format has its own \textbf{reader}, and every reader produces one of four
+\textbf{data models}: a recording's index, an ECG record, a DICOM object, or rows of the
+catalog's canonical tables. Past the reader, nothing depends on the format. VitalStream draws an
+index the same way whether it came from a WFDB record or an EDF file; cohorts search entries the
+same way whether they came from a CSV file or an OMOP database; and the privacy gate checks the
+same fields whatever their origin.
+
+This design has three consequences:
+\begin{itemize}
+\item \textbf{A new format is one new reader.} No viewer, cohort or privacy code changes, as long
+  as the reader produces one of the four models.
+\item \textbf{Readers can be written in any language.} A reader in another language plugs in
+  through a documented boundary: the adapter protocol for recordings, the JSON form for ECGs,
+  DICOM for images, and a table or a set of SQL views with the canonical columns for tabular
+  data.
+\item \textbf{Identity stays out of the models.} No data model has a place for the patient's
+  identity. A recording's index, an ECG record and the viewers' output never hold a name, an
+  identifier or a birth date. Identifiers reach Medorama only through the catalog's identifier
+  tables (imported columns, connected views, and the \code{identify} action for identifiers
+  stored inside recordings), where the privacy gate controls them.
+\end{itemize}
+
+\section{The four data models}
+\label{sec:readers-models}
+
+\begin{xltabular}{\linewidth}{@{}P{2.3cm}P{4.4cm}P{3.4cm}L@{}}
+\caption{The four data models.}
+\label{tab:readers-models}\\
+\toprule
+\tabhead Model & \tabhead What it is & \tabhead Specification & \tabhead Used by \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Model & \tabhead What it is & \tabhead Specification & \tabhead Used by \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Recording index & Channels, pieces of contiguous samples, min/max envelopes, vital-sign series,
+  events, markers and breaks & \Cref{chap:formats-reference};
+  \file{viewers/vitalstream/docs/index-format.md} & VitalStream; Medorama (a Holter's heart rate,
+  recordings in cohorts and on patient pages) \\
+ECG record & Leads in millivolts, their sampling rate, and the report (measurements, statements,
+  notes); also its JSON form & The header comment of \file{viewers/ecg/readers.js}
+  (\cref{sec:readers-ecg-record}) & The ECG viewer \\
+DICOM object & Frames, measurements and reports, as the DICOM standard defines them & DICOM
+  (PS3) & The PACS viewer; the ECG viewer for DICOM ECGs \\
+Catalog tables & Patients, encounters, bed stays and entries, in canonical columns &
+  \Cref{chap:importing} (the column reference) and \cref{chap:connecting} (the canonical views)
+  & Patient pages, cohorts, the \ui{Databases} tab \\
+\end{xltabular}
+
+\subsection{Recordings: the index}
+\label{sec:readers-index}
+
+A recording (an ICU monitor's waveforms, a Holter, an EEG, a sleep study) is turned into an
+\textbf{index}: a folder that holds the recording's structure (its channels and the pieces each
+channel is made of), min/max envelopes of every waveform for fast drawing over days, and its
+markers, vital-sign series, alarms and breaks. The index never holds the recording's samples in
+full. When a view zooms in close, the samples are read from the recording itself, through the
+same reader.
+
+The index format is specified so that independently written programs produce the same bytes.
+The three VitalStream viewers (Rust, C++ and Python) and Medorama share index folders, and a test
+checks that they write byte-identical indexes. The language-neutral model behind the index
+(channels, pieces, lanes, breaks and ``time not stated'') is described in
+\cref{chap:formats-reference}.
+
+\subsection{ECG records}
+\label{sec:readers-ecg-record}
+
+The ECG viewer reads every format into one \textbf{record}, defined in the header comment of
+\file{viewers/ecg/readers.js}:
+\begin{lstlisting}[style=text]
+{ name, start, fs, leads: [{ name, units, fs, v }], meta }
+\end{lstlisting}
+
+\begin{xltabular}{\linewidth}{@{}P{2.0cm}L@{}}
+\caption{The fields of an ECG record.}
+\label{tab:readers-record}\\
+\toprule
+\tabhead Field & \tabhead Content \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Field & \tabhead Content \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{name} & What the record calls itself (a WFDB record's name, \code{MUSE ECG}). The page
+  shows the file's name instead. \\
+\code{start} & When the ECG was recorded, in Unix seconds (UTC), or \code{null} when the file
+  does not say. \\
+\code{fs} & The sampling rate in Hz. Each lead may state its own \code{fs}. \\
+\code{leads} & The leads, in the file's order. \code{name} is the lead's label (\code{I},
+  \code{II}, \code{aVR}, \code{V1}, \code{ECG II}; the twelve standard leads are found by name),
+  \code{units} is \code{mV}, and \code{v} holds the samples in millivolts (\code{NaN} where a
+  sample is missing). \\
+\code{meta} & Optional. It may hold \code{fields} (label and text pairs), \code{measurements}
+  (\code{name}, \code{value}, \code{unit}, and optionally \code{lead}), \code{statements}
+  (\code{source}: \code{computer}, \code{confirmed} or \code{edited}, with optional
+  \code{program}, \code{by} and \code{time}, and \code{lines}), and \code{notes}. \\
+\end{xltabular}
+
+The patient's identity is never part of a record. \code{ECG.checked} in
+\file{viewers/ecg/ecg.js} refuses a record that the paper cannot draw: one with no leads, no
+samples or no sampling rate.
+
+\paragraph{The JSON form.} The same record can be written as a JSON file, which the viewer opens
+like any other ECG:
+\begin{lstlisting}[style=text]
+{ name, start, fs, leads: [{ name, fs?, units, samples: [number | null] }], meta? }
+\end{lstlisting}
+Here \code{start} is Unix seconds, ISO 8601 text or \code{null}; \code{units} is \code{mV},
+\code{uV} (microvolts) or \code{V}; a missing sample is \code{null}; and \code{meta} is checked,
+so that unknown parts and identifying fields are dropped. A program in any language can convert a
+format the page does not read into this form. \cmd{muse-py json} does so for GE MUSE XML.
+
+\subsection{DICOM objects}
+\label{sec:readers-dicom}
+
+Images (echocardiography and other ultrasound loops, angiography, CT, MR, nuclear medicine and
+X-ray), structured reports, encapsulated PDF documents and DICOM waveforms (ECGs) keep their own
+standard model, DICOM. No other image model is defined. An image format that is not DICOM is
+either shown as it is (pictures, videos, PDF documents) or converted to DICOM. The PACS viewer's
+reader is \file{viewers/pacs/dicom.js}, with \file{jpeg.js} for lossless and 12-bit JPEG. The
+privacy gate rewrites DICOM headers in \file{medorama/src/dicom.rs}.
+
+\subsection{Catalog tables}
+\label{sec:readers-catalog}
+
+Tabular data (patients, encounters, bed stays, results, drugs, conditions, notes, and the files
+they name) end up in the catalog's \textbf{canonical columns}. Imported tables reach them through
+the recognized column names and mappings; known exports reach them through an import format that
+converts them first; and connected databases reach them through three SQL views
+(\code{persons}, \code{visits} and \code{entries}). The columns are specified in
+\cref{chap:importing} and \cref{chap:connecting}.
+
+\section{The readers that exist}
+\label{sec:readers-existing}
+
+\begin{xltabular}{\linewidth}{@{}P{3.4cm}P{3.0cm}P{1.8cm}L@{}}
+\caption{The readers of Medorama and its viewers, and the model each one produces.}
+\label{tab:readers-existing}\\
+\toprule
+\tabhead Format & \tabhead Reader & \tabhead Language & \tabhead Where, and the model \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Format & \tabhead Reader & \tabhead Language & \tabhead Where, and the model \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+WFDB records, multi-segment records, collections, folders of records & The WFDB reader, through
+  wfdb-x (refused in a build without WFDB support: \cref{sec:installation-no-wfdb}) & Rust, C++,
+  Python & \file{libs/engine/src/sources/wfdb\_folder.rs},
+  \file{viewers/vitalstream/cpp/engine/src/sources\_wfdb.cpp},
+  \file{vitalstream\_py/sources/wfdb\_folder.py}. Recording index \\
+EDF, EDF+, BDF, BDF+ & The EDF reader & Rust, C++, Python &
+  \file{libs/engine/src/sources/edf.rs}, \file{cpp/engine/src/sources\_edf.cpp},
+  \file{vitalstream\_py/sources/edf.py}. Recording index (\cref{sec:formats-reference-edf}) \\
+BedMasterEx \file{.Stp} (GE Unity and Carescape, Philips PIICiX and Viridia) & stp-adapter, a
+  private add-on available to institutions under agreement & Rust, C++, Python & Outside this
+  repository, through the adapter protocol (\cref{chap:addons}). Recording index \\
+WFDB (a \file{.hea} with its signal files) & \file{wfdb.js} & JavaScript & \file{viewers/ecg/}.
+  ECG record \\
+GE MUSE XML & \file{muse.js}; \cmd{muse-py} (\cmd{json}, \cmd{wfdb}, \cmd{index}) & JavaScript;
+  Python & \file{viewers/ecg/}, \file{viewers/ecg/python/muse/}. ECG record (and its JSON form, a
+  WFDB record, a table) \\
+DICOM ECG waveforms & \file{dicom-ecg.js} with \file{dicom.js}; \cmd{dicom-py wfdb} & JavaScript;
+  Python & \file{viewers/ecg/}, \file{viewers/pacs/python/dicom/}. ECG record (or a WFDB
+  record) \\
+EDF, EDF+, BDF, BDF+ & \file{edf.js} & JavaScript & \file{viewers/ecg/}. ECG record \\
+The ECG viewer's JSON form & \code{ECG.readJson} in \file{ecg.js} & JavaScript &
+  \file{viewers/ecg/}. ECG record \\
+PNG, JPEG, PDF & Shown as they are & & \file{viewers/ecg/}, \file{viewers/pacs/}. Not a model \\
+DICOM images, loops, series, structured reports, encapsulated PDF & \file{dicom.js},
+  \file{jpeg.js}; \cmd{dicom-py index} & JavaScript; Python & \file{viewers/pacs/}. DICOM object
+  (and a table) \\
+DICOM headers in Privacy Mode & \file{dicom.rs} & Rust & \file{medorama/src/}. DICOM object,
+  de-identified \\
+CSV, Parquet, Excel, OpenDocument tables & \file{tables.rs}, \file{parquet\_rows.rs} & Rust &
+  \file{medorama/src/}. Catalog tables \\
+GE MUSE metadata tables; CLIF tables & \file{formats/ge\_muse.rs}; \file{formats/clif.rs} & Rust
+  & \file{medorama/src/formats/}. Catalog tables \\
+A site's own exports & TOML descriptions (\file{formats/declared.rs}) & None: a description & A
+  folder of \code{formats\_dirs}. Catalog tables \\
+OMOP CDM 5.3 and 5.4 & Built-in views (\file{sources/omop.rs}) & SQL & \file{medorama/src/sources/}.
+  Catalog tables (connected) \\
+Any other SQL database & Three views that you write & SQL & A TOML file. Catalog tables
+  (connected) \\
+\end{xltabular}
+
+\section{Adding a format}
+\label{sec:readers-add}
+
+Choose the data model first, because it decides where the reader goes. A format of waveforms that
+people scroll through for hours is a recording. A 10-second, 12-lead ECG printed on paper is an
+ECG record. An image is DICOM. Anything tabular becomes catalog tables.
+
+\subsection{Recordings: a built-in reader or an adapter}
+\label{sec:readers-recordings}
+
+A recording format can be read in two ways, compared in \cref{tab:readers-builtin-adapter}.
+
+\begin{xltabular}{\linewidth}{@{}P{2.4cm}LL@{}}
+\caption{A built-in reader or an adapter.}
+\label{tab:readers-builtin-adapter}\\
+\toprule
+ & \tabhead Built-in reader & \tabhead Adapter \\
+\midrule
+\endfirsthead
+\toprule
+ & \tabhead Built-in reader & \tabhead Adapter \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+What it is & A module of the recording engine, written three times: in Rust, C++ and Python & A
+  separate program, named \file{<name>-adapter}, installed beside Medorama and the viewers \\
+Language & Rust, C++ and Python, all three & Any language \\
+Distributed & With Medorama and the viewers, in this repository & Separately, as an add-on,
+  which may be licensed or private \\
+Choose it when & The format is open and public, worth reading everywhere without an
+  installation, and its rules can be written down exactly (as \cref{sec:formats-reference-edf}
+  does for EDF) & The format is licensed or restricted, needs a vendor's library, or you want
+  one implementation in a language of your choice \\
+\end{xltabular}
+
+\paragraph{A built-in reader.} The EDF reader, \file{libs/engine/src/sources/edf.rs}, is the
+model to follow; the module table is in \file{libs/engine/src/sources/mod.rs}.
+\begin{enumerate}
+\item \textbf{Write down the reading rules} of the format exactly, as
+  \cref{sec:formats-reference-edf} does for EDF: the header, the numbers, the start time, how
+  pieces and breaks are made, the events, every key of \file{meta.json}, and the notes. The three
+  implementations must agree byte for byte, so the rules must leave nothing to interpretation.
+\item \textbf{Write the Rust module} in \file{libs/engine/src/sources/}. It provides a test of the
+  file (\code{is\_<format>}), its format label, \code{build(path, progress, cancelled) -> (meta,
+  arrays)} for the index, and a \code{Reader} whose \code{read(piece, a, b)} returns the physical
+  samples \code{a} to \code{b - 1} of a piece. The module never reads the patient's identity into
+  the index.
+\item \textbf{Register it} in \file{sources/mod.rs}, with a line in \code{kind\_of},
+  \code{format\_label} and \code{build}, and in the \code{Reader} enum (\code{new} and
+  \code{read}).
+\item \textbf{Write the same reader in C++ and in Python.} The C++ reader is
+  \file{viewers/vitalstream/cpp/engine/src/sources\_<format>.cpp}, declared in
+  \file{include/engine/sources.hpp}, dispatched in \file{sources.cpp} and listed in the engine's
+  \file{CMakeLists.txt}. The Python reader is \file{vitalstream\_py/sources/<format>.py},
+  dispatched in \file{sources/\_\_init\_\_.py}.
+\item \textbf{Add test files}, synthetic only, to \file{viewers/vitalstream/testdata/}, written by
+  its \file{generate.py}, and tests in each language (\file{libs/engine/tests/} and the Python
+  viewer's tests).
+\item \textbf{Check that the three agree.} \cmd{make parity} indexes the test files with every
+  built viewer and checks that the indexes are byte-identical.
+\item \textbf{Teach Medorama the format} where it needs to know it: \code{is\_recording} in
+  \file{medorama/src/tables.rs}, so that an imported row makes a recording; the file kinds in
+  \file{medorama/src/patient/files.rs} and \file{medorama/src/gate.rs} if the format's files are
+  also sent to the browser (in Privacy Mode the gate refuses any kind it cannot de-identify); and
+  \file{medorama/src/identify.rs} if the file stores identifiers, so that the \code{identify}
+  action can read them into the identifier tables.
+\end{enumerate}
+
+\paragraph{An adapter.} The protocol is described in \cref{sec:addons-protocol}.
+\begin{enumerate}
+\item Write a program named \file{<name>-adapter} that answers \cmd{describe} (its formats, each
+  with a kind, a label and extensions), \cmd{detect}, \cmd{index PATH DIR} (the index files, in
+  the index format), \cmd{serve} (a session that returns samples), \cmd{identify} (the
+  identifiers the file states) and \opt{-{}-version}.
+\item Test it with every viewer. The following command indexes a recording through the adapter
+  with each built viewer and checks that the results are byte-identical:
+\begin{lstlisting}[style=shell]
+viewers/vitalstream/tests/parity/index_parity.py --adapters-dir DIR FILE...
+\end{lstlisting}
+\item Install it with \cmd{medorama addons install PROGRAM} and restart Medorama. Nothing in
+  Medorama or the viewers names the adapter's format: until the adapter is installed, its files
+  are treated like any other file that the programs do not read.
+\end{enumerate}
+
+\subsection{ECGs: a reader in the ECG viewer, or a converter}
+\label{sec:readers-ecg}
+
+\paragraph{A reader in the ECG viewer.} The viewer keeps one registry of readers,
+\file{viewers/ecg/readers.js}, and each format has its own file (\file{wfdb.js}, \file{muse.js},
+\file{dicom-ecg.js}, \file{edf.js}).
+\begin{enumerate}
+\item \textbf{Write the reader in its own file.} It maps the format to the record of
+  \cref{sec:readers-ecg-record}, and never reads the patient's identity. \file{ecg.js} provides
+  the helpers: units to millivolts, metadata from ``key: value'' lines, and \code{ECG.checked}.
+\item \textbf{End the file with} \code{Readers.add(\{ key, label, extensions, sniff, read \})}.
+  \code{sniff(name, bytes, type)} says whether a file's content is of this format.
+  \code{read(name, bytes, sibling)} returns a promise of the record, and \code{sibling(fileName)}
+  gives a file next to this one, such as a WFDB header's signal files. Three fields are
+  optional: \code{companions} (extensions of files read with it and not opened alone),
+  \code{parts} (the files of a folder that belong to this record) and \code{loose} (its sniff is a
+  guess, tried after the others).
+\item \textbf{Load it} in \file{viewers/ecg/index.html}, after \file{readers.js}. The order of the
+  scripts is the order in which the page lists the formats.
+\item \textbf{List it} in Medorama's built-in page files (\code{page!("ecg", \dots)} in
+  \file{medorama/src/server.rs}).
+\item \textbf{Test it} in \file{viewers/ecg/tests/}; \file{readers.test.js} checks what the
+  registry finds for a file.
+\item \textbf{Privacy Mode.} For Medorama to send such files in Privacy Mode, the privacy gate
+  must be able to de-identify them (\code{file\_kind} in \file{medorama/src/gate.rs}). Otherwise
+  they are refused in Privacy Mode, which is the safe default.
+\end{enumerate}
+
+\paragraph{A converter in any language.} A program can convert a format the page does not read
+into the ECG viewer's JSON form, which the page opens like any other ECG. The privacy gate,
+however, refuses JSON files in Privacy Mode, because it cannot check what they hold. For ECGs that
+will be viewed through Medorama in Privacy Mode, convert to a WFDB record instead, as
+\cmd{muse-py wfdb} and \cmd{dicom-py wfdb} do: the gate de-identifies WFDB headers.
+
+\subsection{Images: convert to DICOM}
+\label{sec:readers-images}
+
+The PACS viewer reads DICOM, and shows pictures, videos and PDF documents as they are. An image
+format that is neither should be converted to DICOM with a conversion tool that keeps its
+acquisition date, modality and pixel spacing. DICOM is also the safer choice for Medorama. In
+Privacy Mode the gate rewrites a DICOM file's header (names, IDs, dates and UIDs), whereas
+pictures and videos are sent as they are, with the ``may contain PHI'' warning, because the gate
+cannot know what they show.
+
+\subsection{Tables: an import format or a connected database}
+\label{sec:readers-tables}
+
+Tabular data need a reader only when their columns cannot simply be mapped. The options, in order
+of effort, are as follows.
+\begin{enumerate}
+\item \textbf{A mapping}, with no reader at all. Map the columns once in the \ui{Import} tab, or
+  with \opt{-{}-mapping} (\cref{chap:importing}).
+\item \textbf{A TOML description}, for an export that your site imports regularly. It describes
+  the export column by column, with date forms, value maps, numbers and joined columns, and needs
+  no code and no build (\file{medorama/src/formats/declared.rs}; \cref{chap:importing}).
+\item \textbf{A Rust converter}, for what a description cannot express, such as one row that
+  becomes several entries, or values that depend on other rows or tables. It implements the two
+  traits of \file{medorama/src/formats/mod.rs}:
+  \begin{itemize}
+  \item \code{Format}: \code{key} (its name on the command line and in the page), \code{label},
+    \code{category}, \code{about}, \code{detect(headers)} (whether a table with these columns is
+    of this format) and \code{start(headers)} (its converter);
+  \item \code{Converter}: \code{headers()} (the converted table's columns, which are catalog
+    fields or columns of its own), and \code{row(record)} or \code{rows(record)} (the converted
+    row, several rows, or the reason a row is left out).
+  \end{itemize}
+  Register it in \code{builtin()} in the same file. \file{ge\_muse.rs} (one row per ECG) and
+  \file{clif.rs} (one format per CLIF table, with rows that become several entries) are the
+  examples. A format keeps only what it names. Identifiers that it maps to the catalog's patient
+  columns are masked in Privacy Mode, and it should not keep other identifying columns, such as
+  staff names or account numbers.
+\item \textbf{A connected database's views}, when the data should stay in their database: three
+  SQL queries with the canonical columns, or the built-in OMOP views (\cref{chap:connecting}). A
+  new kind of database engine is added in \file{medorama/src/sources/} and
+  \file{medorama/src/sql/}.
+\end{enumerate}
+
+\section{Two exceptions: WFDB and BedMasterEx .Stp}
+\label{sec:readers-exceptions}
+
+Two formats are read by code that does not live in this repository.
+\begin{itemize}
+\item \textbf{WFDB} is read through \textbf{wfdb-x}, a public WFDB library with Rust, C++ and
+  Python implementations (\url{https://github.com/alphanumericslab/wfdb-x}). Each of the three
+  engines uses the library of its own language, fetched at a pinned version (\file{Cargo.toml},
+  \file{viewers/vitalstream/cpp/cmake/deps.cmake}). The engines' WFDB modules add what WFDB itself
+  does not define: collections, folders of records read as one session, and the index
+  (\cref{chap:recordings}).
+\item \textbf{BedMasterEx \file{.Stp}} files are read by the \textbf{stp-adapter}, a private
+  add-on available to institutions under agreement, which plugs in through the adapter protocol
+  (\cref{chap:addons}). Medorama and the viewers contain no code for this format.
+\end{itemize}

@@ -1,0 +1,17 @@
+# Example action plug-in (docs/actions.md).  To make it available, add this folder's
+# parent to `actions_dirs` in medorama.toml, or copy the folder into <catalog home>/actions/.
+name = "recording-summary"
+title = "Recording summary (example)"
+version = "1"
+description = "Channels, vital signs and duration of a recording, from its index: an example of the plug-in contract."
+scope = "recording"
+kinds = ["wfdb"]
+requires = ["index"]
+# python3 on macOS and Linux; on Windows use ["python", "summary.py"] (or py -3)
+command = ["python3", "summary.py"]
+timeout_s = 600
+default = false
+
+[params]
+# list at most this many channels in summary.json
+max_channels = 64

@@ -1,0 +1,1 @@
+db."LAD stenosis (%)" > 70

@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use Medorama or VitalStream, please cite it as below."
+title: "Medorama: A unified patient-journey research platform linking EHR data, physiological waveforms, imaging and laboratory results across databases"
+authors:
+  - family-names: Sameni
+    given-names: Reza
+version: 0.1.0
+# 0.1.0 is not released yet (no tag): date-released is added with the tag, together with the
+# versions of the crates, the Python packages, the C++ project and the manual (docs/developing.md)
+license: "PolyForm-Noncommercial-1.0.0"
+repository-code: "https://github.com/alphanumericslab/medorama"
+url: "https://medorama.org"
+keywords:
+  - research platform
+  - patient journey
+  - cohorts
+  - de-identification
+  - privacy
+  - DICOM
+  - electronic health records
+  - bedside monitor
+  - waveforms
+  - WFDB
+  - physiological signals

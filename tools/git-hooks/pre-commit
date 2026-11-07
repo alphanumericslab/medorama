@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Medorama pre-commit check: keeps patient data and recordings out of git (check-files).
+# Enable once per clone:  git config core.hooksPath tools/git-hooks
+# (Bypass only if you are certain:  git commit --no-verify)
+exec "$(dirname "$0")/check-files" --staged

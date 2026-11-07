@@ -1,0 +1,620 @@
+% The settings reference: every key of medorama.toml (medorama/src/config.rs: Config::new for
+% the defaults, Config::load for the types and checks) and of vitalstream.toml
+% (viewers/vitalstream/rust/src/settings.rs, python/vitalstream/vitalstream_py/settings.py,
+% cpp/vitalstream/src/settings.hpp; vitalstream.example.toml), the settings Medorama writes for
+% its viewer (medorama/src/viewer.rs), and the options fixed when a program is built
+% (docs/building.md; medorama/Cargo.toml, viewers/vitalstream/rust/Cargo.toml,
+% viewers/vitalstream/cpp/CMakeLists.txt).
+\chapter{Settings reference}
+\label{chap:settings-reference}
+
+This chapter lists every setting of Medorama's \file{medorama.toml} and of the VitalStream
+viewers' \file{vitalstream.toml}, each with its type, its default and its meaning. It then lists
+the options that are fixed when a program is built. It is written for administrators and
+integrators. How the settings are used is described in \cref{chap:administration} for Medorama
+and in \cref{chap:vitalstream} for the viewers; the command-line options that override some of
+them are described in \cref{chap:cli}.
+
+\section{medorama.toml}
+\label{sec:settings-reference-medorama}
+
+\paragraph{The file.} The settings live in \file{<home>/medorama.toml}, in the catalog's home
+folder (\cref{chap:administration}). \cmd{medorama init} writes the file with a comment above
+each key. Medorama reads it when a command or the server starts, so restart the server after a
+change.
+\begin{itemize}
+\item \textbf{Paths} are strings. A \code{\textasciitilde} at the start of a path stands for
+  the home folder of the account; a relative path is relative to the catalog's home folder.
+\item \textbf{Numbers} are TOML integers, 0 or more. \textbf{Switches} are \code{true} or
+  \code{false}. \textbf{Lists} are TOML arrays of strings.
+\item \textbf{Every key is checked.} A key that the program does not know is an error
+  (\code{medorama.toml: unknown settings: ...}). So are a value of the wrong type
+  (\code{medorama.toml: bad value for KEY}), an unknown time zone, a \code{database\_url} that is
+  not a PostgreSQL URL or that holds a password, and inconsistent sign-in settings
+  (\cref{tab:settings-reference-signin-errors}).
+\item \textbf{The environment} overrides three settings: \code{MEDORAMA\_DATABASE\_URL} (a
+  non-empty value) overrides \code{database\_url}, \code{MEDORAMA\_DATABASE\_PASSWORD} overrides
+  \code{database\_password\_file}, and \code{MEDORAMA\_KEY} overrides \code{key\_file}.
+\end{itemize}
+
+\subsection{Folders}
+\label{sec:settings-reference-folders}
+
+\apientry{results\_dir}{The results folder}
+\begin{lstlisting}[style=signature,language=TOML]
+results_dir = "PATH"
+\end{lstlisting}
+A path. \textbf{Required}; \cmd{init -{}-results} sets it. This is the folder the catalog
+writes to: the actions' results go to \file{actions/<action>/r<recording>/j<job>/}, and, unless
+\code{index\_dir} names another folder, the recordings' indexes go to \file{index/}. Never choose
+a folder that holds recordings.
+
+\apientry{index\_dir}{The index folder}
+\begin{lstlisting}[style=signature,language=TOML]
+index_dir = "PATH"
+\end{lstlisting}
+A path. Default: \file{<results\_dir>/index}. This folder holds the recordings' indexes, one
+folder per index key (\cref{chap:formats-reference}). A standalone viewer whose \code{cache\_dir}
+is this folder opens the recordings that the catalog indexed without indexing them again. The
+viewer that the catalog runs always uses it.
+
+\apientry{adapters\_dir}{The adapter folder}
+\begin{lstlisting}[style=signature,language=TOML]
+adapters_dir = "PATH"
+\end{lstlisting}
+A path. Default: \file{\textasciitilde/.local/share/medorama/adapters} (Windows:
+\code{\%LOCALAPPDATA\%\textbackslash medorama\textbackslash adapters}); \cmd{init} writes the
+default out in full. This folder holds the adapters, the programs that read recording formats
+that Medorama does not read itself (\cref{chap:addons}). \cmd{medorama addons install} installs
+adapters into it.
+
+\apientry{data\_roots}{Where files may be imported from}
+\begin{lstlisting}[style=signature,language=TOML]
+data_roots = ["PATH", ...]
+\end{lstlisting}
+A list of paths. Default: \code{[]}, which allows any folder. The files that imported rows name
+must lie inside these folders, after symbolic links are resolved; an import refuses a file that
+lies elsewhere. Administrators browse only inside these folders in the viewers, and a database
+file connected from the page must lie inside one of them.
+
+\apientry{actions\_dirs}{The folders of action plug-ins}
+\begin{lstlisting}[style=signature,language=TOML]
+actions_dirs = ["PATH", ...]
+\end{lstlisting}
+A list of paths. Default: \code{["actions"]}, the folder \file{actions/} of the home folder.
+Each plug-in action is a subfolder that holds an \file{action.toml} (\cref{chap:actions}).
+
+\apientry{formats\_dirs}{The folders of import formats}
+\begin{lstlisting}[style=signature,language=TOML]
+formats_dirs = ["PATH", ...]
+\end{lstlisting}
+A list of paths. Default: \code{["formats"]}, the folder \file{formats/} of the home folder.
+Each import format described in TOML is a file \file{<key>.toml}; these formats come in addition
+to the built-in ones (\cref{chap:importing}).
+
+\subsection{The database}
+\label{sec:settings-reference-database}
+
+\apientry{database}{The SQLite database}
+\begin{lstlisting}[style=signature,language=TOML]
+database = "PATH"
+\end{lstlisting}
+A path. Default: \file{medorama.sqlite}, in the home folder. This is the SQLite database file,
+used when \code{database\_url} is empty. It holds identifiers, so keep it private.
+
+\apientry{database\_url}{A PostgreSQL database instead}
+\begin{lstlisting}[style=signature,language=TOML]
+database_url = "postgres://USER@HOST[:PORT]/DATABASE[?sslmode=MODE]"
+\end{lstlisting}
+A string. Default: empty, which selects the SQLite \code{database}. When it is set, the catalog
+lives in a PostgreSQL database (version 14 or later), named by a URL that begins with
+\code{postgres://} or \code{postgresql://}. The URL must not hold the password: a URL with one is
+refused, whether before the host (\code{user:password@}) or as a parameter
+(\code{?password=}). A server on another host must offer TLS unless the URL says
+\code{sslmode=disable}, and Medorama verifies the server's certificate and name. Each server
+opens at most 32 connections to the database (a request waits for one beyond that), checks a
+connection that was idle before using it again, and, unless the URL sets them, gives each
+connection 10 seconds to connect, TCP keepalives, and 5 minutes for a statement
+(\code{?connect\_timeout=\dots}, \code{keepalives=0}, \code{options=-c statement\_timeout=\dots}
+in the URL change them). \code{MEDORAMA\_DATABASE\_URL} overrides this setting.
+
+\apientry{database\_password\_file}{The PostgreSQL password}
+\begin{lstlisting}[style=signature,language=TOML]
+database_password_file = "PATH"
+\end{lstlisting}
+A path. Default: none. This file holds the password of \code{database\_url}'s account; its
+content is read with surrounding whitespace removed. Make it readable by the catalog's account
+only. \code{MEDORAMA\_DATABASE\_PASSWORD} overrides this setting.
+
+\apientry{database\_ca\_file}{Trusted certificate authorities}
+\begin{lstlisting}[style=signature,language=TOML]
+database_ca_file = "PATH"
+\end{lstlisting}
+A path. Default: none. This file holds certificate authorities (in PEM form) that Medorama
+trusts for the database server's certificate, in addition to the system's: for example a private
+authority, or a cloud provider's bundle.
+
+\apientry{key\_file}{The database key}
+\begin{lstlisting}[style=signature,language=TOML]
+key_file = "PATH"
+\end{lstlisting}
+A path. Default: none. This file holds the key of an encrypted SQLite database, for builds
+with the feature \code{encryption}; its content is read with surrounding whitespace removed. The
+key must be set before \cmd{init} (\cref{chap:deployment}). \code{MEDORAMA\_KEY} overrides this
+setting. A build without encryption refuses to start when a key is configured, and a PostgreSQL
+catalog refuses \code{key\_file}.
+
+\subsection{The server}
+\label{sec:settings-reference-server}
+
+\apientry{host}{The address to listen on}
+\begin{lstlisting}[style=signature,language=TOML]
+host = "ADDRESS"
+\end{lstlisting}
+A string. Default: \code{"127.0.0.1"}, which accepts connections from this machine only. When
+the server listens on any other address than \code{127.0.0.1}, \code{localhost} or \code{::1},
+or signs users in through a proxy, without \code{secure\_cookies}, it prints a warning at start. \cmd{serve -{}-host} overrides this
+setting. With proxy sign-in, keep this address reachable from the proxy only
+(\cref{sec:sign-in-requirements}).
+
+\apientry{port}{The port}
+\begin{lstlisting}[style=signature,language=TOML]
+port = N
+\end{lstlisting}
+An integer from 0 to 65535. Default: 8090; \cmd{init -{}-port} writes another. This is the
+port of the web page and the API. \cmd{serve -{}-port} overrides it.
+
+\apientry{workers}{Jobs run at the same time}
+\begin{lstlisting}[style=signature,language=TOML]
+workers = N
+\end{lstlisting}
+An integer. Default: 2; a value below 1 is read as 1. This is the number of jobs (indexing,
+derived series, actions) that the server, and each \cmd{medorama work} process, run at the same
+time.
+
+\apientry{auto\_index}{Index new recordings in the background}
+\begin{lstlisting}[style=signature,language=TOML]
+auto_index = true | false
+\end{lstlisting}
+A switch. Default: \code{true}. While the server runs, it queues the indexing of new and changed
+recordings every 15 seconds.
+
+\apientry{check\_interval\_s}{Re-check the recordings}
+\begin{lstlisting}[style=signature,language=TOML]
+check_interval_s = SECONDS
+\end{lstlisting}
+An integer. Default: 900. The server checks every recording this often, to find recordings
+that are missing, changed or have lost their index. With 0, it never does; \cmd{medorama check}
+still does it on demand.
+
+\apientry{timezone}{The catalog's time zone}
+\begin{lstlisting}[style=signature,language=TOML]
+timezone = "ZONE"
+\end{lstlisting}
+An IANA time-zone name. Default: \code{"America/New\_York"}; \cmd{init -{}-timezone} writes
+another. Medorama reads the times that imported tables write without an offset in this zone, and
+shows times in it; the viewer that the catalog runs uses it too. Times are stored in UTC.
+
+\subsection{The waveform viewer}
+\label{sec:settings-reference-viewer}
+
+\apientry{viewer}{The viewer the catalog runs}
+\begin{lstlisting}[style=signature,language=TOML]
+viewer = "auto" | "cpp" | "rs" | "py" | "none" | "PATH"
+\end{lstlisting}
+A string. Default: \code{"auto"}, which selects the viewer that \cmd{tools/install-medorama.sh}
+recorded in \file{medorama.viewer} next to Medorama's program, or else the first one found of
+\cmd{vitalstream-cpp}, \cmd{vitalstream-rs} and \cmd{vitalstream-py}. The values \code{"cpp"},
+\code{"rs"} and \code{"py"} select that viewer. With \code{"none"}, the catalog runs no viewer:
+\ui{View} and the \ui{VitalStream} tab are grayed out, with the reason. Any other value is the
+path of a viewer program.
+
+\apientry{viewer\_url}{A viewer running elsewhere}
+\begin{lstlisting}[style=signature,language=TOML]
+viewer_url = "URL"
+\end{lstlisting}
+A string. Default: empty. When it is set, for example to \code{"http://host:8060/"}, the
+catalog runs no viewer of its own, and \ui{View} opens that viewer in a new browser tab.
+
+\apientry{qc\_verbose}{Mark repaired data}
+\begin{lstlisting}[style=signature,language=TOML]
+qc_verbose = true | false
+\end{lstlisting}
+A switch. Default: \code{false}. When it is \code{true}, the viewer that the catalog runs also
+outlines, with a dashed line, the data that a reader repaired, such as data blocks that a file
+stored out of order and that the reader put back in order. Breaks are shaded either way.
+
+\subsection{Sign-in and the audit log}
+\label{sec:settings-reference-sessions}
+
+These settings choose how users sign in, how long a sign-in lasts, and where a copy of the audit
+log goes. \Cref{chap:sign-in} explains the two sign-in methods, the security requirements of
+proxy sign-in, and example proxy configurations.
+
+\apientry{sign\_in}{How users sign in}
+\begin{lstlisting}[style=signature,language=TOML]
+sign_in = "password" | "proxy"
+\end{lstlisting}
+A string. Default: \code{"password"}. With \code{"password"}, users sign in on Medorama's own
+form, with the accounts and passwords that Medorama keeps. With \code{"proxy"}, an
+authenticating reverse proxy in front of Medorama (for example oauth2-proxy, Apache httpd with
+mod\_auth\_openidc or Shibboleth, or nginx with \code{auth\_request}) signs the user in and names
+the user's account in a request header. In both cases, accounts, roles and the PHI permission
+live in Medorama (\cref{sec:sign-in-proxy}).
+
+\apientry{proxy\_user\_header}{The header that names the user}
+\begin{lstlisting}[style=signature,language=TOML]
+proxy_user_header = "HEADER"
+\end{lstlisting}
+A string. Default: \code{"X-Remote-User"}. Proxy mode only. The request header in which the
+proxy sends the user's account name. Medorama compares the whole value with its account names,
+ignoring case.
+
+\apientry{proxy\_addresses}{Where the proxy connects from}
+\begin{lstlisting}[style=signature,language=TOML]
+proxy_addresses = ["ADDRESS", ...]
+\end{lstlisting}
+A list of IP addresses. Default: \code{["127.0.0.1", "::1"]}. Proxy mode only. Medorama
+believes the header of \code{proxy\_user\_header} only on connections from these addresses; on a
+connection from anywhere else, it ignores the header and the request is not signed in. Each entry
+is one address: host names and ranges are not accepted. When Medorama listens on an IPv6 socket,
+a proxy that connects over IPv4 may appear as an IPv4-mapped address, such as
+\code{::ffff:10.0.0.5}; list it in that form.
+
+\apientry{proxy\_logout\_url}{Where Sign out leads}
+\begin{lstlisting}[style=signature,language=TOML]
+proxy_logout_url = "URL"
+\end{lstlisting}
+A string. Default: empty. Proxy mode only. The address that the page's \ui{Sign out} opens: the
+proxy's own sign-out, such as \code{"/oauth2/sign\_out"} for oauth2-proxy or
+\code{"/Shibboleth.sso/Logout"} for Shibboleth. When it is empty, the page shows its
+signed-out screen.
+
+\paragraph{Errors at start.} Medorama refuses to start when the sign-in settings are
+inconsistent, so that a half-made change is never silently ignored. The message follows the
+path of \file{medorama.toml}:
+\begin{xltabular}{\linewidth}{@{}P{5.0cm}L@{}}
+\caption{The sign-in settings' errors at start.}
+\label{tab:settings-reference-signin-errors}\\
+\toprule
+\tabhead Mistake & \tabhead Message \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Mistake & \tabhead Message \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+A \code{proxy\_...} setting without \code{sign\_in = "proxy"}, even with an empty value &
+  \code{proxy\_user\_header, proxy\_addresses and proxy\_logout\_url need sign\_in = "proxy"} \\
+An unknown method & \code{sign\_in: "saml" is not a sign-in method (password, proxy)} \\
+A header name with spaces or other invalid characters & \code{proxy\_user\_header: "bad header" is
+  not a header name} \\
+A host name or a range instead of an IP address & \code{proxy\_addresses: "proxy.example.org" is
+  not an IP address} \\
+An empty list of addresses & \code{proxy\_addresses: name the address the proxy connects from} \\
+\end{xltabular}
+
+\apientry{session\_hours}{How long a sign-in lasts}
+\begin{lstlisting}[style=signature,language=TOML]
+session_hours = HOURS
+\end{lstlisting}
+An integer. Default: 12; a value below 1 is read as 1. In password mode, a session ends this long
+after its sign-in, and its Privacy Mode choice, kept with the session, ends with it. In proxy
+mode, Medorama keeps no session of its own: the proxy or the identity provider sets the
+session's lifetime, and this is how long a visit's Privacy Mode choice is kept at most.
+
+\apientry{session\_idle\_minutes}{A sign-in left unused}
+\begin{lstlisting}[style=signature,language=TOML]
+session_idle_minutes = MINUTES
+\end{lstlisting}
+An integer. Default: 60. In password mode, a session that has not been used for this long ends;
+with 0, only \code{session\_hours} ends it. The page's own checks for new data do not count as
+use, so an unattended page signs out. In proxy mode, this is the gap (at least one minute) after
+which a user's next request counts as a new visit, with a new \code{login} entry in the audit
+log.
+
+\apientry{secure\_cookies}{Cookies over HTTPS only}
+\begin{lstlisting}[style=signature,language=TOML]
+secure_cookies = true | false
+\end{lstlisting}
+A switch. Default: \code{false}. When \code{true}, Medorama marks its cookies \code{Secure}, so
+that browsers send them over HTTPS only. Set it to \code{true} whenever
+users reach Medorama over HTTPS through a reverse proxy, in either sign-in mode
+(\cref{chap:deployment}).
+
+\apientry{audit\_export}{A copy of the audit log}
+\begin{lstlisting}[style=signature,language=TOML]
+audit_export = "PATH"
+\end{lstlisting}
+A path. Default: none. When it is set, Medorama also appends each seal of the audit log and the
+entries it covers to this file, every minute, as JSON lines; the file is readable by its owner
+only and synced to disk. Put it on storage that the database's administrators cannot change, so
+that it keeps a copy of the log out of their reach (\cref{chap:users-privacy}). An entry that the
+database cannot take at once is appended to it at once, as a line with \code{"pending": true}.
+\code{GET audit/verify} and \cmd{medorama audit -{}-verify} compare the database's seals with
+this file.
+
+\subsection{Settings kept in the database}
+\label{sec:settings-reference-db}
+
+Administrators make some settings in the page. Medorama keeps them in the database (the table
+\code{settings}), not in \file{medorama.toml}, and writes each change to the audit log.
+\begin{xltabular}{\linewidth}{@{}P{3.0cm}P{4.0cm}L@{}}
+\caption{The settings made in the Admin tab.}
+\label{tab:settings-reference-admin}\\
+\toprule
+\tabhead Setting & \tabhead Default & \tabhead Where, and meaning \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Setting & \tabhead Default & \tabhead Where, and meaning \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+What Privacy Mode withholds & Names, dates of birth, dates (moved back), ages above 89, MRNs,
+  account numbers; the text of notes and reports is shown, marked & \ui{Admin} $\rightarrow$
+  \ui{Privacy Mode} (\cref{chap:users-privacy}) \\
+The catalog's date offset & 0 years, 0 months, 36\,570 days, 0 hours & \ui{Admin} $\rightarrow$
+  \ui{Privacy Mode}: each value 0 or more \\
+Each patient's own days (\code{spread\_days}) & 365 & \ui{Admin} $\rightarrow$ \ui{Privacy
+  Mode}: 30 to 3650 \\
+How dates are written & \code{2024-01-31} & \ui{Admin} $\rightarrow$ \ui{Dates and times}: also
+  \code{01/31/2024}, \code{31/01/2024} or \code{31.01.2024} \\
+The clock & 24-hour & \ui{Admin} $\rightarrow$ \ui{Dates and times}: also 12-hour \\
+\end{xltabular}
+
+\section{vitalstream.toml}
+\label{sec:settings-reference-vitalstream}
+
+\paragraph{The file.} One settings file serves the three viewers. Each viewer reads the file
+named by \opt{-{}-config FILE} (an error if it does not exist), else the first of these files
+that exists: \file{viewers/vitalstream/vitalstream.toml}, only for a viewer run from the build
+folder of a clone of the repository (git ignores that file); and
+\file{\textasciitilde/.config/vitalstream/vitalstream.toml}. A \file{vitalstream.toml} in the
+working folder is never read unless \opt{-{}-config} names it: a shared data folder could hold
+one that runs programs (\code{adapters\_dir}) or opens the viewer to the network (\code{host},
+\code{auth\_file}). On start, the viewer says which settings file it read.
+\file{viewers/vitalstream/vitalstream.example.toml} is a commented starting point.
+\begin{itemize}
+\item \textbf{Sections.} Top-level keys apply to every viewer. The keys of a \code{[py]},
+  \code{[rs]} or \code{[cpp]} section apply to that viewer only, and override the top-level ones.
+  Each viewer ignores the other viewers' sections.
+\item \textbf{Paths} are relative to the folder of the settings file; \code{\textasciitilde}
+  stands for the home folder.
+\item \textbf{Every key is checked.} An unknown key is an error (\code{unknown settings: ...}),
+  and so are a value of the wrong type (\code{bad value for KEY}) and an unknown time zone.
+\item \textbf{Command-line options} override the file (\cref{chap:cli}).
+\end{itemize}
+
+\apientry{timezone}{The display time zone}
+\begin{lstlisting}[style=signature,language=TOML]
+timezone = "ZONE"
+\end{lstlisting}
+An IANA time-zone name. Default: \code{"America/New\_York"}. Option: \opt{-{}-timezone}. Only the
+display depends on it; data are stored in UTC.
+
+\apientry{data\_roots}{The folders the viewer may open}
+\begin{lstlisting}[style=signature,language=TOML]
+data_roots = ["PATH", ...]
+\end{lstlisting}
+A list of paths. Default: the viewer's root, fixed when it was built
+(\cref{sec:settings-reference-build}). Option: \opt{-{}-root DIR}, which may be repeated. These
+are the folders that the viewer may list and open, inside its root. A folder that contains the
+root is narrowed to the root, and a folder outside the root is left out with a warning: the
+settings can narrow the root but never widen it. A path is allowed when the file or folder it
+leads to, with every symbolic link resolved, lies inside a data root; a link that leads outside is
+refused and not listed. With no data root left, the viewer does not start.
+
+\apientry{max\_records}{Records in a folder}
+\begin{lstlisting}[style=signature,language=TOML]
+max_records = N
+\end{lstlisting}
+An integer, 0 or more. Default: 5000. This is the largest number of header files, segments and
+layout headers included, below a folder of plain records that the viewer opens as one session; a
+folder with more is refused. A WFDB collection is not limited (\cref{chap:recordings}).
+\code{max\_records}, \code{max\_depth} and \code{max\_scan\_s} are settings of the viewers only:
+Medorama has none, and indexes a recording's folder within their defaults.
+
+\apientry{max\_depth}{Folder levels}
+\begin{lstlisting}[style=signature,language=TOML]
+max_depth = N
+\end{lstlisting}
+An integer, 0 or more. Default: 20. This is the largest number of folder levels that the viewer
+reads below a folder of plain records.
+
+\apientry{max\_scan\_s}{Time to count the records}
+\begin{lstlisting}[style=signature,language=TOML]
+max_scan_s = SECONDS
+\end{lstlisting}
+A number of seconds, 0 or more (an integer or a decimal number). Default: 10. This is the
+longest time that the viewer spends counting the records of a folder for its summary, before the
+folder opens.
+
+\apientry{require\_password}{Refuse to run without a password}
+\begin{lstlisting}[style=signature,language=TOML]
+require_password = true | false
+\end{lstlisting}
+A switch. Default: \code{false}. When it is \code{true}, the viewer refuses to start without a
+password (\opt{-{}-no-auth} counts as no password), so a viewer built without password support
+never starts. Medorama sets it for the viewer it runs.
+
+\apientry{host}{The address to listen on}
+\begin{lstlisting}[style=signature,language=TOML]
+host = "ADDRESS"
+\end{lstlisting}
+A string. Default: \code{"127.0.0.1"}, which accepts connections from this machine only; reach
+it from elsewhere through an SSH tunnel. Option: \opt{-{}-host}.
+
+\apientry{allowed\_hosts}{The host names the viewer answers for}
+\begin{lstlisting}[style=signature,language=TOML]
+allowed_hosts = ["NAME", ...]
+\end{lstlisting}
+A list of strings. Default: \code{[]}. The host names the viewer answers for besides
+\code{localhost}, \code{127.0.0.1}, \code{::1} and \code{host}: the names this machine is
+reached by when \code{host} is \code{0.0.0.0}, or a reverse proxy's public name; \code{["*"]}
+allows any. A request naming another host is refused (\code{400}), which defeats DNS rebinding
+(\cref{sec:viewer-api-checks}).
+
+\apientry{port}{The port}
+\begin{lstlisting}[style=signature,language=TOML]
+port = N
+\end{lstlisting}
+An integer from 0 to 65535. Default: 8050 (\cmd{vitalstream-py}), 8060 (\cmd{vitalstream-rs}),
+8070 (\cmd{vitalstream-cpp}); the example file sets them in the viewers' sections. Option:
+\opt{-{}-port}.
+
+\apientry{index\_workers}{Recordings indexed at the same time}
+\begin{lstlisting}[style=signature,language=TOML]
+index_workers = N
+\end{lstlisting}
+An integer, 0 or more. Default: 2. This is the number of recordings that the viewer indexes at
+the same time.
+
+\apientry{cache\_dir}{The index folder}
+\begin{lstlisting}[style=signature,language=TOML]
+cache_dir = "PATH"
+\end{lstlisting}
+A path. Default: \file{\textasciitilde/.cache/vitalstream}; when the viewer runs from a clone,
+\file{viewers/vitalstream/sample\_data/outputs/index}. Option: \opt{-{}-cache-dir}. This is the
+index folder. The three viewers share it, since they write the same index, and they share it with
+Medorama when it is set to the catalog's \code{index\_dir}.
+
+\apientry{adapters\_dir}{The adapter folder}
+\begin{lstlisting}[style=signature,language=TOML]
+adapters_dir = "PATH"
+\end{lstlisting}
+A path. Default: \file{\textasciitilde/.local/share/medorama/adapters} (Windows:
+\code{\%LOCALAPPDATA\%\textbackslash medorama\textbackslash adapters}), the folder Medorama uses
+too. Option: \opt{-{}-adapters-dir}. This is the
+folder of adapters (\cref{chap:addons}).
+
+\apientry{auth\_file}{The password file}
+\begin{lstlisting}[style=signature,language=TOML]
+auth_file = "PATH"
+\end{lstlisting}
+A path. Default: \file{\textasciitilde/.config/vitalstream/auth.json}. This is where
+\opt{-{}-set-password} keeps the password, as a salted scrypt hash with a random signing key, in a
+file readable by its owner only. One password serves the three viewers, \cmd{muse-py serve} and
+\cmd{dicom-py serve}. No password is set until one is. A viewer built without password support
+ignores an existing password: it never asks for one, and is open to whoever reaches its port.
+Signing out adds the sign-in's signature to the file's \code{revoked} list, kept until the
+sign-in would have expired.
+
+\apientry{secure\_cookie}{The sign-in cookie over HTTPS only}
+\begin{lstlisting}[style=signature,language=TOML]
+secure_cookie = true | false
+\end{lstlisting}
+A switch. Default: \code{false}. When it is \code{true}, the sign-in cookie is marked
+\code{Secure}, so that the browser sends it over HTTPS only: set it for a viewer behind an HTTPS
+proxy.
+
+\apientry{qc\_verbose}{Mark repaired data}
+\begin{lstlisting}[style=signature,language=TOML]
+qc_verbose = true | false
+\end{lstlisting}
+A switch. Default: \code{false}. Option: \opt{-{}-qc-verbose}. With \code{false}, the viewer
+does not mark the data that a reader repaired, such as blocks that a file stored out of order and
+that the reader put back in order. With \code{true}, it outlines such data with a dashed line and
+shows the details on hover. Breaks are shaded either way.
+
+\paragraph{An example.} The following file configures a viewer on a server whose recordings
+are in two folders:
+\begin{lstlisting}[language=TOML]
+timezone = "Europe/Paris"
+data_roots = ["/data/icu", "/data/holter"]
+cache_dir = "/data/vitalstream-index"
+index_workers = 4
+
+[cpp]
+port = 8075
+\end{lstlisting}
+
+\subsection{The settings Medorama writes for its viewer}
+\label{sec:settings-reference-medorama-viewer}
+
+The viewer that the catalog runs reads \file{<home>/viewer/vitalstream.toml}, which Medorama
+rewrites every time it starts the viewer. The file sets \code{host = "127.0.0.1"}, a free
+\code{port}, \code{cache\_dir} to the catalog's \code{index\_dir}, \code{adapters\_dir} to the
+catalog's, \code{auth\_file} to \file{<home>/viewer/auth.json}, the catalog's \code{timezone},
+\code{data\_roots} to the catalog's (the whole file system when the catalog has none),
+\code{require\_password = true}, and \code{qc\_verbose = true} when the catalog's
+\code{qc\_verbose} is. It sets no folder limits, so the viewer keeps their defaults. Do not edit
+this file: the next start replaces it.
+
+\section{Options fixed when a program is built}
+\label{sec:settings-reference-build}
+
+A few options are not settings: they are fixed in the program when it is built, so that no
+setting can widen them. The installers pass them (\cref{chap:installation}); a build by hand sets
+them as \cref{tab:settings-reference-build} shows.
+
+\begin{xltabular}{\linewidth}{@{}P{2.9cm}P{5.4cm}L@{}}
+\caption{The build options of the programs.}
+\label{tab:settings-reference-build}\\
+\toprule
+\tabhead Program & \tabhead Option & \tabhead Effect \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Program & \tabhead Option & \tabhead Effect \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\cmd{medorama} & Cargo feature \code{encryption}
+  (\cmd{cargo build -{}-release -{}-locked -p medorama -{}-features encryption}) & Encrypts the
+  database with SQLCipher (OpenSSL is built from source, which needs Perl and \cmd{make}). Off by
+  default \\
+\cmd{vitalstream-rs} & \code{VITALSTREAM\_ROOT=DIR} in the environment of \cmd{cargo build} &
+  The viewer's root: it never opens anything outside \code{DIR} (\code{\textasciitilde} is the
+  home folder of whoever runs it). Unset: the whole file system \\
+\cmd{vitalstream-rs} & \opt{-{}-no-default-features} (without the Cargo feature
+  \code{password}, which is on by default) & No password support: \opt{-{}-set-password} fails, an
+  existing password is ignored, and the viewer refuses to run where a password is required \\
+\cmd{vitalstream-cpp} & CMake \code{-DVS\_ROOT=DIR} (default empty) & The viewer's root. Empty:
+  the whole file system \\
+\cmd{vitalstream-cpp} & CMake \code{-DVS\_PASSWORD=OFF} (default \code{ON}) & No password
+  support \\
+\cmd{vitalstream-py} & \code{VITALSTREAM\_ROOT=DIR} when the package is installed & The viewer's
+  root \\
+\cmd{vitalstream-py} & \code{VITALSTREAM\_PASSWORD=0} when the package is installed & No
+  password support \\
+\cmd{muse-py serve}, \cmd{dicom-py serve} & \code{VIEWER\_ROOT=DIR} when the package is installed
+  (default: the whole file system) & The most that \cmd{serve} ever serves: a \opt{-{}-root} that
+  contains it is narrowed to it, and one outside it is refused \\
+\cmd{muse-py serve}, \cmd{dicom-py serve} & \code{VIEWER\_PASSWORD=0} (default \code{1}) & No
+  password support \\
+The C++ project & CMake \code{VS\_BUILD\_VIEWER} (default \code{ON}) & The viewer. Off: only the
+  libraries \code{vs\_core} and \code{vs\_engine}, for adapters written in C++ \\
+The C++ project & CMake \code{VS\_BUILD\_TESTS} (default \code{ON}) & The unit tests
+  (GoogleTest) \\
+The C++ project & CMake \code{VS\_DEPS\_DIR} (default \file{cpp/deps}) & The folder of
+  pre-downloaded dependency archives, for builds without internet access \\
+\end{xltabular}
+
+At run time, the settings (\code{data\_roots}, \opt{-{}-root}) can narrow a viewer's root
+further, but never widen it. The standalone installer builds in folders of its own
+(\file{target/standalone}, \file{viewers/vitalstream/cpp/build/standalone}), so that Medorama's
+viewer in the same clone (\file{target/release}, \file{build/viewer}) keeps its own options: the
+whole file system as its root, and password support.
+
+\begin{xltabular}{\linewidth}{@{}P{2.4cm}P{3.4cm}L@{}}
+\caption{The C++ project's CMake presets.}
+\label{tab:settings-reference-presets}\\
+\toprule
+\tabhead Preset & \tabhead Folder & \tabhead Builds \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Preset & \tabhead Folder & \tabhead Builds \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{release} & \file{build/release} & The viewer and its tests \\
+\code{debug} & \file{build/debug} & The same, unoptimized, with debug information \\
+\code{viewer} & \file{build/viewer} & The viewer only (what the installers use) \\
+\end{xltabular}

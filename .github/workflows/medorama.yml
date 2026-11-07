@@ -1,0 +1,281 @@
+# Medorama (medorama/): the API description; fuzzing; build and test on Linux, macOS and Windows;
+# the coverage floor; the same tests on PostgreSQL (the oldest and newest versions supported);
+# the build with database encryption (SQLCipher) on Linux; the build without WFDB support (no
+# wfdb-x code) on Linux; the installer
+# tools/install-medorama.sh/.ps1 (Medorama + one VitalStream viewer); the ECG and PACS viewers'
+# tests (it serves them).  It uses the workspace's libraries (libs/), so changes there run it
+# too; format, lint and the dependencies' checks are rust.yml's, for the whole workspace.
+name: Medorama
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"   # Mondays: advisories published since, and fuzzing
+  workflow_dispatch:
+  push:
+    paths: ["Cargo.toml", "Cargo.lock", "deny.toml", "libs/**", "medorama/**", "viewers/vitalstream/rust/**", "viewers/vitalstream/cpp/**",
+            "viewers/vitalstream/web/**", "viewers/vitalstream/tests/web/**", "viewers/ecg/**", "viewers/pacs/**", "tools/install-medorama.*", "tools/make-demo-data.py",
+            ".github/workflows/medorama.yml"]
+  pull_request:
+    paths: ["Cargo.toml", "Cargo.lock", "deny.toml", "libs/**", "medorama/**", "viewers/vitalstream/rust/**", "viewers/vitalstream/cpp/**",
+            "viewers/vitalstream/web/**", "viewers/vitalstream/tests/web/**", "viewers/ecg/**", "viewers/pacs/**", "tools/install-medorama.*", "tools/make-demo-data.py",
+            ".github/workflows/medorama.yml"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: The API's description is valid OpenAPI 3.1 (tests/openapi.rs checks it names every route)
+        run: |
+          pip install --quiet openapi-spec-validator pyyaml
+          python -c "import yaml; from openapi_spec_validator import validate; validate(yaml.safe_load(open('medorama/openapi.yaml')))"
+
+  fuzz-build:
+    # every change: the fuzz targets still build against the code they fuzz, on the versions of
+    # the workspace's Cargo.lock (medorama/fuzz is a workspace of its own)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: nightly
+      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+        with:
+          tool: cargo-fuzz
+      - name: The workspace's Cargo.lock
+        run: cp Cargo.lock medorama/fuzz/Cargo.lock
+      - name: Build every target
+        run: cd medorama/fuzz && cargo fuzz build
+
+  fuzz-targets:
+    # the targets, listed once (medorama/fuzz/Cargo.toml)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      targets: ${{ steps.list.outputs.targets }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+        with:
+          tool: cargo-fuzz
+      - id: list
+        run: echo "targets=$(cd medorama/fuzz && cargo fuzz list | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+
+  fuzz:
+    # coverage-guided fuzzing of what Medorama reads from files and users (medorama/fuzz/): every
+    # target for 5 minutes, every week and on demand; an input that breaks one is kept
+    needs: fuzz-targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.fuzz-targets.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: nightly
+      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+        with:
+          tool: cargo-fuzz
+      - name: Fuzz ${{ matrix.target }}
+        run: |
+          cp Cargo.lock medorama/fuzz/Cargo.lock
+          cd medorama/fuzz
+          mkdir -p corpus/${{ matrix.target }}
+          cargo fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} seeds/${{ matrix.target }} -- -max_total_time=300 -rss_limit_mb=4096
+      - if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: medorama/fuzz/artifacts/
+
+  viewers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+      - run: node --test viewers/ecg/tests/*.test.js viewers/pacs/tests/*.test.js
+      - name: The VitalStream page's scripts (viewers/vitalstream/tests/web/)
+        run: node --test viewers/vitalstream/tests/web/
+      - name: Medorama's page scripts (medorama/tests/web/)
+        run: node --test medorama/tests/web/
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0: for the plug-in test
+        with:
+          python-version: "3.12"
+      - name: A viewer for the gateway's contract test
+        run: cargo build --release --locked -p vitalstream-rs
+      - run: cargo test --release --locked -p medorama
+
+  coverage:
+    # the share of the code the tests run, with a floor: a change that leaves new code untested,
+    # or turns a test off, fails here (docs/developing.md, "Tests")
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+        with:
+          tool: cargo-llvm-cov
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0: for the plug-in test
+        with:
+          python-version: "3.12"
+      - uses: browser-actions/setup-chrome@c785b87e244131f27c9f19c1a33e2ead956ab7ce # v1.7.3: the browser tests run, never skipped here
+        id: chrome
+      - name: A viewer for the gateway's contract test
+        run: cargo build --release --locked -p vitalstream-rs
+      - name: Coverage, at least 76% of the lines
+        env:
+          MEDORAMA_TEST_CHROME: ${{ steps.chrome.outputs.chrome-path }}
+          MEDORAMA_TEST_CHROME_REQUIRED: "1"
+        run: |
+          cargo llvm-cov --locked -p medorama --tests --lcov --output-path lcov.info --fail-under-lines 76
+          cargo llvm-cov report --summary-only | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: medorama-coverage
+          path: lcov.info
+
+  postgres:
+    # every test again with the catalog in PostgreSQL (each test in a schema of its own)
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["14", "17"]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: medorama
+          POSTGRES_PASSWORD: medorama
+          POSTGRES_DB: medorama_test
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      MEDORAMA_TEST_POSTGRES: postgres://medorama:medorama@127.0.0.1:5432/medorama_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0: for the plug-in test
+        with:
+          python-version: "3.12"
+      - name: The trigram extension, shared by the tests' schemas
+        run: PGPASSWORD=medorama psql -h 127.0.0.1 -U medorama -d medorama_test -c "CREATE EXTENSION IF NOT EXISTS pg_trgm SCHEMA public"
+      - name: A viewer for the gateway's contract test
+        run: cargo build --release --locked -p vitalstream-rs
+      - run: cargo test --release --locked -p medorama
+
+  encryption:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo test --release --locked -p medorama --features encryption
+
+  nowfdb:
+    # without the `wfdb` feature (tools/install-medorama.sh --no-wfdb): no wfdb-x code; a WFDB
+    # recording is refused (not added), every other format works (docs/building.md, "Without WFDB")
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0: for the plug-in test
+        with:
+          python-version: "3.12"
+      - name: No wfdb-x among the dependencies
+        run: if cargo tree --locked -p medorama --no-default-features -e normal,build | grep wfdbx; then exit 1; fi
+      - name: A viewer for the gateway's contract test, also without WFDB support
+        run: cargo build --release --locked -p vitalstream-rs --no-default-features --features password
+      - run: cargo test --release --locked -p medorama --no-default-features
+
+  installer:
+    # tools/install-medorama.sh / .ps1 as a user runs them: the catalog, one chosen viewer and the
+    # demo (--demo), which `medorama init` loads and `medorama demo remove` removes
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, viewer: cpp }
+          - { os: macos-latest, viewer: rs }
+          - { os: windows-latest, viewer: cpp }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: tools/install-medorama.sh
+        if: runner.os != 'Windows'
+        run: tools/install-medorama.sh --viewer ${{ matrix.viewer }} --demo
+      - name: tools\install-medorama.ps1
+        if: runner.os == 'Windows'
+        run: powershell -ExecutionPolicy Bypass -File tools\install-medorama.ps1 -Viewer ${{ matrix.viewer }} -Demo; if ($LASTEXITCODE) { exit 1 }
+      - name: The two programs and the recorded choice
+        shell: bash
+        run: |
+          bin=.venv/bin; [ -d .venv/Scripts ] && bin=.venv/Scripts
+          "$bin/medorama" --version
+          "$bin/vitalstream-${{ matrix.viewer }}" --version
+          test "$(tr -d '\r\n' < $bin/medorama.viewer)" = "${{ matrix.viewer }}"
+      - name: The demo, loaded by init and removed
+        shell: bash
+        run: |
+          bin=.venv/bin; [ -d .venv/Scripts ] && bin=.venv/Scripts
+          test -s "$bin/medorama.demo"
+          # init remembers the catalog in the home folder: a temporary one
+          export HOME="$RUNNER_TEMP/home" APPDATA="$RUNNER_TEMP/home" LOCALAPPDATA="$RUNNER_TEMP/home"
+          mkdir -p "$HOME"
+          cat="$RUNNER_TEMP/catalog"
+          echo 'a-ci-password-1' | "$bin/medorama" --home "$cat" init --results "$RUNNER_TEMP/results" --password-stdin
+          "$bin/medorama" --home "$cat" sources list | grep '^DEMO '
+          "$bin/medorama" --home "$cat" demo remove
+          if "$bin/medorama" --home "$cat" sources list | grep '^DEMO '; then exit 1; fi

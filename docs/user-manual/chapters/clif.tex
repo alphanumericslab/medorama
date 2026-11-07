@@ -1,0 +1,398 @@
+% Part III: CLIF. Sources: medorama/src/formats/clif.rs (its module doc and code are the
+% authority: tables(), rank(), import_folder(), the converters), docs/administration.md (the
+% clif- row of "Import formats"); main.rs (import-clif), server.rs (tables/clif),
+% web/index.html (the CLIF folder box).
+\chapter{CLIF}
+\label{chap:clif}
+
+This chapter explains how Medorama imports CLIF databases. It is written for data managers who
+hold intensive-care data in CLIF. CLIF, the \emph{Common Longitudinal ICU data Format}, is an
+open format for the data of intensive care: a set of tables (patients, hospitalizations, ADT,
+vital signs, laboratory results, respiratory support, medications, assessments, microbiology and
+others) with fixed columns and standard categories, so that the data of different hospitals read
+alike. Its data dictionary and tools are published by the CLIF consortium under the Apache-2.0
+license: \url{https://github.com/Common-Longitudinal-ICU-data-Format/CLIF}. Medorama reads every
+table of CLIF 2.1, and five tables of CLIF 3.0 (\code{input}, \code{output},
+\code{intermittent\_dialysis}, \code{validated\_diagnosis} and \code{clinical\_notes\_facts},
+with their columns as in clifpy's 3.0 schemas).
+
+Medorama reads CLIF as tables. Each CLIF table, as CSV or Parquet, becomes a database of the
+catalog, as an imported table does (\cref{chap:importing}), through one import format per table.
+CLIF holds no waveforms, and it is not converted to WFDB.
+
+\section{How CLIF is read}
+\label{sec:clif-reading}
+
+\begin{itemize}
+\item \textbf{Times.} CLIF's times are in UTC, written with their offset
+  (\code{YYYY-MM-DD HH:MM:SS+00:00}), and they are read as such, whatever the catalog's time
+  zone. A CLIF table's time written without an offset is read as UTC too, not in the catalog's
+  time zone.
+\item \textbf{Names.} CLIF's standard categories (its mCIDE: \code{vital\_category},
+  \code{lab\_category}, \code{med\_category}, \code{location\_category} and so on) name the
+  entries, written as words (\code{heart\_rate} becomes \code{Heart rate}), so that every site's
+  data read alike. The sites' raw names (\code{vital\_name}, \code{lab\_name}, \code{med\_name}
+  and so on) stay, as the database's own columns.
+\item \textbf{Units.} Each entry has its unit: CLIF's fixed units for vital signs, settings and
+  rates (\cref{sec:clif-units}), the reference unit of a laboratory result, or the dose unit of a
+  drug.
+\item \textbf{Patients and stays.} \code{patient\_id} names the patient and
+  \code{hospitalization\_id} the encounter. Most tables name only the hospitalization, and their
+  entries go to its patient.
+\item \textbf{Rows left out} are counted by reason, and never named, because rows hold
+  identifiers. A row without the keys that its table needs (\code{rows without
+  hospitalization\_id}), or one that holds no value to keep, makes no entry.
+\end{itemize}
+
+\section{Importing a CLIF folder}
+\label{sec:clif-importing}
+
+A CLIF database is a folder of tables, with one file per table (or several files per table).
+Medorama imports such a folder in one step:
+\begin{enumerate}
+\item Every file directly in the folder whose name ends in \file{.csv} or \file{.parquet} is read
+  for its columns. Subfolders are not read.
+\item Each file is recognized as a CLIF table by its columns (\cref{sec:clif-detect}). A file
+  that is not a CLIF table that Medorama reads is named in the report and left out.
+\item Each table becomes a database of its own, named after it (\code{clif\_patient},
+  \code{clif\_vitals}, \code{clif\_medication\_admin} and so on), with the source label
+  \code{clif}. A table in several files (a year per file, or CLIF's continuous and intermittent
+  medications) is one database.
+\item The tables are imported in order (\cref{sec:clif-order}), each read row by row.
+\end{enumerate}
+
+\paragraph{In the page.} In \ui{Import} $\rightarrow$ \ui{Databases}, in the card \ui{Add a
+database}, choose \ui{Import tables}, open \ui{A CLIF folder on the server}, and type the
+folder's path on the server (\file{/data/clif}). Then click \ui{Preview}, a dry run that reads
+and counts everything and keeps nothing, or \ui{Import the folder}. The folder must be inside
+\code{data\_roots}. The import runs in the background, with its progress shown like any other.
+The report gives, for each table, its database's name, its files and what it added, and then
+the files that are not CLIF tables.
+
+\paragraph{On the command line,} \cmd{medorama import-clif} imports a folder:
+\begin{lstlisting}[style=signature]
+medorama import-clif DIR [--source LABEL] [--dry-run]
+\end{lstlisting}
+\begin{params}
+\item[DIR] The CLIF folder.
+\item[--source LABEL] The source label of every table's rows. Default: \code{clif}.
+\item[--dry-run] Check and count only; store nothing.
+\end{params}
+The following commands preview the import of a folder and then import it:
+\begin{lstlisting}[style=shell]
+medorama import-clif /data/clif --dry-run
+medorama import-clif /data/clif
+\end{lstlisting}
+The command prints a line per table: its database, its files, its rows, the patients,
+encounters, bed stays and items it added, and the rows held back, with up to five of its
+warnings. Unlike the page and the API, the command does not check the folder against
+\code{data\_roots}, because it runs as the operating-system user who can read the home folder
+(\cref{chap:cli}).
+
+\paragraph{Through the API,} an administrator sends \code{POST api/v1/tables/clif} with the JSON
+body \code{\{"dir": "/data/clif", "source": "clif", "dry\_run": false, "background": true\}}. The
+folder must be inside \code{data\_roots}. With \code{background}, the import runs as a task that
+the page follows (\cref{chap:http-api}).
+
+\paragraph{One table at a time.} A single CLIF table can also be imported with
+\cmd{medorama import-table}. It is recognized by its columns, as any known export is, or named
+with \opt{-{}-format clif-vitals} (\cref{chap:importing}). Import the patients, then the
+hospitalizations, then the ADT, before the rest. Susceptibilities cannot be imported alone
+(\cref{sec:clif-micro}).
+
+\section{How tables are told apart}
+\label{sec:clif-detect}
+
+A file is a CLIF table when it has all the columns of \cref{tab:clif-detect} for that table, and
+none of the columns that belong to another table that shares them. Column names are compared
+ignoring case and surrounding spaces. The formats are those whose key begins with \code{clif-};
+\cmd{medorama formats} lists them.
+
+\begin{xltabular}{\linewidth}{@{}P{4.2cm}P{5.2cm}L@{}}
+\caption{The columns that recognize each CLIF table.}
+\label{tab:clif-detect}\\
+\toprule
+\tabhead Format & \tabhead Columns it needs & \tabhead Unless it has \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Format & \tabhead Columns it needs & \tabhead Unless it has \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{clif-patient} & \code{patient\_id}, \code{sex\_category}, \code{birth\_date} &
+  \code{hospitalization\_id} \\
+\code{clif-hospitalization} & \code{patient\_id}, \code{hospitalization\_id},
+  \code{admission\_dttm} & \\
+\code{clif-adt} & \code{hospitalization\_id}, \code{in\_dttm}, \code{location\_category} & \\
+\code{clif-vitals} & \code{hospitalization\_id}, \code{vital\_category}, \code{vital\_value} & \\
+\code{clif-invasive-hemodynamics} & \code{hospitalization\_id}, \code{measure\_category},
+  \code{measure\_value} & \\
+\code{clif-intake-output} & \code{hospitalization\_id}, \code{in\_out\_flag}, \code{amount} & \\
+\code{clif-input} & \code{hospitalization\_id}, \code{input\_category}, \code{input\_volume} & \\
+\code{clif-output} & \code{hospitalization\_id}, \code{output\_category}, \code{output\_value} &
+  \\
+\code{clif-labs} & \code{hospitalization\_id}, \code{lab\_category} & \\
+\code{clif-respiratory-support} & \code{hospitalization\_id}, \code{device\_category},
+  \code{recorded\_dttm} & \code{mcs\_group} \\
+\code{clif-ecmo-mcs} & \code{hospitalization\_id}, \code{mcs\_group} & \\
+\code{clif-crrt-therapy} & \code{hospitalization\_id}, \code{crrt\_mode\_category} & \\
+\code{clif-intermittent-dialysis} & \code{hospitalization\_id}, \code{net\_ultrafiltration\_out}
+  & \\
+\code{clif-medication-admin} & \code{hospitalization\_id}, \code{med\_category},
+  \code{admin\_dttm} & \\
+\code{clif-medication-orders} & \code{hospitalization\_id}, \code{med\_order\_id},
+  \code{order\_start\_dttm} & \\
+\code{clif-transfusion} & \code{hospitalization\_id}, \code{component\_name},
+  \code{transfusion\_start\_dttm} & \\
+\code{clif-patient-assessments} & \code{hospitalization\_id}, \code{assessment\_category} & \\
+\code{clif-position} & \code{hospitalization\_id}, \code{position\_category} & \\
+\code{clif-code-status} & \code{patient\_id}, \code{code\_status\_category} & \\
+\code{clif-key-icu-orders} & \code{hospitalization\_id}, \code{order\_category},
+  \code{order\_dttm} & \\
+\code{clif-therapy-details} & \code{hospitalization\_id}, \code{therapy\_element\_category} & \\
+\code{clif-provider} & \code{hospitalization\_id}, \code{provider\_id} & \\
+\code{clif-place-based-index} & \code{hospitalization\_id}, \code{index\_name},
+  \code{index\_value} & \\
+\code{clif-clinical-trial} & \code{hospitalization\_id}, \code{trial\_id} & \\
+\code{clif-microbiology-culture} & \code{organism\_category}, \code{collect\_dttm} &
+  \code{result\_category}, \code{micro\_order\_name} \\
+\code{clif-microbiology-nonculture} & \code{organism\_category}, \code{result\_category} & \\
+\code{clif-microbiology-susceptibility} & \code{organism\_id}, \code{antimicrobial\_category} &
+  \\
+\code{clif-patient-procedures} & \code{hospitalization\_id}, \code{procedure\_code} & \\
+\code{clif-hospital-diagnosis} & \code{hospitalization\_id}, \code{diagnosis\_code} &
+  \code{start\_dttm}, \code{source\_type} \\
+\code{clif-patient-diagnosis} & \code{patient\_id}, \code{diagnosis\_code}, \code{start\_dttm} &
+  \\
+\code{clif-validated-diagnosis} & \code{hospitalization\_id}, \code{diagnosis\_category},
+  \code{validation\_method} & \\
+\code{clif-clinical-notes-facts} & \code{hospitalization\_id}, \code{note\_id},
+  \code{note\_type\_category} & \\
+\end{xltabular}
+
+\section{The import order}
+\label{sec:clif-order}
+
+The tables of a folder are imported in this order, and in the order of their formats' keys within
+each step:
+\begin{enumerate}
+\item \code{patient}, which says who the patients are;
+\item \code{hospitalization}, which says which stays there are, and of which patient;
+\item \code{adt}, the bed stays, which name only their hospitalization;
+\item every other table, whose rows name their hospitalization (or patient);
+\item \code{microbiology\_susceptibility}, last, after the cultures it names.
+\end{enumerate}
+In this way, every entry finds its encounter at once. A table imported out of this order is not
+lost: its items wait for their patient or encounter, and are matched when the table that names
+it comes (\cref{chap:importing}). ADT rows are the exception: a bed stay that names only its
+hospitalization needs the hospitalization first.
+
+\section{What each table becomes}
+\label{sec:clif-tables}
+
+\Cref{tab:clif-tables} lists every CLIF table Medorama reads, its category
+(\cref{chap:importing}) and what its rows become: the entry's name, its value and unit, and the
+columns kept as the database's own.
+
+\begin{xltabular}{\linewidth}{@{}P{3.6cm}P{2.0cm}L@{}}
+\caption{The CLIF tables Medorama reads, and what each becomes.}
+\label{tab:clif-tables}\\
+\toprule
+\tabhead CLIF table & \tabhead Category & \tabhead Becomes \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead CLIF table & \tabhead Category & \tabhead Becomes \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{patient} & (patients) & The patient, by \code{patient\_id}: the sex from
+  \code{sex\_category} (\code{Male} \code{M}, \code{Female} \code{F}), the date of birth (its first
+  ten characters); race, ethnicity, language and the time of death as columns \\
+\code{hospitalization} & (encounters) & An encounter, by \code{hospitalization\_id}: admission
+  (\code{admission\_dttm}), discharge, disposition (\code{discharge\_category}); the admission
+  type as a column \\
+\code{adt} & (bed stays) & A bed stay of the hospitalization, its unit the
+  \code{location\_category} (\code{icu} shows as ICU), from \code{in\_dttm} to \code{out\_dttm};
+  the hospital and the location's name as columns. No bed, so ADT does not link recordings by bed
+  and time \\
+\code{vitals} & Vitals & Each vital sign, by \code{vital\_category}, in CLIF's units
+  (\cref{tab:clif-units}); rows without a number are left out \\
+\code{invasive\_hemodynamics} & Vitals & Each measurement, by \code{measure\_category}: CVP, right
+  atrial and ventricular pressures, PA systolic, diastolic and mean pressures, PCWP, cardiac
+  output by thermodilution and by Fick \\
+\code{intake\_output} (2.1) & Vitals & Each intake or output, \code{Intake: <fluid>} or
+  \code{Output: <fluid>} (by \code{in\_out\_flag} 1 or 0, the fluid's name), in mL \\
+\code{input}, \code{output} (3.0) & Vitals & \code{Intake: <category>}, in mL;
+  \code{Output: <category>} (urine, drains \dots), in \code{output\_unit} (mL, or occurrences:
+  emesis \dots); the group and the raw name as columns \\
+\code{labs} & Labs & Each result, by \code{lab\_category}: the numeric value
+  (\code{lab\_value\_numeric}), else the text (\code{lab\_value}), in the
+  \code{reference\_unit}; the LOINC code; at its collection time, else its result's, else its
+  order's; the raw name, specimen and order and result times as columns \\
+\code{respiratory\_support} & Life support & An entry \code{Respiratory support} (the device),
+  and each setting and observation of the row an entry of its own (\cref{tab:clif-units}); the
+  mode and tracheostomy as columns \\
+\code{ecmo\_mcs} & Life support & \code{Circulatory support} (the device, or the MCS group), blood
+  flow, sweep gas flow and FdO2, and the device's work rate (RPM, Impella power \dots) named by its
+  control parameter's category, else \code{Device rate} \\
+\code{crrt\_therapy} & Life support & \code{CRRT mode} (\code{CVVHDF} \dots) and each rate
+  \\
+\code{intermittent\_dialysis} (3.0) & Life support & Each rate, named \code{\dots{} (IHD)} \\
+\code{medication\_admin\_continuous}, \code{medication\_admin\_intermittent} & Medications & Each
+  administration, by \code{med\_category}, with its dose and dose unit; a dose not given is the
+  event without a dose (\cref{sec:clif-not-given}); the group, route, action and raw name as
+  columns \\
+\code{medication\_orders} & Medications & \code{<drug> order}: dose and unit, from start to end;
+  route, status, frequency, PRN and order time as columns \\
+\code{transfusion} & Transfusions & The component (\code{component\_name}), its volume and unit,
+  its ISBT 128 product code \\
+\code{patient\_assessments} & Assessments & Each assessment (GCS, RASS, CAM \dots), by
+  \code{assessment\_category}: its numerical, else categorical, else text value \\
+\code{position} & Assessments & \code{Position}: prone or not prone \\
+\code{code\_status} & Assessments & \code{Code status}, of the patient, from its start \\
+\code{key\_icu\_orders} & Assessments & Each order (physical and occupational therapy \dots), by
+  \code{order\_category}, with its status \\
+\code{therapy\_details} & Assessments & Each element of a therapy session and its value \\
+\code{provider} & Assessments & \code{Care team}: each role, from start to stop; never who
+  (\code{provider\_id} is not read) \\
+\code{place\_based\_index} & Assessments & Each index (Area Deprivation Index, Social
+  Vulnerability Index \dots) of the hospitalization, with its version \\
+\code{clinical\_trial} & Assessments & \code{Clinical trial}: the trial, at randomization (else
+  consent); the arm, consent, randomization and withdrawal as columns \\
+\code{microbiology\_culture} & Microbiology & A culture, named by its method and fluid
+  (\code{Culture blood}), its value the organism; the LOINC code; its \code{organism\_id} kept
+  (\cref{sec:clif-micro}) \\
+\code{microbiology\_nonculture} & Microbiology & Each organism tested (PCR \dots), detected or
+  not, with its unit and range \\
+\code{microbiology\_susceptibility} & Microbiology & \code{<organism>: <antimicrobial>}, its
+  result (susceptible, resistant \dots), on its culture (\cref{sec:clif-micro}) \\
+\code{patient\_procedures} & Procedures & Each billed procedure, named by its code, in its
+  vocabulary (\code{procedure\_code\_format}) \\
+\code{hospital\_diagnosis} & Conditions & Each diagnosis of the hospitalization, by its code and
+  vocabulary, without a time; primary and present on admission as columns \\
+\code{patient\_diagnosis} & Conditions & Each diagnosis from clinical documentation (problem
+  list, history), by its code, from start to end \\
+\code{validated\_diagnosis} (3.0) & Conditions & Each clinician-validated label and its status
+  (confirmed, ruled out, uncertain); never who reviewed it \\
+\code{clinical\_notes\_facts} (3.0) & Notes & Each note's revision, by note type: its time, type,
+  author's specialty, status and revision, without text \\
+\end{xltabular}
+
+\subsection{Names and units}
+\label{sec:clif-units}
+
+\begin{xltabular}{\linewidth}{@{}P{5.0cm}P{5.2cm}L@{}}
+\caption{The names and units of CLIF's vital signs, measurements, settings and rates.}
+\label{tab:clif-units}\\
+\toprule
+\tabhead CLIF category or column & \tabhead Name & \tabhead Unit \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead CLIF category or column & \tabhead Name & \tabhead Unit \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\multicolumn{3}{@{}l}{\textbf{vitals: \code{vital\_category}}} \\
+\code{temp\_c} & Temperature & \textdegree C \\
+\code{heart\_rate} & Heart rate & bpm \\
+\code{sbp}, \code{dbp}, \code{map} & Systolic BP, Diastolic BP, Mean arterial pressure & mmHg \\
+\code{spo2} & SpO2 & \% \\
+\code{respiratory\_rate} & Respiratory rate & /min \\
+\code{height\_cm}, \code{weight\_kg} & Height, Weight & cm, kg \\
+\addlinespace
+\multicolumn{3}{@{}l}{\textbf{invasive\_hemodynamics: \code{measure\_category}}} \\
+\code{cvp}, \code{ra}, \code{rv} & CVP, Right atrial pressure, Right ventricular pressure & mmHg \\
+\code{pa\_systolic}, \code{pa\_diastolic}, \code{pa\_mean} & PA systolic, PA diastolic, PA mean
+  pressure & mmHg \\
+\code{pcwp} & PCWP & mmHg \\
+\code{cardiac\_output\_thermodilution}, \code{cardiac\_output\_fick} & Cardiac output
+  (thermodilution), Cardiac output (Fick) & L/min \\
+\addlinespace
+\multicolumn{3}{@{}l}{\textbf{respiratory\_support: columns}} \\
+\code{fio2\_set} & FiO2 (set) & fraction \\
+\code{lpm\_set}, \code{flow\_rate\_set} & O2 flow (set), Flow rate (set) & L/min \\
+\code{tidal\_volume\_set}, \code{tidal\_volume\_obs} & Tidal volume (set), Tidal volume & mL \\
+\code{resp\_rate\_set}, \code{resp\_rate\_obs} & Respiratory rate (set), Respiratory rate
+  (ventilator) & /min \\
+\code{pressure\_control\_set}, \code{pressure\_support\_set} & Pressure control (set), Pressure
+  support (set) & cmH2O \\
+\code{peak\_inspiratory\_pressure\_set}, \code{\dots\_obs} & Peak inspiratory pressure (set),
+  Peak inspiratory pressure & cmH2O \\
+\code{peep\_set}, \code{peep\_obs} & PEEP (set), PEEP & cmH2O \\
+\code{plateau\_pressure\_obs}, \code{mean\_airway\_pressure\_obs} & Plateau pressure, Mean airway
+  pressure & cmH2O \\
+\code{inspiratory\_time\_set} & Inspiratory time (set) & s \\
+\code{minute\_vent\_obs} & Minute ventilation & L/min \\
+\addlinespace
+\multicolumn{3}{@{}l}{\textbf{ecmo\_mcs: columns}} \\
+\code{flow} & Blood flow (MCS) & L/min \\
+\code{sweep\_set} (or \code{sweep}) & Sweep gas flow (set) & L/min \\
+\code{fdo2\_set} (or \code{fdo2}) & FdO2 (set) & fraction \\
+\addlinespace
+\multicolumn{3}{@{}l}{\textbf{crrt\_therapy: columns}} \\
+\code{blood\_flow\_rate} & Blood flow rate & mL/min \\
+\code{pre\_filter\_replacement\_fluid\_rate}, \code{post\_filter\_\dots} & Pre-filter, Post-filter
+  replacement fluid rate & mL/h \\
+\code{dialysate\_flow\_rate} & Dialysate flow rate & mL/h \\
+\code{ultrafiltration\_out} & Ultrafiltration & mL/h \\
+\addlinespace
+\multicolumn{3}{@{}l}{\textbf{intermittent\_dialysis: columns}} \\
+\code{blood\_flow\_rate} & Blood flow rate (IHD) & mL/min \\
+\code{dialysate\_flow\_rate}, \code{net\_ultrafiltration\_out} & Dialysate flow rate (IHD), Net
+  ultrafiltration (IHD) & none (clifpy's 3.0 schema gives none) \\
+\end{xltabular}
+
+A category not in these lists is named by its words (\code{etco2} becomes \code{Etco2}), without a
+unit.
+
+\section{Susceptibilities on their cultures}
+\label{sec:clif-micro}
+
+A row of \code{microbiology\_susceptibility} names only its organism, by \code{organism\_id}, and
+not its patient, its hospitalization or its time. When a folder is imported, Medorama therefore
+first reads the folder's \code{microbiology\_culture} files and keeps each culture by its
+\code{organism\_id}. It then puts each susceptibility on its culture, with the culture's patient,
+encounter and collection time. The susceptibility is named \code{<organism>: <antimicrobial>}
+(\code{Escherichia coli: Ceftriaxone}), with the culture and the organism as columns. A
+susceptibility whose culture is not in the folder, and every row of a susceptibility table
+imported on its own, is left out and counted (\code{rows without their culture}).
+
+\section{Doses not given}
+\label{sec:clif-not-given}
+
+An administration that was not given is kept as an event, without a dose and unit, so that it is
+never counted or searched as a dose given. CLIF marks such an administration with the
+\code{mar\_action\_group} \code{not\_administered} (stopped, paused, held) or, without a group,
+with the \code{mar\_action\_category} \code{stop}. Its action stays in the \code{action} column.
+
+\section{What is left out, and why}
+\label{sec:clif-left-out}
+
+A format keeps only the columns it names, and everything else of a CLIF table is left out. The
+following are left out on purpose:
+\begin{itemize}
+\item \textbf{The geography} of \code{hospitalization} (ZIP codes, census blocks), because these
+  are identifiers under HIPAA.
+\item \textbf{Devices' serial IDs} (\code{device\_id}), for the same reason.
+\item \textbf{\code{age\_at\_admission}}, because ages are computed from the date of birth, and
+  capped in Privacy Mode.
+\item \textbf{Staff IDs} (\code{provider\_id}, \code{author\_id}, \code{cosigner\_id},
+  \code{reviewer\_id}), because formats keep no staff.
+\item \textbf{\code{lda\_id}} (lines, drains and airways), which is not read.
+\item \textbf{Note text}, which CLIF does not hold. \code{clinical\_notes\_facts} gives a note's
+  facts (its type, time, status and revision), which become entries of the Notes column without
+  text.
+\end{itemize}
+
+\begin{phibox}
+A CLIF database still holds identifiers: \code{patient\_id}, \code{hospitalization\_id}, dates of
+birth and every time. Once imported, they are kept like any other table's identifiers
+(\cref{chap:importing}). They are shown only to users with the PHI permission out of Privacy
+Mode, and are otherwise replaced by pseudonyms and moved dates (\cref{chap:protecting}).
+\end{phibox}

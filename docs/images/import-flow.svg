@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" width="1000" height="400" role="img" aria-labelledby="t d">
+<title id="t">Importing a database</title><desc id="d">A table is inspected, its columns mapped (their names kept), its rows matched to patients and encounters, their files linked where they are; unmatched rows wait for review; recordings are indexed by workers.</desc>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#4B5563"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#B97A00"/></marker></defs>
+<rect x="0" y="0" width="1000" height="400" rx="14" fill="#FFFFFF"/>
+<g font-family="Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#1F2937">
+<text x="24" y="34" font-size="17" font-weight="700" fill="#1F2937" text-anchor="start">Importing a database: the only way in</text>
+<text x="24" y="54" font-size="12" font-weight="400" fill="#4B5563" text-anchor="start">A file always comes with the row that names its patient. Nothing is written where the data lie.</text>
+<rect x="24" y="84" width="176" height="112" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4"/>
+<text x="36" y="105" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start">Table</text>
+<text x="36" y="124.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">CSV, or a spreadsheet</text>
+<text x="36" y="140.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(Excel, OpenDocument):</text>
+<text x="36" y="157.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">an export of a source</text>
+<text x="36" y="173.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(EHR, ECG, PACS, …)</text>
+<rect x="218" y="84" width="176" height="112" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="230" y="105" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">Inspect</text>
+<text x="230" y="124.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">columns recognised</text>
+<text x="230" y="140.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(patient ID, MRN,</text>
+<text x="230" y="157.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">times, values, file);</text>
+<text x="230" y="173.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">names kept as imported</text>
+<path d="M200 140 L218 140" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="412" y="84" width="176" height="112" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="424" y="105" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">Match</text>
+<text x="424" y="124.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">rows to patients and</text>
+<text x="424" y="140.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">encounters (ID, MRN,</text>
+<text x="424" y="157.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">encounter, CSN);</text>
+<text x="424" y="173.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">duplicates to review</text>
+<path d="M394 140 L412 140" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="606" y="84" width="176" height="112" rx="9" fill="#F6E8F1" stroke="#A8507E" stroke-width="1.4"/>
+<text x="618" y="105" font-size="13.5" font-weight="650" fill="#4A1D36" text-anchor="start">Catalog</text>
+<text x="618" y="124.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">patients, identifiers</text>
+<text x="618" y="140.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(PHI), encounters,</text>
+<text x="618" y="157.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">items, the rows as</text>
+<text x="618" y="173.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">imported, provenance</text>
+<path d="M588 140 L606 140" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="800" y="84" width="176" height="112" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="812" y="105" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">Index</text>
+<text x="812" y="124.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">workers index linked</text>
+<text x="812" y="140.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">recordings, derive</text>
+<text x="812" y="157.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">series (Holter heart</text>
+<text x="812" y="173.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">rate); pseudonyms</text>
+<path d="M782 140 L800 140" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="412" y="230" width="176" height="112" rx="9" fill="#F2F3F5" stroke="#6B7280" stroke-width="1.4"/>
+<text x="424" y="251" font-size="13.5" font-weight="650" fill="#1F2937" text-anchor="start">Review (admins)</text>
+<text x="424" y="270.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">rows without a patient</text>
+<text x="424" y="286.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">wait; possible</text>
+<text x="424" y="303.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">duplicates merged</text>
+<text x="424" y="319.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">or kept apart</text>
+<rect x="218" y="230" width="176" height="112" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="230" y="251" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start">Files</text>
+<text x="230" y="270.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">linked where they are,</text>
+<text x="230" y="286.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">inside data_roots</text>
+<text x="230" y="303.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(read only)</text>
+<path d="M500 196 L500 230" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M306 196 L306 230" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="606" y="230" width="370" height="112" rx="9" fill="#F2F3F5" stroke="#6B7280" stroke-width="1.4"/>
+<text x="618" y="251" font-size="13.5" font-weight="650" fill="#1F2937" text-anchor="start">Removal</text>
+<text x="618" y="270.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">removing a database takes out everything it added,</text>
+<text x="618" y="286.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">everywhere: its items, values and notes, the</text>
+<text x="618" y="303.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">recordings and identifiers that only it brought</text>
+<text x="24" y="380" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Requirements for each table: docs/importing.md. Identifiers stay in the catalog’s identifier tables; every import and removal is audited.</text>
+</g></svg>

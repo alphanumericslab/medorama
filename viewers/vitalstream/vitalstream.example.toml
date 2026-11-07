@@ -1,0 +1,72 @@
+# VitalStream viewer settings, shared by the three viewers (vitalstream-py, vitalstream-rs,
+# vitalstream-cpp).  Copy to viewers/vitalstream/vitalstream.toml in a clone (git ignores it; read
+# by a viewer built in that clone), to ~/.config/vitalstream/vitalstream.toml, or pass --config
+# FILE.  A vitalstream.toml in the folder a viewer is started from is not read.  Every key is
+# optional, and a key of the wrong type is an error.  Relative paths are relative to the folder
+# of this file.
+#
+# Top-level keys apply to every viewer; the keys of a [py], [rs] or [cpp] section apply to that
+# viewer only (and override the top-level ones).  Command-line options override both.
+
+# Display time zone (IANA name).  Data are stored in UTC; this only affects display.
+timezone = "America/New_York"
+
+# Folders the viewers may open, inside the viewer's root (fixed when it was built:
+# install.sh --root, default your home folder; a build by hand without one: the whole file
+# system).  Default: the viewer's root.  A folder that contains the root is narrowed to it, and
+# one outside it is left out (with a warning).  Paths are checked after their symbolic links are
+# resolved.  E.g. ["~/recordings", "/data/recordings"].
+# data_roots = ["~"]
+
+# The limits on a folder opened as one session (Open multiple records...): header files below
+# it, folder levels, and seconds to count them before it opens (docs/wfdb-collection.md,
+# "Limits" at the repository root).  Over a limit the folder is refused.
+# max_records = 5000
+# max_depth = 20
+# max_scan_s = 10
+
+# Refuse to start without a password (Medorama sets it for the viewer it runs).  Default false.
+# require_password = false
+
+# 127.0.0.1 = this machine only (use an SSH tunnel from elsewhere).
+host = "127.0.0.1"
+
+# Host names the viewer answers for besides localhost, 127.0.0.1, ::1 and host (other requests
+# are refused, against DNS rebinding): this machine's names when host is "0.0.0.0", or a reverse
+# proxy's public name; ["*"] allows any.
+# allowed_hosts = []
+
+# Send the sign-in cookie over HTTPS only (Secure): set it for a viewer behind an HTTPS proxy.
+# secure_cookie = false
+
+# Recordings indexed at the same time.
+index_workers = 2
+
+# The index folder, shared by the three viewers (they write the same index) and by Medorama
+# (set it to the catalog's index_dir to use the catalog's indexes).  Default:
+# sample_data/outputs/index when run from a clone, else ~/.cache/vitalstream.
+# cache_dir = "~/.cache/vitalstream"
+
+# The adapter folder: programs that read formats the viewers do not read themselves
+# (docs/adapters.md at the repository root).  Default: ~/.local/share/medorama/adapters
+# (Windows: %LOCALAPPDATA%\medorama\adapters), the folder Medorama uses too.
+# adapters_dir = "~/.local/share/medorama/adapters"
+
+# Verbose QC: also mark (dashed outline) the data a reader repaired, such as data blocks the
+# file stored out of order and the reader put back in order.  Default false: repaired data is
+# not marked; breaks are shaded either way.  Also --qc-verbose.
+# qc_verbose = false
+
+# Where --set-password keeps the password hash (no password until you set one).  The same
+# password then works for every viewer.
+# auth_file = "~/.config/vitalstream/auth.json"
+
+# Per viewer: its port.
+[py]
+port = 8050
+
+[rs]
+port = 8060
+
+[cpp]
+port = 8070

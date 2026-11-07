@@ -1,0 +1,293 @@
+% Preamble of the Medorama user's manual (medorama-user-manual.tex); the design of the WFDB-x
+% manual's, so that the two read alike.
+% Built with pdflatex (latexmk; see README.md). The source is ASCII: special characters are
+% written as LaTeX commands.
+
+% ---- Engine, encoding and fonts ----------------------------------------------------------
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+\else
+  \usepackage{fontspec}
+\fi
+\usepackage{XCharter}                               % text: Charter
+\IfFileExists{sourcesans.sty}                       % headings, labels: Source Sans (\sffamily)
+  {\usepackage{sourcesans}}{\usepackage{sourcesanspro}}  % (older TeX distributions)
+\usepackage[varqu,varl,scaled=0.9]{zi4}             % code: Inconsolata, upright quotes, bold
+\usepackage{textcomp}
+\usepackage{amsmath,amssymb}
+\usepackage{microtype}
+\DisableLigatures[-,<,>]{family=tt*}           % "--", "<<", ">>" stay as typed in code
+
+% ---- Colors (color-blind-safe; red is never used: it is reserved for alarms) --------------------
+\usepackage[table]{xcolor}
+\definecolor{titlecolor}{HTML}{12324A}               % headings, title page
+\definecolor{accent}{HTML}{0072B2}                   % Okabe-Ito blue: numbers, links, rules
+\definecolor{okskyblue}{HTML}{56B4E9}
+\definecolor{okgreen}{HTML}{009E73}
+\definecolor{okorange}{HTML}{E69F00}
+\definecolor{okviolet}{HTML}{7B3294}                 % identifying data (PHI)
+\definecolor{rulecolor}{HTML}{B8C4CE}
+\definecolor{mutedtext}{HTML}{5A6B7B}
+\definecolor{codebg}{HTML}{F5F7F9}
+\definecolor{codecomment}{HTML}{5A6B7B}
+\definecolor{codekeyword}{HTML}{005A8C}
+\definecolor{codestring}{HTML}{00785A}
+\definecolor{noteback}{HTML}{EBF4FA}
+\definecolor{phiback}{HTML}{F4EDF8}
+\definecolor{tipback}{HTML}{E9F6F1}
+\definecolor{tableheadback}{HTML}{EEF2F5}
+
+% ---- Page --------------------------------------------------------------------------------
+\usepackage[a4paper,top=28mm,bottom=27mm,inner=27mm,outer=25mm,headheight=15pt,
+  headsep=9mm,footskip=11mm]{geometry}
+\usepackage[skip=0.55em plus 0.2em minus 0.1em]{parskip}
+\raggedbottom
+\clubpenalty=10000
+\widowpenalty=10000
+\setcounter{tocdepth}{2}
+\setcounter{secnumdepth}{3}
+
+% ---- Headings and the table of contents --------------------------------------------------
+\usepackage{titlesec}
+\usepackage{titletoc}
+\titleformat{\part}[display]
+  {\normalfont\sffamily\centering\color{titlecolor}}
+  {\large\bfseries\color{accent}\MakeUppercase{\partname}\enspace\thepart}
+  {14pt}
+  {\Huge\bfseries}
+\titleformat{\chapter}[display]
+  {\normalfont\sffamily\color{titlecolor}}
+  {\large\bfseries\color{accent}\MakeUppercase{\chaptertitlename}\enspace\thechapter}
+  {4pt}
+  {{\color{accent}\titlerule[1.2pt]}\vspace{10pt}\Huge\bfseries}
+\titleformat{name=\chapter,numberless}[display]
+  {\normalfont\sffamily\color{titlecolor}}
+  {}
+  {0pt}
+  {{\color{accent}\titlerule[1.2pt]}\vspace{10pt}\Huge\bfseries}
+\titlespacing*{\chapter}{0pt}{0pt}{26pt}
+\titleformat{\section}
+  {\normalfont\sffamily\Large\bfseries\color{titlecolor}}{\color{accent}\thesection}{0.75em}{}
+\titleformat{\subsection}
+  {\normalfont\sffamily\large\bfseries\color{titlecolor}}{\color{accent}\thesubsection}{0.75em}{}
+\titleformat{\subsubsection}
+  {\normalfont\sffamily\normalsize\bfseries\color{titlecolor}}{\thesubsubsection}{0.75em}{}
+\titleformat{\paragraph}[runin]
+  {\normalfont\sffamily\normalsize\bfseries\color{titlecolor}}{}{0pt}{}
+\titlespacing*{\section}{0pt}{1.6em plus 0.4em minus 0.2em}{0.5em}
+\titlespacing*{\subsection}{0pt}{1.3em plus 0.3em minus 0.2em}{0.4em}
+\titlespacing*{\subsubsection}{0pt}{1.1em plus 0.3em minus 0.2em}{0.3em}
+\titlespacing*{\paragraph}{0pt}{0.8em plus 0.2em}{0.6em}
+
+\titlecontents{part}[0pt]
+  {\addvspace{1.3em}\sffamily\bfseries\large\color{titlecolor}}
+  {\partname\ \thecontentslabel\quad}{}{\hfill\contentspage}[\addvspace{0.3em}]
+\titlecontents{chapter}[2.2em]
+  {\addvspace{0.55em}\sffamily\bfseries}
+  {\contentslabel{2.2em}}{\hspace*{-2.2em}}{\hfill\contentspage}
+\titlecontents{section}[4.9em]
+  {\small}{\contentslabel{2.7em}}{\hspace*{-2.7em}}
+  {\titlerule*[0.7pc]{.}\contentspage}
+\titlecontents{subsection}[8.4em]
+  {\small\color{mutedtext}}{\contentslabel{3.5em}}{\hspace*{-3.5em}}
+  {\titlerule*[0.7pc]{.}\contentspage}
+\titlecontents{figure}[2.6em]
+  {\small}{\contentslabel{2.6em}}{\hspace*{-2.6em}}{\titlerule*[0.7pc]{.}\contentspage}
+
+% ---- Running heads -----------------------------------------------------------------------
+\usepackage{fancyhdr}
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\sffamily\small\color{mutedtext}\nouppercase{\leftmark}}
+\fancyhead[R]{\sffamily\small\bfseries\color{titlecolor}\thepage}
+\fancyfoot[L]{\sffamily\footnotesize\color{mutedtext}Medorama\enspace\textbar\enspace
+  User's manual}
+\fancyfoot[R]{\sffamily\footnotesize\color{mutedtext}Version \mdversion}
+\renewcommand{\headrule}{{\color{rulecolor}\hrule height 0.4pt width\headwidth}}
+\renewcommand{\footrulewidth}{0pt}
+\renewcommand{\chaptermark}[1]{\markboth{%
+  \ifnum\value{secnumdepth}>-1 \ifnum\value{chapter}>0 \thechapter\quad\fi\fi #1}{}}
+\fancypagestyle{plain}{\fancyhf{}%
+  \fancyfoot[L]{\sffamily\footnotesize\color{mutedtext}Medorama\enspace\textbar\enspace
+    User's manual}%
+  \fancyfoot[R]{\sffamily\footnotesize\bfseries\color{titlecolor}\thepage}%
+  \renewcommand{\headrulewidth}{0pt}}
+
+% ---- Lists, figures, tables --------------------------------------------------------------
+\usepackage{enumitem}
+\setlist{itemsep=0.15em,topsep=0.3em,parsep=0.1em}
+\setlist[itemize,1]{label={\color{accent}\textbullet}}
+\usepackage{graphicx}
+\usepackage{caption}
+\captionsetup{font=small,labelfont={bf,sf,color=accent},textfont=sf,labelsep=quad,
+  skip=6pt}
+\captionsetup[table]{position=top}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{xltabular}
+\usepackage{multirow}
+\usepackage{etoolbox}
+\newcolumntype{L}{>{\raggedright\arraybackslash}X}       % ragged-right X column
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}} % ragged-right fixed-width column
+\renewcommand{\arraystretch}{1.2}
+\setlength{\aboverulesep}{0.5ex}
+\setlength{\belowrulesep}{0.6ex}
+\setlength{\heavyrulewidth}{0.9pt}
+\setlength{\lightrulewidth}{0.45pt}
+\AtBeginEnvironment{tabularx}{\small}
+\AtBeginEnvironment{xltabular}{\small}
+\newcommand{\tabhead}{\leavevmode\sffamily\bfseries\color{titlecolor}}   % the header cells of a table
+
+% ---- Code --------------------------------------------------------------------------------
+\usepackage{listings}
+\lstdefinelanguage{Rust}{
+  morekeywords={as,break,const,continue,crate,else,enum,extern,false,fn,for,if,impl,in,let,
+    loop,match,mod,move,mut,pub,ref,return,self,Self,static,struct,super,trait,true,type,
+    unsafe,use,where,while,dyn,Some,None,Ok,Err,Option,Result,Vec,String,u8,u16,u32,u64,
+    i16,i32,i64,f32,f64,usize,isize,bool,str},
+  sensitive=true,
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]",
+}
+\lstdefinelanguage{TOML}{
+  morecomment=[l]{\#},
+  morestring=[b]",
+  morestring=[b]',
+  morekeywords={true,false},
+}
+\lstdefinelanguage{CMake}{
+  morekeywords={add_subdirectory,target_link_libraries,set,cmake_minimum_required,project,
+    add_executable,find_package,PRIVATE,PUBLIC,CACHE,BOOL,FORCE,OFF,ON,EXCLUDE_FROM_ALL},
+  sensitive=false,
+  morecomment=[l]{\#},
+  morestring=[b]",
+}
+\lstdefinelanguage{JavaScript}{
+  morekeywords={async,await,break,case,catch,const,continue,default,delete,do,else,export,
+    false,finally,for,function,if,import,in,instanceof,let,new,null,return,switch,this,throw,
+    true,try,typeof,undefined,var,while},
+  sensitive=true,
+  morecomment=[l]{//},
+  morecomment=[s]{/*}{*/},
+  morestring=[b]",
+  morestring=[b]',
+  morestring=[b]`,
+}
+\lstdefinelanguage{PowerShell}{
+  morekeywords={param,if,else,foreach,function,return,try,catch,finally,throw},
+  sensitive=false,
+  morecomment=[l]{\#},
+  morestring=[b]",
+  morestring=[b]',
+}
+\lstdefinelanguage{CSV}{}
+\lstdefinelanguage{JSON}{
+  morestring=[b]",
+  morekeywords={true,false,null},
+}
+\lstset{
+  basicstyle=\ttfamily\small,
+  columns=fullflexible,
+  keepspaces=true,
+  upquote=true,
+  showstringspaces=false,
+  breaklines=true,
+  breakatwhitespace=false,
+  postbreak=\mbox{\textcolor{codecomment}{$\hookrightarrow$}\space},
+  backgroundcolor=\color{codebg},
+  frame=l,
+  framerule=2pt,
+  rulecolor=\color{okskyblue},
+  framesep=6pt,
+  xleftmargin=8pt,
+  xrightmargin=0pt,
+  aboveskip=0.8em,
+  belowskip=0.6em,
+  tabsize=4,
+  keywordstyle=\color{codekeyword}\bfseries,
+  commentstyle=\color{codecomment}\itshape,
+  stringstyle=\color{codestring},
+}
+\lstdefinestyle{text}{language={},keywordstyle={},commentstyle={},stringstyle={}}
+% The styles of the listings: "signature" is the syntax of a command or a request (one listing
+% right after each \apientry), "example" an example, "shell" a command line.
+\lstdefinestyle{signature}{backgroundcolor=\color{white},rulecolor=\color{accent},
+  basicstyle=\ttfamily\small\bfseries,keywordstyle=\color{codekeyword}}
+\lstdefinestyle{example}{}
+\lstdefinestyle{shell}{language=bash,keywordstyle={},commentstyle=\color{codecomment},
+  stringstyle={}}
+
+% ---- Boxes -------------------------------------------------------------------------------
+\usepackage{tikz}
+\usepackage[most]{tcolorbox}
+\tcbset{mdbox/.style={enhanced,breakable,boxrule=0pt,leftrule=3pt,arc=0pt,outer arc=0pt,
+  left=8pt,right=8pt,top=5pt,bottom=5pt,before skip=0.8em,after skip=0.8em,
+  fonttitle=\sffamily\bfseries\small,attach title to upper={\quad}}}
+\newtcolorbox{note}[1][Note]{mdbox,colback=noteback,colframe=accent,coltitle=accent,
+  title={#1}}
+\newtcolorbox{tip}[1][Tip]{mdbox,colback=tipback,colframe=okgreen,coltitle=okgreen,
+  title={#1}}
+\newtcolorbox{phibox}[1][Patient data]{mdbox,colback=phiback,colframe=okviolet,
+  coltitle=okviolet,title={#1}}
+
+% ---- Links and references ----------------------------------------------------------------
+\usepackage{xurl}
+\usepackage[bookmarksnumbered,bookmarksopen,bookmarksopenlevel=0]{hyperref}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=accent,citecolor=accent,
+  pdftitle={Medorama: User's manual},
+  pdfauthor={Reza Sameni},
+  pdfsubject={A unified patient-journey research platform linking EHR data, physiological
+    waveforms, imaging and laboratory results across databases},
+  pdfkeywords={Medorama, VitalStream, patient journey, cohorts, OMOP, CLIF, WFDB, ECG, DICOM,
+    privacy, de-identification}}
+\usepackage[nameinlink,capitalise,noabbrev]{cleveref}
+
+% ---- Manual macros -----------------------------------------------------------------------
+\newcommand{\mdversion}{0.1.0}        % the version of Medorama described
+\newcommand{\mddate}{November 2026}
+\newcommand{\md}{Medorama}
+\newcommand{\ui}[1]{\textsf{\bfseries #1}}   % a button, tab or menu of a page: \ui{Open record\dots}
+\newcommand{\key}[1]{\fbox{\footnotesize\sffamily #1}}  % a key of the keyboard
+
+% An underscore that allows a line break after it, so long identifiers wrap in tables.
+\DeclareRobustCommand{\_}{\ifmmode\text{\textunderscore}\else\textunderscore\allowbreak\fi}
+
+\newcommand{\code}[1]{\texttt{#1}}          % inline code, identifiers, values (escape _ # % & { })
+\newcommand{\cmd}[1]{\texttt{#1}}           % a command line or a subcommand
+\newcommand{\opt}[1]{\texttt{#1}}           % a command-line option
+% A file or folder of the repository or an output: may break after each /.
+\makeatletter
+\DeclareRobustCommand{\file}[1]{\texttt{\md@file#1/\@nil}}
+\def\md@file#1/#2\@nil{#1\if\relax\detokenize{#2}\relax\else/\allowbreak\md@file#2\@nil\fi}
+\makeatother
+\newcommand{\phimark}{\textsuperscript{\textcolor{okviolet}{\sffamily\bfseries PHI}}}
+\pdfstringdefDisableCommands{\def\_{\textunderscore}\def\allowbreak{}\def\code#1{#1}%
+  \def\file#1{#1}\def\cmd#1{#1}\def\opt#1{#1}\def\phimark{}\def\ui#1{#1}\def\key#1{#1}}
+
+% A function or command entry of a reference chapter: \apientry{name}{one-line summary}
+\newcommand{\apientry}[2]{\par\addvspace{0.9em}\noindent
+  {\color{rulecolor}\rule{\linewidth}{0.4pt}}\par\nopagebreak\vspace{0.15em}\noindent
+  {\large\ttfamily\bfseries\color{titlecolor}#1}\hfill{\small\sffamily\color{mutedtext}#2}\par
+  \nopagebreak\smallskip}
+% Parameter lists of reference entries: \begin{params} \item[\code{name}] meaning \end{params}
+\newlist{params}{description}{1}
+\setlist[params]{font=\normalfont\ttfamily\bfseries,leftmargin=2.2em,style=nextline,
+  itemsep=0.1em}
+
+% Return value and errors of a reference entry: \returns{...} \raises{...}
+\newcommand{\returns}[1]{\par\noindent{\sffamily\bfseries\small\color{titlecolor}Returns}
+  \quad #1\par}
+\newcommand{\raises}[1]{\par\noindent{\sffamily\bfseries\small\color{titlecolor}Errors}
+  \quad #1\par}
+% Screenshots: \screenshot{file in ../images/screens}{caption}{label}
+\graphicspath{{figures/}}   % copies of ../images (screens, diagrams as PDF): make figures
+\newcommand{\screenshot}[3]{\begin{figure}[htbp]\centering
+  \includegraphics[width=\linewidth,height=0.42\textheight,keepaspectratio]{#1}
+  \caption{#2}\label{#3}\end{figure}}
+

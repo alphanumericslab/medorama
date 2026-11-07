@@ -1,0 +1,26 @@
+# Dependabot: pull requests for new versions of the GitHub Actions the workflows use (pinned by
+# commit, with the version in a comment, which Dependabot updates together) and of the Rust
+# crates (Cargo.lock; every update still passes cargo deny and the tests).  The Python packages
+# state ranges, not pins, so new versions need no change here; wfdb-x is pinned by commit on
+# purpose and updated by hand (Cargo.toml, pyproject.toml, deps.cmake).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: wfdbx
+    groups:
+      # versions that keep the same requirement in Cargo.toml: one pull request
+      compatible:
+        update-types: [minor, patch]

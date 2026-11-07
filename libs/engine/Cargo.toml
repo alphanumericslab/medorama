@@ -1,0 +1,33 @@
+[package]
+name = "recording-engine"
+version = "0.1.0"
+description = "The recording engine of Medorama and VitalStream: read, index and query physiological recordings (WFDB records and folders, EDF, EDF+ and BDF files; other formats through adapters)"
+readme = "README.md"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "recording_engine"
+path = "src/lib.rs"
+
+[features]
+# WFDB records and folders, read with wfdb-x (the crate `wfdbx`).  Without it
+# (`--no-default-features`) the engine holds no wfdb-x code: a WFDB record or folder is
+# recognised and refused ("this build has no WFDB support"); every other format reads as usual.
+default = ["wfdb"]
+wfdb = ["dep:wfdbx"]
+
+[dependencies]
+signal-core.workspace = true
+wfdbx = { workspace = true, optional = true }
+indexmap.workspace = true
+memmap2.workspace = true
+rayon.workspace = true
+sha2.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

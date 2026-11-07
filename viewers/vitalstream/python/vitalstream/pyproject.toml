@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vitalstream_py"
+version = "0.1.0"
+description = "VitalStream viewer (Python): physiological recordings (WFDB folders, and the formats of installed adapters) in a web browser"
+requires-python = ">=3.9"
+license = "PolyForm-Noncommercial-1.0.0"
+# copied from the repository by setup.py (the licence travels with every copy of the package)
+license-files = ["LICENSE", "COMMERCIAL.md"]
+authors = [{ name = "Reza Sameni" }]
+dependencies = [
+    "fastapi>=0.100",
+    "uvicorn>=0.20",
+    "numpy>=1.22",
+    "tomli>=1.1; python_version < '3.11'",
+    # the IANA time zones (zoneinfo), which Windows does not have
+    "tzdata; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+# WFDB records and folders: pip install '.[wfdb]' (the installers include it).  Without it the
+# viewer holds no wfdb-x code: a WFDB record or folder is refused ("this build has no WFDB
+# support"), every other format reads as usual.
+wfdb = [
+    # wfdb-x (WFDB records): the GitHub archive of a pinned commit
+    "wfdb-x @ https://github.com/alphanumericslab/wfdb-x/archive/a707ba9ec1624241793bf41b938b219d76005526.tar.gz#subdirectory=python",
+]
+test = ["pytest", "httpx"]
+
+[project.scripts]
+vitalstream-py = "vitalstream_py.__main__:main"
+
+[tool.setuptools]
+packages = ["vitalstream_py", "vitalstream_py.sources"]
+
+[tool.setuptools.package-data]
+# filled from <repo>/web/ by setup.py at build time
+vitalstream_py = ["static/*", "static/*/*"]

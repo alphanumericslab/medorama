@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PACS viewer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="title"><div id="host" class="host" hidden></div><span class="brand">PACS</span><span id="name"></span></div>
+  <div class="tools">
+    <div class="seg">
+      <button id="prev" title="Previous frame or image (←)">‹</button>
+      <button id="play" title="Play (Space)">▶</button>
+      <button id="next" title="Next frame or image (→)">›</button>
+    </div>
+    <select id="speed" title="Speed" aria-label="Speed"><option value="0.25">¼×</option><option value="0.5">½×</option><option value="1" selected>1×</option><option value="2">2×</option></select>
+    <label>Window <select id="preset"></select></label>
+    <div class="seg"><button id="zout" title="Smaller (Ctrl + wheel)">−</button><button id="zin" title="Larger (Ctrl + wheel)">+</button></div>
+    <button id="cal" title="Calipers: click two points (Esc clears)">Calipers</button>
+  </div>
+  <div class="right">
+    <a id="server" class="button" href="browse" hidden title="The folders of the computer serving this page">Server folders…</a>
+    <button id="open" class="primary" title="One record: a study's or series' DICOM files, a video, a picture or a PDF">Open record…</button>
+    <button id="openDir" title="A folder: every study in it and in its subfolders, listed by series">Open multiple records…</button>
+    <button id="theme" title="Light or dark"></button>
+    <input id="file" type="file" multiple hidden>
+    <input id="dir" type="file" webkitdirectory multiple hidden>
+  </div>
+</header>
+<div id="msg" class="msg"></div>
+<main id="view" class="hidden">
+  <nav id="series" aria-label="Series"></nav>
+  <section class="viewport">
+    <canvas id="canvas"></canvas>
+    <div id="page" class="page hidden"></div>
+    <div id="tl" class="corner tl"></div><div id="tr" class="corner tr"></div>
+    <div id="bl" class="corner bl"></div><div id="br" class="corner br"></div>
+    <input id="slider" type="range" min="0" max="0" value="0" title="Images or frames (wheel, ↑ ↓)">
+  </section>
+</main>
+<script src="jpeg.js"></script>
+<script src="dicom.js"></script>
+<script src="host.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

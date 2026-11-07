@@ -1,0 +1,274 @@
+% Appendix: licenses. The license of Medorama is stated in one paragraph (sec:licences-licence):
+% a change of license edits that paragraph only. Sources: LICENSE, COMMERCIAL.md, CLA.md,
+% THIRD_PARTY_LICENSES.md, README.md ("License" and its trademarks paragraph); CLIF's data
+% dictionary (formats/clif.rs).
+\chapter{Licenses}
+\label{chap:licences}
+
+This appendix states the license of Medorama and its viewers, explains what follows from the
+components they are built with, and lists every third-party component with its license. It is an
+inventory for users and maintainers, not legal advice. The repository's \file{LICENSE} and
+\file{THIRD\_PARTY\_LICENSES.md} are the reference.
+
+\section{Medorama's license}
+\label{sec:licences-licence}
+
+Copyright \textcopyright{} 2025--2026 Reza Sameni. Medorama, its viewers and the synthetic data of
+the repository are licensed under the \textbf{PolyForm Noncommercial License 1.0.0}
+(\file{LICENSE}, \url{https://polyformproject.org/licenses/noncommercial/1.0.0}).
+\begin{itemize}
+\item \textbf{Noncommercial use is free.} The license permits any noncommercial purpose. It names
+  personal use for research, experiment and testing for the benefit of public knowledge, and use
+  by charitable organizations, educational institutions, public research organizations, public
+  safety or health organizations, environmental protection organizations and government
+  institutions, regardless of how that use is funded. Within those purposes, Medorama may be
+  run, changed and distributed, with the license terms and the \code{Required Notice:} line of
+  \file{LICENSE}.
+\item \textbf{Commercial use needs a commercial license}, agreed in writing with the author
+  (\file{COMMERCIAL.md}): for example a company's own use, a product or service built on
+  Medorama, or its inclusion in a commercial product. Commercial licensees may use a build
+  without WFDB support, which has no copyleft dependency, or one with it, whose wfdb-x component
+  stays under its own license (\cref{sec:installation-no-wfdb}).
+\item \textbf{Contributions} are accepted under the Contributor License Agreement
+  (\file{CLA.md}), which lets the author offer them under both licenses while their authors keep
+  their copyright.
+\end{itemize}
+
+\section{Programs built with wfdb-x}
+\label{sec:licences-gpl}
+
+Medorama's programs read WFDB records with wfdb-x
+(\url{https://github.com/alphanumericslab/wfdb-x}), a reimplementation of PhysioNet's WFDB
+Software Package 10.7.0 with identical behavior in Rust, C++ and Python, a separate project licensed under the GNU
+General Public License, version 3 or (at your option) any later version. wfdb-x is not part of
+the repository: each implementation takes it from GitHub at one pinned commit (\code{a707ba9}).
+A build without the \code{wfdb} feature (Cargo's \opt{-{}-no-default-features},
+CMake's \code{VS\_WFDB=OFF}, \code{vitalstream\_py} without its \code{[wfdb]} extra) contains no
+wfdb-x code (\cref{sec:installation-no-wfdb}).
+\begin{itemize}
+\item wfdb-x is linked statically into the Rust programs (\cmd{medorama}, \cmd{vitalstream-rs},
+  through the crate \code{recording-engine}) and into \cmd{vitalstream-cpp}, and
+  \code{vitalstream\_py} imports it.
+\item Building Medorama from source and running it, as the repository is set up to do, combines
+  the two only on the machine that builds it.
+\item \textbf{Distributing} a built program (a binary release, an installer, a container image) is
+  an open point that the maintainers are settling (\file{THIRD\_PARTY\_LICENSES.md}): the GPL v3
+  asks for the whole program under the GPL v3, while Medorama's license restricts commercial use.
+  Until it is settled, binary releases are off: the release workflow runs only when the
+  repository variable \code{RELEASES\_ENABLED} is \code{true}. The archives it builds carry
+  \file{LICENSE}, \file{COMMERCIAL.md}, \file{THIRD\_PARTY\_LICENSES.md} and wfdb-x's license (as
+  \file{LICENSE-wfdb-x}).
+\end{itemize}
+wfdb-x's own copies of the original C sources (its \file{third\_party/}, used in no build) keep
+their LGPL and GPL v2 licenses. The programs that do not contain wfdb-x (the ECG and PACS pages,
+\cmd{muse-py}, \cmd{dicom-py}) are under Medorama's license alone. The EDF, EDF+, BDF and BDF+
+readers of the engines and of the ECG viewer are written in the repository from the published
+specifications; they use no third-party EDF library.
+
+\section{Third-party components}
+\label{sec:licences-third-party}
+
+Nothing from other parties is vendored in the repository: the components below are fetched by
+Cargo, CMake and pip at fixed versions when the programs are built.
+
+\subsection{Rust}
+\label{sec:licences-rust}
+
+The Rust workspace (\cmd{medorama}, \cmd{vitalstream-rs}, \file{libs/}) takes its crates from
+crates.io at the versions recorded in \file{Cargo.lock}, and wfdb-x from GitHub. Every crate from
+crates.io is under a permissive license that permits its use in Medorama. \cmd{cargo deny check}
+(\file{deny.toml}, \cmd{make audit}) fails the build on any license that is not in
+\cref{tab:licences-rust}.
+
+\begin{xltabular}{\linewidth}{@{}P{6.0cm}P{1.2cm}L@{}}
+\caption{The licenses of the Rust crates.}
+\label{tab:licences-rust}\\
+\toprule
+\tabhead License & \tabhead Crates & \tabhead Among them \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead License & \tabhead Crates & \tabhead Among them \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+MIT OR Apache-2.0 (and equivalent spellings) & 189 & \\
+MIT & 48 & \\
+Apache-2.0 & 6 & \code{flagset}, \code{parquet}, \code{rpassword}, \code{rtoolbox},
+  \code{sync\_wrapper}, \code{zopfli} \\
+BSD-3-Clause & 5 & \code{snap}, \code{subtle}, \code{zstd}, \code{zstd-safe}, \code{zstd-sys}
+  (with the Zstandard library) \\
+Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT & 4 & \code{wasi}, \code{wasip2},
+  \code{wit-bindgen} \\
+Zlib OR Apache-2.0 OR MIT, MIT OR Zlib OR Apache-2.0 & 4 & \code{objc2-core-foundation},
+  \code{objc2-system-configuration}, \code{tinyvec}, \code{miniz\_oxide} \\
+Unlicense OR MIT & 4 & \code{byteorder}, \code{memchr}, \code{csv}, \code{csv-core} \\
+Zlib & 2 & \code{foldhash}, \code{zlib-rs} \\
+MIT OR Apache-2.0 OR LGPL-2.1-or-later & 2 & \code{r-efi} (used under MIT or Apache-2.0) \\
+Apache-2.0 OR ISC OR MIT & 2 & \code{rustls}, \code{rustls-native-certs} \\
+ISC & 2 & \code{rustls-webpki}, \code{untrusted} \\
+(MIT OR Apache-2.0) AND Unicode-3.0 & 2 & \code{unicode-ident}, \code{unicode-normalization} \\
+Apache-2.0 OR BSL-1.0 OR MIT & 2 & \code{wasite}, \code{whoami} \\
+BSD-2-Clause OR Apache-2.0 OR MIT & 2 & \code{zerocopy}, \code{zerocopy-derive} \\
+Apache-2.0 AND ISC & 1 & \code{ring} (the cryptography of TLS, without OpenSSL) \\
+(Apache-2.0 OR MIT) AND BSD-3-Clause & 1 & \code{encoding\_rs} \\
+MIT AND BSD-3-Clause & 1 & \code{matchit} \\
+0BSD OR MIT OR Apache-2.0 & 1 & \code{adler2} \\
+Apache-2.0 OR BSL-1.0 & 1 & \code{ryu} \\
+CC0-1.0 & 1 & \code{tiny-keccak}, through \code{ahash} \\
+GPL-3.0-or-later & 1 & \code{wfdbx}, wfdb-x (\cref{sec:licences-gpl}) \\
+\end{xltabular}
+
+The direct dependencies are the following.
+\begin{itemize}
+\item \textbf{\cmd{medorama}:} \code{axum}, \code{tokio}, \code{hyper-util} (the gateway),
+  \code{rusqlite} (SQLite compiled in), \code{tokio-postgres}, \code{tokio-postgres-rustls},
+  \code{rustls}, \code{rustls-native-certs} (PostgreSQL over verified TLS), \code{argon2},
+  \code{hmac}, \code{sha2}, \code{getrandom} (passwords, sessions, the audit log's seals),
+  \code{calamine} (spreadsheets), \code{csv}, \code{parquet} (CLIF's tables, without Arrow),
+  \code{chrono}, \code{chrono-tz}, \code{clap}, \code{serde}, \code{serde\_json}, \code{toml},
+  \code{include\_dir}, \code{mime\_guess}, \code{rpassword}, \code{bytes}, \code{futures-util},
+  \code{http-body-util}, \code{anyhow}; and, for the tests only, \code{tempfile}, \code{tower},
+  \code{tungstenite} (the browser test), \code{zip}.
+\item \textbf{\cmd{vitalstream-rs}:} \code{axum}, \code{tokio}, \code{scrypt}, \code{hmac},
+  \code{sha2}, \code{getrandom}, \code{toml}, \code{chrono-tz}, \code{clap}, \code{serde},
+  \code{serde\_json}, \code{include\_dir}, \code{mime\_guess}, \code{rpassword},
+  \code{indexmap}.
+\item \textbf{\code{recording-engine}:} \code{wfdbx} (wfdb-x), \code{indexmap}, \code{memmap2},
+  \code{rayon}, \code{sha2}. \textbf{\code{signal-core}:} \code{indexmap}.
+\end{itemize}
+
+\begin{xltabular}{\linewidth}{@{}P{8.0cm}L@{}}
+\caption{Compiled into \cmd{medorama}.}
+\label{tab:licences-compiled}\\
+\toprule
+\tabhead Component & \tabhead License \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Component & \tabhead License \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+SQLite (\code{rusqlite}, \code{libsqlite3-sys}) & Public domain \\
+SQLCipher, with \opt{-{}-features encryption} & BSD-3-Clause \\
+OpenSSL, built from source by \code{openssl-src}, with \opt{-{}-features encryption} &
+  Apache-2.0 \\
+\end{xltabular}
+
+Each release archive of the Rust programs carries \file{THIRD\_PARTY\_LICENSES.md}, wfdb-x's
+\file{LICENSE} and \file{THIRD\_PARTY\_CRATES.txt}, the license texts of every crate compiled in
+(written by \cmd{cargo about} with \file{tools/about.toml}).
+
+\subsection{C++}
+\label{sec:licences-cpp}
+
+The C++ viewer (\file{viewers/vitalstream/cpp/}) downloads its dependencies when it is built, or
+takes them from \file{cpp/deps/}, at fixed versions. Each one is checked against the SHA-256
+recorded in \file{cpp/cmake/deps.cmake}.
+
+\begin{xltabular}{\linewidth}{@{}P{2.8cm}P{2.2cm}P{2.8cm}L@{}}
+\caption{The libraries of \cmd{vitalstream-cpp}.}
+\label{tab:licences-cpp}\\
+\toprule
+\tabhead Library & \tabhead Version & \tabhead License & \tabhead Used for \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Library & \tabhead Version & \tabhead License & \tabhead Used for \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+wfdb-x (C++) & Commit \code{a707ba9} & GPL-3.0-or-later & Reading WFDB records, headers and
+  annotation files (linked statically) \\
+CLI11 & 2.4.2 & BSD-3-Clause & The command line \\
+toml++ & 3.4.0 & MIT & The settings file \\
+cpp-httplib & 0.65.0 & MIT & The HTTP server \\
+GoogleTest & 1.15.2 & BSD-3-Clause & The unit tests only \\
+\end{xltabular}
+
+The build tools are not shipped. They are CMake (BSD-3-Clause), Ninja (Apache-2.0), and the
+compiler's own runtime libraries (libstdc++: the GPL with the GCC Runtime Library Exception; libc++: Apache-2.0
+WITH LLVM-exception; the MSVC runtime: Microsoft's redistribution terms). SHA-256, scrypt, HMAC
+and the list of IANA time-zone names are implemented or generated in the repository. The name list
+is generated from Python's \code{zoneinfo} by \file{tools/gen\_timezones.py}; the IANA tz database
+is in the public domain.
+
+\subsection{Python}
+\label{sec:licences-python}
+
+The Python packages are installed by pip from PyPI, except wfdb-x, which comes from GitHub at the
+pinned commit. Nothing is vendored.
+
+\begin{xltabular}{\linewidth}{@{}P{2.4cm}P{2.4cm}P{2.6cm}L@{}}
+\caption{The Python packages.}
+\label{tab:licences-python}\\
+\toprule
+\tabhead Package & \tabhead Version & \tabhead License & \tabhead Needed by \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Package & \tabhead Version & \tabhead License & \tabhead Needed by \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+FastAPI & 0.100 or later & MIT & \code{vitalstream\_py} \\
+Uvicorn & 0.20 or later & BSD-3-Clause & \code{vitalstream\_py} \\
+NumPy & 1.22 or later & BSD-3-Clause & \code{vitalstream\_py}, \code{dicom\_index\_py} \\
+wfdb-x & commit \code{a707ba9} & GPL-3.0-or-later & \code{vitalstream\_py} (reading WFDB
+  records) \\
+tomli & 1.1 or later & MIT & \code{vitalstream\_py} on Python before 3.11 \\
+tzdata & any & Apache-2.0 & \code{vitalstream\_py} on Windows (the IANA time zones) \\
+pydicom & 2.4 or later & MIT & \code{dicom\_index\_py} (DICOM headers, structured reports,
+  waveforms) \\
+pytest, httpx & Any & MIT, BSD-3-Clause & The tests only \\
+\end{xltabular}
+
+\code{muse\_reader\_py} has no dependencies. The ECG viewer's MUSE readers
+(\file{viewers/ecg/muse.js}, \file{viewers/ecg/python/muse}) were written from the format,
+independently of GE's GPL \file{musexmlex.py}. The PACS and ECG viewers' \file{dicom.js} is written
+from the DICOM standard.
+
+\subsection{The web pages}
+\label{sec:licences-web}
+
+\file{medorama/web/}, \file{viewers/vitalstream/web/}, \file{viewers/ecg/} and
+\file{viewers/pacs/} are written for the project. They contain no third-party JavaScript or CSS,
+and the PACS viewer's JPEG decoders are the project's own as well. Medorama's heart-rate detector for Holter recordings follows a
+published method (Pan and Tompkins, 1985), implemented in the repository.
+
+\subsection{CLIF}
+\label{sec:licences-clif}
+
+Medorama reads tables in CLIF, the Common Longitudinal ICU data Format
+(\url{https://github.com/Common-Longitudinal-ICU-data-Format}), whose data dictionary is published
+under the Apache License 2.0. Medorama implements the format from that dictionary; it includes
+none of CLIF's files (\cref{chap:clif}).
+
+\subsection{Add-ons}
+\label{sec:licences-addons}
+
+Add-ons for licensed formats are separate programs, not part of the repository, with licenses and
+inventories of their own. Medorama and the viewers only run them (\cref{chap:addons}). For
+example, stp-adapter, which reads BedMasterEx \file{.Stp} files, is a private add-on: it is
+licensed separately and available to institutions under agreement.
+
+\section{Trademarks}
+\label{sec:licences-trademarks}
+
+Product and company names in this manual and in the repository (GE, MUSE, Marquette, Unity,
+Carescape, BedMasterEx, Philips, Viridia, DICOM, Epic, Cerner, Oracle, SQL Server, Snowflake,
+BigQuery and others) are trademarks of their respective owners. They are used only to name the
+systems and formats Medorama reads or connects to; Medorama is not affiliated with or endorsed by
+them.
+
+\section{Research use only}
+\label{sec:licences-research}
+
+Medorama is research software, not a medical device. It is not cleared for diagnosis or
+treatment, and it must not be used to make clinical decisions. The licenses above disclaim every
+warranty: the software is provided as is.

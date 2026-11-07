@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>ECG viewer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="title"><div id="host" class="host" hidden></div><span class="brand">ECG</span><span id="name"></span><span id="info"></span></div>
+  <div id="tools" class="tools off">
+    <label>Layout <select id="layout">
+      <option value="3x4">3 × 4 + rhythm</option>
+      <option value="6x2">6 × 2 + rhythm</option>
+      <option value="12x1">12 × 1</option>
+    </select></label>
+    <label>Speed <select id="speed"><option value="25">25 mm/s</option><option value="50">50 mm/s</option></select></label>
+    <label>Gain <select id="gain"><option value="5">5 mm/mV</option><option value="10">10 mm/mV</option><option value="20">20 mm/mV</option></select></label>
+    <div class="seg"><button id="zout" title="Smaller">−</button><button id="zoomv" title="Fit the width">Fit</button><button id="zin" title="Larger">+</button></div>
+    <button id="cal" title="Calipers: click two points (Esc clears)">Calipers</button>
+  </div>
+  <div class="right">
+    <span id="nav" class="nav" hidden>
+      <button id="prev" title="The previous ECG of the folder (←)">‹</button>
+      <select id="pick" title="The ECGs of the folder"></select>
+      <button id="next" title="The next ECG of the folder (→)">›</button>
+    </span>
+    <a id="server" class="button" href="browse" hidden title="The folders of the computer serving this page">Server folders…</a>
+    <button id="open" class="primary" title="One ECG">Open record…</button>
+    <button id="open-many" title="A folder: every ECG in it and in its subfolders, one at a time">Open multiple records…</button>
+    <button id="theme" title="Light or dark"></button>
+    <input id="file" type="file" multiple hidden>
+    <input id="dir" type="file" webkitdirectory multiple hidden>
+  </div>
+</header>
+<main id="stage"></main>
+<script src="ecg.js"></script>
+<script src="readers.js"></script>
+<script src="wfdb.js"></script>
+<script src="muse.js"></script>
+<script src="dicom.js"></script>
+<script src="dicom-ecg.js"></script>
+<script src="edf.js"></script>
+<script src="paper.js"></script>
+<script src="host.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

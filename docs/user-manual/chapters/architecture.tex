@@ -1,0 +1,600 @@
+% Architecture: the parts, where each runs, trust boundaries and deployment topologies, a
+% request's path through the server, sign-in, the protection of patient data in brief, the
+% gateway, data flow, readers and data models, extension points, contracts, technology, the code
+% map and the status. Written for IT security reviewers, integrators and contributors.
+% Source: docs/architecture.md; the code is the authority (medorama/src/server.rs router, guard,
+% privacy; signin.rs; gateway.rs; viewer.rs; jobs.rs; sources/; libs/engine).
+\chapter{Architecture}
+\label{chap:architecture}
+
+This chapter describes how Medorama is built: its parts, where each one runs, how a request
+travels through the server, how data come in, and where the system can be adapted. It is written
+for institutional IT security reviewers, for integrators who deploy Medorama, and for
+contributors, and it can be read on its own. How patients' identities are protected is explained
+in \cref{chap:protecting}, and the security controls are reviewed, with their code and tests, in
+\cref{chap:security}. Together, these three chapters form the part of the manual meant for a
+review before Medorama is deployed on patient data.
+
+\section{Overview}
+\label{sec:architecture-overview}
+
+Medorama is a research system that gathers each patient's data from many sources (admissions,
+laboratory results, vital signs, medications, notes, ECGs, imaging and bedside-monitor
+recordings) into one \emph{catalog}, Medorama's own database. It shows each patient's journey on
+one page, lets researchers build cohorts across all sources, and opens recordings and images in
+its own viewers. It is one server program that an institution runs on its own hosts, and users
+reach it with a web browser. Every request passes Medorama's sign-in, and every answer to a user
+who may not see identifiers leaves through the \emph{privacy gate}, which replaces identifiers
+and moves dates back (\cref{fig:architecture-glance}).
+
+\screenshot{architecture.pdf}{Medorama at a glance: users reach one server through its sign-in;
+the server reads the catalog, the data sources and connected databases, runs the viewers and
+plug-ins, and sends every answer of a session in Privacy Mode through the privacy
+gate.}{fig:architecture-glance}
+
+\section{Design principles}
+\label{sec:architecture-principles}
+
+\begin{enumerate}
+\item \textbf{Separate programs, joined by written contracts.} Each part builds, runs and is
+  tested on its own. Parts meet only through a documented contract: a file format, an HTTP API,
+  a command-line protocol or a folder layout (\cref{sec:architecture-contracts}).
+\item \textbf{One way in.} When Medorama fronts the viewers, every request passes its sign-in,
+  roles and rules. The viewers stay simple and read only what Medorama hands them.
+\item \textbf{One way out.} The catalog keeps every identifier as imported. In Privacy Mode,
+  every answer the server sends (JSON, files, exports, the waveform viewer's answers) passes the
+  privacy gate, and the server's last layer refuses any answer that the gate did not clear, so a
+  new endpoint cannot forget the rule.
+\item \textbf{Sources are only read.} No part of Medorama writes into a data folder or a
+  connected database. Derived data (indexes, results) go to their own folders or to the catalog.
+\item \textbf{The server decides; the page draws.} What a user may see, and how data are
+  matched, merged and searched, is decided on the server. The pages draw what they are sent,
+  with no build step and no third-party code.
+\item \textbf{Open formats inside, licensed formats outside.} The repository reads open formats
+  (WFDB, EDF, DICOM, GE MUSE XML, tables). A format under a vendor's license is read by an
+  \emph{add-on}, a separate program that an administrator installs and that is distributed under
+  its own terms. Nothing licensed is compiled into Medorama or a viewer.
+\item \textbf{Recordings are read identically three times.} The VitalStream viewer has three
+  independent implementations (Rust, C++ and Python) that write the same index byte for byte and
+  answer the same API. They are checked against each other, so that a misread recording does not
+  go unnoticed.
+\end{enumerate}
+
+\section{The parts}
+\label{sec:architecture-parts}
+
+\Cref{tab:architecture-parts} lists the parts of Medorama, where each one lives in the
+repository, and how it runs.
+
+\begin{xltabular}{\linewidth}{@{}P{3.0cm}P{2.9cm}L@{}}
+\caption{The parts of Medorama.}
+\label{tab:architecture-parts}\\
+\toprule
+\tabhead Part & \tabhead Folder; language & \tabhead Runs as \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Part & \tabhead Folder; language & \tabhead Runs as \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Medorama server & \file{medorama/}; Rust & One program, \cmd{medorama serve}, on the
+  institution's host; also the \cmd{medorama} command line for administration \\
+Medorama's web page & \file{medorama/web/}; HTML, CSS, JavaScript & Static files embedded in the
+  server and run in the user's browser, with light and dark themes \\
+VitalStream (waveforms: ICU monitoring, Holter, EEG, sleep) & \file{viewers/vitalstream/}; Rust,
+  C++, Python, and a shared page & Alone, a local program with its own page. Inside Medorama, a
+  child process on a private loopback port, behind the gateway \\
+ECG viewer (12-lead ECGs on standard paper) & \file{viewers/ecg/}; JavaScript, and
+  \cmd{muse-py} in Python & A web page, opened from disk, served by \cmd{muse-py serve}, or
+  served by Medorama as a tab \\
+PACS viewer (DICOM studies) & \file{viewers/pacs/}; JavaScript, and \cmd{dicom-py} in Python &
+  A web page, like the ECG viewer (\cmd{dicom-py serve} alone) \\
+Engine & \file{libs/engine/} (\code{recording-engine}), \file{libs/signal-core/}; Rust & A
+  library used by Medorama and the Rust viewer: readers, the index, queries, the adapter
+  protocol. WFDB is read through wfdb-x \\
+Add-ons (adapters) & Outside this repository; any language & Programs in the adapter folder, run
+  as child processes; for example stp-adapter for BedMasterEx \file{.Stp} files (private,
+  available to institutions under agreement) \\
+Plug-in actions & An administrator's \code{actions\_dirs}; any language & Programs run as child
+  processes by the job queue (\cref{chap:actions}) \\
+Catalog database & The catalog's home folder, or a PostgreSQL server & Medorama's own data:
+  users, sessions, the audit log, settings, patients and identifiers, pseudonyms, cohorts, the
+  job queue \\
+Indexes and results & \code{index\_dir}, \code{results\_dir}; files & Waveform indexes (the
+  viewers' format) and the outputs of actions \\
+Data sources & \code{data\_roots}; connected databases & Exported tables, recordings, ECGs,
+  DICOM studies and documents, read where they lie; OMOP or other databases read through
+  views \\
+\end{xltabular}
+
+The viewers are programs of their own. Each is useful alone and never depends on Medorama.
+Medorama opens them as tabs, at an address that names the file to show
+(\cref{chap:viewers-in-medorama}).
+
+\section{Trust boundaries and deployment}
+\label{sec:architecture-boundaries}
+
+\screenshot{system-context.pdf}{The system context and its trust boundaries: the browser, the
+optional authenticating proxy, Medorama's server with its viewer and plug-ins, the data
+sources, the catalog's database and the connected databases.}{fig:architecture-context}
+
+The browser and the network are untrusted: every request is authenticated and authorized on the
+server, and the page decides nothing about access. The server host is trusted: one
+operating-system account, the catalog's owner, runs Medorama, its viewer and its plug-ins. The
+zones and how far each is trusted are tabulated in \cref{tab:security-zones}.
+
+\subsection{What listens where}
+\label{sec:architecture-listen}
+
+\begin{xltabular}{\linewidth}{@{}P{3.8cm}P{4.4cm}L@{}}
+\caption{The programs that listen, and who reaches them.}
+\label{tab:architecture-listen}\\
+\toprule
+\tabhead Program & \tabhead Listens on (default) & \tabhead Reached by \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Program & \tabhead Listens on (default) & \tabhead Reached by \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\cmd{medorama serve} & 127.0.0.1:8090 (\code{host}, \code{port}) & Browsers, through a TLS
+  reverse proxy or an SSH tunnel \\
+VitalStream under Medorama & 127.0.0.1, on a free port chosen at start & Medorama's gateway only,
+  with requests signed by a key only Medorama knows \\
+VitalStream alone & 127.0.0.1:8050 (Python), 8060 (Rust), 8070 (C++) & A browser on the same
+  computer, or through an SSH tunnel \\
+\cmd{muse-py serve}, \cmd{dicom-py serve} & 127.0.0.1:8080, 127.0.0.1:8081 & The same \\
+Adapters and plug-ins & Nothing & Medorama and the viewers start them and talk to them over
+  pipes and files \\
+\end{xltabular}
+
+Medorama listens on the loopback address by default, so that nothing on the network can reach
+it until an administrator puts a TLS proxy in front of it. If it is bound to another address
+without \code{secure\_cookies = true}, it prints a warning at start. It opens outgoing
+connections only to its PostgreSQL catalog and to connected databases, always over verified TLS
+when they are on another host, and it sends nothing anywhere else.
+
+\subsection{What is read and what is written}
+\label{sec:architecture-data}
+
+\begin{xltabular}{\linewidth}{@{}P{5.4cm}P{3.8cm}L@{}}
+\caption{Where data live, and who writes them.}
+\label{tab:architecture-data}\\
+\toprule
+\tabhead Data & \tabhead Lives in & \tabhead Written by \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Data & \tabhead Lives in & \tabhead Written by \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Recordings, ECGs, images, documents, exported tables & Their own folders, inside
+  \code{data\_roots} & Nobody: they are only read \\
+Connected databases & The institution's database servers & Nobody: they are read through
+  read-only sessions \\
+Patients, encounters, entries, identifiers, pseudonyms, users, sessions, jobs, the audit log &
+  The catalog database & Medorama \\
+Waveform indexes & \code{index\_dir} (which standalone viewers' \code{cache\_dir} may share) &
+  The engine, the viewers, adapters \\
+Results of actions & \code{results\_dir} & Plug-ins, through the job queue \\
+\end{xltabular}
+
+\subsection{Deployment topologies}
+\label{sec:architecture-topologies}
+
+\begin{itemize}
+\item \textbf{One server with SQLite.} This is the default. \cmd{medorama init} creates a home
+  folder with \file{medorama.toml} and the SQLite database (readable by its owner only, and
+  optionally encrypted with SQLCipher). One \cmd{medorama serve} process answers requests and
+  runs jobs in worker threads. This suits a team or a department.
+\item \textbf{Several servers with PostgreSQL.} Identical servers share one catalog in
+  PostgreSQL (\code{database\_url}), with the same \code{data\_roots} and with the index and
+  results folders on shared storage. Any server answers any request. Sessions, cohorts and the
+  job queue are in the database, and work that must happen once takes an advisory lock. A load
+  balancer or reverse proxy spreads the requests (\cref{chap:administration}).
+\item \textbf{Behind a TLS reverse proxy.} nginx, Apache httpd or a load balancer terminates
+  HTTPS and passes requests to Medorama on 127.0.0.1, with \code{secure\_cookies = true}. Users
+  sign in with Medorama's passwords (\cref{chap:deployment}).
+\item \textbf{Behind the institution's sign-in.} An authenticating proxy (oauth2-proxy, Apache
+  httpd with mod\_auth\_openidc, Shibboleth or Kerberos, nginx with \code{auth\_request}) signs
+  users in with single sign-on and multi-factor authentication, and names them to Medorama in a
+  header (\code{sign\_in = "proxy"}; \cref{chap:sign-in}).
+\item \textbf{Viewers alone on a workstation.} A researcher runs a VitalStream viewer, or opens
+  the ECG or PACS viewer's page, on their own computer, with no Medorama and no catalog. The
+  viewer reads files under a root folder fixed when it was built, and may ask for a password
+  (\cref{sec:sign-in-viewers}).
+\end{itemize}
+
+\subsection{Running separately and together}
+\label{sec:architecture-together}
+
+\textbf{Separately}, each viewer runs on its own: the VitalStream viewers on their ports, with
+their own page and optional password (\file{viewers/vitalstream/install.sh}), and the ECG and
+PACS viewers as pages opened from disk or served by \cmd{muse-py serve} and \cmd{dicom-py serve}.
+Medorama runs on its own port and may link to a VitalStream viewer that runs elsewhere
+(\code{viewer\_url}).
+
+\textbf{Together} (\cmd{tools/install-medorama.sh -{}-viewer cpp|rs|py|none}), Medorama is
+installed with one VitalStream viewer, and the ECG and PACS viewers are built into Medorama.
+Medorama's supervisor (\file{viewer.rs}) starts the VitalStream viewer on first use, on
+127.0.0.1 and a free port, with a settings file and a private password file that Medorama
+writes. It restarts the viewer if its process ends, or if a request cannot reach it and it then
+fails a health check, and stops it when Medorama stops. A request to a running viewer waits for
+no other request and costs no check, so a viewer busy with a large recording is never taken for
+a dead one. Add-ons are
+installed into the adapter folder that Medorama and the viewers share
+(\cmd{medorama addons install PROGRAM}).
+
+\section{A request's path through the server}
+\label{sec:architecture-request}
+
+\screenshot{components.pdf}{Inside the server: the path of one request, through the guard, the
+sign-in and the privacy layer to its handler, and back out through the privacy
+gate.}{fig:architecture-components}
+
+Every HTTP request passes the same layers, which are axum middleware (\file{server.rs},
+\code{router}):
+\begin{enumerate}
+\item \textbf{The guard} (\code{guard}). The server refuses any API request that changes
+  something unless it carries the header \code{X-Medorama: 1}, which a page on another site
+  cannot add. On the way out, the guard sets security headers on every answer: a Content
+  Security Policy, framing rules, \code{nosniff}, \code{no-referrer}, and \code{no-store} on the
+  API.
+\item \textbf{Sign-in} (\file{signin.rs}, \code{identify}). The privacy layer asks the sign-in
+  module, once per request, who the request comes from: the account of a session cookie, or the
+  account that an authenticating proxy names.
+\item \textbf{The privacy layer, inbound} (\code{privacy}). The server decides whether the
+  session is in Privacy Mode. In Privacy Mode, the user is replaced by a copy without the PHI
+  permission.
+\item \textbf{The handler.} The route's handler receives the user as \code{Auth(User)} (HTTP 401
+  without one), checks the role and the permission it needs, and reads the catalog through the
+  core modules. A handler that knows its data de-identifies them itself (files, table cells,
+  notes).
+\item \textbf{The privacy layer, outbound: the gate.} For a session in Privacy Mode, every JSON
+  answer passes the privacy gate, a file passes only if its handler cleared it, and any other
+  answer carrying data is refused. The answer then leaves through the guard.
+\end{enumerate}
+The handlers are thin: the rules live in modules that the command line, the background workers
+and the tests also use.
+
+\section{Sign-in}
+\label{sec:architecture-sign-in}
+
+How users sign in is decided in one module, \file{signin.rs}, and chosen by the setting
+\code{sign\_in}:
+\begin{itemize}
+\item \code{password} (the default) uses Medorama's own accounts, with Argon2id password hashes,
+  throttling, and session cookies holding a random token that is stored hashed;
+\item \code{proxy} lets the institution's authenticating reverse proxy sign the user in (single
+  sign-on through OpenID Connect or SAML, Kerberos, multi-factor authentication). The proxy names
+  the user in a header, which Medorama believes only on connections from the proxy's addresses.
+\end{itemize}
+With either method, accounts, roles and the PHI permission live in Medorama, and every handler
+receives the signed-in user in the same form (\cref{fig:sign-in-seam}). Supporting another
+method means changing the sign-in module only. The settings, proxy examples and the code changes
+for a new method are in \cref{chap:sign-in}.
+
+\section{Protecting patient data}
+\label{sec:architecture-privacy}
+
+Identifiers (names, medical record numbers, dates of birth, account numbers, imported IDs) are
+kept only in the catalog database, in their own tables. What leaves the server is decided at the
+moment of sending. A session is in \emph{Privacy Mode} unless its user has the PHI permission and
+has switched Privacy Mode off. In Privacy Mode, the privacy gate (\file{gate.rs}, \file{deid.rs},
+\file{dicom.rs}, \file{pseudonyms.rs}):
+\begin{itemize}
+\item replaces identifiers with placeholders (\code{[Patient Name]}, \code{[MRN]}) and random
+  pseudonyms (\code{MO-XXXX-XXXX});
+\item moves every date back by the catalog's offset plus each patient's own number of days, so
+  that a patient's intervals are kept;
+\item de-identifies files at the source (WFDB headers, GE MUSE XML, DICOM headers following
+  PS3.15's Basic Profile, EDF and BDF headers and annotations), passes pictures, videos and PDF
+  documents with a warning, and refuses any other file;
+\item refuses searches of identifiers;
+\item applies to exports, to the VitalStream viewer through the gateway, and to connected
+  databases' data; plug-ins receive pseudonyms only.
+\end{itemize}
+The full explanation is \cref{chap:protecting}, and the controls, their code and their tests are
+in \cref{sec:security-privacy}.
+
+\section{The gateway}
+\label{sec:architecture-gateway}
+
+When Medorama runs a VitalStream viewer, the browser never talks to the viewer directly.
+Medorama passes the viewer's requests through \file{/viewer/} (\file{gateway.rs}) and decides
+each one.
+\begin{itemize}
+\item \textbf{Default deny.} Only the listed endpoints of the viewer's API (version 1) pass.
+  Anything else, including endpoints that a newer viewer may add, is refused until it is given a
+  rule.
+\item \textbf{Medorama's sign-in.} A signed-in Medorama user is required. The viewer runs with a
+  private password that Medorama generates; Medorama signs each request it passes on and never
+  forwards the user's own cookie. Users never see the viewer's sign-in, and the viewer's port is
+  of no use to anyone else on the host.
+\item \textbf{Rules per user}, as \cref{tab:architecture-gateway} shows.
+\item \textbf{Audit.} Each opened recording is written to the audit log (\code{view}).
+\item \textbf{Paths} are compared after symbolic links are resolved, as the viewers do.
+\item \textbf{Settings.} The viewer starts with a settings file that Medorama writes (its index
+  and adapter folders among them), so that a user's own \file{vitalstream.toml} cannot conflict
+  with the gateway's rules.
+\end{itemize}
+
+\begin{xltabular}{\linewidth}{@{}P{4.6cm}P{4.4cm}L@{}}
+\caption{The gateway's rules for each viewer request.}
+\label{tab:architecture-gateway}\\
+\toprule
+\tabhead Viewer request & \tabhead Administrators & \tabhead Analysts and viewers \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Viewer request & \tabhead Administrators & \tabhead Analysts and viewers \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+The Open dialog (\code{browse}, \code{complete}, places and the start folder in \code{config}) &
+  Folders inside \code{data\_roots} (everything when it is empty) & Only folders that hold
+  recordings in the catalog, showing only those recordings \\
+\code{scan} a folder and \code{open} a recording & Any recording inside \code{data\_roots} & Only
+  recordings in the catalog \\
+\code{cancel} an index being built; \code{datasets/\{key\}\dots} (windows, vital signs, markers)
+  & Only datasets they opened through the gateway & The same \\
+In Privacy Mode (anyone) & Browsing and scanning refused; recordings opened by token
+  (\code{mo-rec:<n>}); times translated both ways; paths and names replaced; annotation texts
+  treated like notes; the viewer's error texts (which name files) replaced by a fixed sentence,
+  and the records of a folder it left out named by number & The same \\
+\end{xltabular}
+
+\begin{itemize}
+\item \textbf{Changes are JSON.} A request that changes something (\code{open}, \code{cancel})
+  must be sent as \code{application/json} with \code{X-Medorama: 1}, which another site's page
+  cannot send unasked.
+\item \textbf{The page's policy.} The viewer's page is served with a Content Security Policy of
+  its own scripts and styles only (\code{default-src 'self'; script-src 'self'; img-src 'self'
+  data:; object-src 'none'; base-uri 'none'; frame-ancestors 'self'}).
+\end{itemize}
+
+The ECG and PACS viewers need no gateway. They are pages that Medorama serves, and they read only
+an entry's files, through \code{patients/\{id\}/file/\{item\}}, which Medorama checks like every
+other request (\cref{chap:http-api}).
+
+\section{Data flow}
+\label{sec:architecture-flow}
+
+\paragraph{Importing databases.} Data enter the catalog as databases
+(\cref{fig:importing-flow}). An administrator imports a table (CSV, Excel, OpenDocument or
+Parquet) exported from a source system, from the page or the command line. Medorama recognizes
+its columns (patient ID, MRN, times, values, file), keeps the column names as imported, matches
+each row to a patient and an encounter, and stores the identifiers in the identifier tables. Rows
+that it cannot place wait in the \ui{Review} tab. Files are linked where they lie, by the rows
+that name their patient, and only inside \code{data\_roots}. Known exports (GE MUSE, CLIF) are
+converted by import formats (\file{medorama/src/formats/}). Removing a database takes out
+everything it added. The requirements for tables are in \cref{chap:importing}.
+
+\paragraph{Connected databases.} A \emph{connected database} (an OMOP CDM instance, or any SQL
+database described by views) is read in place at each request, read-only, through three views of
+canonical columns: persons, visits and entries (\file{medorama/src/sources/};
+\cref{fig:connecting-sources}). Each person is linked to a catalog patient by the import rules
+(patient ID, then MRN of the same authority), so a person in several sources is one patient with
+one pseudonym. Cohort criteria are answered by every source that holds such data, and the
+patient page shows every source's entries in the same columns. Everything leaves through the
+same gate. How to connect one is described in \cref{chap:connecting}.
+
+\paragraph{Recordings and indexing.} A recording (a WFDB record, an EDF file, a folder of
+records, or a licensed format read by an add-on) is imported by path and never copied.
+Background workers index it: the engine, or the add-on, reads the recording once and writes an
+\emph{index} (channels, pieces, envelopes, vital signs, events) in the shared format of
+\cref{chap:formats-reference}, into \code{index\_dir}. The viewers then open the recording
+quickly from its index. Workers also derive series (for example a Holter's heart rate) and run
+plug-in actions from the job queue (\file{jobs.rs}). The built-in \code{identify} action reads
+the identifiers that a recording's own file states (for example an EDF header's patient field)
+into the identifier tables, so that an administrator can check that the file belongs to its
+patient.
+
+\paragraph{Files read in place.} ECGs, DICOM studies, pictures and documents are served from
+where they lie, one entry at a time, through \code{patients/\{id\}/file/\{item\}}. Medorama never
+writes to them. In Privacy Mode, it de-identifies them as they are sent.
+
+\section{Readers and data models}
+\label{sec:architecture-readers}
+
+Each file format has its own \emph{reader}, and every reader produces one of four \emph{data
+models} (\cref{tab:architecture-models}).
+
+\begin{xltabular}{\linewidth}{@{}P{3.2cm}P{6.0cm}L@{}}
+\caption{The four data models.}
+\label{tab:architecture-models}\\
+\toprule
+\tabhead Data model & \tabhead Produced by & \tabhead Used by \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Data model & \tabhead Produced by & \tabhead Used by \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Recording index & The engines' readers (WFDB, EDF and BDF) in Rust, C++ and Python; adapters
+  for other formats & VitalStream; Medorama's indexing and cohorts \\
+ECG record & The ECG viewer's readers (WFDB, GE MUSE XML, DICOM ECG, EDF, its JSON form) & The
+  ECG viewer \\
+DICOM objects & The PACS viewer's DICOM reader; \cmd{dicom-py}; the privacy gate's
+  \file{dicom.rs} & The PACS viewer \\
+Catalog tables (canonical columns) & \file{tables.rs}, import formats, connected databases'
+  views & Patient pages, cohorts, the \ui{Databases} tab \\
+\end{xltabular}
+
+Past its reader, a format is like any other: the viewers, cohorts and the privacy gate know only
+the data models. A new format is therefore one new reader. Where readers live and how to add one
+is described in \cref{chap:readers}, and EDF's reading rules in \cref{chap:formats-reference}.
+
+\paragraph{The engine, adapters and the toolbox.} \textbf{The engine} (\file{libs/engine}) holds
+what is needed to read a recording quickly: the readers (WFDB records, multi-segment records,
+folders of records read as one session, WFDB collections, EDF, EDF+, BDF and BDF+), the index,
+the dataset queries that the viewer's API answers (windows, envelopes, vital signs, markers), and
+a sample reader with which Medorama derives a Holter's heart rate. The Rust viewer is a thin HTTP
+layer over it, and the C++ and Python viewers have their own engines that write the same index.
+\textbf{Adapters} read formats that the engines do not read. An adapter is a program named
+\code{<name>-adapter} in the adapter folder. The engine asks it to \code{describe} itself,
+\code{detect} the files it reads, \code{index} a recording (writing the shared index format) and
+\code{serve} samples over a pipe, and Medorama also asks it to \code{identify} a file's
+identifiers. It may be written in any language (\cref{chap:addons}). \textbf{The toolbox}, which
+is planned, will hold processing on waveforms (filters, beat detection, signal quality,
+machine-learning inference), each tool available as a Medorama action, on the command line, from
+Python and as tracks in the viewer.
+
+\section{Extension points}
+\label{sec:architecture-extension}
+
+An institution adapts Medorama at a few documented places, without changing the rest
+(\cref{tab:architecture-extension}).
+
+\begin{xltabular}{\linewidth}{@{}P{3.4cm}P{7.2cm}L@{}}
+\caption{Where Medorama is adapted, and the contract at each place.}
+\label{tab:architecture-extension}\\
+\toprule
+\tabhead To adapt & \tabhead Where & \tabhead Described in \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead To adapt & \tabhead Where & \tabhead Described in \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+How users sign in & Configuration only, for an authenticating proxy (\code{sign\_in = "proxy"});
+  or, in code, a new variant of \code{signin::Method} and its arm in \code{signin::identify}
+  (\file{signin.rs}) & \cref{chap:sign-in} \\
+A new recording format & A reader in the engine (\file{libs/engine/src/sources/mod.rs}), or an
+  add-on in any language & \cref{chap:readers}, \cref{chap:addons} \\
+A new ECG format in the ECG viewer & A reader registered in \file{viewers/ecg/readers.js} &
+  \cref{chap:readers} \\
+A new export to import & A TOML description in \code{formats\_dirs} (no code), or a converter in
+  \file{medorama/src/formats/} & \cref{chap:importing} \\
+An existing database, read in place & A connection of kind \code{omop}, or \code{sql} with views
+  that give the canonical columns (\file{medorama/src/sources/}) & \cref{chap:connecting} \\
+An analysis on recordings & A plug-in action: a folder with \file{action.toml} in
+  \code{actions\_dirs} & \cref{chap:actions} \\
+Scripts and other clients & The HTTP API (\file{medorama/openapi.yaml}) & \cref{chap:http-api} \\
+\end{xltabular}
+
+\section{Contracts between the parts}
+\label{sec:architecture-contracts}
+
+\begin{xltabular}{\linewidth}{@{}P{3.6cm}P{4.6cm}L@{}}
+\caption{The contracts between the parts, and what checks them.}
+\label{tab:architecture-contracts}\\
+\toprule
+\tabhead Contract & \tabhead Between & \tabhead Checked by \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Contract & \tabhead Between & \tabhead Checked by \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+The index (folder layout, key, arrays; \cref{chap:formats-reference}) & The engines and add-ons,
+  Medorama, the viewers sharing an index folder & \file{tests/parity/index\_parity.py} (byte for
+  byte) \\
+VitalStream's API, version 1 (\cref{chap:viewer-api}) & VitalStream's page and Medorama's
+  gateway, and the three viewers & \file{tests/parity/viewer\_parity.py};
+  \file{medorama/tests/gateway.rs} \\
+The adapter protocol, version 1 (\cref{chap:addons}) & The engines and Medorama, and add-ons &
+  The engines' adapter tests; \file{medorama/tests/sources.rs}; each add-on's conformance
+  tests \\
+EDF reading rules (\cref{chap:formats-reference}) & The three engines and the ECG viewer & The
+  engines' EDF tests, the parity tests \\
+WFDB collection (\cref{chap:formats-reference}) & The engines, and the tools that write long
+  recordings as WFDB records & The viewers' tests, the parity tests \\
+Viewer addresses (\code{\#src}, \code{\#list}, \code{\#path}) & Medorama and every viewer & The
+  viewers' tests, Medorama's tests \\
+Tables to import, connected databases' views (\cref{chap:importing}, \cref{chap:connecting}) &
+  Source systems and Medorama & \file{medorama/tests/catalog.rs},
+  \file{medorama/tests/connections.rs} \\
+Medorama's HTTP API, version 1 (\cref{chap:http-api}) & Medorama and its page, scripts &
+  \file{medorama/tests/openapi.rs} \\
+Plug-in actions (\cref{chap:actions}) & Medorama and plug-ins & Medorama's tests \\
+The catalog on SQLite and PostgreSQL & Medorama and its database & Every test, on both
+  (\code{MEDORAMA\_TEST\_POSTGRES}) \\
+\end{xltabular}
+
+\section{Technology and dependencies}
+\label{sec:architecture-technology}
+
+\begin{itemize}
+\item \textbf{Medorama} is written in Rust: axum and tokio for HTTP, rusqlite for SQLite
+  (SQLCipher in encrypted builds), tokio-postgres with rustls for PostgreSQL, argon2 for
+  passwords, and calamine and parquet for spreadsheets and Parquet files. Versions are pinned by
+  \file{Cargo.lock} and checked by \cmd{cargo deny}.
+\item \textbf{The web page and the ECG and PACS viewers} are plain HTML, CSS and JavaScript
+  modules, with no build step and no third-party code, embedded in the server's binary.
+\item \textbf{VitalStream} has three implementations: Rust (over the engine), C++20 (CMake) and
+  Python. All three read WFDB through wfdb-x, a public WFDB library.
+\item \textbf{The Python tools} \cmd{muse-py} and \cmd{dicom-py} build databases of GE MUSE ECGs
+  and DICOM studies to import, and serve the ECG and PACS viewers alone.
+\end{itemize}
+Every third-party component and its license is listed in \cref{chap:licences}, and building is
+described in \cref{chap:installation}.
+
+\section{Code map}
+\label{sec:architecture-code}
+
+\Cref{tab:architecture-code} lists the main modules of the Medorama server
+(\file{medorama/src/}). A guide for contributors is in the repository's
+\file{docs/developing.md}.
+
+\begin{xltabular}{\linewidth}{@{}P{5.6cm}L@{}}
+\caption{The main modules of the Medorama server.}
+\label{tab:architecture-code}\\
+\toprule
+\tabhead Module & \tabhead Responsibility \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Module & \tabhead Responsibility \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\file{server.rs} & Routes, the guard and privacy layers, files in Privacy Mode, background
+  workers \\
+\file{signin.rs} & Sign-in methods: password and proxy \\
+\file{users.rs} & Accounts, roles, the PHI permission, sessions \\
+\file{gate.rs}, \file{deid.rs}, \file{dicom.rs}, \file{pseudonyms.rs} & The privacy gate: the
+  identifier dictionary and placeholders; dates, ages, WFDB, MUSE and EDF headers; DICOM;
+  pseudonyms \\
+\file{gateway.rs}, \file{viewer.rs} & The VitalStream gateway; the viewer's supervisor \\
+\file{patient/}, \file{cohorts/}, \file{expr.rs}, \file{search.rs}, \file{query.rs} & The
+  patient pages; cohorts, their criteria and exports; criteria written as text; search \\
+\file{tables.rs}, \file{imports.rs}, \file{bulk.rs}, \file{typed.rs}, \file{formats/},
+  \file{parquet\_rows.rs} & Importing databases; import formats \\
+\file{linkage.rs}, \file{identity.rs}, \file{review.rs}, \file{ehr.rs} & Matching rows to
+  patients and encounters; identity; the \ui{Review} tab; clinical entries \\
+\file{databases.rs} & The \ui{Databases} tab and database exports \\
+\file{sources/} & Connected databases: views, read-only pools, the person registry \\
+\file{recordings.rs}, \file{identify.rs}, \file{derived.rs}, \file{categories.rs} & Recordings;
+  identifiers stated in files; derived series; recording categories \\
+\file{jobs.rs}, \file{actions.rs}, \file{addons.rs} & The job queue, plug-in actions, installed
+  adapters \\
+\file{audit.rs}, \file{db.rs}, \file{sql/}, \file{schema/}, \file{config.rs} & The sealed audit
+  log; the database and its migrations; SQLite and PostgreSQL behind one interface; settings \\
+\file{demo.rs} & The demo's invented patients \\
+\end{xltabular}
+
+\section{Status}
+\label{sec:architecture-status}
+
+Everything described above is built, except the toolbox and its results format. The remaining
+work is listed item by item, with designs and tests, in the repository's \file{docs/todo.md}.
+Next come per-study access lists, more of connected databases on the page, the toolbox and the
+engine's streaming reader, and viewing recordings while they are being recorded. Later items are
+server-side decoding of codecs that browsers do not decode (JPEG-LS, JPEG 2000, MPEG), DICOM
+Holter recordings in VitalStream, free-text de-identification, FHIR, HL7 v2 and DICOMweb sources,
+and ONNX inference.

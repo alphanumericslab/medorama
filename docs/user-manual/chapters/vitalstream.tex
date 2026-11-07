@@ -1,0 +1,1049 @@
+% VitalStream, the waveform viewer, in full: installing, running, the page, opening records and
+% folders, the lanes, time, the settings, deploying, adapters, testing.
+% Sources: viewers/vitalstream/README.md, viewers/vitalstream/docs/*.md, docs/wfdb-collection.md,
+% docs/edf.md,
+% checked against viewers/vitalstream/web/index.html, web/js/app.js and render.js,
+% rust/src/main.rs, settings.rs, server.rs and auth.rs, install.sh and install.ps1, and the
+% folder limits of libs/engine/src/sources/wfdb_folder.rs.
+\chapter{VitalStream}
+\label{chap:vitalstream}
+
+This chapter describes VitalStream, the waveform viewer, as a program on its own: installing
+it, running it, its page, and its settings. It is written for researchers who run the viewer on
+their own computer or a server, and for administrators.
+
+VitalStream shows waveform recordings in a browser: every channel, the vital-sign trends, the
+alarms or annotations, and the breaks in the data, on one time axis, from weeks down to single
+samples. Long, high-frequency recordings are its strength. ICU bedside monitoring, Holter ECGs,
+EEGs and sleep studies of hours, days or weeks open at once and stay fluid while zooming.
+VitalStream is the waveform viewer of Medorama, which opens recordings in it at the moment chosen
+on a patient's page (\cref{chap:viewers-in-medorama}), and it is also a complete program on its
+own. Its page has a light and a dark theme, and follows the system's setting until one is
+chosen.
+
+VitalStream adds nothing that is not in the recording. Samples are never resampled, interpolated
+or stitched. Where the recording is ambiguous (a break's length, a record without a start time),
+the page says so. Times are kept in UTC; the time zone in which they are shown is a setting of
+the page only.
+
+\screenshot{vitalstream.png}{VitalStream in the dark theme: a synthetic ICU recording (a WFDB collection), with the ECG, arterial pressure, pleth and respiration waveforms, an alarm, the vital-sign trends and the values at the cursor.}{fig:vitalstream-main}
+
+% ==========================================================================================
+\section{What it reads}
+\label{sec:vitalstream-reads}
+
+\begin{table}[htbp]
+\centering
+\caption{The recordings VitalStream reads.}
+\label{tab:vitalstream-reads}
+\begin{tabularx}{\linewidth}{@{}LP{4.6cm}@{}}
+\toprule
+\tabhead Recordings & \tabhead How \\
+\midrule
+One WFDB record (PhysioNet's format): its \file{.hea} header file, single- or multi-segment &
+  Read by the viewer itself \\
+A folder of WFDB records, its subfolders included, read as \emph{one session} on one time axis;
+  a WFDB collection (records in time order with their vital signs, alarms and breaks) & Read by
+  the viewer itself \\
+An EDF, EDF+, BDF or BDF+ file (\file{.edf}, \file{.bdf}): sleep studies, EEG, long-term ECG &
+  Read by the viewer itself (\cref{sec:vitalstream-edf}) \\
+Other formats, licensed ones among them (\file{.Stp} files of BedMasterEx, through the
+  stp-adapter add-on, which is private and available to institutions under agreement) &
+  Through an installed \emph{adapter} (\cref{sec:vitalstream-adapters}) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+WFDB collections, multi-segment records and the files a collection holds (\file{index.csv},
+\file{gaps.csv}, \file{vitals.csv}, \file{events.csv}, the \file{.mrk} markers) are described in
+\cref{chap:formats-reference}. VitalStream assumes nothing that a record does not state. A
+record whose header gives no sampling frequency is not read: opened alone, it is refused, and in
+a folder of records it is left out and counted in the notes. A signal with a gain of 0 is shown
+in stored counts, with the unit \code{adu}, and a signal whose header gives no units has none.
+WFDB's old defaults of 250\,Hz, a gain of 200 and millivolts are not used.
+
+% ==========================================================================================
+\section{EDF, EDF+, BDF and BDF+ files}
+\label{sec:vitalstream-edf}
+
+The three viewers read files of the European Data Format family directly, without an add-on:
+EDF and BDF (16-bit and 24-bit samples), and EDF+ and BDF+, which add annotations and
+interrupted recordings (\cref{sec:recordings-edf}). An EDF file is one recording. A file is
+opened as EDF when its name ends in \file{.edf} or \file{.bdf}, in any letter case; choose
+\ui{Open record\dots} and pick the file, or type its path in the dialog. The built-in reader takes
+precedence over any adapter that lists these extensions. \Cref{tab:vitalstream-edf} lists what
+the viewer shows; the exact reading rules are specified in \cref{sec:formats-reference-edf}.
+
+\begin{xltabular}{\linewidth}{@{}P{5.0cm}L@{}}
+\caption{An EDF file in VitalStream.}
+\label{tab:vitalstream-edf}\\
+\toprule
+\tabhead In the file & \tabhead In the viewer \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead In the file & \tabhead In the viewer \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Each ordinary signal & A channel, with the signal's label and physical dimension (\code{ECG},
+  \code{mV}). \\
+Samples per data record divided by the duration of a data record & The channel's sampling rate.
+  Signals may have different rates. \\
+Digital values & Physical values, scaled with the signal's physical and digital minimum and
+  maximum. \\
+The start date and time in the header & The time axis. The time is taken as UTC, since EDF does
+  not state a time zone. \\
+EDF+ and BDF+ annotations & Events in the \ui{Annotations} lane, with their text and duration.
+  Hover over one to read it. \\
+An interrupted recording (EDF+D) & One stretch of data per uninterrupted run, with a break
+  between runs (\code{not recorded}). \\
+A second signal with the same label & A channel named with its count: \code{ECG (2)}. \\
+\end{xltabular}
+
+The \ui{Recording} panel shows the format as \code{EDF}, \code{EDF+}, \code{BDF} or
+\code{BDF+}, and the notes that apply, for example when a file ends partway through a data
+record. The header's patient and recording identification fields are never read into the index
+and never shown. Under Medorama, in Privacy Mode, the annotations' texts are treated like the text
+of notes (\cref{sec:protecting-edf}).
+
+\screenshot{vitalstream-sleep.png}{VitalStream on the demo's EDF+ sleep study, with its
+EEG, EOG, ECG, airflow, effort and SpO$_2$ channels and its Annotations lane (dark
+theme).}{fig:vitalstream-sleep}
+
+Two limits apply. A folder of EDF files is not yet opened as one session: \ui{Open multiple
+records\dots} reads the WFDB records of a folder, so open EDF files one at a time. An EDF+ file
+that holds only annotations (some sleep-scoring files do) has no signal to draw and is
+refused.
+
+% ==========================================================================================
+\section{Three viewers, one specification}
+\label{sec:vitalstream-three}
+
+VitalStream has three implementations: the same page, the same requests and answers, the same
+index, in three languages. Use whichever fits the machine; several can run side by side.
+
+\begin{table}[htbp]
+\centering
+\caption{The three VitalStream viewers.}
+\label{tab:vitalstream-three}
+\begin{tabularx}{\linewidth}{@{}P{3.2cm}LLL@{}}
+\toprule
+& \tabhead Python & \tabhead Rust & \tabhead C++ \\
+\midrule
+Command & \cmd{vitalstream-py} & \cmd{vitalstream-rs} & \cmd{vitalstream-cpp} \\
+Port (default) & 8050 & 8060 & 8070 \\
+Folder & \file{python/vitalstream} & \file{rust/} & \file{cpp/} \\
+Needs to run & Python 3.9 or later & Nothing (one file) & Nothing but the C++ runtime (one
+  file) \\
+Indexing a day of ICU data & About a minute & A few seconds & A few seconds \\
+Package, library & The Python package \code{vitalstream\_py} & The crate \code{vitalstream-rs},
+  with the engine \code{recording-engine} (\file{libs/engine}) & The CMake targets
+  \code{vs\_core}, \code{vs\_engine}, \code{vs\_viewer} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The folders are those of \file{viewers/vitalstream}. The three serve the same page
+(\file{viewers/vitalstream/web}: the Rust and C++ viewers have it built in, the Python viewer
+serves it from its package), answer the same HTTP API with the same JSON
+(\cref{chap:viewer-api}), write the same index byte for byte (\cref{sec:vitalstream-index}), and
+share one settings file, one password, one index folder and one adapter folder. Every name a
+user meets ends in the implementation's suffix, \code{-py}, \code{-rs} or \code{-cpp}; without a
+suffix, a name refers to what the three have in common (``the viewer'', \file{vitalstream.toml}).
+The three read WFDB records with wfdb-x, in each language.
+
+% ==========================================================================================
+\section{Installing}
+\label{sec:vitalstream-install}
+
+VitalStream alone is installed from a clone of the repository, with no administrator rights
+beyond the compiler, by \file{viewers/vitalstream/install.sh} (Linux, macOS) or
+\file{viewers/vitalstream/install.ps1} (Windows); the commands for each operating system are
+also at \url{https://medorama.org/docs/install.html}. The script builds one viewer and installs it:
+
+\begin{lstlisting}[style=shell]
+git clone https://github.com/alphanumericslab/medorama.git && cd medorama
+viewers/vitalstream/install.sh                         # the C++ viewer, into ~/.local/bin
+viewers/vitalstream/install.sh --viewer rs             # or the Rust viewer (or: py)
+viewers/vitalstream/install.sh --root /data/icu        # it opens nothing outside /data/icu
+viewers/vitalstream/install.sh --no-password           # a viewer without password support
+viewers/vitalstream/install.sh --no-wfdb               # a viewer without WFDB support (no wfdb-x)
+\end{lstlisting}
+
+On Windows, the following command runs the installer in PowerShell (for the C++ viewer, in a
+``Developer PowerShell for VS''):
+
+\begin{lstlisting}[style=shell]
+powershell -ExecutionPolicy Bypass -File viewers\vitalstream\install.ps1 -Viewer rs -Root D:\data
+\end{lstlisting}
+
+\begin{xltabular}{\linewidth}{@{}P{2.9cm}P{1.8cm}P{2.3cm}L@{}}
+\caption{The options of VitalStream's installers.}
+\label{tab:vitalstream-install}\\
+\toprule
+{\tabhead install.sh} & {\tabhead install.ps1} & {\tabhead Default} & {\tabhead Effect} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead install.sh} & {\tabhead install.ps1} & {\tabhead Default} & {\tabhead Effect} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\opt{-{}-viewer cpp}, \opt{rs} or \opt{py} & \opt{-Viewer} & \code{cpp} & The viewer to build: C++
+  (a C++20 compiler, CMake and Ninja; \file{install.sh} installs CMake and Ninja into a build
+  environment, \file{viewers/vitalstream/cpp/build/tools}, when they are missing), Rust
+  (\file{install.sh} installs Rust in your account when \cmd{cargo} is missing), Python \\
+\opt{-{}-prefix DIR} & \opt{-Prefix} & \file{\textasciitilde/.local} (Windows:
+  \code{\%LOCALAPPDATA\%\textbackslash vitalstream}) & The program goes into \file{DIR/bin}; the
+  Python viewer's environment into \file{DIR/share/vitalstream/venv} (Windows:
+  \code{DIR\textbackslash venv}), with a link to its program in \file{DIR/bin} \\
+\opt{-{}-root DIR} & \opt{-Root} & \code{\textasciitilde} & The viewer's root, fixed in the program:
+  its page never lists or opens anything outside \file{DIR}. \code{\textasciitilde} is the home
+  folder of whoever runs the viewer; \code{/} is the whole file system \\
+\opt{-{}-no-password} & \opt{-NoPassword} & Password support & Build it without password
+  support: no password can be set (\opt{-{}-set-password} and \opt{-{}-clear-password} fail), a
+  password already set in the shared file is ignored (the page never asks for one), and it
+  refuses to run where one is required \\
+\opt{-{}-no-wfdb} & \opt{-NoWfdb} & WFDB support & Build it without WFDB support: it contains no
+  wfdb-x code, refuses a WFDB record or folder with a message (``this build has no WFDB
+  support''), and reads every other format (\cref{sec:installation-no-wfdb}) \\
+\opt{-{}-no-rustup} & & & Fail, rather than install Rust, when \cmd{cargo} is missing (the Rust
+  viewer); \file{install.ps1} never installs Rust \\
+\opt{-h}, \opt{-{}-help} & & & Print the options and exit \\
+\end{xltabular}
+
+The script ends with the program's path and its root, for instance
+\code{Installed \textasciitilde/.local/bin/vitalstream-cpp (root: \textasciitilde)}, followed by
+\code{; no password support} or \code{; no WFDB support} for a build without them, and says
+how to start it. When
+\file{DIR/bin} is not on the \code{PATH}, it says so: add it, or call the program by its path.
+Run the script again to change the root or the password support.
+
+The installer's \opt{-{}-root} is not the viewer's \opt{-{}-root}: the first is fixed when the
+viewer is built and cannot be widened afterwards; the second (\cref{sec:vitalstream-run}) narrows
+it each time the viewer starts (\cref{chap:viewers-alone}). The standalone builds go to folders of
+their own (\file{target/standalone}, \file{viewers/vitalstream/cpp/build/standalone}), so that
+Medorama's viewer in the same clone keeps its own. A build by hand sets the same three options:
+
+\begin{table}[htbp]
+\centering
+\caption{The build options of VitalStream, by hand.}
+\label{tab:vitalstream-build-options}
+\begin{tabularx}{\linewidth}{@{}P{2.3cm}LLL@{}}
+\toprule
+\tabhead Viewer & \tabhead Root & \tabhead Without password support & \tabhead Without WFDB support \\
+\midrule
+\cmd{vitalstream-rs} & \code{VITALSTREAM\_ROOT=DIR} when it is compiled &
+  \opt{-{}-no-default-features -{}-features wfdb} (the Cargo feature \code{password} left out) &
+  \opt{-{}-no-default-features -{}-features password} (the Cargo feature \code{wfdb} left out) \\
+\cmd{vitalstream-cpp} & CMake \code{-DVS\_ROOT=DIR} & \code{-DVS\_PASSWORD=OFF} &
+  \code{-DVS\_WFDB=OFF} (the preset \code{nowfdb}) \\
+\cmd{vitalstream-py} & \code{VITALSTREAM\_ROOT=DIR} when the package is installed &
+  \code{VITALSTREAM\_PASSWORD=0} & Installed without its \code{[wfdb]} extra \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Without them (a developer's \cmd{cargo build}, \cmd{cmake -{}-preset release},
+\cmd{pip install}), the root is the whole file system and the password is supported. The
+compilers, CMake presets, builds without administrator rights and without internet access are
+described in \cref{chap:installation}.
+
+\paragraph{With Medorama.} \cmd{tools/install-medorama.sh} builds Medorama and one viewer
+together. That viewer has the whole file system as its root and password support, since Medorama
+applies its own rules: it starts the viewer itself, with its own settings, which require a
+password (\cref{chap:viewers-in-medorama,chap:administration}).
+
+\paragraph{Update and uninstall.} To update, \cmd{git pull} and run the installer again with the
+same options, then restart the viewer. To uninstall, delete \file{\textasciitilde/.local/bin/vitalstream-*}
+(and, for the Python viewer, \file{\textasciitilde/.local/share/vitalstream}); the index folder is
+\file{\textasciitilde/.cache/vitalstream}, the settings and the password are in
+\file{\textasciitilde/.config/vitalstream/}. Recordings are never touched.
+
+% ==========================================================================================
+\section{Running}
+\label{sec:vitalstream-run}
+
+The following commands start the C++ viewer in the most common ways; the other two viewers take
+the same options.
+\begin{lstlisting}[style=shell]
+vitalstream-cpp                       # opens http://127.0.0.1:8070 in your browser
+vitalstream-cpp --set-password        # once, on a shared machine (one password for the viewers)
+vitalstream-cpp --no-browser          # on a server; then an SSH tunnel to its port
+vitalstream-cpp --root ~/icu          # open nothing outside ~/icu (inside the viewer's root)
+vitalstream-cpp --index RECORDING     # index ahead of time
+vitalstream-cpp --help                # every option
+\end{lstlisting}
+
+The three viewers take the same options. Each option overrides the setting of the same name
+(\cref{sec:vitalstream-settings}).
+
+\begin{lstlisting}[style=signature]
+vitalstream-cpp [--config FILE] [--host HOST] [--port N] [--timezone ZONE] [--root DIR]...
+                [--cache-dir DIR] [--adapters-dir DIR] [--qc-verbose] [--no-browser]
+                [--set-password | --clear-password] [--no-auth] [--index PATH] [-V]
+\end{lstlisting}
+
+\begin{params}
+\item[--config FILE] The settings file. Default: the first that exists of
+  \file{viewers/vitalstream/vitalstream.toml} (only for a viewer run from the build folder of a
+  clone) and \file{\textasciitilde/.config/vitalstream/vitalstream.toml}; a
+  \file{vitalstream.toml} in the working folder is never read unless \opt{-{}-config} names it.
+  A \file{FILE} that does not exist is an error (\code{FILE: no such settings file}).
+\item[--host HOST] The address to listen on. Default: \code{127.0.0.1}, this machine only.
+\item[--port N] The port. Default: 8050 (\cmd{vitalstream-py}), 8060 (\cmd{vitalstream-rs}),
+  8070 (\cmd{vitalstream-cpp}).
+\item[--timezone ZONE] The display time zone, an IANA name such as \code{America/New\_York}.
+  An unknown zone is an error (\code{unknown time zone}).
+\item[--root DIR] A folder the viewer may open, inside its root; repeatable. Default: its root
+  (the setting \code{data\_roots}).
+\item[--cache-dir DIR] The index folder (\cref{sec:vitalstream-index}).
+\item[--adapters-dir DIR] The adapter folder (\cref{sec:vitalstream-adapters}).
+\item[--qc-verbose] Also mark the data a reader repaired, such as data blocks put back in order
+  (\cref{sec:vitalstream-qc}).
+\item[--no-browser] Do not open a browser window.
+\item[--set-password] Set (or change) the password the page asks for, then exit. It asks for the
+  password twice (\code{New VitalStream password:}, \code{Repeat it:}); at least 8 characters.
+  A viewer built without password support refuses (\code{this viewer was built without
+  password support}).
+\item[--clear-password] Remove the password, then exit; refused, as \opt{-{}-set-password}, by a
+  viewer built without password support.
+\item[--no-auth] Run without asking for the password, even when one is set.
+\item[--index PATH] Index \file{PATH} (a record's \file{.hea}, a folder, a file an adapter reads)
+  into the index folder, print \code{indexed PATH -> FOLDER/KEY/}, and exit.
+\item[-V, --version] Print the program's name and version (\code{vitalstream-py 0.1.0}), then
+  exit.
+\end{params}
+
+When it starts, the viewer prints the settings file it read, its address, its root, its data
+roots, the index folder and the time zone, and whether a password protects it:
+
+\begin{lstlisting}[style=text]
+vitalstream-rs: settings from /home/user/.config/vitalstream/vitalstream.toml
+VitalStream (Rust): open http://127.0.0.1:8060/
+  root: /; data roots: /data/icu; cache: /home/user/.cache/vitalstream; time zone UTC
+  no password: anyone who can connect to this port can read your files through it.
+  On a shared machine, set one once with: vitalstream-rs --set-password
+\end{lstlisting}
+
+Without a settings file it says \code{no settings file (defaults)}. An IPv6 \opt{-{}-host} is
+written with brackets in the address (\code{http://[::1]:8050/}). A data root outside the
+viewer's root is left out, with a warning; with none left, the viewer
+does not start. With the setting \code{require\_password} and no password set (or with
+\opt{-{}-no-auth}), it does not start either (\code{a password is required here
+(require\_password); set one with -{}-set-password}; for a viewer built without password
+support, \code{a password is required here (require\_password), and this viewer was built
+without password support}). A viewer built without password support ignores a password already
+set, and says at start \code{built without password support: anyone who can connect to this
+port can read the files under its root}. The viewer stops with \key{Ctrl}+\key{C}.
+
+% ==========================================================================================
+\section{The page}
+\label{sec:vitalstream-page}
+
+The page has, from top to bottom: the top bar, the overview strip, the time axis, the lanes (with
+the sidebar on their right), and the status bar. Before a recording is opened, the lanes show
+\ui{Open a recording}, with the same two buttons as the top bar.
+
+\begin{xltabular}{\linewidth}{@{}P{3.6cm}L@{}}
+\caption{The controls of VitalStream's page, from left to right and from top to bottom.}
+\label{tab:vitalstream-controls}\\
+\toprule
+{\tabhead Control} & {\tabhead Does} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Control} & {\tabhead Does} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\ui{Open record\dots} (\key{O}) & Opens the file browser to open one record or one EDF file
+  (\cref{sec:vitalstream-open}) \\
+\ui{Open multiple records\dots} (\key{Shift}+\key{O}) & Opens the file browser to open a folder:
+  every record in it and in its subfolders, as one session (\cref{sec:vitalstream-session}) \\
+The recording's name & \emph{name} $\cdot$ \emph{format} $\cdot$ \emph{description}, for
+  instance \code{session $\cdot$ WFDB records}; the recording's path on hover. Before one is
+  open: \code{No recording open}. A host's context (\code{who}, \code{what}) takes its place
+  when another program opens the page (\cref{sec:vitalstream-address}) \\
+\ui{Go to\dots} (\key{G}) & A date and a time to go to (\cref{sec:vitalstream-goto}); available once
+  a recording is open \\
+The busy indicator & Shown while data are being fetched \\
+\ui{Time zone} & The display time zone (\cref{sec:vitalstream-time}) \\
+\ui{S} \ui{M} \ui{L} & The height of the lanes: compact, normal, tall \\
+The half-filled circle & Switches between the light and the dark theme. Until it is used, the
+  page follows the system's setting \\
+\ui{?} (\key{?}) & The help: the keys and mouse actions, and what the shadings mean \\
+The overview strip (\ui{OVERVIEW}) & The whole recording: one row per kind of signal with the
+  data it holds, the alarms, the breaks, and a frame around the part in view. Click or drag
+  to move the view there; the wheel zooms around the middle of the view \\
+The time axis & The date and the zone's abbreviation, the spacing of the ticks
+  (\code{ticks every 2 s}), the times, and the cursor's time \\
+The lanes & The alarms, the waveforms and the trends (\cref{sec:vitalstream-lanes}) \\
+\ui{At cursor} & The time of the cursor (else of the middle of the view), and the latest value
+  of every vital sign at that time, no older than 10 minutes, with its age (\code{now}, or how
+  long before); the trends shown in lanes come first. \code{No values in the 10 minutes
+  before.} when there are none \\
+\ui{Show all waveforms and trends} & Every waveform (up to 64) and every trend; untick it to
+  return to the selection the recording opened with \\
+\ui{Waveforms} & The channels, grouped by kind (\ui{ECG}, \ui{Pressure},
+  \ui{SpO$_2$ / pleth}, \ui{Respiration}, \ui{CO$_2$}, \ui{Gases}, \ui{Ventilator},
+  \ui{EEG, EOG, EMG}, \ui{ICG}, \ui{SvO$_2$}), each with its color, unit (\code{adu} without
+  one) and sampling rate. The channels of plain WFDB records and EDF files, whose readers state no
+  kind, are grouped by their labels (\code{ECG}, \code{II} and \code{V1} as ECG, \code{SpO2} and
+  \code{Pleth}, \code{Airflow} and \code{Thorax} as respiration, \code{EEG}, \code{EOG} and
+  \code{EMG}, \code{ART} as pressure, \code{CO2}); a channel whose label names no kind is listed
+  under \ui{Signals}. Tick or untick a channel to show or hide its lane \\
+\ui{Trends} & The vital-sign series, with the unit and the number of values of each; tick or
+  untick a series to show or hide its lane. \ui{Filter vital signs\dots} narrows the list \\
+\ui{Recording} & \ui{Format}, \ui{Start}, \ui{End}, \ui{Duration}, \ui{Waveforms} (the channels and
+  the contiguous pieces they are made of), \ui{Vital signs}, \ui{Alarms} (\ui{Annotations} for an
+  EDF+ file), \ui{Breaks},
+  \ui{Markers} (their number and names), \ui{Time stamps} (the resolution of the source's time
+  stamps, when known); then the recording's notes, and what could not be shown
+  (\code{Not shown: \dots}) \\
+The status bar & On the left, the span in view (start $\rightarrow$ end $\cdot$ length $\cdot$
+  samples per pixel, or pixels per sample, of the fastest waveform shown); on the right, the
+  messages (\code{updated in 8 ms}). Errors are written in bold: red is kept for alarms \\
+\end{xltabular}
+
+The page remembers the following in the browser: the theme (once chosen), the time zone, the
+lanes' height, the last folder of the file browser, the recent folders and the recent
+recordings.
+
+% ==========================================================================================
+\section{Opening a recording}
+\label{sec:vitalstream-open}
+
+Two buttons at the top of the page, repeated in the empty page, open recordings
+(\cref{tab:vitalstream-open}).
+
+\begin{table}[htbp]
+\centering
+\caption{VitalStream's two ways to open recordings.}
+\label{tab:vitalstream-open}
+\begin{tabularx}{\linewidth}{@{}P{4.4cm}L@{}}
+\toprule
+\tabhead Button & \tabhead Opens \\
+\midrule
+\ui{Open record\dots} (\key{O}) & One record: a WFDB record (its \file{.hea} file; a multi-segment
+  record whole, or one of its segments alone, by the segment's own header), an EDF, EDF+, BDF or
+  BDF+ file, or a file in a format that an installed adapter reads \\
+\ui{Open multiple records\dots} (\key{Shift}+\key{O}) & A folder: every WFDB record in it and in
+  its subfolders, on one time axis (one session), or a WFDB collection \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{The file browser}
+\label{sec:vitalstream-browser}
+
+Both buttons open the file browser of the computer the viewer runs on (titled \ui{Open record}
+or \ui{Open multiple records}), at the last folder used; the first time, at the home folder when
+the viewer may open it, else at its first data root. The browser shows only what lies inside the
+viewer's data roots (\cref{chap:viewers-alone}).
+
+\begin{itemize}
+\item \textbf{The path box.} Type or paste a path. \key{Tab} completes it (to the longest common
+  beginning of the paths that match, and lists them), \key{$\downarrow$} and \key{$\uparrow$} pick
+  one of the suggestions (up to 50), \key{Enter} goes there, \key{Esc} closes the suggestions, and
+  \key{Alt}+\key{$\uparrow$} goes up one folder. \ui{Go} goes to the path typed; \ui{$\uparrow$} goes
+  up one folder. A path to a record or a recording file opens it.
+\item \textbf{The places} below it: \ui{Home}, \ui{sample\_data} (run from a clone), each data root
+  other than the home folder and the whole file system, then the recent folders (up to six).
+  Below them, the path as links, one per folder.
+\item \textbf{The list.} Folders first, then records and recording files, by name; a row \ui{..}
+  leads to the folder above. Folders are entered with a click; records and recording files open
+  with a click. Each entry is marked:
+  \begin{itemize}
+  \item a folder;
+  \item a folder that holds records itself, or a WFDB collection, tagged \code{WFDB records};
+  \item a WFDB record (by its name, without \file{.hea}), tagged \code{WFDB record} or
+    \code{WFDB multi-segment record};
+  \item an EDF or BDF file, tagged with its format (\code{EDF}) and its size;
+  \item a file an adapter reads, tagged with its format's label and its size;
+  \item a symbolic link, with \code{link}; a link that leads nowhere, tagged \code{broken link}.
+  \end{itemize}
+  Signal files, files no installed reader reads, and the segments and layout headers of the
+  multi-segment records in the folder are not listed. Nothing outside the data roots is listed,
+  symbolic links that lead outside among them. A folder of more than 5000 entries shows its first
+  5000 (\code{Showing the first 5000 entries; type a path or use the filter to narrow down.}).
+\item \ui{Filter this folder\dots} narrows the list to the names that contain what is typed;
+  \key{Enter} opens the only one left.
+\item \ui{hidden}: also list the hidden entries (names that start with \code{.}) and the segments
+  of multi-segment records.
+\item \ui{Recent recordings}: the last eight recordings opened, by path; a click opens one again.
+\end{itemize}
+
+A path that cannot be shown is answered in the browser: \code{path outside the configured data
+roots}, \code{no such file or folder: PATH}, \code{not a folder or a recording this viewer reads:
+PATH}, \code{permission denied: PATH}.
+
+\subsection{Open multiple records: the folder's summary}
+\label{sec:vitalstream-summary}
+
+In \ui{Open multiple records\dots}, each folder of the list has an \ui{Open} button, and
+\ui{Open the records in this folder} opens the folder being shown. Before anything is read, the
+viewer counts the records (\code{Counting the records\dots}) and shows a summary of the folder,
+from its headers alone (\cref{fig:vitalstream-summary}):
+\begin{itemize}
+\item the records, the segments of multi-segment records, and the signals (their names, the first
+  twelve);
+\item the time span (\code{From \dots{} to \dots}), and the length of data in all; or, when no record
+  states its time, the length of data alone;
+\item the records that state no time (\code{placed after the data before});
+\item the records that cannot be read (\code{will be left out});
+\item the size to index (\code{to index once; later openings are instant.}).
+\end{itemize}
+\ui{Open as one session} opens it; \ui{Back} returns to the browser. A folder over a limit, or
+without records, is refused at this step (\cref{sec:vitalstream-limits}).
+
+\screenshot{vitalstream-open-multiple.png}{The summary of a folder, before it is opened as one session: six records, four segments of multi-segment records, three signals, the time span, two records that state no time, and the size to index.}{fig:vitalstream-summary}
+
+\subsection{Indexing, and Cancel}
+\label{sec:vitalstream-indexing}
+
+The first opening of a recording indexes it: a progress bar shows how far it is (\code{Indexing
+NAME \dots{} 40 \%{} $\cdot$ about 12 s left. This is done once; the index is cached.}), and
+\ui{Cancel} stops it: \code{Cancelled: nothing was kept.} Later openings are instant: the index
+is kept in the index folder (\cref{sec:vitalstream-index}). Once it is ready, the dialog closes
+and the recording opens, whole, in the lanes. A recording that cannot be read is reported in the
+dialog (\code{Error: \dots}) and in the status bar (\code{Could not open: \dots}).
+
+\subsection{A folder as one session}
+\label{sec:vitalstream-session}
+
+A folder without an \file{index.csv} is read as one session: every record in it and in its
+subfolders, on one time axis. This is how a patient's records, split into folders by device or by
+day, are seen together. A folder with an \file{index.csv} is a WFDB collection, read as its files
+describe it (\cref{chap:formats-reference}).
+
+\begin{itemize}
+\item \textbf{Records} are the \file{.hea} files below the folder, at every level, in the order of
+  their path relative to the folder (\code{/} between folders, compared character by character).
+  Hidden entries (names that start with \code{.}) and symbolic links are skipped; the segments and
+  the layout header of a multi-segment record belong to that record, never records of their own.
+  A \file{RECORDS} file is not needed, and not read; a \file{vitals.csv}, \file{events.csv} or
+  \file{gaps.csv} in the folder itself is read as for a collection.
+\item \textbf{Placement.} A record starts at its header's base date and time, taken as UTC. A
+  record without one is placed after the data before it, and shaded \emph{time not stated}
+  (\cref{sec:vitalstream-untimed}). One record alone without a time starts at 0
+  (1970-01-01).
+\item A record that cannot be read, or whose header states no sampling frequency, is left out;
+  the recording's notes say how many.
+\end{itemize}
+
+\paragraph{Multi-segment records.} A multi-segment record is read as one record. Its segments
+follow each other from the record's start, each at its offset (the samples of the segments
+before it, divided by the sampling frequency); each signal of each segment is a piece of the
+channel of its name. A null segment (\code{\textasciitilde}) is a break of known length, with
+the reason \code{null segment}. In a record with a variable layout, the layout segment (the first,
+of length 0) names the signals, and a signal absent from a segment is a break in its channel
+only. The record's markers are those of the master header's \file{.mrk} file; a marker in a null
+segment is left out. Opening one segment's own header (\file{rec\_0001.hea}) reads that segment
+alone, as one record.
+
+\paragraph{Overlapping records.} A signal recorded twice at the same time (two records of lead II
+whose times overlap) is never drawn on top of itself: each piece goes into the first lane of its
+channel that it does not overlap, and each further lane is a channel of its own, named with its
+number: \code{II}, \code{II (2)}, \code{II (3)}. Pieces are placed in the order of the records,
+and the signals of a record in the order of its header. The recording's notes say so when it
+happens. A channel is a kind of signal (\code{wfdb} for plain records), a signal description and
+a unit.
+
+\screenshot{vitalstream-session.png}{The synthetic folder \file{testdata/session} opened as one session: the lanes ART, II, II (2) and V; a span whose time is not stated (amber); the break of a null segment (grey); R-wave markers.}{fig:vitalstream-session}
+
+\subsection{The limits on a folder}
+\label{sec:vitalstream-limits}
+
+So that opening a large folder by mistake cannot overwhelm the viewer, a folder of plain records
+is opened only within these limits. They are VitalStream settings (\code{max\_records},
+\code{max\_depth}, \code{max\_scan\_s}, \cref{sec:vitalstream-settings}); Medorama has no such
+settings, and indexes a recording's folder within the defaults:
+
+\begin{table}[htbp]
+\centering
+\caption{The limits on a folder opened as one session.}
+\label{tab:vitalstream-limits}
+\begin{tabularx}{\linewidth}{@{}LP{1.6cm}P{5.4cm}@{}}
+\toprule
+\tabhead Limit & \tabhead Default & \tabhead Over it \\
+\midrule
+Header files below the folder (segments and layout headers counted) & 5000 &
+  \code{the folder holds more than 5000 WFDB records} \\
+Folder levels below the folder & 20 & \code{the folder has records nested more than 20 levels
+  deep} \\
+Seconds to count the records (the summary) & 10 & \code{counting the records took more than
+  10 s} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Over a limit, the viewer refuses the folder, says which limit was reached, and what to do
+instead: \code{open a subfolder, or describe the records in an index.csv (a WFDB collection,
+docs/wfdb-collection.md)}. A WFDB collection lists its records itself and is not limited by
+these. A folder without any record is refused too (\code{no WFDB records in or below PATH}).
+Every recording, a collection included, has at most 100,000 pieces (signals $\times$ records,
+or the runs of an EDF+D file), and a folder's index key is computed from at most 200,000 of its
+files within \code{max\_depth} levels (\cref{sec:formats-reference-limits}).
+
+\subsection{Trying it}
+\label{sec:vitalstream-try}
+
+The synthetic recordings of \file{viewers/vitalstream/testdata/} (no patient data) show what the
+viewer does: \ui{Open multiple records\dots}, then \file{viewers/vitalstream/testdata/session}
+(\cref{fig:vitalstream-session}), \file{testdata/collection} (a WFDB collection with vital signs,
+alarms and breaks) or \file{testdata/plain} (plain records). The clone must lie inside the viewer's
+root (by default, the home folder).
+
+% ==========================================================================================
+\section{Moving through a recording}
+\label{sec:vitalstream-navigate}
+
+A recording opens whole. The mouse and the keys move and zoom the view; the keys work when the
+focus is not in a text box, and are ignored with \key{Ctrl}, \key{Alt} or \key{Cmd}.
+
+\begin{xltabular}{\linewidth}{@{}P{5.2cm}L@{}}
+\caption{The mouse actions and keys of VitalStream.}
+\label{tab:vitalstream-keys}\\
+\toprule
+{\tabhead Action} & {\tabhead Effect} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Action} & {\tabhead Effect} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Wheel, or a trackpad pinch, over the traces & Zoom at the pointer \\
+Horizontal scroll over the traces & Pan \\
+Drag & Pan \\
+\key{Shift} + drag & Zoom to the time span selected \\
+Double-click, \key{Home} & The whole recording \\
+Click or drag in the overview strip & Move the view there \\
+Wheel over the overview strip & Zoom around the middle of the view \\
+Wheel over the lane labels & Scroll the lanes \\
+\key{$\leftarrow$} \key{$\rightarrow$} & Pan 10\,\% of the view \\
+\key{PgUp} \key{PgDn} & Pan one screen \\
+\key{+} (or \key{=}) \key{$-$} & Zoom in and out, by a factor of 2, around the cursor (else the
+  middle of the view) \\
+\key{1} \key{2} \key{3} & Show 10\,s, 1\,min or 10\,min around the cursor (else the middle of the
+  view) \\
+\ui{Go to\dots}, \key{G} & A calendar of the recording's days and a time, to the millisecond
+  (\cref{sec:vitalstream-goto}) \\
+\key{O} $\cdot$ \key{Shift}+\key{O} $\cdot$ \key{?} & Open a record $\cdot$ open multiple records
+  $\cdot$ help \\
+In the file browser: \key{Tab} $\cdot$ \key{Enter} $\cdot$ \key{Alt}+\key{$\uparrow$} & Complete
+  the path $\cdot$ go there $\cdot$ go up one folder \\
+\end{xltabular}
+
+The view can be zoomed in to 20\,ms, and out to a little more than the whole recording; it can
+be moved a little beyond the data on each side. The pointer over the traces is the cursor: a
+vertical line, with its time on the axis, the value of each lane at the right of the lane, and
+the vital signs at that time in \ui{At cursor}.
+
+\subsection{Go to a date and a time}
+\label{sec:vitalstream-goto}
+
+\ui{Go to\dots} (\key{G}) opens a calendar at the cursor's time (else the middle of the view):
+\begin{itemize}
+\item the month, with \ui{\textless} and \ui{\textgreater} for the months before and after (within
+  the recording); weeks start on Monday; the days with waveforms are marked, the days outside the
+  recording cannot be chosen;
+\item \ui{Time}, to the millisecond, in the display time zone (named beside it);
+\item \ui{Show}: \ui{the current span}, \ui{10 s}, \ui{1 min}, \ui{10 min} or \ui{1 h}
+  \emph{around it};
+\item \ui{Start} and \ui{End}: the recording's first and last moment;
+\item \ui{Go} (or \key{Enter}, or a double click on a day) goes there; \key{Esc} closes it.
+\end{itemize}
+The cursor line then marks the time asked for, and the status bar says \code{Went to \dots}. A
+time outside the recording is refused, with the recording's span.
+
+% ==========================================================================================
+\section{The lanes}
+\label{sec:vitalstream-lanes}
+
+The lanes are, from top to bottom: the alarms (when the recording has any), the waveforms,
+grouped by kind (ECG, pressures, SpO$_2$ and pleth, respiration, CO$_2$, gases, ventilator, EEG,
+ICG, SvO$_2$, then the others), and the trends. For plain WFDB records and EDF files, the kind of
+each channel is recognized from its label; this affects only the grouping and the colors on the
+page, not the index. Each lane's label gives its name, its unit and,
+for a waveform, its sampling rate, with the top and bottom of its scale. Values are in the
+units the file states; \code{adu} means it states no calibration.
+
+\subsection{Waveforms, and the 64-lane cap}
+\label{sec:vitalstream-waves}
+
+Waveform lanes show, for long views, the minimum and the maximum of the samples behind each
+pixel column, so that no peak is lost, and the samples themselves when zoomed in (with a dot on
+each sample once they are far enough apart). The y-axis fits the data in view. A missing sample
+is a gap in the line, never a zero. A lane without data in view says \code{no data in view}.
+
+At most 64 waveform lanes show at once. A recording with more opens with the first 64, in lane
+order, and the status bar says so (\code{N waveforms: the first 64 are shown; pick others under
+Waveforms.}); another is shown by unticking one under \ui{Waveforms} and ticking it. Ticking a
+65th is refused (\code{At most 64 waveform lanes at once: untick one first.}).
+
+\subsection{Trends and vital signs}
+\label{sec:vitalstream-trends}
+
+Trend lanes show the vital signs as stored, as points joined by a line (not across more than 15
+minutes without a value); when there are more values than pixels, the minimum and maximum of
+each pixel column. The value under the cursor is shown only when a stored value lies within the
+15 minutes before it. A recording opens with these trends, when it has them: heart rate (\code{HR}),
+SpO$_2$, respiration rate, the mean arterial pressure and the mean non-invasive pressure;
+\ui{Show all waveforms and trends}, or the boxes under \ui{Trends}, show the others. A label
+measured by several sources is a series per source, never merged: \code{HR}, \code{HR [import]}.
+
+\subsection{Alarms}
+\label{sec:vitalstream-alarms}
+
+Alarms are bands in the lane \ui{Alarms}, colored by severity: 1 advisory, 2 warning, 3 crisis.
+They are the only red on the page. The annotations of an EDF+ file are shown in the same way, in
+a lane named \ui{Annotations}; they have no severity. The monitor's alarm state, when the recording has it, has a row
+of its own above the other alarms. A band shows its text when it is wide enough; on hover, its
+text, its kind and level, its start and end, and its length. The overview strip shows the alarms
+too.
+
+\subsection{Markers}
+\label{sec:vitalstream-markers}
+
+Markers, such as R waves and pacing spikes, are ticks at the top of their channel's lane, in
+views up to 2 minutes. With fewer than 80 in a lane, each is labelled: \code{R} for an R wave,
+\code{P}, \code{pace}, \code{defib}, or the marker's name.
+
+\subsection{Breaks}
+\label{sec:vitalstream-breaks}
+
+A break is a place where contiguity is not proven. Breaks are shaded grey: across every lane
+for a break of the whole recording, only across a channel's lanes for a break of that channel. On
+hover: \code{Break in the data:} and its reason, its length (\code{(exact)} when it is) and how it
+was measured, or \code{gap duration unknown}, its start and end, and its notes. Pieces of a
+channel are drawn apart, never joined across a break.
+
+\subsection{Time not stated}
+\label{sec:vitalstream-untimed}
+
+Data whose time the recording does not state is shaded amber, labelled \code{TIME NOT STATED}
+where it is wide enough. It is placed after the data before it; its place is known relative to
+its neighbors, not on the clock, and the timing of its samples within it is exact. On hover:
+\code{Time not stated in the file for this data.}
+
+\subsection{Repaired data: \texorpdfstring{\code{qc\_verbose}}{qc\_verbose}}
+\label{sec:vitalstream-qc}
+
+Some readers repair what a file stores out of order: the STP adapter puts back in order the data
+blocks a file stored late, so that they make no break. By default, such repaired data is not
+marked. With the setting \code{qc\_verbose} (or \opt{-{}-qc-verbose}), it is outlined in dashed
+blue, with its details on hover (\code{Data block stored late in the file (N s, N blocks); the
+reader put it back in order. Not a break: shown because qc\_verbose is on.}). Breaks are shaded
+either way.
+
+% ==========================================================================================
+\section{Time zones}
+\label{sec:vitalstream-time}
+
+Recordings are kept in UTC, as Unix seconds; a WFDB header's base date and time is taken as UTC.
+The time zone only changes how times are shown: on the axis, at the cursor, in \ui{Recording},
+in \ui{Go to\dots} and in the address's view.
+
+The list \ui{Time zone}, at the top right, holds the viewer's default zone, marked
+\code{(default)}, then \code{UTC}, then every zone the browser knows. The default is the setting
+\code{timezone} (or \opt{-{}-timezone}), \code{America/New\_York} unless set; a choice in the list
+is remembered in the browser. The axis names the zone's abbreviation at the time shown
+(\code{EST}, \code{EDT}).
+
+% ==========================================================================================
+\section{The address}
+\label{sec:vitalstream-address}
+
+The page's address keeps what it shows in its fragment (after \code{\#}), so that a reload or a
+bookmark returns to the same place, and another program can open the viewer at a recording:
+
+\begin{table}[htbp]
+\centering
+\caption{The fragments of VitalStream's address.}
+\label{tab:vitalstream-address}
+\begin{tabularx}{\linewidth}{@{}P{5.0cm}L@{}}
+\toprule
+\tabhead Fragment & \tabhead Means \\
+\midrule
+\code{path=\dots\&t0=\dots\&t1=\dots} & A recording on the server (its path), at a time span (Unix
+  seconds) \\
+\code{browse=FOLDER} & The file browser, open at a folder \\
+\code{who=\dots}, \code{what=\dots}, \code{pos=\dots}, \code{nav=\dots} & A host's context, shown in
+  place of the recording's name (\cref{chap:viewers-alone}) \\
+\code{theme=light} or \code{dark} & The host's colors: applied, not saved as the viewer's own
+  choice (the theme button still switches them); Medorama passes its page's theme this way
+  (\cref{chap:viewers-in-medorama}) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The page's requests to its server are described in \cref{chap:viewer-api}.
+
+% ==========================================================================================
+\section{Settings}
+\label{sec:vitalstream-settings}
+
+A settings file, \file{vitalstream.toml}, changes the defaults. It is \opt{-{}-config FILE},
+else the first that exists of \file{viewers/vitalstream/vitalstream.toml} (only for a viewer run
+from the build folder of a clone: git ignores it) and
+\file{\textasciitilde/.config/vitalstream/vitalstream.toml}; only that one is read. A
+\file{vitalstream.toml} in the working folder is never read unless \opt{-{}-config} names it: a
+shared data folder could hold one that runs programs (\code{adapters\_dir}) or opens the viewer
+to the network (\code{host}, \code{auth\_file}). On start, the viewer says which settings file it
+read. One file serves the three viewers: the top-level keys apply to all, the keys
+of a \code{[py]}, \code{[rs]} or \code{[cpp]} section to that viewer only, and override the
+top-level ones. Command-line options override both. Every key is optional; relative paths are
+relative to the file's folder, and \code{\textasciitilde} is the home folder. A key the viewer does
+not know is an error (\code{unknown settings: KEY}), and so is a value of the wrong type
+(\code{bad value for KEY}): the viewer does not start. \code{data\_roots} and
+\code{allowed\_hosts} are lists of strings, \code{port} an integer from 0 to 65535,
+\code{index\_workers}, \code{max\_records} and \code{max\_depth} integers of at least 0,
+\code{max\_scan\_s} a number of at least 0, the switches \code{true} or \code{false}, the others
+strings. Start from
+\file{viewers/vitalstream/vitalstream.example.toml}.
+
+\begin{xltabular}{\linewidth}{@{}P{3.4cm}P{3.0cm}L@{}}
+\caption{The settings of VitalStream (\file{vitalstream.toml}).}
+\label{tab:vitalstream-settings}\\
+\toprule
+{\tabhead Key (option)} & {\tabhead Default} & {\tabhead Meaning} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Key (option)} & {\tabhead Default} & {\tabhead Meaning} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{data\_roots} (\opt{-{}-root}) & The viewer's root & The folders the viewer may open, inside
+  its root: one that contains the root is narrowed to it, one outside it is left out (the
+  settings narrow the root, never widen it). A path is allowed when the file or folder it leads
+  to, every symbolic link resolved, lies inside a data root; a link that leads outside is
+  refused, and not listed \\
+\code{max\_records}, \code{max\_depth}, \code{max\_scan\_s} & 5000, 20, 10 & The limits on a
+  folder of records: header files, folder levels, seconds to count them
+  (\cref{sec:vitalstream-limits}); \code{max\_scan\_s} is a number of seconds, 0 or more \\
+\code{require\_password} & \code{false} & Refuse to start without a password (Medorama sets it
+  for the viewer it runs; a viewer built without password support then never starts) \\
+\code{timezone} (\opt{-{}-timezone}) & \code{America/New\_York} & The display time zone, an IANA
+  name; data are stored in UTC \\
+\code{host}, \code{port} (\opt{-{}-host}, \opt{-{}-port}) & \code{127.0.0.1}; 8050, 8060, 8070 &
+  Where the viewer listens \\
+\code{allowed\_hosts} & \code{[]} & The host names the viewer answers for besides
+  \code{localhost}, \code{127.0.0.1}, \code{::1} and \code{host}: the names this machine is
+  reached by when \code{host} is \code{0.0.0.0}, or a reverse proxy's public name;
+  \code{["*"]} allows any. A request naming another host is refused, which defeats DNS
+  rebinding (\cref{sec:viewer-api-checks}) \\
+\code{secure\_cookie} & \code{false} & Marks the sign-in cookie \code{Secure}, so that the
+  browser sends it over HTTPS only: set it for a viewer behind an HTTPS proxy \\
+\code{index\_workers} & 2 & The recordings indexed at the same time (0 is taken as 1) \\
+\code{cache\_dir} (\opt{-{}-cache-dir}) & \file{\textasciitilde/.cache/vitalstream} (run from a
+  clone: \file{viewers/vitalstream/sample\_data/outputs/index}) & The index folder; shared by the
+  three viewers, and with Medorama when set to its \code{index\_dir} \\
+\code{adapters\_dir} (\opt{-{}-adapters-dir}) & \file{\textasciitilde/.local/share/medorama/adapters}
+  (Windows: \code{\%LOCALAPPDATA\%\textbackslash medorama\textbackslash adapters}) & The adapter
+  folder \\
+\code{auth\_file} & \file{\textasciitilde/.config/vitalstream/auth.json} & The password: a salted
+  scrypt hash, readable by you only \\
+\code{qc\_verbose} (\opt{-{}-qc-verbose}) & \code{false} & \code{false}: data the reader repaired
+  (blocks stored out of order and put back in order) is not marked; \code{true} outlines it
+  (dashed), with its details on hover. Breaks are shaded either way \\
+\end{xltabular}
+
+An example, for a server whose recordings lie in two folders:
+
+\begin{lstlisting}[language=TOML,style=example]
+# ~/.config/vitalstream/vitalstream.toml, for a viewer installed with --root /data
+timezone = "Europe/Paris"
+data_roots = ["/data/icu", "/data/holter"]
+host = "127.0.0.1"
+index_workers = 4
+max_records = 10000
+
+[cpp]
+port = 8070
+\end{lstlisting}
+
+The settings of every program of Medorama, VitalStream's among them, are gathered in
+\cref{chap:settings-reference}.
+
+% ==========================================================================================
+\section{The index}
+\label{sec:vitalstream-index}
+
+The index of a recording is what lets the viewer show days of waveforms at once: the
+recording's structure (its channels, and the pieces each is made of), the minimum and maximum
+envelopes of every waveform, and its markers, vital signs, alarms and breaks. A recording is
+indexed the first time it is opened, or ahead of time with \opt{-{}-index PATH}; later openings
+are instant.
+
+\begin{itemize}
+\item The index folder (\code{cache\_dir}) holds one folder per recording, named by its
+  \emph{key}: the first 20 hexadecimal digits of a SHA-256 of the index format's version, the
+  recording's real path, and its files' sizes and modification times. A recording that is changed, moved or replaced gets a new
+  key, so an outdated index is never used.
+\item The three viewers and Medorama write the same index for the same recording, byte for byte,
+  and may share one index folder at the same time.
+\item An index is written into a temporary folder and renamed into place, so that a reader sees
+  a complete index or none; it is never written next to a recording.
+\end{itemize}
+
+\begin{phibox}
+An index holds no name, identifier or date of birth, but it holds the recording's path and its
+values, which are patient data. Keep index folders on storage protected like the recordings.
+\end{phibox}
+
+The index format is specified in \cref{chap:formats-reference}.
+
+% ==========================================================================================
+\section{Deploying}
+\label{sec:vitalstream-deploy}
+
+\paragraph{On your computer:} install, then run the command; the page opens in your browser. On a
+machine others can log in to, set a password once (\opt{-{}-set-password}): anyone who can connect
+to the port can otherwise read the files under the viewer's root.
+
+\paragraph{On a server where the data are:} the data need not be copied anywhere.
+\begin{enumerate}
+\item Install it with a root that holds the recordings, and set a password once:
+  \cmd{viewers/vitalstream/install.sh -{}-root /data/icu}, then
+  \cmd{vitalstream-cpp -{}-set-password}.
+\item Start it without a browser, in \cmd{tmux} or as a service (below):
+  \cmd{vitalstream-cpp -{}-no-browser}.
+\item From your computer: \cmd{ssh -N -L 8070:127.0.0.1:8070 user@server}, then open
+  \url{http://127.0.0.1:8070}.
+\end{enumerate}
+
+The viewers listen on 127.0.0.1 by default, keep a sign-in for 30 days, and work behind a portal
+or a reverse proxy that serves them under a path prefix (their page uses relative addresses).
+When the sign-in ends, or the password changes, the page shows the sign-in form again. Signing
+out ends that sign-in on the server too, so that a copy of the cookie no longer works. After
+wrong passwords from one address, the next one is checked only after a delay (1, 3, 7, 15
+\dots{} up to 30\,s); the C++ viewer answers such an early password \code{429}
+(\cref{sec:viewer-api-signin}). A viewer that answers for other names than this machine's local
+ones (\code{host = "0.0.0.0"}, or a reverse proxy that passes its public name on) lists them in
+\code{allowed\_hosts}; behind an HTTPS proxy, set \code{secure\_cookie = true}.
+
+\paragraph{Run as a service} (Linux, systemd, as your user):
+
+\begin{lstlisting}[style=shell]
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/vitalstream.service <<'EOF'
+[Unit]
+Description=VitalStream viewer
+
+[Service]
+ExecStart=%h/.local/bin/vitalstream-cpp --no-browser
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload && systemctl --user enable --now vitalstream
+loginctl enable-linger "$USER"   # keep it running after you log out (may need an administrator)
+\end{lstlisting}
+
+On macOS and Windows, a viewer runs as a service as Medorama does, with the viewer's command
+(\cref{chap:deployment}).
+
+% ==========================================================================================
+\section{Adapters}
+\label{sec:vitalstream-adapters}
+
+VitalStream reads WFDB records and EDF files itself. Every other recording format is read by an
+\emph{adapter}: a separate program, named \file{NAME-adapter} (\file{NAME-adapter.exe} on
+Windows), in the adapter folder (the setting \code{adapters\_dir}, by default
+\file{\textasciitilde/.local/share/medorama/adapters}, the folder Medorama uses too). Formats that are
+licensed, such as the \file{.Stp} files of BedMasterEx, are distributed this way, as add-ons,
+outside the repository; the stp-adapter that reads them is private and available to institutions
+under agreement. The built-in readers take precedence over an adapter that lists the same
+extensions.
+
+\begin{itemize}
+\item \textbf{At start}, the viewer asks every adapter of its folder to describe itself, once:
+  the formats it reads, each with a kind, a label and file extensions.
+\item \textbf{Browsing.} A file whose extension an adapter lists is a recording of that adapter's
+  kind, listed with its format's label and size. Until its adapter is installed, a file of that
+  format is treated like any other file the viewer does not read: it is not listed, and opening
+  it is refused.
+\item \textbf{Indexing.} The viewer runs the adapter, which writes the index into a temporary
+  folder and reports its progress. The viewer then completes the index and renames the folder
+  into place.
+\item \textbf{Viewing.} Envelopes, markers and vital signs come from the index. Raw samples, when
+  a view zooms in close enough, are read from the recording through the adapter.
+\end{itemize}
+
+To install an add-on for a viewer alone, copy its program into the adapter folder, make it
+executable on Linux and macOS (\cmd{chmod 755}), allow the system to run it (on macOS,
+\cmd{xattr -d com.apple.quarantine PROGRAM}; on Windows, \cmd{Unblock-File PROGRAM}), and restart
+the viewer. Installing add-ons for Medorama, and the adapters' protocol, are described in
+\cref{chap:addons}.
+
+% ==========================================================================================
+\section{Testing and parity}
+\label{sec:vitalstream-testing}
+
+\begin{xltabular}{\linewidth}{@{}P{5.6cm}L@{}}
+\caption{VitalStream's tests (from the root of the repository).}
+\label{tab:vitalstream-testing}\\
+\toprule
+{\tabhead Command} & {\tabhead Checks} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Command} & {\tabhead Checks} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\cmd{cargo test -p vitalstream-rs -p recording-engine} & The Rust viewer and engine on the
+  synthetic recordings of \file{testdata/} (one record, a folder read as one session, the
+  limits, a record's index key, cancelling, headers that state too many samples, files outside
+  the data roots); the viewer's root and its settings files; the HTTP API's checks and sign-in;
+  the adapter protocol with a mock adapter and misbehaving ones \\
+\cmd{(cd viewers/vitalstream/cpp \&\& ctest -{}-preset release)} & The C++ viewer and engine: the
+  same recordings and adapter; the engine's limits and checks (\file{test\_limits.cpp}) and the
+  HTTP server's (\file{test\_server.cpp}) \\
+\cmd{pytest viewers/vitalstream/python/vitalstream/tests} & The Python viewer: the same recordings
+  and adapter, sign-in, the file browser, a build without password support, and the limits and
+  checks shared with the Rust engine and viewer (\file{test\_limits.py}) \\
+\cmd{make parity} & The viewers that are built: byte-identical indexes under the specified key,
+  and the same API answers (\file{viewers/vitalstream/tests/parity}) \\
+\end{xltabular}
+
+\cmd{make parity} runs \file{tests/parity/index\_parity.py}, which indexes recordings with every
+viewer that is built and checks that each key equals the one computed from the specification,
+by an independent implementation, and that the index files are byte-identical (\file{meta.json}
+compared without its informative fields), and \file{tests/parity/viewer\_parity.py}, which checks
+that the viewers give the same answers to the same requests, and the same statuses and errors
+to the requests they refuse (the \code{Host} check, \code{Origin}, \code{415}, \code{413}, the
+query grammar, a record whose signal file leads outside the data roots). The first also takes recordings an
+adapter reads:
+
+\begin{lstlisting}[style=shell]
+python viewers/vitalstream/tests/parity/index_parity.py                            # testdata/
+python viewers/vitalstream/tests/parity/index_parity.py --adapters-dir DIR FILE... # an adapter's
+\end{lstlisting}
+
+\file{testdata/generate.py} writes the synthetic recordings, deterministically, with the Python
+standard library only: a WFDB collection with three stretches, a break of stated length, a record
+without a start time, vital signs from two sources, alarms and markers; plain WFDB records, among
+them an uncalibrated signal and a record without a sampling frequency; a folder of records in
+subfolders to open as one session (two overlapping ECG records, a record without a start time,
+multi-segment records with a null segment and a variable layout, a hidden folder that is not
+read); and four EDF files in \file{testdata/edf/} (\cref{sec:formats-reference-edf-tests}).
+
+% ==========================================================================================
+\section{License}
+\label{sec:vitalstream-licence}
+
+VitalStream is licensed, like all of Medorama, under the PolyForm Noncommercial License 1.0.0,
+with commercial licenses by agreement. The three viewers read WFDB records with wfdb-x, a
+separate project under the GNU GPL version 3 or later (\cref{chap:licences}).

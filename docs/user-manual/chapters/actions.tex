@@ -1,0 +1,286 @@
+% Part II: actions and jobs. Sources: docs/actions.md; docs/user-guide.md ("Actions and jobs");
+% medorama/src/jobs.rs, actions.rs (secret_env), identify.rs; web/js/views/actions.js, jobs.js.
+\chapter{Actions and jobs}
+\label{chap:actions}
+
+This chapter describes actions, the work that Medorama does on recordings in the background. It
+is written for analysts who run actions, and for administrators and developers who install and
+write plug-ins. An \emph{action} does something to one recording. Medorama's background workers
+run it as a \emph{job} and keep its result. Two actions are built in, and \emph{plug-ins} add
+others without a new build of Medorama. The \ui{Actions} tab runs actions on a selection of
+recordings, and the \ui{Jobs} tab shows the queue.
+
+\section{The built-in actions}
+\label{sec:actions-builtin}
+
+\begin{table}[htbp]
+\caption{The built-in actions.}
+\label{tab:actions-builtin}
+\begin{tabularx}{\linewidth}{@{}P{3.0cm}L@{}}
+\toprule
+{\tabhead Action} & {\tabhead Does} \\
+\midrule
+\ui{Index} (\code{index}) & Builds the index that the viewers draw from (envelopes, markers,
+  vital signs, events), in \file{index\_dir/<index key>/}, with the recording engine's WFDB or
+  EDF reader, or with the recording's adapter (\cref{chap:formats-reference},
+  \cref{chap:readers}). It is ticked by default in the Actions tab, and it runs automatically for
+  new and changed recordings while the server runs (the setting \code{auto\_index}). \\
+\ui{Read identifiers} (\code{identify}) & Reads the patient identifiers that the recording's own
+  file states into the catalog's database only, so that they can be checked against the
+  databases. Medorama reads the patient and recording fields of an EDF or BDF header itself;
+  for other formats, the recording's adapter returns them. WFDB records hold none. The values
+  are shown only to users with the PHI permission (\cref{chap:recordings}). This action also
+  runs automatically. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{A Holter's heart rate} is not an action of its own. The \code{index} job computes it
+after indexing a recording that has an ECG lead and no heart rate of its own, such as a Holter
+ECG or a sleep study. A Pan--Tompkins detector finds the QRS complexes, reading an hour of
+signal at a time. For each minute, the job then keeps the median of the beat-to-beat rates and
+their 5th to 95th percentile range; minutes with fewer than 10 plausible beats (30 to
+250\,bpm) are left out. The series is kept in the database (\code{recording\_series}) and shown
+on the patient page (\cref{chap:patients}).
+
+\section{The Actions tab}
+\label{sec:actions-tab}
+
+The \ui{Actions} tab is shown to analysts and administrators. It lists the installed actions,
+each with a box to tick, its title (built-in actions are marked \ui{built in}), its version, the
+actions it requires, and its description. An action that cannot run (one that requires an action
+that is not installed, or one of the reserved \code{encounter} scope) says why, and cannot be
+ticked. Plug-ins whose manifest could not be read are listed after the table (``Not loaded:
+\dots''). The ticked actions are remembered in this browser.
+
+\ui{Run on} chooses the recordings:
+\begin{description}
+\item[\ui{The selected encounters}] The encounters ticked in the Patient Catalog's
+  \ui{Encounters} table (\cref{chap:patients}), whose \ui{Run actions on selected\dots} button
+  opens this tab.
+\item[\ui{The encounters matching the current search}] The encounters that the Encounters
+  table's search finds.
+\item[\ui{The members of a cohort}] The recordings of a cohort's members, with the cohort chosen
+  in the list. A cohort's \ui{Run actions\dots} opens this tab with that cohort chosen
+  (\cref{chap:cohorts}).
+\item[\ui{Every recording in the catalog}] All of them, after a confirmation.
+\end{description}
+\ui{Run again where already done} runs the ticked actions even where they already succeeded.
+\ui{Run} queues the jobs and says what it did, for example: ``Run 12: 8 recording(s), 6 job(s)
+queued; 2 already done, 0 already queued, 0 not applicable.''
+
+\section{Runs and jobs}
+\label{sec:actions-runs}
+
+\paragraph{A run} applies one or more actions to a selection (encounters, a search, a cohort's
+members, recordings, or all of them). It is expanded to one job per action and recording, with
+the following rules:
+\begin{itemize}
+\item Missing recordings, and recordings of kinds that an action does not apply to, are left out
+  (``not applicable'').
+\item The actions that an action requires are added.
+\item \textbf{No work is done twice.} A job is not queued when the same action, at the same
+  version and with the same parameters, already succeeded on the recording as it is now (its
+  fingerprint). \ui{Run again where already done} (\opt{-{}-force}) overrides this for the
+  chosen actions.
+\item A job already queued or running is never queued twice. Asking again with a higher
+  priority raises its priority.
+\end{itemize}
+
+\paragraph{Workers} take the jobs from the queue. They are the workers of \cmd{medorama serve}
+(as many at once as the setting \code{workers}, 2 by default), and \cmd{medorama work}, which
+runs the queue in the terminal until it is empty. Workers take the job with the highest priority
+first, then the oldest. \ui{Index now}, beside a recording, has priority 10; automatic indexing,
+and runs unless asked otherwise, have priority 0. A job waits until the actions it requires have
+succeeded on the recording, and fails if one of them failed.
+
+\paragraph{Robustness.} A running job's worker writes a heartbeat every 2 seconds. A job whose
+heartbeat stops for 2 minutes (a crashed or killed worker) goes back to the queue. A heartbeat
+the database refuses (busy, a connection lost) is tried again: only the job's row stops a job
+(cancelled, or taken back by the queue). A job's end is written again, for up to half a minute,
+until the database takes it. A server or \cmd{medorama work} that stops (\key{Ctrl}+\key{C},
+\code{SIGTERM}) stops its plug-ins, with everything they started (TERM to the plug-in's process
+group, KILL 5 seconds later), and puts their jobs back in the queue at once. Canceling stops a
+plug-in at once, while indexing runs to its end and its result is discarded. Several processes
+(the server, \cmd{work}, the commands) can share one database, and each job is taken by exactly
+one worker.
+
+\section{The Jobs tab}
+\label{sec:actions-jobs}
+
+The \ui{Jobs} tab, shown to everyone, lists the jobs, unfinished ones first, or only those of one
+state (\ui{Running}, \ui{Queued}, \ui{Failed}, \ui{Done}, \ui{Cancelled}), with the number of
+jobs in each state. Each job shows its number, its state, its action, its recording (and its
+error, when it failed), its progress while it runs, and when it was queued and finished. While
+jobs are unfinished, the table refreshes itself every few seconds, and the number beside the
+tab counts the jobs running and queued.
+
+\begin{itemize}
+\item \ui{Cancel}, beside a queued or running job, cancels it (analysts and administrators).
+\item \ui{Cancel all unfinished} cancels every queued and running job, after a confirmation
+  (administrators).
+\end{itemize}
+
+A failed job's error says why it failed. For a plug-in, it reads ``\dots{} exited with \dots''
+followed by the last lines of its log, ``stopped after the time limit (\dots{} s)'', or
+``canceled''. A recording whose indexing failed shows the error beside the recording too
+(\cref{chap:patients}). The page does not show a job's result (its summary). The summary is kept
+in the database with its recording, and the API returns it with the recording
+(\code{GET recordings/\{id\}}) and with an encounter's recordings (\code{GET encounters/\{id\}};
+\cref{chap:http-api}).
+
+\section{From the command line}
+\label{sec:actions-cli}
+
+The following commands list the installed actions, queue runs, work through the queue, list
+the failed jobs and cancel a job:
+\begin{lstlisting}[style=shell]
+medorama actions                               # the installed actions
+medorama run index --all                       # queue
+medorama run recording-summary --cohort 7 --param recording-summary.max_channels=16
+medorama work                                  # run the queue here, until it is empty
+medorama jobs --state failed                   # what failed, and why
+medorama cancel --job 12                       # cancel a job (--run N: a run's, --all: every one)
+\end{lstlisting}
+\cmd{medorama run} takes the actions' names and a selection: \opt{-{}-all},
+\opt{-{}-encounter ID} (repeated), \opt{-{}-recording ID} (repeated), \opt{-{}-search TEXT} (in
+the encounters' search syntax; \cref{chap:patients}), or \opt{-{}-cohort N} (the cohort's
+number, as the Cohorts tab shows it). \opt{-{}-force} runs the actions again where they are
+already done, \opt{-{}-param ACTION.KEY=VALUE} overrides a parameter (VALUE is JSON, or text),
+and \opt{-{}-priority N} sets the jobs' priority. The jobs are then run by \cmd{serve} or
+\cmd{work}. \Cref{chap:cli} describes every command and option.
+
+\section{Plug-ins}
+\label{sec:actions-plugins}
+
+A plug-in is a folder holding an \file{action.toml} file and a program, in one of the folders of
+the setting \code{actions\_dirs} (by default \file{<home>/actions}). Medorama reads the plug-ins
+when it starts, and again on \code{POST api/v1/actions/reload} (administrators). \cmd{serve}
+prints the plug-ins it could not load, and the Actions tab lists the others. An example in
+Python, using the standard library only, is in
+\file{medorama/actions/examples/recording-summary}. Its \file{action.toml} file reads:
+\begin{lstlisting}[language=TOML]
+name = "recording-summary"
+title = "Recording summary (example)"
+version = "1"
+description = "Channels, vital signs and duration of a recording, from its index: ..."
+scope = "recording"
+kinds = ["wfdb"]
+requires = ["index"]
+command = ["python3", "summary.py"]   # on Windows: ["python", "summary.py"]
+timeout_s = 600
+default = false
+
+[params]
+max_channels = 64                     # list at most this many channels in summary.json
+\end{lstlisting}
+
+\begin{xltabular}{\linewidth}{@{}P{2.6cm}P{2.6cm}L@{}}
+\caption{The keys of \file{action.toml}.}
+\label{tab:actions-manifest}\\
+\toprule
+{\tabhead Key} & {\tabhead Default} & {\tabhead Meaning} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Key} & {\tabhead Default} & {\tabhead Meaning} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{name} & (Required) & The action's name: \code{a}--\code{z}, \code{0}--\code{9}, \code{\_}
+  and \code{-}, up to 64 characters. It must be unique: a second action of the same name is not
+  loaded. \\
+\code{title} & The name & What the Actions tab shows. \\
+\code{version} & \code{"1"} & A text or a number. Change it whenever the results would differ,
+  so that the action runs again. \\
+\code{description} & (Empty) & What the action does. \\
+\code{scope} & \code{"recording"} & \code{"recording"}. The scope \code{"encounter"} is
+  reserved: such actions are listed but cannot run yet. \\
+\code{kinds} & Every kind & The recording kinds it applies to: \code{wfdb}, \code{edf}, or an
+  adapter's kind (\code{["wfdb"]}). \\
+\code{requires} & None & Actions that must have succeeded on the recording first. An action that
+  requires one that is not installed cannot run. \\
+\code{command} & (Required) & The program and its arguments. Relative paths that exist in the
+  action's folder are made absolute. \\
+\code{timeout\_s} & \code{21600} (6 hours) & The time limit, in seconds (0: no limit). \\
+\code{default} & \code{false} & Whether the action is ticked in the Actions tab, until the user
+  makes a choice. \\
+\code{[params]} & None & Default parameters, which a run may override (\opt{-{}-param}). \\
+\end{xltabular}
+
+\paragraph{Trying the example.} Add the folder \file{medorama/actions/examples} of the clone
+(its full path) to \code{actions\_dirs} in \file{medorama.toml} and restart the server. The
+following command then queues the example on every recording and runs the queue:
+\begin{lstlisting}[style=shell]
+medorama run recording-summary --all && medorama work
+\end{lstlisting}
+On Windows, change its \code{command} to \code{["python", "summary.py"]}.
+
+\section{The contract}
+\label{sec:actions-contract}
+
+For each job, Medorama:
+\begin{enumerate}
+\item creates the output folder
+  \file{results\_dir/actions/<name>/r<recording id>/j<job id>/} (a job run again, after its
+  worker stopped, gets a new one: \file{j<job id>-2/}, \file{-3/} \dots, the earlier attempt's
+  files kept);
+\item runs \code{command} there, with the job description as JSON on its standard input, also
+  saved as \file{job.json} (its path in the environment variable \code{MEDORAMA\_JOB});
+\item sends the command's standard error to \file{log.txt}, and keeps the other lines of its
+  standard output in \file{stdout.txt}.
+\end{enumerate}
+
+The command must follow these rules:
+\begin{itemize}
+\item It writes its results into its working folder, never anywhere else.
+\item It may print \code{progress <0..1>} lines on its standard output (\code{progress 0.5}),
+  which the Jobs tab shows.
+\item It may leave a \file{summary.json} file (up to 256\,KB), which Medorama stores in the
+  database with the recording and returns through the API (\code{GET recordings/\{id\}}, and
+  with an encounter's recordings through \code{GET encounters/\{id\}}). A larger summary is
+  replaced by a note (``summary.json too large to store''), and one that is not JSON fails the
+  job.
+\item It exits with 0 on success. Any other exit, a timeout or a cancellation marks the job
+  failed, and the failure message ends with the last lines of \file{log.txt}. At the time limit
+  or a cancellation, the plug-in's process group gets TERM, then KILL 5 seconds later: a plug-in
+  that must clean up handles TERM.
+\end{itemize}
+
+The command runs with the environment of the catalog's account, minus two groups of variables:
+Medorama's own variables (\code{MEDORAMA\_\dots}: the database's address and password, the
+encryption key), and every variable whose name marks it as secret (\code{PGPASS\dots}, names
+containing \code{PASSWORD}, \code{SECRET}, \code{TOKEN}, \code{PASSPHRASE} or
+\code{CREDENTIAL}, names ending in \code{\_KEY}, and \code{DATABASE\_URL}). The rest stays, so
+that a plug-in finds its interpreter and libraries (\code{PATH}, \code{HOME}, a virtual or conda
+environment). The command also receives \code{MEDORAMA\_JOB}, the path of its job description.
+
+\paragraph{The job description} has this form:
+\begin{lstlisting}[language=JSON]
+{
+  "catalog": "medorama 0.1.0",
+  "job_id": 12, "action": "heart_rate", "version": "1",
+  "params": {"window_s": 10},
+  "recording": {"id": 3, "path": "/data/.../ICU7_12-...", "kind": "wfdb",
+                "name": "ICU7_12-...", "format": "WFDB collection",
+                "t_start": 1704106200.0, "t_end": 1704297600.0,
+                "index_dir": "/results/index/0123456789abcdef0123"},
+  "encounters": [{"encounter_id": "MO-E-7F3K-2QXM", "patient_id": "MO-AB4C-9D2E"}],
+  "output_dir": "/results/actions/heart_rate/r3/j12"
+}
+\end{lstlisting}
+\code{index\_dir} is \code{null} when the recording has no current index. An action that needs
+one declares \code{requires = ["index"]} and reads it as the index format describes
+(memory-mapped arrays and \file{meta.json}; \cref{chap:formats-reference}).
+
+\section{Privacy}
+\label{sec:actions-privacy}
+
+\begin{phibox}
+The job description holds pseudonyms only (\code{MO-\dots}), never identifiers, and job
+summaries never contain identifiers (\code{identify} says only whether it found any). A plug-in
+runs with the rights of the catalog's account. Install only plug-ins you trust, keep the actions
+folders writable by that account only, and review what a plug-in writes to its results folder,
+which is outside the catalog's database and its privacy gate (\cref{chap:security}).
+\end{phibox}

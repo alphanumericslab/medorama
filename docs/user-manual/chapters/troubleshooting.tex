@@ -1,0 +1,340 @@
+% Troubleshooting: Medorama's messages and their remedies (docs/administration.md,
+% "Troubleshooting"), add-ons (docs/adapters.md), building (docs/building.md, "Troubleshooting"),
+% finding a fault (docs/developing.md, "Finding a fault"), and the viewers' common problems
+% (viewers' READMEs; viewers/vitalstream/rust/src/main.rs, settings.rs;
+% libs/engine/src/sources/wfdb_folder.rs).
+\chapter{Troubleshooting}
+\label{chap:troubleshooting}
+
+This chapter is for administrators and users who meet an error. Each table pairs a message or
+a symptom with its cause and its remedy: Medorama's own, sign-in's, the add-ons', the builds' and
+the viewers'. The last section says where to look when none of them applies. Messages are quoted
+as the programs print them; \code{...} stands for the part that varies.
+
+\section{Medorama}
+\label{sec:troubleshooting-medorama}
+
+\begin{xltabular}{\linewidth}{@{}P{5.8cm}L@{}}
+\caption{Medorama's messages, and what to do.}
+\label{tab:troubleshooting-medorama}\\
+\toprule
+\tabhead Problem & \tabhead Cause, remedy \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Problem & \tabhead Cause, remedy \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{no catalog in .../.local/share/medorama} & The catalog is elsewhere:
+  \cmd{medorama -{}-home DIR use}, or \opt{-{}-home DIR}, or \code{MEDORAMA\_HOME}
+  (\cref{chap:administration}) \\
+\code{... medorama.sqlite is missing, although ... medorama.toml is there} & \cmd{init} stopped
+  before creating the database (delete \file{medorama.toml} and run \cmd{init} again), or the
+  database was moved or deleted (put it back, or set \code{database}) \\
+\code{the password is too short} & Passwords need at least 10 characters \\
+\cmd{init}: \code{cannot create the database} & Most often the home folder is on a network file
+  system: choose a home folder on a local disk with \opt{-{}-home} \\
+\code{unknown settings: ...}, \code{bad value for ...} & A mistyped key or a value of the wrong
+  type in \file{medorama.toml}; the keys and their types are in \cref{chap:settings-reference} \\
+\code{unknown time zone ...} & \code{timezone} (or \opt{-{}-timezone}) takes an IANA name, such
+  as \code{America/New\_York} \\
+\code{cannot listen on 127.0.0.1:8090} & Another program uses the port: \opt{-{}-port N}, or
+  \code{port} in \file{medorama.toml} \\
+\cmd{serve}: \code{WARNING: reachable from other machines without HTTPS} & \code{host} is not a
+  loopback address and \code{secure\_cookies} is \code{false}: serve it behind a proxy with TLS
+  (\cref{chap:deployment}) \\
+Import: \code{skipped ...: the catalog writes to ...} & The results, index or home folder is a
+  recording's folder or inside one: choose folders elsewhere \\
+Import: \code{outside the configured data\_roots} & Add the folder to \code{data\_roots} (empty:
+  anywhere) \\
+Import: \code{... not a recording Medorama reads. A format read by an add-on needs it installed
+  ...} & A recording row (ICU, Holter, EEG or sleep) names a file that no installed reader reads: install the add-on,
+  restart, then remove that import and import the table again (\cref{chap:addons}) \\
+A recording stays gray (not indexed) & Is the server running with workers and
+  \code{auto\_index = true}? Otherwise \cmd{medorama run index -{}-recording ID} and
+  \cmd{medorama work}. When it shows \ui{Failed}, the \ui{Jobs} tab shows the error \\
+Recordings are not linked to encounters & Linking needs a row naming the file, or a bed stay
+  with the same \code{UNIT\_BED} overlapping the recording's time: check
+  \cmd{medorama recordings -{}-unlinked} and the databases' times (their time zone) \\
+\ui{View} is grayed out & Its tooltip says why; usually no viewer is installed beside the
+  catalog: \cmd{tools/install-medorama.sh -{}-viewer cpp}, or set \code{viewer} \\
+The \ui{VitalStream} tab does not start & The viewer's own output is in
+  \file{<home>/viewer/viewer.log} \\
+\code{too many failed attempts; try again in 60 s} & 5 wrong passwords lock a user name for a
+  minute \\
+A forgotten admin password & \cmd{medorama user set NAME -{}-password} on the server \\
+\code{the catalog needs at least one enabled admin} & A change or removal would leave no enabled
+  admin: make another user an admin first \\
+\code{the database has schema version N, newer than this program knows} & A newer
+  \cmd{medorama} updated the database: use that version \\
+\code{a database key is configured, but this build has no encryption} & \code{MEDORAMA\_KEY} or
+  \code{key\_file} is set for a build without \opt{-{}-features encryption}: build it with
+  encryption, or remove the key if the database was never encrypted \\
+\code{key\_file encrypts a SQLite database; a PostgreSQL database is encrypted by its server} &
+  remove \code{key\_file}: on PostgreSQL the server encrypts \\
+\code{the PostgreSQL database ... holds no catalog yet} & \code{database\_url} names an empty
+  database: create the catalog there (\cmd{init -{}-database-url}), or copy one
+  (\cmd{copy-database}) \\
+\code{PostgreSQL: ... TLS ...} & The server offers no TLS, or a certificate Medorama cannot
+  verify: install a certificate, or name its authority in \code{database\_ca\_file};
+  \code{sslmode=disable} only on a network you trust \\
+\code{database\_url: leave the password out} & The password goes in
+  \code{database\_password\_file} or \code{MEDORAMA\_DATABASE\_PASSWORD} \\
+A query fails on PostgreSQL only & Run with \code{MEDORAMA\_DEBUG\_SQL=1}: it prints the
+  statement PostgreSQL refused, as translated (never its values) \\
+A patient's page says \code{omop: not available} & That connected database did not answer:
+  \cmd{medorama connections check omop} (\cref{chap:connecting}) \\
+A criterion: \code{... names N measurements in omop} & OMOP's concept names are long: write the
+  one meant, quoted (\code{omop."Lactate [Moles/volume] in Blood" > 4}) \\
+A search is refused in Privacy Mode & Searches of names, MRNs, dates of birth, account numbers
+  or withheld columns are refused there; find patients by their pseudonyms, or leave Privacy
+  Mode with the PHI permission (\cref{chap:users-privacy}) \\
+A file does not open in Privacy Mode (403) & Privacy Mode sends only the files it can
+  de-identify or mark (WFDB headers and \file{.dat} signal files, GE MUSE XML, DICOM, EDF and BDF,
+  pictures, videos and PDF) and refuses the rest: JSON ECGs, text files, signal files with an
+  extension other than \file{.dat}, deflated or big-endian DICOM, and EDF+ files with annotations
+  larger than 64\,MB, which VitalStream still shows (\cref{sec:protecting-files}) \\
+Notes read \code{[Withheld]} in Privacy Mode & The admin withholds \ui{The text of notes and
+  reports} in \ui{Admin} $\rightarrow$ \ui{Privacy Mode}; by default notes are shown, the
+  patient's names and date of birth replaced (\cref{chap:users-privacy}) \\
+\end{xltabular}
+
+\section{Sign-in}
+\label{sec:troubleshooting-signin}
+
+\Cref{tab:troubleshooting-signin} covers sign-in through the institution's proxy
+(\code{sign\_in = "proxy"}), whose setup and security requirements are described in
+\cref{chap:sign-in}. Medorama checks the sign-in settings when it starts; their error messages
+are listed in \cref{tab:settings-reference-signin-errors}.
+
+\begin{xltabular}{\linewidth}{@{}P{5.8cm}L@{}}
+\caption{Sign-in: problems and remedies.}
+\label{tab:troubleshooting-signin}\\
+\toprule
+\tabhead Problem & \tabhead Cause, remedy \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Problem & \tabhead Cause, remedy \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+The page says \code{your institution's sign-in names you ..., and Medorama has no account of that
+  name: ask an administrator} (HTTP 403) & The proxy signed the user in, but no enabled account
+  has that name (case does not matter). Create the account under exactly the name the proxy
+  sends (\cmd{medorama user add NAME -{}-role R -{}-no-password}), or make the proxy send the
+  account's name. A disabled account, or two accounts whose names differ only in case, give the
+  same answer. \ui{Admin} $\rightarrow$ \ui{Audit log} shows the name in a \code{login\_failed} entry \\
+The page says that the institution's sign-in has not signed the user in (HTTP 401) & Medorama
+  received no header, an empty one, or a header from an address that is not in
+  \code{proxy\_addresses}, which it ignores. Check that the proxy sets
+  \code{proxy\_user\_header}, and that \code{proxy\_addresses} names the address the proxy
+  connects from, as Medorama sees it \\
+An IPv4 proxy is ignored although its address is listed & When Medorama listens on an IPv6
+  socket, an IPv4 proxy appears as an IPv4-mapped address: list it as \code{::ffff:10.0.0.5} \\
+\code{this catalog signs users in through the institution's sign-in, not with a password} &
+  A script called \code{POST login} in proxy mode: send its requests through the proxy instead \\
+\ui{Sign out} returns to the page signed in & \code{proxy\_logout\_url} is empty or does not end
+  the proxy's session: set it to the proxy's sign-out address (\cref{sec:sign-in-examples}) \\
+\code{proxy\_user\_header, proxy\_addresses and proxy\_logout\_url need sign\_in = "proxy"} at start
+  & A \code{proxy\_...} setting is present, even empty, without \code{sign\_in = "proxy"}: remove
+  it, or add the method \\
+\end{xltabular}
+
+\section{Add-ons}
+\label{sec:troubleshooting-addons}
+
+\begin{xltabular}{\linewidth}{@{}P{5.8cm}L@{}}
+\caption{Add-ons: problems and remedies.}
+\label{tab:troubleshooting-addons}\\
+\toprule
+\tabhead Problem & \tabhead Cause, remedy \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Problem & \tabhead Cause, remedy \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\cmd{addons install}: \code{an adapter's program is named <name>-adapter} & The file was
+  renamed: install the program as it came in the archive \\
+\cmd{addons install}: \code{describe} fails, ``cannot be opened'', ``permission denied'' & The
+  system blocks a downloaded program: \cmd{xattr -d com.apple.quarantine} on macOS,
+  \cmd{Unblock-File} on Windows, or \cmd{chmod 755} \\
+\cmd{addons install}: \code{speaks protocol N; this program speaks 1} & The add-on was built for
+  another Medorama: ask for the release that matches yours \\
+\cmd{addons list} shows it, but its files are still refused & The server was not restarted, or
+  it runs as another account whose \code{adapters\_dir} is elsewhere \\
+Recordings named by an earlier import are missing & They were skipped before the add-on was
+  there: remove that import and import the table again \\
+Indexing fails with the adapter's message & The adapter could not read the file; a session that
+  ended is started again once, and the recording stays unreadable until the file or the adapter
+  changes \\
+\end{xltabular}
+
+\section{Building and installing}
+\label{sec:troubleshooting-building}
+
+\begin{xltabular}{\linewidth}{@{}P{5.8cm}L@{}}
+\caption{Messages of a build, and what to do (\cref{chap:installation}).}
+\label{tab:troubleshooting-building}\\
+\toprule
+\tabhead Message & \tabhead Cause, remedy \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Message & \tabhead Cause, remedy \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{command not found: medorama} & The program is in \file{.venv/bin}:
+  \cmd{source .venv/bin/activate}, or call \cmd{.venv/bin/medorama}, or
+  \cmd{cargo install -{}-path medorama -{}-locked} \\
+\code{linker 'cc' not found} (Linux) & No C toolchain: \code{build-essential} or \code{gcc}, or
+  a compiler without administrator rights (\cmd{tools/install-gcc.sh}) \\
+\code{linker 'link.exe' not found}, \code{No CMAKE\_CXX\_COMPILER could be found} (Windows) &
+  the Build Tools are missing or lack \ui{Desktop development with C++}; for C++, use a Developer
+  PowerShell \\
+\code{exit status: 69}, \code{You have not agreed to the Xcode license agreements} (macOS) &
+  \cmd{sudo xcodebuild -license accept}, or
+  \cmd{export DEVELOPER\_DIR=/Library/Developer/CommandLineTools} \\
+A standard header such as \code{cstddef} not found (macOS) & The Command Line Tools are damaged:
+  \cmd{sudo rm -rf /Library/Developer/CommandLineTools \&\& Xcode-select -{}-install} \\
+\code{feature 'edition2024' is required}, \code{requires rustc 1.88} & Rust is too old:
+  \cmd{rustup update} (a distribution's packaged Rust is often old) \\
+\code{cargo: command not found} after installing Rust & Open a new shell, or read
+  \file{\textasciitilde/.cargo/env} into this one (\cmd{source}) \\
+\code{failed to get ... from crates.io} & No internet access: vendor the dependencies
+  (\cmd{cargo vendor}; \cref{chap:installation}) \\
+\code{The C++ compiler is too old} & GCC 12 or later, or Clang 15 or later, is needed; then
+  delete the build folder \\
+\code{CXX is ..., but this build folder was configured with ...} & CMake keeps the first
+  compiler: \cmd{rm -rf build/release} and configure again \\
+\code{The current CMakeCache.txt directory ... is different} & The clone moved after a build:
+  delete \file{build/} and configure again \\
+\code{CMake 3.24 or higher is required}, no \code{Ninja} &
+  \cmd{pip install -{}-user "cmake>=3.24" ninja} \\
+\code{Failed to download}, \code{HASH mismatch} while configuring & No internet access or a
+  proxy: \cmd{tools/fetch-cpp-deps.sh} on another machine \\
+\code{version 'GLIBC\_2.xx' not found}, \code{'GLIBCXX\_3.4.xx' not found} for a copied program
+  & Built on a newer Linux: the static musl build (Rust), or the static C++ runtime (C++) \\
+``running scripts is disabled on this system'' (Windows) & Start the installers with
+  \cmd{powershell -ExecutionPolicy Bypass -File ...}; for \file{Activate.ps1},
+  \cmd{Set-ExecutionPolicy -Scope CurrentUser RemoteSigned} \\
+\end{xltabular}
+
+\section{The viewers}
+\label{sec:troubleshooting-viewers}
+
+\begin{xltabular}{\linewidth}{@{}P{5.8cm}L@{}}
+\caption{The viewers' common problems (\cref{chap:viewers-alone}).}
+\label{tab:troubleshooting-viewers}\\
+\toprule
+\tabhead Problem & \tabhead Cause, remedy \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Problem & \tabhead Cause, remedy \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{no data root inside this viewer's root, ... (set when it was built)} & Every folder of
+  \code{data\_roots} (\opt{-{}-root}) lies outside the root fixed when the viewer was built: give
+  a folder inside it, or build the viewer again with another root \\
+\code{... is outside this viewer's root (...): left out} & A data root outside the viewer's root
+  is ignored, with this warning; the settings narrow the root, never widen it \\
+A folder or file is not listed in the file browser & It lies outside the data roots (a symbolic
+  link that leads outside included), or it is a signal file, a segment of a multi-segment record,
+  a hidden entry (tick \ui{hidden}) or a file that no installed reader reads \\
+The synthetic test recordings cannot be opened & The clone must lie inside the viewer's root (by
+  default, the home folder) \\
+\code{the folder holds more than 5000 WFDB records}, \code{... nested more than 20 levels deep}
+  & A folder of plain records is opened only within the limits \code{max\_records},
+  \code{max\_depth}, \code{max\_scan\_s}: open a subfolder, or describe the records in an
+  \file{index.csv} (a WFDB collection, which is not limited) \\
+\code{...: the header states no sampling frequency} & The viewers assume none: such a record is
+  not read (in a folder of records it is left out, and counted in the notes) \\
+\code{not a recording this program reads: ...} & No reader reads that file: for a vendor format,
+  install its add-on (\cref{chap:addons}) \\
+\code{this build has no WFDB support (...)} & A program built without WFDB support (no wfdb-x)
+  refuses WFDB records and folders; an import lists them among the skipped files. Use a build with
+  WFDB support (\cref{sec:installation-no-wfdb}) \\
+\code{a password is required here (require\_password); set one with --set-password} & The
+  settings require a password: \opt{-{}-set-password}, once \\
+\code{... and this viewer was built without password support} & A viewer built without password
+  support (\code{VS\_PASSWORD=OFF}, \code{VITALSTREAM\_PASSWORD=0}, without the Cargo feature
+  \code{password}) cannot run where a password is required, such as under Medorama: build it with
+  password support \\
+A viewer does not ask for the password that was set & It was built without password support:
+  it ignores an existing password and is open to whoever reaches its port; keep it on
+  \code{127.0.0.1} or behind a tunnel, or build it with password support \\
+\opt{-{}-set-password}: \code{Use at least 8 characters.} & The viewers' password has at least 8
+  characters; one password serves the three viewers, \cmd{muse-py serve} and
+  \cmd{dicom-py serve} \\
+A new password does not take effect & Restart the viewer after \opt{-{}-set-password} \\
+\code{cannot listen on 127.0.0.1:8070} & Another program, or another viewer, uses the port:
+  \opt{-{}-port N} \\
+\code{unknown settings: ...} & A mistyped key in \file{vitalstream.toml}; the keys are in
+  \cref{chap:settings-reference} \\
+\code{... is not a folder inside this viewer's root} (\cmd{muse-py serve}, \cmd{dicom-py serve})
+  & The \opt{-{}-root} lies outside the root fixed when the package was installed
+  (\code{VIEWER\_ROOT}): give a \opt{-{}-root} inside it \\
+A recording opens slowly the first time & The first opening indexes it, with a progress bar and
+  \ui{Cancel}; later openings are instant. \opt{-{}-index PATH} indexes ahead of time \\
+Values are shown in \code{adu} & The recording states no calibration for that signal (a gain of
+  0): the values are its stored counts \\
+Amber shading, \ui{time not stated} & The recording states no time for that data: it is placed
+  after the data before it, and its timing within is exact \\
+\end{xltabular}
+
+\section{Finding a fault}
+\label{sec:troubleshooting-fault}
+
+When no table above applies, \cref{tab:troubleshooting-fault} says where to look.
+
+\begin{xltabular}{\linewidth}{@{}P{5.0cm}L@{}}
+\caption{Where to look, by symptom.}
+\label{tab:troubleshooting-fault}\\
+\toprule
+\tabhead Symptom & \tabhead Look at \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Symptom & \tabhead Look at \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+A toast with an error in the page & The request in the browser's network panel: its
+  \code{detail}; a 500 is also on the server's standard error \\
+A screen stays empty & The browser's console (errors that no screen caught are also shown as a
+  toast) \\
+A database imports, but rows are missing or wrong & The import report (warnings, ``held back''),
+  then the \ui{Databases} tab (each row's status) and \ui{Review} \\
+A file does not open in its viewer & The row's \code{file} column, \code{data\_roots} in
+  \file{medorama.toml}, then the viewer's own message (it names what it cannot read) \\
+A job fails & \cmd{medorama jobs -{}-state failed}; a plug-in's own log is \file{log.txt} in its
+  output folder \\
+Privacy Mode shows something it should not & Report it as a vulnerability; the code is in
+  \file{medorama/src/gate.rs}, \file{deid.rs} and \file{dicom.rs}, and the test that walks every
+  answer is \file{medorama/tests/privacy.rs} \\
+A cohort finds the wrong patients & \code{POST cohorts/parse \{"text": ...\}} shows how an
+  expression is read (\cref{chap:http-api}) \\
+A query fails on PostgreSQL only & \code{MEDORAMA\_DEBUG\_SQL=1} prints each statement
+  PostgreSQL refuses, as translated (never its values) \\
+A connected database answers wrongly & \cmd{medorama connections check NAME}; its views;
+  \code{MEDORAMA\_DEBUG\_SQL=1} \\
+The waveform viewer under Medorama & \file{<home>/viewer/viewer.log} \\
+\end{xltabular}
+
+\begin{phibox}
+The database holds identifiers: \cmd{sqlite3 medorama.sqlite} opens it (with its key,
+\code{MEDORAMA\_KEY}, if it is encrypted), but open copies of real catalogs only where patient data
+may be, and never paste their values, headers or paths into a report.
+\end{phibox}

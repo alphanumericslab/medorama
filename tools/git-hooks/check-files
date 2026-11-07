@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# Medorama's privacy check: keeps patient data and recordings out of git (PRIVACY.md).
+# It reads what git stores (the staged or committed blobs), never the working tree.
+#
+#   check-files [--staged]        what is staged (the pre-commit and pre-merge-commit hooks)
+#   check-files --commits A..B    every commit of a range, each against its first parent (CI)
+#   check-files --tree REV        every file of a revision
+#
+# Exit status: 0 when nothing is refused, 1 when something is, 2 on a usage or git error.
+# no pipefail: `grep -q` and `head` close their input early, and git's SIGPIPE is no failure
+set -eu
+export LC_ALL=C
+
+MAX_BYTES=$((5 * 1024 * 1024))
+# the user's manual, built from docs/user-manual/: its pictures make it larger
+MANUAL='docs/user-manual/medorama-user-manual.pdf'
+MAX_MANUAL_BYTES=$((20 * 1024 * 1024))
+# Data files are allowed only in the synthetic test data and the viewers' synthetic examples
+# (tools/make-viewer-examples.py); the catalog's schema files are SQL.
+ALLOW_DATA='^(viewers/vitalstream/testdata/|medorama/(tests/fixtures|fuzz/seeds)/|viewers/(ecg|pacs)/examples/|viewers/ecg/tests/fixtures/)'
+ALLOW_SQL='^medorama/src/schema/(sqlite|postgres)/[^/]+\.sql$'
+# recordings, signal arrays, tables, databases and their journals, dumps, images, archives
+DATA_EXT='\.(stp|dat|hea|atr|mrk|tim|vit|alr|ann|edf|bdf|mat|npy|npz|pkl|pickle|parquet|feather|arrow|h5|hdf5|csv|tsv|xlsx|xlsm|xls|sqlite|sqlite3|sqlite-wal|sqlite-shm|sqlite-journal|db|db-wal|db-shm|db-journal|sql|dump|bak|dcm|dicom|zip|gz|tgz|bz2|xz|zst|7z|rar|tar)$'
+# Bedside-monitor systems name recordings UNIT_BED-<Unix time> (the bed may hold spaces):
+# such a name dates a patient's stay.
+REC_NAME='[A-Za-z0-9]+_[A-Za-z0-9]+( +[A-Za-z0-9]+)*-1[0-9]{9}'
+EMPTY_TREE=4b825dc642cb6eb9a060e54bf8d69288fbee4904
+
+# Python for the notebook check (Windows' Git Bash often has only `python`).
+PY=$(command -v python3 || command -v python || true)
+
+TMP=$(mktemp)
+trap 'rm -f "$TMP"' EXIT
+fail=0
+complain() { echo "privacy check: $1" >&2; fail=1; }
+usage() { sed -n '5,7s/^# //p' "$0" >&2; exit 2; }
+
+# check PATH MODE BLOB [WHERE]: the rules for one stored file
+check() {
+  local f=$1 mode=$2 blob=$3 where=${4:-} lower size magic head nb
+  local at=${where:+" ($where)"}
+  lower=$(printf '%s' "$f" | tr '[:upper:]' '[:lower:]')
+
+  case "/$f" in
+    /sample_data/README.md|/viewers/vitalstream/sample_data/README.md) ;;
+    */sample_data/*) complain "$f$at: sample_data/ folders hold patient data and results; they are never committed" ;;
+  esac
+  if [[ "$f" =~ $REC_NAME ]]; then
+    complain "$f$at: the path holds a recording name (UNIT_BED-<unix time>); use a generic name such as recording"
+  fi
+  if [[ "$lower" =~ $DATA_EXT ]] && ! [[ "$f" =~ $ALLOW_DATA ]] && ! [[ "$f" =~ $ALLOW_SQL ]]; then
+    complain "$f$at: data file type (recordings, tables, databases, dumps, images, archives) outside the synthetic test data (viewers/vitalstream/testdata/, medorama/tests/fixtures/, medorama/fuzz/seeds/, viewers/ecg/tests/fixtures/) and the viewers' synthetic examples (viewers/ecg/examples/, viewers/pacs/examples/)"
+  fi
+
+  # symbolic links (their blob is the target's path) and submodules have no content to read
+  case "$mode" in 120000|160000) return 0 ;; esac
+
+  size=$(git cat-file -s "$blob")
+  if [ "$f" = "$MANUAL" ]; then
+    if [ "$size" -gt "$MAX_MANUAL_BYTES" ]; then
+      complain "$f$at: $(awk -v b="$size" 'BEGIN { printf "%.1f", b / 1048576 }') MB is larger than 20 MB"
+    fi
+  elif [ "$size" -gt "$MAX_BYTES" ]; then
+    complain "$f$at: $(awk -v b="$size" 'BEGIN { printf "%.1f", b / 1048576 }') MB is larger than 5 MB"
+  fi
+  # the content, text or binary
+  git cat-file blob "$blob" > "$TMP"
+  if grep -aqE "$REC_NAME" "$TMP"; then
+    complain "$f$at: contains a recording name (UNIT_BED-<unix time>); use a generic name such as recording"
+  fi
+  if ! [[ "$f" =~ $ALLOW_DATA ]]; then
+    # DICOM, whatever the extension: "DICM" after the 128-byte preamble
+    magic=$(head -c 132 "$TMP" | tail -c +129 | tr -d '\0')
+    if [ "$magic" = DICM ]; then
+      complain "$f$at: a DICOM file (allowed only in the synthetic test data and examples)"
+    fi
+    # a GE MUSE XML ECG: an XML document whose root is RestingECG
+    head=$(head -c 4096 "$TMP" | tr -d '\0')
+    head=${head#$'\xef\xbb\xbf'}
+    if [[ "$head" =~ ^[[:space:]]*\< ]] && [[ "$head" == *"<RestingECG"* ]]; then
+      complain "$f$at: a GE MUSE XML ECG (allowed only in the synthetic test data and examples)"
+    fi
+  fi
+  if [[ "$lower" == *.ipynb ]]; then
+    if [ -z "$PY" ]; then
+      complain "$f$at: a notebook, and no Python to check it for saved outputs"
+      return 0
+    fi
+    nb=0
+    "$PY" -c '
+import json, sys
+try:
+    nb = json.loads(sys.stdin.buffer.read())
+    cells = nb["cells"]
+    if not isinstance(cells, list) or not all(isinstance(c, dict) for c in cells):
+        raise ValueError
+except Exception:
+    sys.exit(2)
+sys.exit(1 if any(c.get("outputs") for c in cells if c.get("cell_type") == "code") else 0)
+' < "$TMP" || nb=$?
+    case $nb in
+      0) ;;
+      1) complain "$f$at: notebook has saved outputs (clear them: they may show patient data)" ;;
+      *) complain "$f$at: not a readable notebook (its outputs cannot be checked)" ;;
+    esac
+  fi
+}
+
+# check_raw [WHERE]: every record of `git diff --raw -z` on stdin
+check_raw() {
+  local meta f mode blob
+  while IFS= read -r -d '' meta && IFS= read -r -d '' f; do
+    # ":old-mode new-mode old-blob new-blob status"
+    read -r _ mode _ blob _ <<< "$meta"
+    check "$f" "$mode" "$blob" "${1:-}"
+  done
+}
+
+DIFF=(--raw -z --no-renames --no-abbrev --diff-filter=ACMRT)
+case "${1:---staged}" in
+  --staged)
+    git diff --cached "${DIFF[@]}" > /dev/null   # fail here on a git error, not silently below
+    check_raw < <(git diff --cached "${DIFF[@]}")
+    ;;
+  --commits)
+    range=${2:?--commits needs a range A..B}
+    commits=$(git rev-list --reverse "$range")
+    for c in $commits; do
+      parent=$(git rev-parse -q --verify "$c^1" || echo "$EMPTY_TREE")
+      check_raw "commit $(git rev-parse --short "$c")" < <(git diff "${DIFF[@]}" "$parent" "$c")
+    done
+    ;;
+  --tree)
+    rev=${2:?--tree needs a revision}
+    git rev-parse -q --verify "$rev^{tree}" > /dev/null || { echo "privacy check: no revision $rev" >&2; exit 2; }
+    while IFS= read -r -d '' line; do
+      # "mode type blob<TAB>path"
+      read -r mode _ blob <<< "${line%%$'\t'*}"
+      check "${line#*$'\t'}" "$mode" "$blob"
+    done < <(git ls-tree -r -z --full-tree "$rev")
+    ;;
+  *) usage ;;
+esac
+
+if [ "$fail" -ne 0 ]; then
+  echo "privacy check: refused (see PRIVACY.md)." >&2
+  exit 1
+fi

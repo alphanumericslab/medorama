@@ -1,0 +1,8 @@
+/* The sign-in page of the three viewers (their LOGIN_PAGE links it: no inline style, for the
+   Content-Security-Policy). */
+body{font:14px -apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#0e1116;color:#dde3ea;
+display:grid;place-items:center;height:100vh;margin:0}form{background:#151a21;border:1px solid #262d38;
+border-radius:12px;padding:24px;width:min(380px,90vw)}h1{font-size:18px;margin:0 0 14px}
+input{width:100%;box-sizing:border-box;padding:8px;border-radius:7px;border:1px solid #262d38;
+background:#1b212a;color:inherit;margin:0 0 12px}button{padding:7px 14px;border-radius:7px;border:0;
+background:#4c9aff;color:#0b1220;font-weight:600}.err{color:#f5a524;margin:0 0 10px}

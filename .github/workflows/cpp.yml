@@ -1,0 +1,215 @@
+# The C++ viewer (viewers/vitalstream/cpp): build and test with GCC and Clang on Linux, Apple
+# Clang and GCC on macOS, MSVC and MinGW on Windows, also without WFDB support (VS_WFDB=OFF: no
+# wfdb-x code); the parity of the three viewers (the same
+# index, byte for byte, and the same API answers, on the synthetic recordings of testdata/).
+# Two more jobs follow the build guide's routes without administrator rights: GCC from
+# conda-forge on Linux, and GCC from MSYS2 on Windows.
+name: cpp
+
+on:
+  push:
+    paths: ["viewers/vitalstream/**", "libs/**", "Cargo.toml", "Cargo.lock", "tools/install*", "tools/fetch-cpp-deps.*", ".github/workflows/cpp.yml"]
+  pull_request:
+    paths: ["viewers/vitalstream/**", "libs/**", "Cargo.toml", "Cargo.lock", "tools/install*", "tools/fetch-cpp-deps.*", ".github/workflows/cpp.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # the oldest compilers docs/building.md promises (GCC 12, Clang 15), then current ones
+          - { os: ubuntu-22.04, cc: gcc-12, cxx: g++-12 }
+          - { os: ubuntu-22.04, cc: clang-15, cxx: clang++-15 }
+          - { os: ubuntu-24.04, cc: gcc-13, cxx: g++-13 }
+          - { os: ubuntu-24.04, cc: gcc-14, cxx: g++-14 }
+          - { os: ubuntu-24.04, cc: clang-18, cxx: clang++-18 }
+          - { os: macos-latest, cc: clang, cxx: clang++ }
+          # GoogleTest does not compile with GCC against macOS 26's SDK (Apple's Mach headers use
+          # Clang-only constructs): the unit tests are left out there.
+          - { os: macos-latest, cc: gcc-14, cxx: g++-14, tests: "OFF" }
+          # without WFDB support (the preset nowfdb: VS_WFDB=OFF), which refuses WFDB records
+          - { os: ubuntu-24.04, cc: gcc-14, cxx: g++-14, preset: nowfdb }
+          - { os: macos-latest, cc: clang, cxx: clang++, preset: nowfdb }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Toolchain
+        run: |
+          python -m pip install "cmake>=3.24" ninja
+          $CXX --version
+      - name: Configure and build (vitalstream-cpp, tests), warnings as errors
+        run: cd viewers/vitalstream/cpp && cmake --preset ${{ matrix.preset || 'release' }} -DVS_WARNINGS_AS_ERRORS=ON -DVS_BUILD_TESTS=${{ matrix.tests || 'ON' }} && cmake --build --preset ${{ matrix.preset || 'release' }}
+      - name: Unit tests (ctest)
+        if: matrix.tests != 'OFF'
+        run: cd viewers/vitalstream/cpp && ctest --preset ${{ matrix.preset || 'release' }}
+      - name: Without WFDB support, no wfdb-x was fetched or built in
+        if: matrix.preset == 'nowfdb'
+        run: |
+          cd viewers/vitalstream/cpp/build/nowfdb
+          test ! -e _deps/wfdbx-src
+          if nm -C bin/vitalstream-cpp | grep -i wfdbx; then exit 1; fi
+
+  parity:
+    # viewers/vitalstream/docs/index-format.md and viewer-api.md: the three viewers write the
+    # same index under the specified key, and answer the same requests with the same JSON
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        if: runner.os == 'Windows'
+      - name: Build the three viewers
+        run: |
+          python -m pip install "cmake>=3.24" ninja
+          cargo build --release --locked -p vitalstream-rs
+          (cd viewers/vitalstream/cpp && cmake --preset release -DVS_BUILD_TESTS=OFF && cmake --build --preset release)
+          python -m venv .venv
+          if [ -d .venv/Scripts ]; then bin=.venv/Scripts; else bin=.venv/bin; fi
+          "$bin/python" -m pip install "./viewers/vitalstream/python/vitalstream[wfdb]"
+          echo "VENV_PY=$bin/python" >> "$GITHUB_ENV"
+      - name: Index parity
+        run: $VENV_PY viewers/vitalstream/tests/parity/index_parity.py
+      - name: API parity
+        run: $VENV_PY viewers/vitalstream/tests/parity/viewer_parity.py
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+      - name: Toolchain
+        run: python -m pip install "cmake>=3.24" ninja
+      - name: Configure and build (vitalstream-cpp, tests), warnings as errors
+        run: cd viewers/vitalstream/cpp; cmake --preset release -DVS_WARNINGS_AS_ERRORS=ON; if ($LASTEXITCODE) { exit 1 }; cmake --build --preset release; if ($LASTEXITCODE) { exit 1 }
+      - name: Unit tests (ctest)
+        run: cd viewers/vitalstream/cpp; ctest --preset release; if ($LASTEXITCODE) { exit 1 }
+      - name: The program
+        run: viewers\vitalstream\cpp\build\release\bin\vitalstream-cpp.exe --version
+
+  windows-installer:
+    # tools/install.ps1 -Cpp as a user runs it: it finds Visual Studio's compiler itself
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: tools\install.ps1 -Cpp
+        run: powershell -ExecutionPolicy Bypass -File tools\install.ps1 -Cpp; if ($LASTEXITCODE) { exit 1 }
+      - name: The installed program
+        run: .venv\Scripts\vitalstream-cpp.exe --version
+      - name: Run again (an existing build folder is reused or replaced)
+        run: powershell -ExecutionPolicy Bypass -File tools\install.ps1 -Cpp; if ($LASTEXITCODE) { exit 1 }
+
+  standalone:
+    # viewers/vitalstream/install.sh: VitalStream alone, without Medorama; also without WFDB
+    # support (--no-wfdb), which refuses a WFDB record and reads an EDF file
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { viewer: cpp }
+          - { viewer: rs }
+          - { viewer: py }
+          - { viewer: cpp, options: --no-wfdb }
+          - { viewer: rs, options: --no-wfdb }
+          - { viewer: py, options: --no-wfdb }
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: viewers/vitalstream/install.sh --viewer ${{ matrix.viewer }} ${{ matrix.options }}
+        run: viewers/vitalstream/install.sh --viewer ${{ matrix.viewer }} ${{ matrix.options }} --prefix "$RUNNER_TEMP/vs"
+      - name: The installed program
+        run: '"$RUNNER_TEMP/vs/bin/vitalstream-${{ matrix.viewer }}" --help > /dev/null'
+      - name: Without WFDB support, a WFDB record is refused with its message, an EDF file indexed
+        if: matrix.options == '--no-wfdb'
+        run: |
+          vs="$RUNNER_TEMP/vs/bin/vitalstream-${{ matrix.viewer }}"
+          if "$vs" --index viewers/vitalstream/testdata/plain/rec_a.hea --cache-dir "$RUNNER_TEMP/cache" 2> "$RUNNER_TEMP/err"; then exit 1; fi
+          grep 'this build has no WFDB support' "$RUNNER_TEMP/err"
+          "$vs" --index viewers/vitalstream/testdata/edf/plain.edf --cache-dir "$RUNNER_TEMP/cache"
+
+  linux-conda:
+    # docs/building.md, "Without administrator rights": tools/install-gcc.sh (GCC 13,
+    # CMake, Ninja from conda-forge in the home folder)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: tools/install-gcc.sh
+        run: tools/install-gcc.sh
+      - name: Build (the program with the C++ runtime linked in)
+        run: |
+          source ~/miniforge3/bin/activate vs-build
+          $CXX --version
+          cd viewers/vitalstream/cpp && cmake --preset release -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
+          cmake --build --preset release
+      - name: Tests (ctest)
+        run: |
+          source ~/miniforge3/bin/activate vs-build
+          cd viewers/vitalstream/cpp && ctest --preset release
+      - name: The program runs outside the environment
+        run: env -i PATH=/usr/bin:/bin viewers/vitalstream/cpp/build/release/bin/vitalstream-cpp --version
+      - name: The script again (an existing installation is reused)
+        run: tools/install-gcc.sh
+
+  windows-mingw:
+    # docs/building.md, "Without administrator rights": GCC, CMake and Ninja from MSYS2 (UCRT64)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          msystem: UCRT64
+          install: git mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja mingw-w64-ucrt-x86_64-python
+      - name: "Build (static, so no MSYS2 DLLs are needed to run)"
+        run: cd viewers/vitalstream/cpp && cmake --preset release -DCMAKE_EXE_LINKER_FLAGS=-static && cmake --build --preset release
+      - name: Tests (ctest)
+        run: cd viewers/vitalstream/cpp && ctest --preset release
+      - name: The program runs from PowerShell
+        shell: pwsh
+        run: viewers\vitalstream\cpp\build\release\bin\vitalstream-cpp.exe --version

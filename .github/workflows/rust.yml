@@ -1,0 +1,121 @@
+# The Rust workspace's libraries and the Rust viewer (Medorama has its own workflow,
+# medorama.yml): format, lint and documentation of the whole workspace; the dependencies'
+# advisories, licences and sources (wfdb-x, the WFDB library, comes from GitHub at a pinned
+# commit); the tests on Linux and macOS, also of the builds without WFDB support (no wfdb-x code);
+# on Windows, the installer tools/install.ps1 and the same tests, with the Python viewer's.
+name: rust
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"   # Mondays: advisories published since
+  push:
+    paths: ["Cargo.toml", "Cargo.lock", "deny.toml", "rustfmt.toml", "libs/**", "medorama/**", "viewers/vitalstream/rust/**",
+            "viewers/vitalstream/testdata/**", "viewers/vitalstream/web/**",
+            "tools/install.*", ".github/workflows/rust.yml"]
+  pull_request:
+    paths: ["Cargo.toml", "Cargo.lock", "deny.toml", "rustfmt.toml", "libs/**", "medorama/**", "viewers/vitalstream/rust/**",
+            "viewers/vitalstream/testdata/**", "viewers/vitalstream/web/**",
+            "tools/install.*", ".github/workflows/rust.yml"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --release --locked -- -D warnings
+      - name: The same, without WFDB support (the `wfdb` feature left out)
+        run: >-
+          cargo clippy --all-targets --release --locked -p recording-engine -p medorama -p vitalstream-rs
+          --no-default-features --features vitalstream-rs/password -- -D warnings
+      - name: The code's documentation builds without a broken link
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --locked
+
+  msrv:
+    # the oldest Rust the workspace supports (rust-version in Cargo.toml; README.md and
+    # docs/building.md say the same), with the versions of Cargo.lock
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: "1.88"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: rust-version in Cargo.toml is the one checked here
+        run: grep -qx 'rust-version = "1.88"' Cargo.toml
+      - run: cargo check --locked --workspace
+
+  supply-chain:
+    # dependencies of the whole workspace: RustSec advisories, licences (deny.toml), sources;
+    # also every week, for advisories published after the last change
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories licenses sources bans
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Tests of the libraries and the viewer
+        run: cargo test --release --locked -p signal-core -p recording-engine -p vitalstream-rs
+      - name: The viewer built without password support, and with a root (install.sh --no-password --root)
+        run: VITALSTREAM_ROOT='~' cargo test --release --locked -p vitalstream-rs --no-default-features --features wfdb --target-dir target/standalone
+      - name: Without WFDB support (install.sh --no-wfdb) a WFDB record is refused, and no wfdb-x is built in
+        run: |
+          cargo test --release --locked -p recording-engine -p vitalstream-rs --no-default-features --features vitalstream-rs/password --target-dir target/nowfdb
+          if cargo tree --locked -p vitalstream-rs --no-default-features --features password -e normal,build | grep wfdbx; then exit 1; fi
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+      - name: Install (tools/install.ps1, Python and Rust)
+        run: tools\install.ps1 -Rs
+      - name: Tests of the libraries and the viewer
+        run: cargo test --release --locked -p signal-core -p recording-engine -p vitalstream-rs; if ($LASTEXITCODE) { exit 1 }
+      - name: Python tests (the Python viewer)
+        run: .venv\Scripts\python.exe -m pytest -q viewers/vitalstream/python/vitalstream/tests
+      - name: Commands
+        run: |
+          .venv\Scripts\medorama.exe --version
+          .venv\Scripts\vitalstream-rs.exe --version

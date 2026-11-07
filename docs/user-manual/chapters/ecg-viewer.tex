@@ -1,0 +1,759 @@
+% The ECG viewer in full: the formats it reads (WFDB single- and multi-segment, GE MUSE XML,
+% DICOM ECGs, EDF and BDF, its JSON form, PNG, JPEG, PDF), opening one ECG or a folder, the
+% paper, the calipers, the report, the themes, the addresses, muse-py (serve, json, wfdb, index),
+% the examples.
+% Sources: viewers/ecg/README.md, viewers/ecg/python/muse/README.md, viewers/ecg/examples/README.md,
+% docs/edf.md, checked against viewers/ecg/index.html, app.js, readers.js (the registry and the
+% record), wfdb.js, muse.js, dicom-ecg.js, edf.js, ecg.js, paper.js, style.css and
+% viewers/ecg/python/muse/muse_reader_py/cli.py and page_server.py.
+\chapter{The ECG viewer}
+\label{chap:ecg-viewer}
+
+This chapter describes the ECG viewer: the files it reads, how to open them, the paper and its
+tools, and how to run it alone or with \cmd{muse-py}. It is written for clinicians and
+researchers who read ECGs, and for administrators who deploy the viewer.
+
+The ECG viewer shows 12-lead ECGs as cardiologists read them: on standard ECG paper, with their
+report. It is one of Medorama's viewers, and also a page of its own that needs no installation.
+Open it on the website (\url{https://medorama.org/viewers/ecg/}), or open
+\file{viewers/ecg/index.html} from a clone, from disk or from any web server; then choose
+\ui{Open record\dots} or \ui{Open multiple records\dots}, or drop the files on the page. The
+files are read and drawn in the browser, and sent nowhere. The page has a light and a dark theme,
+and follows the system's setting until one is chosen (\cref{sec:ecg-viewer-themes});
+\cref{fig:ecg-viewer-main,fig:ecg-viewer-dark} show both.
+
+\screenshot{ecg.png}{The ECG viewer in the light theme, as Medorama shows it (the bar above the paper is Medorama's, with a synthetic patient): a synthetic 12-lead ECG in the layout 3~$\times$~4 with a rhythm strip, and its report above the paper.}{fig:ecg-viewer-main}
+
+\screenshot{ecg-dark.png}{The same ECG in the dark theme.}{fig:ecg-viewer-dark}
+
+% ==========================================================================================
+\section{What it reads}
+\label{sec:ecg-viewer-formats}
+
+\begin{xltabular}{\linewidth}{@{}P{4.2cm}L@{}}
+\caption{The files the ECG viewer reads.}
+\label{tab:ecg-viewer-formats}\\
+\toprule
+{\tabhead File} & {\tabhead Shown} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead File} & {\tabhead Shown} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+WFDB record: the \file{.hea} header with its signal file(s), chosen together & Drawn on paper,
+  in the signal formats 8, 16, 24, 32, 61, 80, 160 and 212. The first 10\,s are read, and the
+  header's comments (\code{\# QT: 410 ms}, \code{\# Dx: \dots}) are the report. A skewed signal
+  (\code{16:3}) is read that many frames later, as the WFDB library reads it. Where the header
+  leaves a value out, WFDB's own defaults apply (\cref{sec:ecg-viewer-wfdb}). \\
+WFDB multi-segment record: the master header with its segments' headers and signal files & The
+  same. The segments follow each other from the record's start; a null segment, and a lead that a
+  segment does not hold, are gaps. \\
+GE MUSE XML (resting ECG) & Drawn on paper (the rhythm strip, with III, aVR, aVL and aVF
+  derived), with its report: details, measurements, the Marquette 12SL statements and the
+  confirmed or edited ones. \\
+DICOM ECG (12-lead, Holter or other waveform object) & Drawn on paper, with its annotations as
+  the report. Any other DICOM file is refused, with a pointer to the PACS viewer. \\
+EDF, EDF+, BDF, BDF+ (\file{.edf}, \file{.bdf}) & Drawn on paper: the first 10\,s of the ECG
+  signals, with the annotations of that span as notes (\cref{sec:ecg-viewer-edf}). \\
+The JSON form (\cref{sec:ecg-viewer-json}) & Drawn on paper. \\
+PNG, JPEG (and GIF, WebP) & Shown as it is (a scanned or exported ECG). The layout, the speed,
+  the gain and the calipers are grayed out. \\
+PDF & Shown as it is, in the browser's PDF viewer, with the same controls grayed out. \\
+\end{xltabular}
+
+A file is recognized by its extension, or else by its first bytes. A file of another kind is
+refused with \code{This is not an ECG the viewer reads} and the list of what the viewer reads.
+Each format has its own reader, and every reader produces the same \emph{record}
+(\cref{sec:ecg-viewer-files}; adding a format is described in \cref{sec:readers-ecg}).
+
+\subsection{WFDB records}
+\label{sec:ecg-viewer-wfdb}
+
+A WFDB record is its header (\file{.hea}) and the signal files the header names, which must be
+chosen with it (\code{Choose the header together with its signal file FILE.} otherwise). The
+viewer reads the first 10 seconds of every signal, in the formats 8, 16, 24, 32, 61, 80, 160 and
+212, converts them to millivolts with each signal's gain, baseline and units (\code{mV},
+\code{uV} or \code{V}), and keeps a signal with several samples per frame at its own rate. The
+header's start time is shown as UTC.
+
+\begin{note}
+Where the header leaves a value out, the ECG viewer applies WFDB's own defaults: a sampling
+frequency of 250\,Hz; a gain of 200\,adu/mV, also for a gain of 0; the unit mV; the baseline at
+the ADC zero. A header that states them all is read as stated. VitalStream, unlike this viewer,
+reads only what a header states (\cref{sec:viewers-alone-opening}).
+\end{note}
+
+\paragraph{The report in the header's comments.} The comment lines (\code{\# Key: value}, or
+\code{Key = value}) are the report above the paper:
+\begin{itemize}
+\item a measurement under one of its usual names, with a number, is a measurement, with its
+  default unit when none is given: \code{Vent. rate} (or \code{HR}, \code{Heart rate}),
+  \code{Atrial rate}, \code{PR}, \code{QRS}, \code{QT}, \code{QTc}, \code{QTcB}, \code{QTcF},
+  \code{RR}, \code{P axis}, \code{R axis} (or \code{QRS axis}), \code{T axis};
+\item a key that ends with a lead's name (\code{ST V5: -0.12 mV}) is a measurement of that lead;
+\item \code{Dx}, \code{Diagnosis}, \code{Interpretation}, \code{Statement}, \code{Comment},
+  \code{12SL} and \code{Reason} are the computer's statements; \code{Program} (or
+  \code{12SL version}) names its program;
+\item \code{Dx confirmed}, with \code{Confirmed by} and \code{Confirmed at}, are the physician's
+  confirmed statements; \code{Dx edited} the edited ones, not confirmed. Statements in one line
+  are separated by \code{;} or \code{|};
+\item any other \code{key: value} is a detail of the ECG; a line without a key is a note;
+\item a key that names the patient anywhere in it (\code{Name}, \code{Full name},
+  \code{Patient ID}, \code{Subject ID}, \code{MRN}, \code{Medical record number},
+  \code{Accession number}, \code{NHS number}, \code{Date of birth}, \code{Born}, \code{Address},
+  \code{Zip}, \code{Phone}, \code{Email} and the like) is never shown, even when the file holds
+  it. Free text, a comment line without a key and the statements, is shown as written.
+\end{itemize}
+
+\begin{lstlisting}[style=text]
+rest_0001 12 500 5000 09:30:00 02/01/2024
+rest_0001.dat 16 1000/mV 16 0 0 0 0 I
+...
+# Vent. rate: 72 bpm
+# QTc: 412 ms
+# ST V5: -0.12 mV
+# Dx: Sinus rhythm; ST depression, inferolateral leads
+\end{lstlisting}
+
+\subsection{Multi-segment records}
+\label{sec:ecg-viewer-multisegment}
+
+A multi-segment record (a master header whose record line is \code{name/n}) is chosen with its
+segments' headers and signal files. Its segments follow each other from the record's start; a
+null segment (\code{\textasciitilde}) is a gap of its length in every lead, a lead that a segment
+does not hold is a gap in that lead, and the layout segment of a variable layout names the leads.
+The first 10 seconds are read, as for one record.
+
+\subsection{GE MUSE XML}
+\label{sec:ecg-viewer-muse}
+
+The page reads GE MUSE resting ECG XML files (\code{RestingECG}) with its own small XML parser,
+\file{muse.js}; another XML file is refused (\code{This XML file is not a MUSE resting ECG
+(RestingECG).}). Its Python twin, \cmd{muse-py} (\cref{sec:ecg-viewer-muse-py}), gives the same
+result; both are tested on the same synthetic file.
+
+\begin{table}[htbp]
+\centering
+\caption{What is read from a MUSE XML file.}
+\label{tab:ecg-viewer-muse}
+\begin{tabularx}{\linewidth}{@{}P{2.6cm}L@{}}
+\toprule
+\tabhead Part & \tabhead From \\
+\midrule
+Leads & The rhythm waveform (\code{Waveform} of type \code{Rhythm}): base64 little-endian 16-bit
+  integers times \code{LeadAmplitudeUnitsPerBit}. III, aVR, aVL and aVF are derived from I and
+  II, as the carts derive them \\
+Sampling rate & \code{SampleBase} $\times$ 10 to the power \code{SampleExponent}. A base that
+  is not a positive number is taken as 500\,Hz, and an exponent beyond $\pm$6 is refused \\
+Details & \code{TestDemographics}: the acquisition time, the device, the site, the location, the
+  reason, the status, and the filters; the patient's age and sex \\
+Measurements & \code{RestingECGMeasurements}: the ventricular and atrial rates, PR, QRS, QT, QTc,
+  QTcF, the P, R and T axes, the QRS count \\
+Statements & \code{OriginalDiagnosis} gives the computer's (Marquette 12SL, with its version).
+  \code{Diagnosis} gives the physician's: \emph{confirmed} (with the overreader and the time of
+  the edit) when the status is \code{CONFIRMED}; \emph{edited} when it is not confirmed but
+  differs from the computer's \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The patient's name, ID and date of birth, the order (accounts, admission, physicians' IDs) and
+other identifiers are never read into what the page shows.
+
+\subsection{DICOM ECGs}
+\label{sec:ecg-viewer-dicom}
+
+A DICOM 12-lead ECG, a Holter ECG, or another DICOM waveform object, is read by the PACS viewer's
+DICOM reader, of which the ECG viewer keeps a copy (\file{dicom.js}). The viewer draws the longest
+group of channels (the rhythm, not the median beats), in microvolts unless the file says
+otherwise, and shows the file's annotations as the report: its measurements, under the names the
+viewer uses (\code{QT}, \code{QRS}, \code{Vent. rate}, \dots), its text as the computer's
+statements, and the acquisition time and the group's label as details. Any other DICOM file is
+refused: \code{This DICOM file is not an ECG: open it in the PACS viewer.}
+
+\subsection{EDF, EDF+, BDF and BDF+}
+\label{sec:ecg-viewer-edf}
+
+The viewer reads files of the European Data Format family with its own reader, \file{edf.js},
+which follows the same reading rules as the engines of VitalStream and Medorama
+(\cref{sec:formats-reference-edf}). Since the viewer draws a 12-lead-style ECG on paper, it reads
+a short span of the file:
+\begin{itemize}
+\item \textbf{The leads} are the ordinary signals at the sampling rate of the first ECG signal:
+  a signal labelled \code{I} to \code{V6}, or whose label starts with \code{ECG} or \code{EKG}.
+  A file without such a signal uses the signals at the most common rate. The other signals are
+  left out, and a note lists them. Samples are converted to millivolts.
+\item \textbf{The span} is the first 10 seconds of the recording's first uninterrupted part. An
+  interrupted (EDF+D) file is read up to its first break, with a note.
+\item \textbf{Annotations} within that span are listed as notes, with their times from the start
+  of the span: at most 100, followed by a count of the others.
+\item \textbf{The header's identification fields} are never read, with one exception: the four
+  digits of the year of an EDF+ recording field's \code{Startdate dd-MMM-yyyy}, which date the
+  recording.
+\item The page names the format (\code{EDF}, \code{EDF+}, \code{BDF} or \code{BDF+}), and the
+  signals' filters when they share one.
+\end{itemize}
+Long recordings, such as sleep studies and EEGs, are best opened in VitalStream
+(\cref{sec:vitalstream-edf}). In Medorama, an EDF file of the category \code{ecg} is an ECG
+attachment that opens in this viewer; in Privacy Mode it is sent de-identified
+(\cref{sec:protecting-edf}).
+
+\subsection{The JSON form}
+\label{sec:ecg-viewer-json}
+
+The JSON form is a file that any program can write (a MUSE XML reader, for instance). It holds
+the samples of each lead, in the lead's units, with \code{null} where a sample is missing. It is
+the ECG record of \cref{sec:readers-ecg-record} written as JSON.
+
+\begin{lstlisting}[language=JSON,style=example]
+{
+  "name": "ECG 2024-01-02 09:30",
+  "start": "2024-01-02T09:30:00Z",
+  "fs": 500,
+  "leads": [
+    { "name": "I", "units": "uV", "samples": [12, 15, 19] },
+    { "name": "II", "units": "uV", "samples": [20, 24, 30] }
+  ],
+  "meta": {
+    "fields": [["Device", "MAC 5500"], ["Filters", "0.05-150 Hz"]],
+    "measurements": [{ "name": "QTc", "value": 412, "unit": "ms" },
+                     { "name": "ST", "value": -0.07, "unit": "mV", "lead": "V5" }],
+    "statements": [{ "source": "computer", "program": "12SL", "lines": ["Sinus rhythm"] }],
+    "notes": ["synthetic"]
+  }
+}
+\end{lstlisting}
+
+\begin{xltabular}{\linewidth}{@{}P{3.4cm}L@{}}
+\caption{The fields of the ECG viewer's JSON form.}
+\label{tab:ecg-viewer-json}\\
+\toprule
+{\tabhead Field} & {\tabhead Meaning} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Field} & {\tabhead Meaning} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{name} & The ECG's name; default \code{ECG} \\
+\code{start} & The time of the first sample: an ISO 8601 text, or Unix seconds; optional \\
+\code{fs} & The sampling rate, in Hz; it may instead be given per lead \\
+\code{leads} & Required: one object per lead \\
+\quad\code{name} & The lead's name (\code{I}, \code{aVR}, \code{V1}, \code{ECG II}, \dots) \\
+\quad\code{units} & \code{mV}, \code{uV} (or \code{$\mu$V}) or \code{V}; other units are taken as
+  millivolts \\
+\quad\code{samples} & The values, in those units; \code{null} where a sample is missing \\
+\quad\code{fs} & The lead's sampling rate, when it differs \\
+\code{meta} & Optional: the report \\
+\quad\code{fields} & \code{[[label, text], \dots]}: the details; a field that names the patient is
+  dropped \\
+\quad\code{measurements} & \code{[\{name, value, unit, lead\}, \dots]}; \code{lead} is optional \\
+\quad\code{statements} & \code{[\{source, program, by, time, lines\}, \dots]}: \code{source} is
+  \code{computer}, \code{confirmed} or \code{edited}; \code{lines} is a list of texts; the others
+  are optional \\
+\quad\code{notes} & A list of texts \\
+\end{xltabular}
+
+A record must have at least one lead, a sampling rate for each, and at least one sample;
+otherwise the page says which is missing (\code{this ECG has no leads}, \code{lead NAME: no
+sampling rate}, \code{this ECG has no samples}).
+
+\subsection{Pictures and PDF}
+\label{sec:ecg-viewer-pictures}
+
+A PNG or JPEG picture (a scanned or exported ECG) is shown as it is, and a PDF in the browser's
+PDF viewer. The controls of the paper (layout, speed, gain, zoom and calipers) are grayed out,
+because a picture's layout, speed and gain are fixed, and calipers need the signal.
+
+% ==========================================================================================
+\section{Opening ECGs}
+\label{sec:ecg-viewer-open}
+
+\begin{table}[htbp]
+\centering
+\caption{The ways to open ECGs in the ECG viewer.}
+\label{tab:ecg-viewer-open}
+\begin{tabularx}{\linewidth}{@{}P{4.2cm}L@{}}
+\toprule
+& \tabhead Opens \\
+\midrule
+\ui{Open record\dots} & One ECG: choose its file, or a WFDB record's \file{.hea} together with
+  its signal files (and a multi-segment record's segments). \\
+\ui{Open multiple records\dots} & A folder: every ECG in it and in its subfolders, one at a
+  time. \\
+Drop & The files dropped on the page, as with \ui{Open record\dots}. \\
+\ui{Server folders\dots} & Shown only when the page is served by \cmd{muse-py serve}: the
+  folders of the serving computer (\cref{sec:ecg-viewer-serve}). \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{Open record\dots} opens the browser's file chooser, which offers the files whose
+extensions the viewer's readers claim: \file{.hea} and \file{.dat}, \file{.xml}, \file{.dcm} and
+\file{.dicom}, \file{.edf} and \file{.bdf}, \file{.json}, the pictures (\file{.png},
+\file{.jpg}, \file{.jpeg}, \file{.gif}, \file{.webp}) and \file{.pdf}. Several files may be
+chosen at once. Of the files chosen, the header is the ECG shown and the others are its signal
+files; without a header, the first file is shown.
+
+\paragraph{Open multiple records\dots} opens the browser's folder chooser. The folder's ECGs are
+its files, at every level, whose extension a reader claims (as above, except the signal files
+\file{.dat}), in the order of their folder and then of their name. EDF files are listed with the
+others. Hidden files and folders (names that start with \code{.}) are passed over, and the
+segments and layout of a multi-segment record belong to it. A WFDB record's signal files are taken
+from its own folder. The first ECG opens; then:
+\begin{itemize}
+\item \ui{\textless} and \ui{\textgreater} (or \key{$\leftarrow$} and \key{$\rightarrow$}) step to the
+  previous and the next ECG, and the list between them picks one;
+\item the name shows the ECG's path in the folder (without \file{.hea}) and its place:
+  \code{ecg/2024-03/rest\_0003 (3 of 12)}.
+\end{itemize}
+A folder of more than 5000 ECGs is refused: \code{This folder holds more than 5000 ECGs: open a
+subfolder.} A folder without one: \code{No ECG in this folder or its subfolders.} An ECG of the
+folder that cannot be read says why when it is stepped to; the others still open.
+
+\paragraph{Drop.} Files dropped anywhere on the page open as with \ui{Open record\dots}.
+
+% ==========================================================================================
+\section{The page}
+\label{sec:ecg-viewer-page}
+
+The header holds, from left to right: the name \ui{ECG}, the file's name and a line about the
+record (its start, as UTC, the number of leads, the sampling rate and the length: \code{2024-02-20
+09:20:00 $\cdot$ 12 leads $\cdot$ 500 Hz $\cdot$ 10.0 s}), the controls of the paper, and the
+buttons to open files. The report and the paper fill the page below it.
+
+\begin{xltabular}{\linewidth}{@{}P{4.4cm}L@{}}
+\caption{The controls and keys of the ECG viewer.}
+\label{tab:ecg-viewer-controls}\\
+\toprule
+{\tabhead Control} & {\tabhead Does} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Control} & {\tabhead Does} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\ui{Layout} & \ui{3 $\times$ 4 + rhythm}, \ui{6 $\times$ 2 + rhythm}, \ui{12 $\times$ 1}
+  (\cref{sec:ecg-viewer-paper}); only for a record with the twelve standard leads \\
+\ui{Speed} & \ui{25 mm/s} or \ui{50 mm/s} \\
+\ui{Gain} & \ui{5 mm/mV}, \ui{10 mm/mV} or \ui{20 mm/mV} \\
+\ui{$-$} \ui{Fit} \ui{+} & Smaller; fit the width of the page; larger. Zoomed, the middle
+  button shows the size, \ui{100 \%} being the paper's real size on a 96\,dpi screen; a click on
+  it fits the width again \\
+\ui{Calipers} & Measure between two points of the traces (\cref{sec:ecg-viewer-calipers}) \\
+\key{Esc} & Clear the calipers' points \\
+\ui{\textless}, the list, \ui{\textgreater}; \key{$\leftarrow$} \key{$\rightarrow$} & The previous
+  ECG of the folder, any of them, the next (shown with \ui{Open multiple records\dots}) \\
+\ui{Server folders\dots} & The folders of the computer serving the page (\cmd{muse-py serve}
+  only) \\
+\ui{Open record\dots} & One ECG (\cref{sec:ecg-viewer-open}) \\
+\ui{Open multiple records\dots} & A folder of ECGs \\
+The moon or sun button & Switches between the light and the dark theme \\
+\end{xltabular}
+
+The layout, the speed, the gain and the theme are remembered in the browser. For a picture or a
+PDF, the controls of the paper are grayed out. When another program opens the page at a file
+(\code{\#src=}), the buttons that open files, the folder's arrows and list, \ui{Server
+folders\dots} and the theme button are hidden: the host decides what is shown
+(\cref{sec:ecg-viewer-address}).
+
+% ==========================================================================================
+\section{The paper}
+\label{sec:ecg-viewer-paper}
+
+The ECG is drawn on standard paper: 25\,mm/s and 10\,mm/mV by default (or 50\,mm/s; 5 or
+20\,mm/mV), a 1\,mm and 5\,mm grid, a 1\,mV calibration pulse (200\,ms wide) at the start of each
+row, the lead's name at the start of each segment, and a mark where the lead changes. The foot of
+the paper repeats the speed, the gain and the sampling rate (\code{25 mm/s 10 mm/mV 500 Hz}). The
+strip is 10 seconds long, or the record's length when it is shorter.
+
+A record with the twelve standard leads (I, II, III, aVR, aVL, aVF, V1 to V6, by these names or
+close ones: \code{ECG II}, \code{Lead II}, \code{avr}, \code{MLII} for II) is laid out in one of
+three layouts:
+
+\begin{table}[htbp]
+\centering
+\caption{The layouts of a 12-lead ECG.}
+\label{tab:ecg-viewer-layouts}
+\begin{tabularx}{\linewidth}{@{}P{3.2cm}L@{}}
+\toprule
+\tabhead Layout & \tabhead Rows \\
+\midrule
+\ui{3 $\times$ 4 + rhythm} & Three rows of four columns of 2.5\,s: I, aVR, V1, V4; II, aVL, V2,
+  V5; III, aVF, V3, V6; then lead II over the whole strip \\
+\ui{6 $\times$ 2 + rhythm} & Six rows of two columns of 5\,s: I, V1; II, V2; III, V3; aVR, V4; aVL,
+  V5; aVF, V6; then lead II over the whole strip \\
+\ui{12 $\times$ 1} & Twelve rows, each lead over the whole strip, in the order I to V6 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Any other record (fewer leads, other names) shows each lead in full, one per row, and
+\ui{Layout} is grayed out. The paper fits the width of the page; \ui{$-$} and \ui{+} step through
+fixed sizes.
+
+\subsection{Calipers}
+\label{sec:ecg-viewer-calipers}
+
+\ui{Calipers} turns the calipers on (the button is highlighted) or off. Click two points of the
+paper: each snaps to the nearest sample of a trace, within 40\,ms of the click along the paper.
+The viewer shows the interval between them, in milliseconds, and the voltage difference, in
+microvolts, the second point's minus the first's: \code{412 ms $\cdot$ +150 $\mu$V}. A third click
+starts again; \key{Esc} clears the points, and so does a change of layout, speed or gain.
+
+\subsection{The report above the paper}
+\label{sec:ecg-viewer-report}
+
+Above the paper, the report gives what the file says about the ECG:
+\begin{itemize}
+\item its details: time, device, site, status, age, sex, filters, and a MUSE file's location and
+  reason for the test (in a WFDB header, \code{Reason} is a statement);
+\item its measurements: rates, PR, QRS, QT, QTc, axes, and, on a line per measurement, those
+  given per lead (\code{ST I -0.07 $\cdot$ II -0.07 \dots{} mV}); millivolts with two decimals;
+\item its statements, side by side: the computer's interpretation (\ui{Computer interpretation},
+  with its program), and the physician's (\ui{Confirmed by}, with the name and the time, or
+  \ui{Edited, not confirmed});
+\item its notes.
+\end{itemize}
+
+\begin{phibox}
+A field whose key names the patient anywhere in it (name, ID, MRN, accession or NHS number,
+birth date, address, zip, phone, e-mail \dots) is never shown, even when the file holds it. Free
+text (comment lines without a key, statements) is shown as written. The name of the physician
+who confirmed the statements is shown as the file gives it.
+\end{phibox}
+
+\subsection{Light and dark}
+\label{sec:ecg-viewer-themes}
+
+The page has a light and a dark theme (\cref{fig:ecg-viewer-main,fig:ecg-viewer-dark}). Until a
+theme is chosen, the page follows the system's setting. The moon button (in the light theme) or
+the sun button (in the dark theme) switches the theme, and the choice is remembered in the
+browser. \code{theme=light} or \code{theme=dark} in the address sets the theme for that page
+without remembering it; Medorama passes its own page's theme this way.
+
+% ==========================================================================================
+\section{Running and deploying}
+\label{sec:ecg-viewer-run}
+
+\begin{xltabular}{\linewidth}{@{}P{5.0cm}L@{}}
+\caption{The ways to run the ECG viewer.}
+\label{tab:ecg-viewer-run}\\
+\toprule
+{\tabhead How} & {\tabhead What it opens} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead How} & {\tabhead What it opens} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+The website, \url{https://medorama.org/viewers/ecg/} & The files you pick
+  or drop, read in your browser: they never leave your computer \\
+\file{viewers/ecg/index.html} from a clone, opened from disk (\code{file://}) & The same,
+  offline \\
+Any web server: copy the page's files (\file{index.html}, \file{style.css} and the \file{.js} files
+  of \file{viewers/ecg}) & The same; and files on that server, by address (\code{\#src=URL}) \\
+\cmd{muse-py serve} on the computer where the ECGs are & The same; and the folders of that
+  computer, under a root you choose (\ui{Server folders\dots}) \\
+Inside Medorama (\cmd{tools/install-medorama.sh}) & A patient's ECGs, as a tab of the patient's
+  page, de-identified by Medorama's server (\cref{chap:viewers-in-medorama}) \\
+\end{xltabular}
+
+The page needs no build and no dependencies; it uses nothing but the browser. For a quick look
+from a web server: \cmd{python3 -m http.server -{}-directory viewers/ecg}.
+
+\subsection{Served from a computer: \texorpdfstring{\cmd{muse-py serve}}{muse-py serve}}
+\label{sec:ecg-viewer-serve}
+
+The Python package \file{viewers/ecg/python/muse} (\code{muse\_reader\_py}, the command
+\cmd{muse-py}) serves the page together with the folders of the computer it runs on, so that the
+ECGs of a server are read without copying them, through an SSH tunnel to its port (the commands
+to install it on each operating system are at \url{https://medorama.org/docs/install.html}). \cmd{serve}
+uses only the Python standard library; its module, \file{page\_server.py}, is the same file as
+\cmd{dicom-py serve}'s.
+
+\begin{lstlisting}[style=shell]
+pip install ./viewers/ecg/python/muse         # copies the page into the package
+muse-py serve                                 # opens http://127.0.0.1:8080/browse: your home folder
+muse-py serve --root /data/ecg                # another folder
+muse-py serve --set-password                  # once, on a shared machine (VitalStream's password)
+\end{lstlisting}
+
+\begin{lstlisting}[style=signature]
+muse-py serve [--root DIR] [--host HOST] [--port N] [--auth-file FILE]
+              [--set-password | --clear-password] [--no-auth] [--no-browser]
+\end{lstlisting}
+
+\begin{params}
+\item[--root DIR] The folder served: only the files and folders under it are listed and served,
+  every symbolic link resolved (a link that leads outside is refused, and not listed). Default:
+  the home folder. It lies inside the root the package was installed with: a folder that
+  contains that root is narrowed to it, one outside it is refused.
+\item[--host HOST] Where it listens. Default: \code{127.0.0.1}. A request must name the server
+  by a loopback name, an IP address or this host; any other name is refused (no DNS rebinding).
+\item[--port N] Default: 8080.
+\item[--auth-file FILE] The password file, shared with VitalStream and \cmd{dicom-py serve}.
+  Default: \file{\textasciitilde/.config/vitalstream/auth.json}.
+\item[--set-password] Set (or change) the password the page asks for, then exit
+  (\code{New viewer password:}, at least 8 characters, then \code{Repeat it:}). For
+  \cmd{muse-py serve} and \cmd{dicom-py serve}, a sign-in lasts 30 days, until the server stops,
+  or until a browser signs out, which ends every sign-in; after a wrong password the next try,
+  from any browser, waits 1\,s, then 2, 4 \dots{} up to 60\,s.
+\item[--clear-password] Remove the password, then exit.
+\item[--no-auth] Run without asking for the password.
+\item[--no-browser] Do not open a browser window.
+\end{params}
+
+When it starts, \cmd{serve} prints its address (\code{ECG viewer: open http://127.0.0.1:8080/
+(server folders: http://127.0.0.1:8080/browse)}), its root, and whether a password protects it;
+then it opens the browser at \file{browse}, unless told not to.
+
+\paragraph{The server folders.} \file{browse} (titled \ui{ECG viewer: server folders}) lists the
+folders and the ECG files of a folder under the root: the files ending in \file{.hea},
+\file{.xml}, \file{.json}, \file{.dcm}, \file{.pdf}, \file{.png}, \file{.jpg} and \file{.jpeg},
+with their size; hidden entries are neither listed nor served, and a folder shows its first 5000
+entries. A row \ui{..} leads to the folder above. A click on a file opens it in the viewer
+(\code{\#src=files/PATH}); the browser's Back button returns to the list. The page opened at its
+own address (\url{http://127.0.0.1:8080/}) shows \ui{Server folders\dots}, which leads to the list.
+
+Files are sent as they are read, in part when a browser asks for a range (\code{Range}), under a
+policy that runs nothing in them (\code{Content-Security-Policy: sandbox}); a kind of file the
+viewers do not read is sent as a download. The sign-in cookie is signed with a key of the
+running server too: browsers send a cookie to every port of a host, and another server on
+127.0.0.1 cannot use it.
+
+\paragraph{The requests.} \cmd{serve} answers \code{GET /} (the page), \code{GET browse?path=}
+(a folder's records and subfolders, as HTML), \code{GET files/PATH} (a file), \code{GET
+list/PATH/} (a folder's files as \code{\{"files": [\dots]\}}, the PACS viewer's \code{\#list=}; and
+\code{list/PATH} without a final \code{/}, the file itself) and \code{GET served}, which answers
+200 \code{\{"viewer", "root"\}}: when it does, the page shows its \ui{Server folders\dots} button.
+
+\paragraph{Fixed at install time.} Two options are fixed when the package is installed, from the
+environment:
+
+\begin{table}[htbp]
+\centering
+\caption{The install-time variables of \cmd{muse-py} (and \cmd{dicom-py}).}
+\label{tab:ecg-viewer-serve-build}
+\begin{tabularx}{\linewidth}{@{}P{3.0cm}P{2.8cm}L@{}}
+\toprule
+\tabhead Variable & \tabhead Default & \tabhead Effect \\
+\midrule
+\code{VIEWER\_ROOT} & The whole file system & The most \cmd{serve} ever serves;
+  \code{\textasciitilde} is the home folder of whoever runs it. A \opt{-{}-root} that contains it
+  is narrowed to it, and one outside it is refused (\code{\dots{} is not a folder inside this
+  viewer's root}): then give a \opt{-{}-root} inside it \\
+\code{VIEWER\_PASSWORD} & \code{1} & \code{0}: without password support (\opt{-{}-set-password}
+  fails, the page never asks for one) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{lstlisting}[style=shell]
+VIEWER_ROOT=/data/ecg VIEWER_PASSWORD=1 pip install ./viewers/ecg/python/muse
+\end{lstlisting}
+
+An editable install (\cmd{pip install -e}, as \cmd{tools/install-medorama.sh} makes) serves the
+page from the clone instead of a copy. The two variables still apply when they are given at
+install time (they are written into the clone, in a file git ignores); without them, its root is
+the whole file system, with password support.
+
+\paragraph{On a server where the ECGs are:} install with a \code{VIEWER\_ROOT} that holds them,
+set a password once (\cmd{muse-py serve -{}-set-password}), and start it without a browser, in
+\cmd{tmux} or as a service: \cmd{muse-py serve -{}-root /data/ecg -{}-no-browser}. From your
+computer: \cmd{ssh -N -L 8080:127.0.0.1:8080 user@server}, then open
+\url{http://127.0.0.1:8080/}. Without a password, anyone who can connect to the port can read the
+files under the root. The security model shared by the viewers is described in
+\cref{chap:viewers-alone}.
+
+% ==========================================================================================
+\section{muse-py: MUSE files outside the page}
+\label{sec:ecg-viewer-muse-py}
+
+\cmd{muse-py} reads GE MUSE resting ECG XML files with no dependencies, as the page does: to the
+JSON form, to a WFDB record whose header comments carry the report, or to an ECG database to
+import into Medorama.
+
+\begin{lstlisting}[style=shell]
+pip install -e viewers/ecg/python/muse
+muse-py json ECG.xml > ecg.json          # the JSON form, with its report (meta)
+muse-py wfdb ECG.xml out/                # a WFDB record (format 16, 1 uV per unit)
+muse-py index /path/to/muse -o ecg.csv   # an ECG database: one row per file
+muse-py --version
+\end{lstlisting}
+
+\apientry{muse-py json}{The ECG in the JSON form}
+\begin{lstlisting}[style=signature]
+muse-py json FILE
+\end{lstlisting}
+Writes the ECG of the MUSE file \file{FILE} in the viewer's JSON form, with its report in
+\code{meta}, on the standard output (one line).
+
+\apientry{muse-py wfdb}{The ECG as a WFDB record}
+\begin{lstlisting}[style=signature]
+muse-py wfdb FILE OUT_DIR [--name NAME]
+\end{lstlisting}
+Writes \file{NAME.hea} and \file{NAME.dat} into \file{OUT\_DIR} (created if needed), and prints
+the header's path: the leads in format 16, at 1000 units per millivolt (1\,$\mu$V per unit), with
+the details, the measurements and the statements in the header's comments (\code{\# Dx: \dots},
+\code{\# Dx confirmed: \dots}, \code{\# Confirmed by: \dots}), each value on one line (line breaks in
+it become spaces), which the ECG viewer reads back as the report.
+\begin{params}
+\item[--name NAME] The record's name. Default: the file's name without its extension.
+\end{params}
+
+\apientry{muse-py index}{An ECG database}
+\begin{lstlisting}[style=signature]
+muse-py index FOLDER -o CSV
+\end{lstlisting}
+Reads every MUSE file (\file{.xml}) under \file{FOLDER}, passing over hidden files and folders,
+and writes a CSV, one row per file, to
+import into Medorama (\cref{chap:ecg-imaging}). It prints \code{CSV: N ECG(s)}, and
+\code{; M file(s) not read} with each of them on the standard error.
+\begin{params}
+\item[-o, --output CSV] The CSV to write (required); the file paths in it are relative to its
+  folder.
+\end{params}
+
+The columns of the database:
+\begin{itemize}
+\item \code{mrn} (the MUSE \code{PatientDemographics/PatientID}, in a column named \code{mrn}:
+  Medorama links each row to its patient by it, as an MRN), \code{time}, \code{category}
+  (\code{ecg}), \code{name} (\code{12-lead ECG}), and \code{value} and \code{unit} (the
+  ventricular rate);
+\item one column per measurement: \code{PR (ms)}, \code{QT (ms)}, \code{QTc (ms)} and the others;
+\item \code{interpretation} (12SL) and \code{confirmed};
+\item \code{file}: its path, relative to the CSV.
+\end{itemize}
+
+\begin{phibox}
+No patient identity is written into the JSON or WFDB outputs. The database holds the patient ID
+(\code{mrn}\phimark), the key that links each ECG to its patient: keep it as PHI, with Medorama's
+databases, never in the repository.
+\end{phibox}
+
+% ==========================================================================================
+\section{Addresses}
+\label{sec:ecg-viewer-address}
+
+\code{index.html\#src=URL} shows the file at \code{URL}; a WFDB header's signal files, and a
+multi-segment record's segments, are read beside it (\code{URL}'s folder followed by their
+names). The file is fetched with the page's own credentials. Changing the fragment shows another
+file without reloading the page.
+
+\begin{table}[htbp]
+\centering
+\caption{The fragments of the ECG viewer's address.}
+\label{tab:ecg-viewer-address}
+\begin{tabularx}{\linewidth}{@{}P{4.6cm}L@{}}
+\toprule
+\tabhead Fragment & \tabhead Means \\
+\midrule
+\code{src=URL} & The file to show \\
+\code{name=\dots} & The name to show \\
+\code{theme=light} or \code{dark} & The theme \\
+\code{compact=1} & The paper alone, fitted to the frame (shown inside another page): no header,
+  a shorter report \\
+\code{shift=SECONDS} & For a host that de-identifies in the page: the report's dates, and the
+  record's start in the header line, move back by it \\
+\code{cap90=1} & The same: ages above 89 years shown as 90+ (an \code{Age} or \code{<age>}
+  field; in days, weeks or months when its unit says so) \\
+\code{who=\dots}, \code{what=\dots}, \code{pos=\dots}, \code{nav=\dots} & A host's context, shown in
+  place of the file's name (\cref{chap:viewers-alone}) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Medorama does not need \code{shift} and \code{cap90}: its server de-identifies the files
+themselves. Example, from a web server that serves the page and a folder \file{ecgs/}:
+\code{index.html\#src=ecgs/sinus\_st\_depression.hea\&theme=light}.
+
+% ==========================================================================================
+\section{The examples}
+\label{sec:ecg-viewer-examples}
+
+\file{viewers/ecg/examples/} holds synthetic ECGs to try the viewer with: every value is
+invented, and no file describes a real person. They are written by
+\file{tools/make-viewer-examples.py} with the demo's generators. On the website, the examples page
+(\url{https://medorama.org/viewers/ecg/examples/}) has a link that opens
+each file in the live viewer; from a clone, open \file{viewers/ecg/index.html} and choose a file
+with \ui{Open record\dots} (a WFDB record: its \file{.hea} and \file{.dat} together), or the whole
+folder with \ui{Open multiple records\dots}.
+
+\begin{table}[htbp]
+\centering
+\caption{The ECG viewer's examples.}
+\label{tab:ecg-viewer-examples}
+\begin{tabularx}{\linewidth}{@{}P{5.0cm}L@{}}
+\toprule
+\tabhead File & \tabhead What \\
+\midrule
+\file{sinus\_st\_depression.hea}, \file{.dat} & A WFDB record of twelve leads (500\,Hz, 10\,s), sinus
+  rhythm with inferolateral ST depression; the cart's report (measurements, the computer's
+  statements) in the header's comments \\
+\file{atrial\_fibrillation\_muse.xml} & A GE MUSE resting ECG XML file: atrial fibrillation with a
+  rapid ventricular response, the measurements and the 12SL statements \\
+\file{normal\_dicom.dcm} & A DICOM 12-lead ECG waveform object: normal sinus rhythm, with its
+  annotations as the report \\
+\file{normal\_printout.pdf} & A PDF printout of a 12-lead ECG, shown as it is \\
+\file{normal\_printout.png} & The same as a picture \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+% ==========================================================================================
+\section{Files and tests}
+\label{sec:ecg-viewer-files}
+
+\begin{table}[htbp]
+\centering
+\caption{The files of the ECG viewer (\file{viewers/ecg}).}
+\label{tab:ecg-viewer-files}
+\begin{tabularx}{\linewidth}{@{}P{3.6cm}L@{}}
+\toprule
+\tabhead File & \tabhead Contents \\
+\midrule
+\file{readers.js} & The registry of readers: one reader per format, each giving the same record.
+  Its header comment documents the record, the JSON form, the reader interface and how to add a
+  format (\cref{sec:readers-ecg}). \\
+\file{ecg.js} & The record model and its helpers: the JSON form (\code{ECG.readJson}), units to
+  millivolts, metadata from ``key: value'' lines, the report, the standard lead names, and
+  \code{ECG.checked}, which refuses a record that the paper cannot draw. \\
+\file{wfdb.js} & The WFDB reader: headers and signal files, single- and multi-segment. \\
+\file{muse.js} & The GE MUSE XML reader, with its own small XML parser. \\
+\file{dicom-ecg.js} & The DICOM ECG reader, over \file{dicom.js}. \\
+\file{dicom.js} & The DICOM parser, a copy of the PACS viewer's. \\
+\file{edf.js} & The EDF, EDF+, BDF and BDF+ reader. \\
+\file{paper.js} & The paper drawing (SVG in millimeters) and the layouts. \\
+\file{host.js} & A host's context (\code{who}, \code{what}, \code{pos}, \code{nav}), shown in
+  place of the file's name; the same file in each viewer. \\
+\file{app.js}, \file{index.html}, \file{style.css} & The page. \file{index.html} loads the
+  readers after \file{readers.js}, in the order in which the page lists the formats. \\
+\file{python/muse/} & \cmd{muse-py}: the MUSE reader in Python (\cmd{json}, \cmd{wfdb},
+  \cmd{index}) and \cmd{serve}. \\
+\file{examples/} & Synthetic ECGs to try the viewer with. \\
+\file{tests/} & The tests of the page (\file{readers.test.js}, \file{ecg.test.js},
+  \file{muse.test.js}, \file{dicom.test.js}, \file{edf.test.js}, \file{host.test.js}) and of
+  \cmd{muse-py}. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{lstlisting}[style=shell]
+node --test viewers/ecg/tests/*.test.js        # the page's readers and drawing
+pytest viewers/ecg/python/muse/tests           # muse-py, serve (its root and its password)
+\end{lstlisting}
+
+The MUSE readers are tested on \file{viewers/ecg/tests/fixtures/synthetic\_muse.xml}, made by
+\file{make\_muse.py} with an invented patient and signals; \file{synthetic\_muse.json} is the
+Python reader's output, which the JavaScript reader's tests compare against. The reader was
+written from the format, independently of GE's GPL \file{musexmlex.py}.

@@ -1,0 +1,23 @@
+[build-system]
+# 77: SPDX licence expressions and license-files (PEP 639).  No upper bound: pip builds in an
+# isolated environment with the newest setuptools, where a cap would only hold back fixes, and
+# CI builds the wheels and the sdists with it on every change (.github/workflows/python.yml).
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dicom_index_py"
+version = "0.1.0"
+description = "DICOM studies as databases for Medorama (one row per loop, run, series, report, ECG; measurements as columns); DICOM ECGs as WFDB"
+requires-python = ">=3.9"
+license = "PolyForm-Noncommercial-1.0.0"
+# copied from the repository by setup.py (the licence travels with every copy of the package)
+license-files = ["LICENSE", "COMMERCIAL.md"]
+authors = [{ name = "Reza Sameni" }]
+dependencies = ["pydicom>=2.4", "numpy"]
+
+[project.scripts]
+dicom-py = "dicom_index_py.cli:main"
+
+[tool.setuptools]
+packages = ["dicom_index_py"]

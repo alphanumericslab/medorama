@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 716" width="1000" height="716" role="img" aria-labelledby="t d">
+<title id="t">Medorama: architecture at a glance</title><desc id="d">People use a browser; requests pass the institution's front door (TLS, optionally its single sign-on), then Medorama's sign-in, roles and handlers; every answer leaves through the privacy gate. Readers turn each file format into one of four data models. Identifiers are kept only in the catalog database; data sources are only read.</desc>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#4B5563"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#B97A00"/></marker></defs>
+<rect x="0" y="0" width="1000" height="716" rx="14" fill="#FFFFFF"/>
+<g font-family="Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#1F2937">
+<text x="24" y="34" font-size="17" font-weight="700" fill="#1F2937" text-anchor="start">Medorama at a glance</text>
+<text x="24" y="54" font-size="12" font-weight="400" fill="#4B5563" text-anchor="start">One server, one way in, one way out: sign-in decides who is asking, the privacy gate decides what leaves.</text>
+<rect x="24" y="80" width="220" height="76" rx="9" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.4"/>
+<text x="36" y="101" font-size="13.5" font-weight="650" fill="#1F2937" text-anchor="start">People</text>
+<text x="36" y="120.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">researchers, clinicians,</text>
+<text x="36" y="136.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">data managers, admins</text>
+<rect x="276" y="80" width="220" height="76" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4"/>
+<text x="288" y="101" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start">Web browser</text>
+<text x="288" y="120.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">the Medorama page and viewers:</text>
+<text x="288" y="136.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">static pages; stores no data</text>
+<rect x="528" y="80" width="448" height="76" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="540" y="101" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start">The institution’s front door</text>
+<text x="540" y="120.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">HTTPS (a reverse proxy), and where required its sign-in:</text>
+<text x="540" y="136.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">single sign-on, MFA, VPN — the part each institution adapts</text>
+<path d="M244 118 L276 118" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M496 118 L528 118" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)" marker-start="url(#a)"/>
+<rect x="24" y="178" width="952" height="346" rx="12" fill="none" stroke="#9CA3AF" stroke-width="1.2" stroke-dasharray="7 5"/>
+<text x="36" y="196" font-size="11.5" font-weight="600" fill="#6B7280" text-anchor="start">Medorama server</text>
+<rect x="40" y="206" width="284" height="80" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="52" y="227" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">1  Sign-in  (signin.rs)</text>
+<text x="52" y="246.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">who is asking: a password, or the</text>
+<text x="52" y="262.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">name the institution’s proxy sends</text>
+<rect x="346" y="206" width="284" height="80" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="358" y="227" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">2  Roles and the PHI permission</text>
+<text x="358" y="246.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">what that user may do and see</text>
+<text x="358" y="262.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(users.rs): admin, analyst, viewer</text>
+<rect x="652" y="206" width="308" height="80" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="664" y="227" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">3  Handlers</text>
+<text x="664" y="246.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">the API, the viewer gateway, the pages;</text>
+<text x="664" y="262.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">imports, cohorts, patient pages, jobs</text>
+<path d="M752 156 L752 168 L280 168 L280 206" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M324 246 L346 246" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M630 246 L652 246" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="40" y="302" width="920" height="64" rx="9" fill="#FDF1DC" stroke="#B97A00" stroke-width="1.4"/>
+<text x="52" y="323" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">4  The privacy gate  (gate.rs, deid.rs, dicom.rs)</text>
+<text x="52" y="342.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">every answer, file and export of a session in Privacy Mode leaves through it: identifiers replaced, dates moved back,</text>
+<text x="52" y="358.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">files de-identified at the source; an answer it did not clear is refused (fail closed)</text>
+<path d="M806 286 L806 302" fill="none" stroke="#B97A00" stroke-width="1.5" marker-end="url(#ag)"/>
+<rect x="40" y="382" width="440" height="126" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="52" y="403" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">Readers: one per file format</text>
+<text x="52" y="422.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">WFDB, EDF, ECG and DICOM files, tables (CSV, Excel, Parquet),</text>
+<text x="52" y="438.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">known exports (GE MUSE, CLIF), connected databases</text>
+<text x="52" y="455.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(OMOP, SQL views); licensed formats through add-ons</text>
+<text x="52" y="471.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Past the reader, every format is one of four data models:</text>
+<text x="52" y="488.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">recordings, ECGs, images, tables</text>
+<rect x="496" y="382" width="220" height="126" rx="9" fill="#E4F4EE" stroke="#009E73" stroke-width="1.4"/>
+<text x="508" y="403" font-size="13.5" font-weight="650" fill="#0B4A38" text-anchor="start">VitalStream viewer</text>
+<text x="508" y="422.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">waveforms; a private port</text>
+<text x="508" y="438.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">on 127.0.0.1, reached only</text>
+<text x="508" y="455.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">through Medorama’s</text>
+<text x="508" y="471.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">gateway</text>
+<rect x="732" y="382" width="228" height="126" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="744" y="403" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">Jobs, plug-ins, add-ons</text>
+<text x="744" y="422.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">indexing and actions;</text>
+<text x="744" y="438.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">plug-ins and adapters run as</text>
+<text x="744" y="455.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">separate programs and</text>
+<text x="744" y="471.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">get pseudonyms, not PHI</text>
+<rect x="24" y="548" width="300" height="104" rx="9" fill="#F6E8F1" stroke="#A8507E" stroke-width="1.4"/>
+<text x="36" y="569" font-size="13.5" font-weight="650" fill="#4A1D36" text-anchor="start">Catalog database</text>
+<text x="36" y="588.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">SQLite or PostgreSQL: users, audit,</text>
+<text x="36" y="604.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">patients, pseudonyms; the only</text>
+<text x="36" y="621.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">place identifiers (PHI) are kept</text>
+<rect x="350" y="548" width="300" height="104" rx="9" fill="#F2F3F5" stroke="#6B7280" stroke-width="1.4"/>
+<text x="362" y="569" font-size="13.5" font-weight="650" fill="#1F2937" text-anchor="start">Indexes and results</text>
+<text x="362" y="588.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">what Medorama derives</text>
+<text x="362" y="604.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(waveform indexes, action</text>
+<text x="362" y="621.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">results): pseudonymous</text>
+<rect x="676" y="548" width="300" height="104" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="688" y="569" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start">Data sources  (read only)</text>
+<text x="688" y="588.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">files where they lie, inside the</text>
+<text x="688" y="604.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">allowed folders; connected</text>
+<text x="688" y="621.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">databases, through read-only views</text>
+<path d="M174 524 L174 548" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)" marker-start="url(#a)"/>
+<text x="184" y="540" font-size="11" font-weight="400" fill="#4B5563" text-anchor="start">read, write</text>
+<path d="M500 524 L500 548" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<text x="510" y="540" font-size="11" font-weight="400" fill="#4B5563" text-anchor="start">write</text>
+<path d="M826 548 L826 524" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<text x="836" y="540" font-size="11" font-weight="400" fill="#4B5563" text-anchor="start">read only</text>
+<text x="24" y="680" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Numbers: a request’s path. Dashed: outside Medorama. The server runs as one operating-system account and listens on 127.0.0.1 by default.</text>
+<text x="24" y="698" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">An institution adapts its front door, and at most one module of Medorama (signin.rs).</text>
+</g></svg>

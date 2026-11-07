@@ -1,0 +1,271 @@
+% Users, roles and the PHI permission; managing accounts; signing in (in brief: the methods are
+% chap:sign-in); Privacy Mode for administrators: who is in it, the switch, its settings and the
+% display of dates; the audit log and its seals. How the privacy gate de-identifies answers is
+% chap:protecting; the security review chap:security.
+% Sources: docs/administration.md, docs/sign-in.md, docs/protecting-patient-data.md,
+% docs/security.md (5, 6, 12); the code is the authority: medorama/src/users.rs, server.rs
+% (in_privacy, set_privacy, user_add), signin.rs, deid.rs (FIELDS, Settings), audit.rs, display.rs.
+\chapter{Users and privacy}
+\label{chap:users-privacy}
+
+This chapter is for administrators. It describes the accounts of a catalog and what each may do,
+how users sign in, how Privacy Mode is set up, and the audit log that records who did what.
+Every person who uses Medorama has an account, with a \emph{role} that says what they may do and,
+separately, the \emph{PHI permission} that says whether they may see identifiers. A session
+without that permission, or whose user has switched it on, is in \textbf{Privacy Mode}: the
+server then sends no identifier at all. How the privacy gate de-identifies each answer and file is
+explained in \cref{chap:protecting}, and the standards Medorama follows and its limits are
+reviewed in \cref{chap:security}.
+
+\section{Users and roles}
+\label{sec:users-privacy-roles}
+
+Each account has one of three roles (\cref{tab:users-privacy-roles}).
+
+\begin{xltabular}{\linewidth}{@{}P{2.2cm}L@{}}
+\caption{The roles. Each role may do everything the one above it may.}
+\label{tab:users-privacy-roles}\\
+\toprule
+\tabhead Role & \tabhead May \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Role & \tabhead May \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{viewer} & Search and look at patients, encounters, recordings, databases and results; keep
+  a history; make, keep and share cohorts \\
+\code{analyst} & Also run and cancel actions (indexing, plug-ins) \\
+\code{admin} & Also import and remove data, connect databases, review identities, manage users
+  and settings (Privacy Mode, dates and times), and read the audit log \\
+\end{xltabular}
+
+Every check is made on the server. The page hides what a user may not do, but each request is
+checked again. Every signed-in user may see every patient of the catalog, as Privacy Mode and
+their permission allow: there are no per-patient access lists, and separate studies are served by
+separate catalogs. Cohorts are private to their owner unless they are shared
+(\cref{chap:cohorts}).
+
+\subsection{The PHI permission}
+\label{sec:users-privacy-phi}
+
+The PHI permission is set for each user, on top of the role. It lets the user leave Privacy Mode,
+and then see and search MRNs, names, dates of birth, account and encounter numbers and real
+dates, and read the identifiers that recordings' files state. Without it, every session of the
+user is in Privacy Mode, an administrator's too. With it, a session starts in Privacy Mode, except
+an administrator's, which starts outside it (\cref{tab:protecting-who}). The first administrator,
+created by \cmd{medorama init}, has the permission; any other user has it only when an
+administrator gives it.
+
+\subsection{Managing users}
+\label{sec:users-privacy-managing}
+
+Users are managed in \ui{Admin} $\rightarrow$ \ui{Users}, or on the server with
+\cmd{medorama user} (\cref{chap:cli}). The following commands add two users, reset a forgotten
+password, disable an account and list the accounts:
+\begin{lstlisting}[style=shell]
+medorama user add alice --role analyst            # asks for her password
+medorama user add bob --role viewer --phi         # may see identifiers
+medorama user set alice --password                # a forgotten password
+medorama user set bob --disabled true             # cannot sign in; his sessions end
+medorama user list
+\end{lstlisting}
+When users sign in through the institution's sign-in (\code{sign\_in = "proxy"}), accounts need
+no password: \cmd{medorama user add NAME -{}-role R -{}-no-password} gives the account a random
+password that nobody knows, and \ui{Admin} $\rightarrow$ \ui{Users} hides the password field and
+the \ui{Reset password} button (\cref{sec:sign-in-accounts}).
+\begin{itemize}
+\item \textbf{User names} consist of letters, digits and \code{. \_ - @}, at most 64 characters.
+  With proxy sign-in, they are the names the proxy sends.
+\item \textbf{Passwords} have at least 10 characters and are stored as Argon2id hashes
+  (\cref{sec:sign-in-password}).
+\item \textbf{At least one enabled administrator.} The catalog refuses a change or a removal that
+  would leave it without one (\code{the catalog needs at least one enabled admin}).
+\item \textbf{Every change is audited} (\code{user\_added}, \code{user\_changed},
+  \code{user\_deleted}, \code{password\_changed}).
+\end{itemize}
+
+\section{Signing in}
+\label{sec:users-privacy-signin}
+
+A catalog signs users in with one of two methods, chosen by the setting \code{sign\_in}.
+With \code{password}, the default, users sign in on Medorama's own form, with throttled attempts
+and sessions that end after \code{session\_hours} (default 12) or when unused for
+\code{session\_idle\_minutes} (default 60). With \code{proxy}, the institution's authenticating
+reverse proxy signs users in, with single sign-on and multi-factor authentication where the
+institution has them, and names each user to Medorama in a header. Both methods, their settings,
+the proxy's security requirements and example configurations are described in
+\cref{chap:sign-in}.
+\begin{itemize}
+\item \textbf{Signing out everywhere.} In password mode, a user ends all their sessions, on every
+  computer and browser, with the user menu's \ui{Sign out everywhere} (audited as
+  \code{signed\_out\_everywhere}). An administrator ends a user's sessions with \ui{Admin}
+  $\rightarrow$ \ui{Users} $\rightarrow$ \ui{Sign out} (audited as \code{user\_changed}). A new
+  password or a disabled account also ends them, and a disabled user is refused at the next
+  request.
+\item \textbf{The command line} acts as the catalog's owner, with administrator rights and the
+  PHI permission, and is recorded in the audit log as \code{local:<user>}. Whoever can run it
+  under the catalog's account can read the database directly anyway.
+\end{itemize}
+
+\section{Privacy Mode}
+\label{sec:users-privacy-mode}
+
+The catalog keeps every identifier as imported, and the server decides, at the moment of
+sending, what leaves. In Privacy Mode, no identifier reaches the browser: the page never receives
+what it must not show, and it does no masking of its own. Who is in Privacy Mode is summarized in
+\cref{tab:protecting-who}, and what the privacy gate replaces, moves and withholds is explained in
+\cref{chap:protecting}.
+
+The \ui{Privacy Mode} switch in the page's header sends \code{POST privacy}, which is audited
+(\code{privacy\_on}, \code{privacy\_off}). The choice is kept by the server for the session,
+never in the browser: a new sign-in starts in the user's default mode
+(\cref{sec:sign-in-password,sec:sign-in-proxy}). The page then reloads, so that nothing
+identified stays on the screen. A user without the permission who asks
+to leave Privacy Mode is refused (HTTP 403). A session in Privacy Mode is answered as if its user
+had no PHI permission, and its answers pass the privacy gate.
+
+\subsection{Privacy Mode's settings}
+\label{sec:users-privacy-settings}
+
+\ui{Admin} $\rightarrow$ \ui{Privacy Mode} chooses what Privacy Mode withholds and how far it
+moves dates (\cref{tab:users-privacy-fields}). The defaults follow HIPAA's Safe Harbor list where
+the catalog holds the data, except the text of notes and reports, which is shown with a warning.
+Every change is audited (\code{deid\_settings}). Only administrators may read these settings
+(\code{GET deid}), the date offset among them; other users learn from \code{GET config} what is
+withheld, never the offset.
+
+\begin{xltabular}{\linewidth}{@{}P{3.2cm}L P{1.9cm}@{}}
+\caption{What Privacy Mode withholds: the choices of \ui{Admin} $\rightarrow$ \ui{Privacy Mode}.}
+\label{tab:users-privacy-fields}\\
+\toprule
+\tabhead Choice & \tabhead Covers & \tabhead Default \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Choice & \tabhead Covers & \tabhead Default \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{names} & Patients' names & Withheld \\
+\code{birth\_date} & Dates of birth & Withheld \\
+\code{dates} & Real dates and times, moved back by the offset & Moved \\
+\code{age\_over\_89} & Ages above 89, shown as \code{90+} & Withheld \\
+\code{mrn} & Medical record numbers & Withheld \\
+\code{account\_numbers} & Account and encounter numbers (CSN) & Withheld \\
+\code{notes} & The text of notes and reports (\ui{The text of notes and reports}), and the
+  annotations of EDF+ recordings in VitalStream. When it is withheld, notes read
+  \code{[Withheld]} and annotations \code{[Annotation]}. Otherwise the text is shown with the
+  patient's own names and date of birth replaced, and notes are marked with a warning, because
+  free text may still name the patient or others & Shown, marked \\
+\end{xltabular}
+
+Some protections do not depend on these choices and always apply: imported patient and encounter
+IDs become pseudonyms, file names become tokens, staff names become \code{[Staff Name]},
+unrecognized columns are withheld, and files that the gate cannot de-identify are refused
+(\cref{sec:protecting-settings}).
+
+\paragraph{Dates.} Every date and time moves back by \textbf{the catalog's offset}, written in
+years, months, days and hours (each 0 or more) and counted on the calendar from 2000-01-01; the
+default is 36\,570 days, about 100 years. Each patient's dates also move back by \textbf{the
+patient's own days}, a whole number from 0 to \code{spread\_days} (default 365, at least 30, at
+most 3650), drawn at random once, when the patient's pseudonym is drawn, and kept with it. A
+\code{spread\_days} under 30 saved before that minimum is kept, since raising it moves every
+patient's dates, and \cmd{medorama serve} warns about it at start. The intervals between one patient's events are therefore kept exactly
+(\cref{sec:protecting-dates}).
+
+\paragraph{Dates and times on the page.} \ui{Admin} $\rightarrow$ \ui{Dates and times} chooses how
+every page writes dates and times: \code{2024-01-31} (the default), \code{01/31/2024},
+\code{31/01/2024} or \code{31.01.2024}, with a 24-hour (the default) or 12-hour clock. Exports and
+the API keep ISO 8601. Every change is audited (\code{display\_changed}).
+
+\begin{note}
+Record the offset and the spread under your governance, and do not disclose the offset. Anyone
+who learns the real date of one of a patient's events can re-date every event of that patient,
+and every other patient's to within \code{spread\_days}. Date shifting is pseudonymization, not
+anonymization (\cref{sec:protecting-limits}).
+\end{note}
+
+\section{The audit log}
+\label{sec:users-privacy-audit}
+
+The audit log is append-only and readable by administrators (the \ui{Admin} tab,
+\cmd{medorama audit}, \code{GET audit}). Each entry records the time, the user, the event, its
+target and a detail (\cref{tab:users-privacy-events}). In Privacy Mode, the audit page shows no
+target or detail, because a search's text may name a patient. Medorama never deletes an entry.
+An entry is never lost when the database cannot take it at once (busy beyond its wait, or
+failing): it is kept, in order, and written before the next entry or by the next seal; with
+\code{audit\_export} set it is appended to that file at once (a line with
+\code{"pending": true}), and the server's output says so.
+
+\begin{xltabular}{\linewidth}{@{}P{3.0cm}L@{}}
+\caption{The events of the audit log.}
+\label{tab:users-privacy-events}\\
+\toprule
+\tabhead Area & \tabhead Events \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Area & \tabhead Events \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Sign-in & \code{login} (detail \code{proxy} with proxy sign-in, one per visit), \code{login\_failed}, \code{password\_changed},
+  \code{signed\_out\_everywhere} (a user's own \ui{Sign out everywhere}) \\
+Users and settings & \code{user\_added}, \code{user\_changed} (an administrator's \ui{Sign out} of
+  another user too, written in its detail), \code{user\_deleted}, \code{deid\_settings},
+  \code{display\_changed}, \code{init}; on the command line, \code{addon\_install}
+  and \code{addon\_remove} \\
+Privacy Mode & \code{privacy\_on}, \code{privacy\_off} \\
+Identifiers & \code{phi\_search} (searches of identifiers and of notes' text),
+  \code{privacy\_search} (searches, filters and cohort criteria made in Privacy Mode, with their
+  text), \code{phi\_view},
+  \code{patient\_view}, \code{phi\_export} (an export by a user with the PHI permission outside
+  Privacy Mode) \\
+Data & \code{import\_table}, \code{import\_recordings}, \code{cancel\_import},
+  \code{remove\_import}, \code{remove\_encounter}, \code{remove\_recording},
+  \code{remove\_matching}, \code{merge\_patients}, \code{distinct\_patients},
+  \code{move\_encounter}, \code{link\_decision}, \code{apply\_held\_row},
+  \code{dismiss\_held\_row}, \code{view\_database}, \code{export\_database}, \code{view} (a
+  recording opened), \code{demo\_add}, \code{demo\_remove} \\
+Connected databases & \code{connect}, \code{disconnect}, \code{link} (persons linked, held,
+  invalid), \code{copy\_database} \\
+Cohorts & \code{cohort\_create}, \code{cohort\_change}, \code{cohort\_refresh},
+  \code{cohort\_delete} (each with what changed, patients by ID), \code{export} (a cohort's
+  members' data) \\
+Work & \code{run}, \code{check} \\
+\end{xltabular}
+
+\subsection{Seals}
+\label{sec:users-privacy-seals}
+
+The log is tamper-evident, as follows.
+\begin{itemize}
+\item \textbf{Seals.} Every minute, the server seals the entries written since the last seal. A
+  seal is the SHA-256 chain of those entries, in order, starting from the previous seal's hash,
+  and each entry records the seal that covers it. Entries committed late (in a long transaction) go
+  into the next seal.
+\item \textbf{Verification.} \cmd{medorama audit -{}-verify} (or \code{GET audit/verify}, for
+  administrators) computes every chain again. An entry changed, deleted or added to a sealed batch, or a
+  seal changed or deleted, shows as the first seal that no longer holds, and the command fails.
+  Entries and seals are numbered by the database without reuse, so verification also counts
+  what it numbered against what is left: the last seal deleted with its entries, or entries
+  deleted before they were sealed, show as missing.
+  \cmd{medorama audit -{}-seal} seals now, and \cmd{medorama audit -{}-seal -{}-verify} seals,
+  then checks every seal, the new one too.
+\item \textbf{Out of reach.} Whoever controls the database could rewrite entries and seals
+  together. With \code{audit\_export} set, each seal and its entries are also appended to that
+  file (JSON lines, readable by its owner only, synced to disk): put it on storage the database's
+  administrators cannot change (a write-once volume, a log collector). Verification compares the
+  database's seals with it (each exported seal must be in the database, with the same hash): the
+  end of the log is protected by the export, up to its last seal; entries written since are
+  protected by the database's numbering only.
+\end{itemize}
+\begin{lstlisting}[style=shell]
+medorama audit --limit 20          # the latest entries
+medorama audit --verify            # whether every seal holds
+\end{lstlisting}

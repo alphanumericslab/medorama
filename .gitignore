@@ -1,0 +1,111 @@
+# sample_data/ (Medorama) and viewers/vitalstream/sample_data/ (VitalStream) are local storage
+# for data and for every result the programs write (.../outputs/...). Nothing in them is ever
+# committed (see their README.md).
+sample_data/*
+!sample_data/README.md
+viewers/vitalstream/sample_data/*
+!viewers/vitalstream/sample_data/README.md
+
+# Recordings and data files (WFDB records and annotations, EDF and BDF files, signal arrays,
+# DICOM files, tables, databases and their journals) are committed only as synthetic test data
+# (viewers/vitalstream/testdata/, Medorama's fixtures and fuzzing seeds, the ECG viewer's test
+# fixtures) and the viewers' synthetic examples (viewers/ecg/examples/, viewers/pacs/examples/,
+# from tools/make-viewer-examples.py).  tools/git-hooks/check-files enforces the same.
+*.[Ss][Tt][Pp]
+*.dat
+*.hea
+*.atr
+*.mrk
+*.tim
+*.vit
+*.alr
+*.ann
+*.edf
+*.bdf
+*.mat
+*.npy
+*.npz
+*.pkl
+*.parquet
+*.h5
+*.hdf5
+*.dcm
+*.csv
+*.tsv
+*.xlsx
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.dump
+!viewers/vitalstream/testdata/**
+!viewers/ecg/examples/**
+!viewers/ecg/tests/fixtures/**
+!viewers/pacs/examples/**
+!medorama/tests/fixtures/**
+!medorama/fuzz/seeds/**
+
+# Local settings (start from the examples next to them)
+viewers/vitalstream/vitalstream.toml
+
+# Python
+.venv/
+.venv.*/
+venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Build outputs
+/target/
+medorama/fuzz/target/
+medorama/fuzz/corpus/
+medorama/fuzz/artifacts/
+viewers/vitalstream/cpp/build/
+# the Python viewer's build options, written by setup.py (an editable install with VITALSTREAM_ROOT
+# or VITALSTREAM_PASSWORD set)
+viewers/vitalstream/python/vitalstream/vitalstream_py/_build.py
+# downloaded dependency archives (tools/fetch-cpp-deps.sh), for offline C++ builds
+viewers/vitalstream/cpp/deps/*
+!viewers/vitalstream/cpp/deps/README.md
+# a vendored copy of the Rust dependencies for offline builds (docs/building.md)
+/vendor/
+/.cargo/
+dist/
+build/
+# compiled libraries and Python extension modules
+*.so
+*.pyd
+*.dylib
+
+.DS_Store
+
+# the website, when built locally (jekyll build)
+_site/
+.jekyll-cache/
+.jekyll-metadata
+.sass-cache/
+# the user's manual built without latexmk (pdflatex leaves these beside the sources)
+docs/user-manual/*.aux
+docs/user-manual/*.log
+docs/user-manual/*.out
+docs/user-manual/*.toc
+docs/user-manual/*.lof
+docs/user-manual/*.fls
+docs/user-manual/*.fdb_latexmk
+docs/user-manual/*.synctex.gz
+viewers/ecg/python/muse/muse_reader_py/_build.py
+viewers/pacs/python/dicom/dicom_index_py/_build.py
+# the licence, copied beside each Python package by its setup.py at build time (license-files)
+viewers/vitalstream/python/vitalstream/LICENSE
+viewers/vitalstream/python/vitalstream/COMMERCIAL.md
+viewers/ecg/python/muse/LICENSE
+viewers/ecg/python/muse/COMMERCIAL.md
+viewers/pacs/python/dicom/LICENSE
+viewers/pacs/python/dicom/COMMERCIAL.md

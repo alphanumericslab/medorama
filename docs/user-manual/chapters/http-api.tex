@@ -1,0 +1,1393 @@
+% Medorama's HTTP API, version 1: the conventions (sign-in, the change header, answers, errors,
+% Privacy Mode) and one reference entry per route. The authority is medorama/src/server.rs (the
+% router at its end) and the handlers it calls; medorama/openapi.yaml describes the same routes
+% for tools, and a test keeps it equal to the router.
+\chapter{The HTTP API}
+\label{chap:http-api}
+
+\md{}'s page and every other client talk to the server through one JSON API, version 1, under
+\file{/api/v1/}. This chapter is for integrators who write scripts or tools against that API. It
+describes how to sign in, the rules that apply to every request, and every route, one entry per
+route with its parameters, its answer and its errors. The same routes are described for tools in
+\file{medorama/openapi.yaml} (OpenAPI 3.1); a test of the repository fails when a route is added,
+removed or changed on one side only.
+
+In the entries, a path is written relative to \file{/api/v1/}, as in \code{GET patients/\{id\}};
+the signature gives the full path. \code{\{id\}} is always a whole number, the row of the patient,
+encounter, recording, cohort, database or user in the catalog, unless an entry says otherwise.
+The parameters of a \code{GET} or \code{DELETE} request are query parameters. Those of
+\code{POST}, \code{PUT} and \code{PATCH} requests are the fields of a JSON body, unless the entry
+says that the body is a file.
+
+The examples use \cmd{curl} with a cookie file (\file{jar}) against a server on
+\code{http://localhost:8090}, the default port, and the synthetic demo data.
+
+\section{Conventions}
+\label{sec:http-api-conventions}
+
+\subsection{Signing in and sessions}
+\label{sec:http-api-signin}
+
+Every request needs a signed-in user, except \code{GET sign-in} and \code{POST login}. How a
+request is signed in depends on the setting \code{sign\_in} (\cref{chap:sign-in}), which
+\code{GET sign-in} reports.
+
+\paragraph{Password sign-in} (\code{sign\_in = "password"}, the default). \code{POST login}
+checks the user name and the password, and sets the session cookie. The cookie is named
+\code{medorama\_<port>} after the server's port (\code{medorama\_8090} by default) and has the
+attributes \code{HttpOnly}, \code{SameSite=Strict} and \code{Path=/}, and \code{Secure} when the
+setting \code{secure\_cookies} is on (\cref{chap:settings-reference}). It holds a random token of
+64 hexadecimal digits; the catalog keeps only the token's hash.
+
+A session ends in any of these cases:
+\begin{itemize}
+\item after \code{session\_hours} hours (12 by default), the cookie's lifetime;
+\item when it has not been used for \code{session\_idle\_minutes} minutes (60 by default; with
+  0, a session never ends for this reason). The requests that the page makes by itself,
+  \code{GET version} and any request with the header \code{X-Background: 1}, do not count as
+  use, so a page left open does not keep its session alive;
+\item at \code{POST logout}, when an administrator ends the user's sessions
+  (\code{PATCH users/\{id\}} with \code{sign\_out}), or when the user is disabled.
+\end{itemize}
+
+After five failed sign-ins with one user name, that name is locked for 60 seconds, and further
+attempts are answered \code{429}. Each failed attempt is answered after a pause of one second.
+Sign-ins, failed sign-ins and sign-outs everywhere are written to the audit log
+(\cref{chap:users-privacy}).
+
+\paragraph{Proxy sign-in} (\code{sign\_in = "proxy"}). An authenticating reverse proxy in front
+of \md{} signs the user in and names the user's account in a header (\code{proxy\_user\_header},
+by default \code{X-Remote-User}). \md{} believes the header only on connections from
+\code{proxy\_addresses}, and keeps no session of its own: every request is signed in by the
+header, and the proxy's session is the user's session.
+\begin{itemize}
+\item A request from an address in \code{proxy\_addresses} whose header names an enabled account
+  (compared ignoring case) is signed in as that account.
+\item A header that names no account, a disabled account, or two accounts that differ only in
+  case is answered \code{403}, with the reason in \code{detail}: \code{your institution's sign-in
+  names you NAME, and Medorama has no account of that name: ask an administrator}. The page
+  displays this reason.
+\item A request without the header, with an empty header, or from any other address is not signed
+  in, and is answered \code{401}.
+\item \code{POST login} and \code{POST me/password} are refused with \code{400}, and
+  \code{POST logout} answers the proxy's sign-out address (\code{proxy\_logout\_url}).
+\item The audit log receives one \code{login} entry per visit (detail \code{proxy}), and one
+  \code{login\_failed} entry per visit for a name without an account.
+\end{itemize}
+
+In both modes, a request without a signed-in user is answered \code{401} with
+\code{\{"detail": "sign in required"\}}.
+
+\subsection{The change header}
+\label{sec:http-api-header}
+
+Every request under \file{/api/} other than \code{GET} and \code{HEAD}, \code{POST login}
+included, must carry the header \code{X-Medorama: 1}. Without it, the answer is \code{403}
+\code{\{"detail": "missing X-Medorama header"\}}. The page sends this header. A form or a link on
+another site cannot add it, so no other site can make a signed-in browser change anything; this
+protects against cross-site request forgery in both sign-in modes. A JSON body is sent with
+\code{Content-Type: application/json}.
+
+\subsection{Answers}
+\label{sec:http-api-answers}
+
+Answers are JSON (\code{application/json}), except the exports (CSV, JSON or XLSX files sent as
+attachments) and the patients' files. Every answer under \file{/api/} carries
+\code{Cache-Control: no-store}, except the patients' files, which carry
+\code{Cache-Control: private, max-age=300} and \code{Vary: Cookie} (the same address answers
+differently in Privacy Mode). Times are Unix seconds (UTC) unless an entry says otherwise.
+
+Every answer also carries the security headers \code{X-Content-Type-Options: nosniff} and
+\code{Referrer-Policy: no-referrer}, and a content security policy: the page and the API may not
+be framed by another site (\code{frame-ancestors 'none'}, \code{X-Frame-Options: DENY}); the
+patients' files, the viewers' pages under \file{/viewers/} and the waveform viewer under
+\file{/viewer/} may be framed by \md{}'s own page only (\code{frame-ancestors 'self'},
+\code{X-Frame-Options: SAMEORIGIN}). An SVG or XML file is sent with a sandboxing policy, so
+that a script it holds cannot run with the rights of the catalog.
+
+\subsection{Errors}
+\label{sec:http-api-errors}
+
+An error found by \md{} is a JSON object \code{\{"detail": "..."\}}, the message written for a
+person, with one of the status codes of \cref{tab:http-api-status}.
+
+\begin{xltabular}{\linewidth}{@{}P{1.4cm}L@{}}
+\caption{The status codes of the API.}
+\label{tab:http-api-status}\\
+\toprule
+{\tabhead Status} & {\tabhead Meaning} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Status} & {\tabhead Meaning} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{200} & Done; the answer is the result. \\
+\code{202} & An import started in the background (\code{background}): the answer is its task
+  (\code{GET import-tasks/\{id\}}). \\
+\code{400} & The request is wrong: a missing or invalid value, a rule of the catalog broken (for
+  example the last enabled admin disabled), or an action the user's role does not allow where
+  the check is made by the catalog rather than by the route (the message says which). \\
+\code{401} & No valid session (\code{sign in required}), or a wrong user name or password at
+  \code{POST login}. \\
+\code{403} & Not allowed: the role (\code{only admins may do this}), the PHI permission, the
+  change header missing, or an answer the privacy gate does not send in Privacy Mode. \\
+\code{404} & No such patient, encounter, recording, cohort, file, task or route
+  (\code{not found}). \\
+\code{413} & The body is larger than the route accepts: 1\,GiB for the uploads
+  (\code{tables/inspect}, \code{tables}, \code{tables/files}), 2\,MB for any other request. \\
+\code{429} & Too many failed sign-ins with this user name: try again in 60 seconds. \\
+\code{500} & A fault of the server; the message is also written on its standard error. \\
+\code{503} & The catalog is busy saving an import (SQLite has one writer): the answer carries
+  \code{Retry-After: 5}, and its \code{detail} says to try again when the import is done.
+  \code{POST viewer/start} also answers \code{503} when the viewer cannot be started. \\
+\end{xltabular}
+
+A request whose body or parameters cannot be read at all is refused before it reaches \md{}'s
+code, with the status of the web framework and a plain-text message instead of a JSON
+\code{detail}: \code{400} (a body that is not JSON, a path parameter that is not a number),
+\code{415} (a JSON body without \code{Content-Type: application/json}) or \code{422} (a field
+missing or of the wrong type). The removals (\code{POST encounters/remove},
+\code{POST encounters/remove-matching}, \code{POST recordings/remove},
+\code{POST recordings/remove-matching}) also refuse with \code{422} a field they do not know, so
+that a misspelled field is never ignored.
+
+\subsection{Roles, the PHI permission and Privacy Mode}
+\label{sec:http-api-roles}
+
+Each entry says who may call the route: \emph{any} signed-in user, an \emph{analyst} (the
+analyst or admin role), or an \emph{admin}. Some routes also need the PHI permission. Users,
+roles and the PHI permission are described in \cref{chap:users-privacy}. Identifiers (names,
+dates of birth, MRNs, account numbers) are sent only to users who have the PHI permission and
+whose session is out of Privacy Mode.
+
+Privacy Mode is a property of the session. It is always on for users without the PHI
+permission. For the others, it is what \code{POST privacy} last chose, kept by the server for
+the session (a new sign-in starts in the user's default mode); by default it is on, except for
+administrators with the PHI permission, who start out of it. In Privacy Mode, every answer passes
+the privacy gate (\cref{chap:protecting}):
+\begin{itemize}
+\item every JSON answer is rewritten on its way out: identifiers become placeholders
+  (\code{[Patient Name]}, \ldots) and pseudonyms (\code{MO-...}), dates move back by the
+  offset of the settings (on a patient's own routes, \code{patients/\{id\}/...}, by that
+  patient's own offset), ages above 89 become 90+. The answers about the session itself
+  (\code{login}, \code{logout}, \code{me}, \code{privacy}, \code{sign-in}) are left as they
+  are;
+\item the text of notes and reports is sent by default, with the patient's own names and date of
+  birth replaced, and marked with a warning (it may still name the patient or others); it is
+  \code{[Withheld]} only when the admin withholds \emph{The text of notes and reports}
+  (\code{notes} in \code{PUT admin/deid});
+\item a file is sent only as the gate allows (\cref{sec:http-api-files});
+\item any other answer that carries data and that the gate has not cleared is refused, with
+  \code{403} \code{\{"detail": "this answer is not available in Privacy Mode"\}}, so that a
+  route that forgets the gate cannot leak.
+\end{itemize}
+The exports (\code{databases/\{id\}/export}, \code{cohorts/\{id\}/export}) pass the gate in
+Privacy Mode and also when asked with \code{privacy=1}.
+
+\subsection{The patients' files}
+\label{sec:http-api-files}
+
+Out of Privacy Mode, a file is sent as it is. In Privacy Mode, the privacy gate decides by the
+file's kind (\cref{sec:protecting-files}):
+\begin{itemize}
+\item a WFDB header (\file{.hea}): de-identified, its record and file names replaced by tokens;
+\item a WFDB signal file (\file{.dat}): as it is (it holds only samples);
+\item a GE MUSE XML ECG (\file{.xml} with \code{<RestingECG>}): de-identified; any other XML
+  file is refused (\code{403});
+\item a DICOM file: its header rewritten (the pseudonym, the dates moved, the UIDs replaced),
+  its pixels as they are;
+\item an EDF, EDF+, BDF or BDF+ file (\file{.edf}, \file{.bdf}): its header de-identified
+  (the patient field \code{X X X X}; in EDF+ and BDF+, the recording field
+  \code{Startdate <moved date> X X X}, in plain EDF and BDF blank; the start date and time moved
+  back), the texts of EDF+ annotations removed, the samples as they are. A file with
+  annotation signals is rewritten in memory, so such a file larger than 64\,MB is refused
+  (\code{403}; \cref{sec:protecting-edf});
+\item a picture, a video or a PDF (\file{.png}, \file{.jpg}, \file{.jpeg}, \file{.gif},
+  \file{.webp}, \file{.bmp}, \file{.svg}, \file{.mp4}, \file{.m4v}, \file{.webm}, \file{.mov},
+  \file{.ogv}, \file{.pdf}): as it is;
+\item anything else, JSON ECGs, text files and signal files with an extension other than
+  \file{.dat} among them: refused (\code{403}).
+\end{itemize}
+A file whose content the gate cannot inspect (a picture, a video, a PDF, DICOM pixels) carries
+the header \code{x-medorama-may-contain-phi: 1}, on which the page shows its warning. In Privacy
+Mode the files of an attachment are named by tokens, \code{mo-f} followed by the file's number
+in four digits and its extension (\code{mo-f0003.dcm}), never by their names.
+
+\subsection{Pages and the viewers}
+\label{sec:http-api-pages}
+
+Besides the API, the server answers:
+\begin{itemize}
+\item \code{GET /}: the page; \code{GET /static/...}: its scripts and styles;
+\item \code{GET /viewers/ecg/...} and \code{GET /viewers/pacs/...}: the pages of the ECG and
+  PACS viewers (\cref{chap:viewer-api}), which hold no data: they read the patients' files
+  through \code{patients/\{id\}/file/...} with the user's session;
+\item \file{/viewer/}: the VitalStream viewer, behind the catalog's sign-in and its gateway,
+  which passes only the requests of the viewer API that the page needs, each with its rule
+  (\cref{chap:viewer-api}). \code{/viewer} redirects to \code{/viewer/}; a page request without
+  a session redirects to the catalog's page. The gateway answers \code{413} to a request body
+  over 1\,MiB, \code{415} to a \code{POST} not sent as JSON, and \code{403} to a \code{POST}
+  without \code{X-Medorama: 1}.
+\end{itemize}
+Any other path under \file{/api/v1/} is answered \code{404}.
+
+\section{The session and the settings}
+\label{sec:http-api-session}
+
+\apientry{GET sign-in}{How users sign in}
+\begin{lstlisting}[style=signature]
+GET /api/v1/sign-in
+\end{lstlisting}
+Tells the page which sign-in method the catalog uses (\cref{chap:sign-in}), so that it shows the
+password form or explains that the institution's sign-in names the user. It needs no session and
+passes the privacy layer unchanged.
+\returns{\code{method}: \code{password} or \code{proxy}; \code{logout\_url}: the proxy's sign-out
+address (\code{proxy\_logout\_url}), empty in password mode or when none is set.}
+\begin{lstlisting}[style=shell]
+curl -s http://localhost:8090/api/v1/sign-in
+\end{lstlisting}
+\begin{lstlisting}[language=JSON]
+{"method": "proxy", "logout_url": "/oauth2/sign_out"}
+\end{lstlisting}
+
+\apientry{POST login}{Sign in}
+\begin{lstlisting}[style=signature]
+POST /api/v1/login   {"username": NAME, "password": PASSWORD}
+\end{lstlisting}
+Checks the user name and the password of an enabled user, starts a session and sets its cookie
+(\cref{sec:http-api-signin}). It needs no session, but it needs the change header. Password
+sign-in only. Audited (\code{login}, or \code{login\_failed} with the name tried).
+\begin{params}
+\item[username] The user name.
+\item[password] The password.
+\end{params}
+\returns{\code{\{"user": USER\}}: the user (\code{id}, \code{username}, \code{display\_name},
+\code{role}, \code{phi}, \code{disabled}, \code{phi\_allowed}, \code{privacy},
+\code{privacy\_notes}), and the header \code{Set-Cookie}.}
+\raises{\code{400} proxy sign-in (\code{this catalog signs users in through the institution's
+sign-in, not with a password}); \code{401} a wrong user name or password; \code{403} the change
+header missing; \code{429} too many failed attempts.}
+\begin{lstlisting}[style=shell]
+curl -s -c jar -H 'X-Medorama: 1' -H 'Content-Type: application/json' \
+  -d '{"username": "admin", "password": "correct-horse-battery"}' \
+  http://localhost:8090/api/v1/login
+\end{lstlisting}
+
+\apientry{POST logout}{Sign out}
+\begin{lstlisting}[style=signature]
+POST /api/v1/logout   [{"everywhere": BOOL}]
+\end{lstlisting}
+Ends this session and removes the session cookie and the Privacy Mode cookie, so that the next
+sign-in starts in the user's default mode. The body is optional. The route needs no valid
+session: without one, it only removes the cookies. With proxy sign-in, \md{} keeps no session:
+the route only forgets the Privacy Mode choice, and the answer names the proxy's sign-out, to
+which the page then goes.
+\begin{params}
+\item[everywhere] \code{true}: end every session of the user, on every device (password sign-in
+  only). Audited (\code{signed\_out\_everywhere}, with the number of sessions). Default
+  \code{false}.
+\end{params}
+\returns{\code{\{"logout\_url": URL\}}: empty with password sign-in; with proxy sign-in, the
+setting \code{proxy\_logout\_url}.}
+
+\apientry{GET me}{Who is signed in}
+\begin{lstlisting}[style=signature]
+GET /api/v1/me
+\end{lstlisting}
+The session's user, in the session's mode: in Privacy Mode \code{phi} is \code{false} and
+\code{privacy} \code{true}; \code{phi\_allowed} says whether the user may leave Privacy Mode.
+Any user.
+\returns{\code{\{"user": USER\}}, as for \code{POST login}.}
+\begin{lstlisting}[language=JSON]
+{"user": {"id": 2, "username": "reader1", "display_name": "Reader One", "role": "viewer",
+          "phi": false, "disabled": false, "phi_allowed": false, "privacy": true,
+          "privacy_notes": false}}
+\end{lstlisting}
+
+\apientry{POST me/password}{Change one's password}
+\begin{lstlisting}[style=signature]
+POST /api/v1/me/password   {"old": PASSWORD, "new": PASSWORD}
+\end{lstlisting}
+Changes the signed-in user's password. Any user, with password sign-in only. Audited
+(\code{password\_changed}).
+\begin{params}
+\item[old] The current password.
+\item[new] The new password: at least 10 characters.
+\end{params}
+\returns{\code{\{\}}.}
+\raises{\code{400} the new password is too short, or proxy sign-in (\code{this catalog signs
+users in through the institution's sign-in: Medorama's passwords are not used}); \code{403} the
+current password is wrong.}
+
+\apientry{POST privacy}{Switch Privacy Mode}
+\begin{lstlisting}[style=signature]
+POST /api/v1/privacy   {"on": BOOL}
+\end{lstlisting}
+Switches the session's Privacy Mode. The choice is kept by the server for the session, never
+in the browser: in password mode until the session ends, in proxy mode for the visit (at most
+\code{session\_hours}); a new sign-in starts in the user's default mode. Any user may switch it
+on; switching it off needs the PHI permission. Audited (\code{privacy\_on},
+\code{privacy\_off}).
+\begin{params}
+\item[on] \code{true}: Privacy Mode on; \code{false}: off.
+\end{params}
+\returns{\code{\{"privacy": BOOL\}}.}
+\raises{\code{403} switching it off without the PHI permission.}
+
+\apientry{GET config}{The server's settings for the page}
+\begin{lstlisting}[style=signature]
+GET /api/v1/config
+\end{lstlisting}
+What the page needs to know about the server. Any user.
+\returns{\code{version} (of \md{}), \code{timezone}, \code{viewer\_url} (a viewer running
+elsewhere, opened in a new browser tab; empty when \md{} runs its own), \code{auto\_index}
+(whether new and changed recordings are indexed while the server runs), \code{workers} (the
+number of job workers), \code{user} (as \code{GET me}), \code{sign\_in} (\code{password} or
+\code{proxy}; the page hides \ui{Change password}, \ui{Sign out everywhere} and the password
+fields of \ui{Admin} $\rightarrow$ \ui{Users} with \code{proxy}), \code{results\_dir} and \code{index\_dir} (the
+folders, for admins only; \code{null} for the others), \code{viewer} (as \code{GET viewer}),
+\code{deid} (as \code{GET deid}; for users who are not admins, without \code{offset},
+\code{offset\_seconds} and \code{spread\_days}) and \code{display} (the date and time formats, as
+\code{PUT admin/display} answers).}
+
+\apientry{GET deid}{What Privacy Mode withholds}
+\begin{lstlisting}[style=signature]
+GET /api/v1/deid
+\end{lstlisting}
+The privacy gate's settings: what Privacy Mode withholds and how it moves dates. Admins: with
+the offset, any date shown would give the real one, so other users learn what is withheld from
+\code{GET config}, without the offset.
+\returns{\code{fields} (the keys of the fields withheld), \code{offset}
+(\code{\{years, months, days, hours\}}), \code{offset\_seconds}, \code{spread\_days}, and
+\code{choices}: every field that can be withheld, each with its \code{key}, \code{label},
+\code{hipaa} and \code{default}. The keys are \code{names}, \code{birth\_date}, \code{dates},
+\code{age\_over\_89}, \code{mrn}, \code{account\_numbers} and \code{notes}; all but
+\code{notes} are withheld by default.}
+\begin{lstlisting}[language=JSON]
+{"fields": ["account_numbers", "age_over_89", "birth_date", "dates", "mrn", "names"],
+ "offset": {"years": 0, "months": 0, "days": 36570, "hours": 0},
+ "offset_seconds": 3159648000, "spread_days": 365, "choices": [...]}
+\end{lstlisting}
+
+\apientry{PUT admin/deid}{Change what Privacy Mode withholds}
+\begin{lstlisting}[style=signature]
+PUT /api/v1/admin/deid   {"fields": [KEY...], "offset": {...}, "spread_days": N}
+\end{lstlisting}
+Saves the privacy gate's settings (\cref{chap:users-privacy}). Admins. Audited
+(\code{deid\_settings}). Unknown field keys are dropped; a field left out of the body takes
+its default.
+\begin{params}
+\item[fields] The keys of the fields to withhold (as \code{GET deid} lists them).
+\item[offset] How far every date moves back: \code{years}, \code{months}, \code{days},
+  \code{hours}, each 0 or more (at most 1000 years, 12\,000 months, 400\,000 days,
+  10\,000\,000 hours). Default 36\,570 days.
+\item[spread\_days] Each patient's own extra days, drawn once per patient, from 0 to this
+  (30 to 3650; default 365).
+\end{params}
+\returns{the new settings, as \code{GET deid}.}
+\raises{\code{400} a value out of range; \code{403} a user who is not an admin.}
+
+\apientry{PUT admin/display}{How dates and times are written}
+\begin{lstlisting}[style=signature]
+PUT /api/v1/admin/display   {"date": FORMAT, "clock": CLOCK}
+\end{lstlisting}
+How the page writes dates and times, for every user. Admins. Audited (\code{display\_changed}).
+\begin{params}
+\item[date] \code{ymd} (2024-01-31), \code{mdy} (01/31/2024), \code{dmy} (31/01/2024) or
+  \code{dmy\_dot} (31.01.2024).
+\item[clock] \code{24h} (14:05) or \code{12h} (2:05 PM).
+\end{params}
+\returns{\code{\{date, clock, dates, clocks\}}: the setting and the choices (each with its
+\code{key}, \code{example} and \code{label}).}
+\raises{\code{400} an unknown format; \code{403} a user who is not an admin.}
+
+\apientry{GET admin/addons}{The installed add-ons}
+\begin{lstlisting}[style=signature]
+GET /api/v1/admin/addons
+\end{lstlisting}
+The adapters installed in the adapter folder (\cref{chap:addons}). Installing is done on the
+server only, with \cmd{medorama addons install} (\cref{chap:cli}). Admins.
+\returns{\code{\{"dir": FOLDER, "items": [\{name, version, implementation, program,
+formats\}]\}}.}
+
+\apientry{GET version}{The data's version}
+\begin{lstlisting}[style=signature]
+GET /api/v1/version
+\end{lstlisting}
+A number that moves at every import, removal or change of databases, patients, encounters or
+recordings: open pages ask for it and redraw when it moves. Does not count as use of the
+session. Any user.
+\returns{\code{\{"data": N\}}.}
+
+\section{Patients}
+\label{sec:http-api-patients}
+
+\apientry{GET patients}{Find patients}
+\begin{lstlisting}[style=signature]
+GET /api/v1/patients?q=&has=&cohort=&mark=&limit=&offset=
+\end{lstlisting}
+The patients, latest encounter first. Any user; identifiers only as \cref{sec:http-api-roles}
+says.
+\begin{params}
+\item[q] The search text (\cref{chap:patients}).
+\item[has] Categories the patients must have, comma-separated (\code{icu,ecg}); \code{!icu}:
+  without that category.
+\item[cohort] Only the members of this cohort (one the user may see).
+\item[mark] Each item says whether the patient is in this cohort (\code{member}).
+\item[limit, offset] The page of the list: \code{limit} 1 to 1000 (default 100),
+  \code{offset} default 0.
+\end{params}
+\returns{\code{\{total, items, categories\}}: each item has \code{id}, \code{patient\_id},
+\code{pseudonym}, \code{sex}, \code{age}, \code{encounters}, \code{latest}, \code{latest\_where},
+\code{kinds}, \code{items}, \code{sources}, and \code{phi} (the identifiers) for users who see
+them; \code{categories} lists the categories present, each as \code{[key, label]}.}
+\raises{\code{404} a cohort the user may not see.}
+\begin{lstlisting}[style=shell]
+curl -s -b jar 'http://localhost:8090/api/v1/patients?has=icu&limit=20'
+\end{lstlisting}
+
+\apientry{GET patients/\{id\}}{A patient's summary}
+\begin{lstlisting}[style=signature]
+GET /api/v1/patients/{id}
+\end{lstlisting}
+A patient's summary: the identity (protected health information), the encounters with their
+bed stays, problems, medications and allergies; the stays found in the connected databases
+(\code{visits}) and the connected databases that did not answer (\code{unavailable}). Any user;
+audited (\code{patient\_view}) for a user who sees identifiers.
+In Privacy Mode, the patient's own names and date of birth are also replaced wherever a text
+of the answer names them.
+
+\apientry{GET patients/\{id\}/journey}{A patient's journey}
+\begin{lstlisting}[style=signature]
+GET /api/v1/patients/{id}/journey
+\end{lstlisting}
+The journey of \cref{chap:patients}: its columns, its cells of six hours (their items and the
+worst level among them), and its spans (stays, drugs, recordings). Any user.
+
+\apientry{GET patients/\{id\}/report}{A patient's report, or a search in it}
+\begin{lstlisting}[style=signature]
+GET /api/v1/patients/{id}/report?q=
+\end{lstlisting}
+The entries of the patient's report. With \code{q}, the search in it: counts per category,
+the words found highlighted, the fuzzy matches. Any user. It reads the patient's own items
+only, and in Privacy Mode their text as the session is shown it. A search by a user who sees
+identifiers is audited (\code{phi\_search}), and one in Privacy Mode too
+(\code{privacy\_search}).
+\begin{params}
+\item[q] The words to find (optional).
+\end{params}
+
+\apientry{GET patients/\{id\}/detail}{One entry's detail}
+\begin{lstlisting}[style=signature]
+GET /api/v1/patients/{id}/detail?key=KEY
+\end{lstlisting}
+The detail of one entry of the report: the rows of a panel, a text, an attachment, the ICU
+overview, the notes around it. Any user.
+\begin{params}
+\item[key] The entry's key, as the report gave it (in Privacy Mode, with its time moved back:
+  the server moves it forward again).
+\end{params}
+
+\apientry{GET patients/\{id\}/trends}{A patient's numeric series}
+\begin{lstlisting}[style=signature]
+GET /api/v1/patients/{id}/trends
+\end{lstlisting}
+Every numeric series of the patient (results, vital signs), for the trends. Any user.
+
+\apientry{GET patients/\{id\}/file/\{item\}}{An item's attached file}
+\begin{lstlisting}[style=signature]
+GET /api/v1/patients/{id}/file/{item}
+GET /api/v1/patients/{id}/file/{item}/
+\end{lstlisting}
+The file attached to an item of the patient (\code{item} is the item's number), such as a
+picture, a PDF document, a text file, an ECG (GE MUSE XML, DICOM, EDF) or a WFDB header. For an
+attached folder, such as a DICOM series, the answer lists its files instead. In Privacy Mode, the
+file passes the gate (\cref{sec:http-api-files}). Any user.
+\returns{the file, or for a folder \code{\{"files": [NAME...]\}}; in Privacy Mode the folder
+lists only the files the gate would send, by their tokens (\code{mo-f0003.dcm}).}
+\raises{\code{404} no such item or file; \code{403} a file the gate does not send in Privacy
+Mode.}
+
+\apientry{GET patients/\{id\}/file/\{item\}/\{name\}}{A file of an attachment}
+\begin{lstlisting}[style=signature]
+GET /api/v1/patients/{id}/file/{item}/{name}
+\end{lstlisting}
+A file of an item's attachment by its name: the attached file itself, the signal files that
+its WFDB header names, or a file of an attached folder; nothing else of the folder in which the
+attachment lies. In Privacy Mode, by its token only. Any user.
+\raises{\code{404} a name that is not one of the attachment's files (or not its token in
+Privacy Mode); \code{403} as above.}
+\begin{lstlisting}[style=shell]
+curl -s -b jar -o mo-f0000.hea 'http://localhost:8090/api/v1/patients/3/file/41/mo-f0000.hea'
+\end{lstlisting}
+
+\section{Encounters and recordings}
+\label{sec:http-api-encounters}
+
+\apientry{GET encounters}{Find encounters}
+\begin{lstlisting}[style=signature]
+GET /api/v1/encounters?q=&unit=&from=&to=&status=&limit=&offset=
+\end{lstlisting}
+The encounters that match a search. Any user.
+\begin{params}
+\item[q] The search text: words and \code{field:value} terms (\cref{chap:patients}).
+\item[unit] Only stays in this unit.
+\item[from, to] Only stays that overlap \code{[from, to]} (Unix seconds).
+\item[status] The summary status of the encounter's recordings (\code{ready}, \code{new},
+  \ldots, or \code{none}: without recordings).
+\item[limit, offset] The page of the list.
+\end{params}
+\returns{\code{\{total, items\}}: each item with \code{id}, \code{patient},
+\code{encounter\_id}, \code{patient\_id}, \code{sex}, \code{admit\_time},
+\code{discharge\_time}, \code{admit\_unit}, \code{disposition}, \code{units},
+\code{recordings}, \code{status}, \code{status\_counts}, \code{sources}, and the identifiers for
+users who see them.}
+
+\apientry{GET encounters/\{id\}}{An encounter}
+\begin{lstlisting}[style=signature]
+GET /api/v1/encounters/{id}
+\end{lstlisting}
+An encounter with its bed stays, its recordings (their status, their link, their results: the
+newest job of each action other than \code{index} and \code{identify}, with its summary), the counts of its items and the patient's other
+encounters. Adds it to the user's history (\code{GET history}). Any user; audited
+(\code{phi\_view}) for a user who sees identifiers.
+\raises{\code{404} no such encounter.}
+
+\apientry{GET encounters/\{id\}/ehr}{An encounter's items}
+\begin{lstlisting}[style=signature]
+GET /api/v1/encounters/{id}/ehr?domain=&patient_level=&limit=&offset=
+\end{lstlisting}
+The encounter's items in time order. Any user.
+\begin{params}
+\item[domain] Only the items of this domain (category).
+\item[patient\_level] \code{true}: the patient's items that belong to no encounter instead.
+\item[limit, offset] The page: \code{limit} 1 to 5000 (default 500), \code{offset} default 0.
+\end{params}
+\returns{\code{\{total, items\}}.}
+
+\apientry{POST encounters/remove}{Remove encounters}
+\begin{lstlisting}[style=signature]
+POST /api/v1/encounters/remove   {"ids": [ID...], "dry_run": BOOL}
+\end{lstlisting}
+Removes encounters with their bed stays and their items; the recordings stay (unlinked).
+Encounters hold no files or results, so there is nothing to purge. Admins. Audited
+(\code{remove\_encounter}, each encounter) unless a dry run.
+\begin{params}
+\item[ids] The encounters' numbers.
+\item[dry\_run] \code{true}: say what would be removed, and change nothing.
+\end{params}
+\returns{\code{\{removed, report\}}: the number of encounters removed and the report
+(\code{\{dry\_run, encounters, patients, bed\_stays, ehr\_items, ...\}}).}
+\raises{\code{422} any other field (\code{purge} among them).}
+
+\apientry{POST encounters/remove-matching}{Remove the encounters a search finds}
+\begin{lstlisting}[style=signature]
+POST /api/v1/encounters/remove-matching   {"search": {...}, "dry_run": BOOL}
+\end{lstlisting}
+Removes the encounters that a search finds, as \code{POST encounters/remove}. Admins. Audited
+(\code{remove\_matching}) unless a dry run.
+\begin{params}
+\item[search] The search, with the fields of \code{GET encounters} (\code{q}, \code{unit},
+  \code{from}, \code{to}, \code{status}).
+\item[dry\_run] \code{true}: say what would be removed, and change nothing.
+\end{params}
+\returns{the report, as in \code{POST encounters/remove}: \code{\{dry\_run, encounters,
+patients, bed\_stays, ehr\_items, ...\}}.}
+\raises{\code{422} any other field: the body takes \code{search} and \code{dry\_run} only, so that
+a field the route does not read (\code{q}, \code{unlinked}) cannot widen the removal to every
+encounter.}
+
+\apientry{GET recordings}{Find recordings}
+\begin{lstlisting}[style=signature]
+GET /api/v1/recordings?q=&unlinked=&limit=&offset=
+\end{lstlisting}
+The recordings in the catalog. Any user.
+\begin{params}
+\item[q] The search text.
+\item[unlinked] \code{true}: only the recordings linked to no encounter.
+\item[limit, offset] The page: \code{limit} 1 to 1000 (default 100), \code{offset} default 0.
+\end{params}
+\returns{\code{\{total, items\}}.}
+
+\apientry{GET recordings/\{id\}}{A recording}
+\begin{lstlisting}[style=signature]
+GET /api/v1/recordings/{id}
+\end{lstlisting}
+A recording, the encounters it is linked to and the results of the actions run on it. Any user.
+\returns{\code{\{recording, encounters, results\}}: each encounter with \code{id},
+\code{encounter\_id} and \code{method} (how it was linked).}
+\raises{\code{404} no such recording.}
+
+\apientry{POST recordings/remove}{Remove recordings}
+\begin{lstlisting}[style=signature]
+POST /api/v1/recordings/remove   {"ids": [ID...], "purge": BOOL, "dry_run": BOOL}
+\end{lstlisting}
+Removes recordings from the catalog. The recording files are never touched. Admins. Audited
+(\code{remove\_recording}, each recording) unless a dry run.
+\begin{params}
+\item[ids] The recordings' numbers.
+\item[purge] \code{true}: also delete their results and indexes (inside \code{results\_dir} and
+  \code{index\_dir}).
+\item[dry\_run] \code{true}: say how many would go, and change nothing.
+\end{params}
+\returns{\code{\{"dry\_run": BOOL, "removed": N\}}.}
+\raises{\code{422} any other field.}
+
+\apientry{POST recordings/remove-matching}{Remove the recordings a search finds}
+\begin{lstlisting}[style=signature]
+POST /api/v1/recordings/remove-matching   {"q": TEXT, "unlinked": BOOL, "purge": BOOL,
+                                           "dry_run": BOOL}
+\end{lstlisting}
+Removes the recordings that a search finds, as \code{POST recordings/remove}. Admins. Audited
+(\code{remove\_matching}) unless a dry run.
+\begin{params}
+\item[q, unlinked] The search, as in \code{GET recordings}.
+\item[purge] As in \code{POST recordings/remove}.
+\item[dry\_run] \code{true}: say how many would go, and change nothing.
+\end{params}
+\returns{\code{\{"dry\_run": BOOL, "recordings": N\}}.}
+\raises{\code{422} any other field.}
+
+\apientry{POST recordings/\{id\}/link}{Link a recording manually}
+\begin{lstlisting}[style=signature]
+POST /api/v1/recordings/{id}/link   {"encounter": ID | null}
+\end{lstlisting}
+Links a recording to an encounter by hand (\cref{chap:administration}). Admins.
+\begin{params}
+\item[encounter] The encounter's number; \code{null}: forget the recording's manual links.
+\end{params}
+\returns{\code{\{\}}.}
+
+\apientry{POST recordings/\{id\}/decision}{Decide on a proposed link}
+\begin{lstlisting}[style=signature]
+POST /api/v1/recordings/{id}/decision   {"encounter_id": TEXT, "decision": "link" | "never" | null}
+\end{lstlisting}
+Decides on the link of a recording to an encounter that the catalog proposes. Admins. Audited
+(\code{link\_decision}).
+\begin{params}
+\item[encounter\_id] The encounter's identifier (as imported).
+\item[decision] \code{link}: link them; \code{never}: never link them; \code{null}: forget the
+  decision.
+\end{params}
+\returns{\code{\{\}}.}
+
+\apientry{POST check}{Check the recordings again}
+\begin{lstlisting}[style=signature]
+POST /api/v1/check
+\end{lstlisting}
+Checks every recording again: whether its files are still there, whether they changed, and
+whether its index folder is still there. Admins. Audited
+(\code{check}).
+\returns{the counts of the check.}
+
+\section{Review}
+\label{sec:http-api-review}
+
+\apientry{GET review}{What waits for a decision}
+\begin{lstlisting}[style=signature]
+GET /api/v1/review
+\end{lstlisting}
+The Review tab (\cref{chap:administration}): the rows held back at import, the items waiting for
+their patient or encounter; for users who see identifiers also the possible duplicate patients
+and the recordings whose files disagree with the catalog. Admins.
+
+\apientry{POST review/held/\{id\}}{Decide on a held-back row}
+\begin{lstlisting}[style=signature]
+POST /api/v1/review/held/{id}   {"action": "apply" | "dismiss"}
+\end{lstlisting}
+Decides on a row held back at import. Admins. Audited (\code{apply\_held\_row},
+\code{dismiss\_held\_row}).
+\begin{params}
+\item[action] \code{apply}: apply the row, with the fix its problem calls for;
+  \code{dismiss}: drop it.
+\end{params}
+\returns{\code{\{\}}.}
+\raises{\code{400} another action.}
+
+\apientry{POST review/merge}{Merge two patients}
+\begin{lstlisting}[style=signature]
+POST /api/v1/review/merge   {"a": PATIENT_ID, "b": PATIENT_ID}
+\end{lstlisting}
+Merges patient \code{a} into patient \code{b}: \code{a}'s data become \code{b}'s, and
+the recordings and waiting items are linked again. Admins with the PHI permission, out of
+Privacy Mode. Audited (\code{merge\_patients}).
+\begin{params}
+\item[a, b] The patients' identifiers (\code{patient\_id}, as imported).
+\end{params}
+\returns{\code{\{\}}.}
+\raises{\code{403} a user who is not an admin, without the PHI permission, or in Privacy Mode;
+\code{400} \code{a} and \code{b} the same patient.}
+
+\apientry{POST review/distinct}{Two patients are different people}
+\begin{lstlisting}[style=signature]
+POST /api/v1/review/distinct   {"a": PATIENT_ID, "b": PATIENT_ID}
+\end{lstlisting}
+Records that two patients proposed as duplicates are different people, so that they are no
+longer proposed. Admins with the PHI permission, out of Privacy Mode. Audited
+(\code{distinct\_patients}).
+\returns{\code{\{\}}.}
+\raises{\code{403} a user who is not an admin, without the PHI permission, or in Privacy Mode.}
+
+\section{Databases and imports}
+\label{sec:http-api-databases}
+
+\apientry{GET databases}{The databases in use}
+\begin{lstlisting}[style=signature]
+GET /api/v1/databases
+\end{lstlisting}
+The databases of the Databases tab (\cref{chap:databases-tab}): their rows, the patients they
+reach, their categories, their held-back rows and waiting items; for a connected database its
+\code{connection}. Any user.
+\returns{\code{\{"items": [...]\}}.}
+
+\apientry{GET databases/\{id\}/rows}{A database's rows}
+\begin{lstlisting}[style=signature]
+GET /api/v1/databases/{id}/rows?q=&f<pos>=&sort=&desc=&limit=&offset=
+\end{lstlisting}
+One page of a database's rows, as imported: its columns (each with its \code{header} and the
+catalog field it \code{maps\_to}), the columns not shown, and each row's cells, status, patient,
+entry and link to its file. Any user; in Privacy Mode through the gate, and the search, the
+filters and the sort then use the cells as the session is shown them (a sort by a placeholder
+column is ignored); such a search or filter is audited (\code{privacy\_search}). A sort puts
+numbers in numeric order before text, and empty cells last. Audited (\code{view\_database}) for
+a user who sees identifiers.
+\begin{params}
+\item[q] Text to find in the rows.
+\item[f<pos>] A filter on the column at position \code{<pos>} (\code{f0}, \code{f3}, \ldots).
+\item[sort] The position of the column to sort by; \code{desc=1} (or \code{true}): descending.
+\item[limit, offset] The page (default 100 rows from 0).
+\end{params}
+
+\apientry{GET databases/\{id\}/export}{A database as CSV}
+\begin{lstlisting}[style=signature]
+GET /api/v1/databases/{id}/export?privacy=
+\end{lstlisting}
+The database as a CSV file, as imported. Admins. Through the gate in Privacy Mode, or with
+\code{privacy=1} (\code{deid=1} is the earlier name of the same parameter). Audited
+(\code{phi\_export} for a user with the PHI permission out of Privacy Mode, else
+\code{export\_database}).
+\returns{a \code{text/csv} attachment.}
+
+\apientry{GET formats}{The import formats}
+\begin{lstlisting}[style=signature]
+GET /api/v1/formats
+\end{lstlisting}
+The import formats the catalog knows: those built in and those described in the site's folders
+(\code{formats\_dirs}), the files there that could not be read, and the categories
+(\cref{chap:importing}). Admins.
+\returns{\code{\{items, problems, categories\}}: each category with its \code{key} and
+\code{label}.}
+
+\apientry{POST tables/inspect}{Look at a table before importing it}
+\begin{lstlisting}[style=signature]
+POST /api/v1/tables/inspect?name=FILE&format=   (body: the file)
+\end{lstlisting}
+Reads an uploaded table without importing it: its headers, the mapping and the category they
+suggest, the format it is in (converted), the catalog's columns by group; for users who see
+identifiers, also its first rows. Admins. The body is the file (at most 1\,GiB).
+\begin{params}
+\item[name] The file's name.
+\item[format] \code{auto} (the default: recognized from the file), \code{none} (read as it is),
+  or a format's key.
+\end{params}
+\begin{lstlisting}[style=shell]
+curl -s -b jar -H 'X-Medorama: 1' --data-binary @labs.csv \
+  'http://localhost:8090/api/v1/tables/inspect?name=labs.csv'
+\end{lstlisting}
+
+\apientry{POST tables}{Import a table}
+\begin{lstlisting}[style=signature]
+POST /api/v1/tables?name=&batch=&source=&category=&mapping=&format=&dry_run=  (body: the file)
+\end{lstlisting}
+Imports one file as a database, in one batch (\cref{chap:importing}). Admins. The body is the
+file (at most 1\,GiB). Audited (\code{import\_table}) unless a dry run.
+\begin{params}
+\item[name] The file's name (for the import log, and the default batch name).
+\item[batch] The database's (batch's) name; default the file's name.
+\item[source] The source label.
+\item[category] The category of the items when the table has no category column.
+\item[mapping] The column mapping, as JSON or TOML text: each catalog column and the header
+  that holds it; in TOML at the top level or under \code{[columns]}. Empty: the columns are
+  recognized by their headers. With a mapping, a header is read as a catalog column only if the
+  mapping names it, or if it is that column's own name and the mapping names no other header
+  for it (\cref{chap:importing}).
+\item[format] \code{auto} (default), \code{none}, or a format's key.
+\item[dry\_run] \code{true}: read and check everything, keep nothing.
+\end{params}
+\returns{the import's report.}
+
+\apientry{POST tables/files}{Import several files as one database}
+\begin{lstlisting}[style=signature]
+POST /api/v1/tables/files?batch=&source=&category=&mapping=&format=&dry_run=&background=
+     (multipart body: one part named "file" per file)
+\end{lstlisting}
+Imports one database from one or several files with the same columns, sent as a multipart form
+(each part named \code{file}, held in memory, never written to disk). The parameters are those
+of \code{POST tables}; \code{batch}, the database's name, is required. Admins.
+\begin{params}
+\item[background] \code{true}: run in the background; the answer, \code{202}, is the import's
+  task (\code{GET import-tasks/\{id\}}).
+\end{params}
+\returns{the import's report, or with \code{background} its task.}
+\raises{\code{400} no \code{batch}, or no file.}
+\begin{lstlisting}[style=shell]
+curl -s -b jar -H 'X-Medorama: 1' -F file=@vitals-1.csv -F file=@vitals-2.csv \
+  'http://localhost:8090/api/v1/tables/files?batch=vitals&background=true'
+\end{lstlisting}
+
+\apientry{POST tables/clif}{Import a CLIF folder}
+\begin{lstlisting}[style=signature]
+POST /api/v1/tables/clif   {"dir": FOLDER, "source": TEXT, "dry_run": BOOL, "background": BOOL}
+\end{lstlisting}
+Imports a CLIF folder on the server, each table as a database (\cref{chap:clif}). The folder
+must lie inside \code{data\_roots}. Admins.
+\begin{params}
+\item[dir] The folder, on the server.
+\item[source] The source label; default \code{clif}.
+\item[dry\_run] \code{true}: keep nothing.
+\item[background] As in \code{POST tables/files}.
+\end{params}
+\returns{\code{\{tables, skipped\}}: each table imported with its \code{name}, \code{files} and
+\code{report}; the files skipped.}
+\raises{\code{400} no such folder, or a folder outside \code{data\_roots}.}
+
+\apientry{GET import-tasks}{The imports in the background}
+\begin{lstlisting}[style=signature]
+GET /api/v1/import-tasks
+\end{lstlisting}
+The imports running in the background, and those that ended within the last hour. Admins.
+\returns{\code{\{"items": [TASK...]\}}, each task as \code{GET import-tasks/\{id\}}.}
+
+\apientry{GET import-tasks/\{id\}}{An import's progress}
+\begin{lstlisting}[style=signature]
+GET /api/v1/import-tasks/{id}
+\end{lstlisting}
+One import's progress, or its end. \code{id} is the task's identifier (24 hexadecimal
+digits). Admins.
+\returns{\code{\{id, label, state, started, progress, report, error\}}: \code{state} is
+\code{running}, \code{done}, \code{cancelled} or \code{failed}; \code{progress} is
+\code{\{phase, rows, done, elapsed\_s, rate, left\_s, cancelling\}}, with \code{phase}
+\code{rows}, \code{index}, \code{match} or \code{done}, \code{done} the fraction done
+(0 to 1), \code{rate} rows per second and \code{left\_s} the seconds left (when it can be
+estimated); \code{report} the import's report once done, \code{error} the message once failed or
+cancelled.}
+\raises{\code{404} no such import.}
+\begin{lstlisting}[language=JSON]
+{"id": "5f0c2a9e41d7b3c8a6e2f910", "label": "vitals", "state": "running", "started": 1767225600.0,
+ "progress": {"phase": "rows", "rows": 120000, "done": 0.42, "elapsed_s": 8.0,
+              "rate": 15000.0, "left_s": 11.0, "cancelling": false},
+ "report": null, "error": null}
+\end{lstlisting}
+
+\apientry{POST import-tasks/\{id\}/cancel}{Stop an import}
+\begin{lstlisting}[style=signature]
+POST /api/v1/import-tasks/{id}/cancel
+\end{lstlisting}
+Stops an import in the background, at its next chunk of rows; nothing of it is kept. Audited
+(\code{cancel\_import}). Admins.
+\returns{the task, as \code{GET import-tasks/\{id\}}.}
+\raises{\code{404} no such import.}
+
+\apientry{GET imports}{The batches}
+\begin{lstlisting}[style=signature]
+GET /api/v1/imports
+\end{lstlisting}
+The import batches. Admins.
+\returns{\code{\{"items": [...]\}}.}
+
+\apientry{POST imports/\{id\}/remove}{Remove a batch}
+\begin{lstlisting}[style=signature]
+POST /api/v1/imports/{id}/remove   {"purge": BOOL, "dry_run": BOOL}
+\end{lstlisting}
+Removes an import batch and what it added: the patients, encounters and recordings that
+nothing else holds go, and the rows of the database as imported. Admins. Audited
+(\code{remove\_import}) unless a dry run.
+\begin{params}
+\item[purge] \code{true}: also delete the results folders of the actions run on the
+  recordings that go with it.
+\item[dry\_run] \code{true}: only count.
+\end{params}
+\returns{the counts of what was (or would be) removed.}
+
+\apientry{GET sources}{The sources}
+\begin{lstlisting}[style=signature]
+GET /api/v1/sources
+\end{lstlisting}
+The sources (the labels the imports gave) with what each contributes. Any user.
+\returns{\code{\{items, waiting\}}: \code{items} the sources with what they contribute,
+\code{waiting} the number of items waiting for their encounter.}
+
+\apientry{POST sources/remove}{Remove a source}
+\begin{lstlisting}[style=signature]
+POST /api/v1/sources/remove   {"source": LABEL, "purge": BOOL, "dry_run": BOOL}
+\end{lstlisting}
+Removes everything a source added. Admins.
+\begin{params}
+\item[source] The source's label (required).
+\item[purge, dry\_run] As in \code{POST imports/\{id\}/remove}.
+\end{params}
+\raises{\code{400} no source.}
+
+\apientry{GET demo/removal}{What removing the demo would remove}
+\begin{lstlisting}[style=signature]
+GET /api/v1/demo/removal
+\end{lstlisting}
+A dry run of deleting the demo's cohort \code{DEMO}, which removes the demo with it
+(\cref{chap:quickstart}). Admins.
+\returns{the counts of what would be removed.}
+
+\apientry{GET mappings}{The saved column mappings}
+\begin{lstlisting}[style=signature]
+GET /api/v1/mappings
+\end{lstlisting}
+The column mappings saved for imports. Admins.
+\returns{\code{\{"items": [\{name, kind, columns\}]\}}.}
+
+\apientry{POST mappings}{Save a column mapping}
+\begin{lstlisting}[style=signature]
+POST /api/v1/mappings   {"name": NAME, "kind": "table", "columns": {FIELD: HEADER, ...}}
+\end{lstlisting}
+Saves a column mapping under a name, replacing one of the same name. Admins.
+\begin{params}
+\item[name] The mapping's name (not empty).
+\item[kind] \code{table}.
+\item[columns] Each catalog field and the header that holds it.
+\end{params}
+\returns{\code{\{\}}.}
+\raises{\code{400} no name, or another kind.}
+
+\apientry{DELETE mappings/\{name\}}{Delete a column mapping}
+\begin{lstlisting}[style=signature]
+DELETE /api/v1/mappings/{name}
+\end{lstlisting}
+Deletes a saved mapping (\code{name} is its name). Admins.
+\returns{\code{\{\}}.}
+
+\section{Connected databases}
+\label{sec:http-api-connections}
+
+\apientry{GET connections}{The connected databases}
+\begin{lstlisting}[style=signature]
+GET /api/v1/connections
+\end{lstlisting}
+The connected databases (\cref{chap:connecting}), with the persons linked; no secrets (only
+the name of a password file). Admins.
+\returns{\code{\{"items": [...]\}}.}
+
+\apientry{POST connections}{Connect a database}
+\begin{lstlisting}[style=signature]
+POST /api/v1/connections   {"name": NAME, "kind": "omop" | "sql", "url": URL,
+                            "password": TEXT, "settings": {...}}
+\end{lstlisting}
+Connects a database, as \cmd{medorama connections add} does, and checks that it answers.
+Admins. Audited (\code{connect}).
+\begin{params}
+\item[name] Letters, digits, \code{-} and \code{\_}, starting with a letter (criteria write it:
+  \code{name.lactate}); not the name of an imported database.
+\item[kind] \code{omop} (an OMOP CDM database) or \code{sql} (views written in SQL).
+\item[url] The database's address, without its password. A SQLite file
+  (\code{sqlite:PATH}) must lie inside \code{data\_roots} and must not be the catalog itself.
+\item[password] Optional: kept in \file{<home>/secrets/<name>.password} (mode 0600), never in
+  the catalog, never sent back.
+\item[settings] \code{schema}, \code{vocabulary\_schema}, \code{timezone} (of the database's
+  times; when none is given, the catalog's time zone is written into the connection as it is
+  added, and stays fixed from then on), \code{identifier} (what OMOP's
+  \code{person\_source\_value} holds: \code{mrn}, the default, \code{patient\_id} or
+  \code{none}: each person then becomes a patient of its own, with the patient ID
+  \code{<connection>:<person key>}), \code{mrn\_authority}, \code{timeout\_s} (0: 60),
+  \code{max\_rows} (per criterion, and for the persons a sync reads; 0: 1\,000\,000); for kind
+  \code{sql} the views \code{persons} and \code{entries} (required), \code{visits}, and
+  \code{version}.
+\end{params}
+\returns{\code{\{id, name, views, version\}}.}
+\raises{\code{400} an invalid name, kind or URL, a file outside \code{data\_roots}, missing
+views, a view that names a missing table (for OMOP every table its views read must exist, even
+empty: \code{cdm\_source} is in effect required), or a database that does not answer.}
+
+\apientry{POST connections/\{id\}/check}{Whether a connected database answers}
+\begin{lstlisting}[style=signature]
+POST /api/v1/connections/{id}/check
+\end{lstlisting}
+Asks a connected database for each of its views. Admins.
+\returns{\code{\{"ok": true, "views", "version", "ms"\}}, or
+\code{\{"ok": false, "error": TEXT\}}.}
+
+\apientry{POST connections/\{id\}/sync}{Link a connected database's persons}
+\begin{lstlisting}[style=signature]
+POST /api/v1/connections/{id}/sync
+\end{lstlisting}
+Links every person of a connected database to the catalog's patients, reading them in one
+query within \code{max\_rows}. Admins. Audited (\code{link}) when persons were linked, held or
+found without valid identifiers.
+\returns{\code{\{persons, linked\}}.}
+\raises{\code{400} a database with more persons than \code{max\_rows} (raise \code{max\_rows},
+or let searches link the persons they find).}
+
+\apientry{DELETE connections/\{id\}}{Disconnect a database}
+\begin{lstlisting}[style=signature]
+DELETE /api/v1/connections/{id}
+\end{lstlisting}
+Disconnects a database: its links and what it added go, and the password file the page made
+for it. Admins. Audited (\code{disconnect}).
+\returns{\code{\{\}}.}
+
+\section{Cohorts}
+\label{sec:http-api-cohorts}
+
+A cohort's criteria are a JSON object \code{\{"version": 1, "include": EXPR, "exclude":
+[EXPR...]\}}, where an expression is a criterion (\code{\{"kind": ...\}}) or a group
+(\code{\{"op": "and" | "or" | "not", "of": [EXPR...]\}}); the kinds of criteria and their fields
+are those of \cref{chap:cohorts}. A cohort is seen and changed as it is shared: its owner may do
+everything, a user it is shared with may read it, and edit it when the share allows.
+
+\apientry{POST cohorts/search}{The patients that meet criteria}
+\begin{lstlisting}[style=signature]
+POST /api/v1/cohorts/search   {"criteria": {...}, "source": {...}, "within_source_of": ID,
+                               "limit": N, "offset": N}
+\end{lstlisting}
+The patients that meet the criteria, with why. Any user.
+\begin{params}
+\item[criteria] The criteria.
+\item[source] Only among a source's patients: \code{\{"op": "within" | "union" |
+  "intersection" | "difference", "of": [COHORT...]\}}.
+\item[within\_source\_of] Or among those of a stored cohort's source (its criteria being
+  edited).
+\item[limit, offset] The page (default 100 from 0).
+\end{params}
+\returns{\code{\{total, items, ids, excluded\_total, excluded\}}: \code{ids} every patient
+found; \code{excluded} up to 50 of the patients the exclusions took out.}
+
+\apientry{POST cohorts/parse}{Criteria written as text}
+\begin{lstlisting}[style=signature]
+POST /api/v1/cohorts/parse   {"text": TEXT}
+\end{lstlisting}
+Reads criteria written as text (\cref{chap:cohorts}). Any user.
+\returns{\code{\{"ok": true, "expr": EXPR, "words": TEXT\}}, or
+\code{\{"ok": false, "error": TEXT\}}.}
+\begin{lstlisting}[style=shell]
+curl -s -b jar -H 'X-Medorama: 1' -H 'Content-Type: application/json' \
+  -d '{"text": "lactate > 4 and has icu"}' http://localhost:8090/api/v1/cohorts/parse
+\end{lstlisting}
+
+\apientry{GET cohorts}{The cohorts}
+\begin{lstlisting}[style=signature]
+GET /api/v1/cohorts
+\end{lstlisting}
+The cohorts the user may see, each with its \code{definition} in words. Any user.
+\returns{\code{\{"items": [...]\}}.}
+
+\apientry{POST cohorts}{Make a cohort}
+\begin{lstlisting}[style=signature]
+POST /api/v1/cohorts   {"name": NAME, "description": TEXT, "criteria": {...},
+                        "source": {...}, "patients": [ID...]}
+\end{lstlisting}
+Makes a cohort, owned by the user. Any user. Audited (\code{cohort\_create}).
+\begin{params}
+\item[name] Its name (required).
+\item[description] Optional.
+\item[criteria] Its definition.
+\item[source] A subcohort's parent or the cohorts it combines, as in \code{POST cohorts/search};
+  none: the whole catalog.
+\item[patients] The patients to put in now; none: all those the definition selects.
+\end{params}
+\returns{the cohort, as \code{GET cohorts/\{id\}}.}
+
+\apientry{GET cohorts/\{id\}}{A cohort}
+\begin{lstlisting}[style=signature]
+GET /api/v1/cohorts/{id}
+\end{lstlisting}
+A cohort, with its definition and its shares. Any user it is shared with.
+\raises{\code{404} no such cohort, or one the user may not see.}
+
+\apientry{PATCH cohorts/\{id\}}{Change a cohort}
+\begin{lstlisting}[style=signature]
+PATCH /api/v1/cohorts/{id}   {"name", "description", "criteria", "add", "add_search",
+                              "remove", "shares"}
+\end{lstlisting}
+Changes a cohort. Its editors; the shares, its owner only. Every field is optional. Audited
+(\code{cohort\_change}, with what changed).
+\begin{params}
+\item[name, description, criteria] The new values.
+\item[add] Patients to add: those the definition selects count as found by it, the others as
+  added manually.
+\item[add\_search] And every patient this search finds: \code{\{q, has, cohort\}}, as in
+  \code{GET patients}.
+\item[remove] Members to take out: those the definition selected stay out when it is refreshed.
+\item[shares] Who else may see it, replacing the list:
+  \code{[\{"user\_id": ID, "can\_edit": BOOL\}]}.
+\end{params}
+\returns{the cohort.}
+
+\apientry{DELETE cohorts/\{id\}}{Delete a cohort}
+\begin{lstlisting}[style=signature]
+DELETE /api/v1/cohorts/{id}
+\end{lstlisting}
+Deletes a cohort. Its owner. Audited (\code{cohort\_delete}). The demo's cohort \code{DEMO} is
+deleted by an admin only, and the demo goes with it (audited \code{demo\_remove}).
+\returns{\code{\{\}}; for the demo's cohort \code{\{"removed": ...\}}, what was removed.}
+\raises{\code{403} the demo's cohort by a user who is not an admin.}
+
+\apientry{POST cohorts/\{id\}/clone}{Copy a cohort}
+\begin{lstlisting}[style=signature]
+POST /api/v1/cohorts/{id}/clone   {"name": NAME}
+\end{lstlisting}
+A copy of a cohort the user may see, owned by the user. Any user it is shared with.
+\returns{the new cohort.}
+
+\apientry{GET cohorts/\{id\}/history}{A cohort's changes}
+\begin{lstlisting}[style=signature]
+GET /api/v1/cohorts/{id}/history
+\end{lstlisting}
+A cohort's changes, latest first. Any user it is shared with.
+\returns{\code{\{"items": [...]\}}.}
+
+\apientry{GET cohorts/\{id\}/members}{A cohort's members}
+\begin{lstlisting}[style=signature]
+GET /api/v1/cohorts/{id}/members?limit=&offset=
+\end{lstlisting}
+A cohort's members. Any user it is shared with.
+\begin{params}
+\item[limit, offset] The page (default 100 from 0).
+\end{params}
+\returns{\code{\{total, items\}}.}
+
+\apientry{POST cohorts/\{id\}/refresh}{Apply a cohort's definition again}
+\begin{lstlisting}[style=signature]
+POST /api/v1/cohorts/{id}/refresh   {"dry_run": BOOL, "join": [ID...], "leave": BOOL}
+\end{lstlisting}
+What the cohort's definition selects now, applied unless a dry run. Its editors. Audited
+(\code{cohort\_refresh}) unless a dry run.
+\begin{params}
+\item[dry\_run] \code{true}: list who would join and who would leave (up to 500 of each),
+  change nothing.
+\item[join] Add only these of the patients who would join; none: all of them.
+\item[leave] Whether the members the definition no longer selects leave (default \code{true});
+  \code{false}: only new patients are added.
+\end{params}
+\returns{\code{added} and \code{removed}, and for a dry run the patients who would join and
+leave.}
+
+\apientry{GET cohorts/\{id\}/export}{Export a cohort}
+\begin{lstlisting}[style=signature]
+GET /api/v1/cohorts/{id}/export?what=&privacy=
+\end{lstlisting}
+A cohort as a file. Any user it is shared with. Through the gate in Privacy Mode, or with
+\code{privacy=1} (\code{deid=1}, its earlier name).
+\begin{params}
+\item[what] \code{members} (the default: the members, CSV), \code{criteria} (the definition,
+  JSON), \code{data} (the members' data, a long CSV) or \code{xlsx} (all of it, a sheet per
+  database).
+\item[privacy] \code{1} or \code{true}: through the privacy gate.
+\end{params}
+\returns{an attachment.}
+\begin{lstlisting}[style=shell]
+curl -s -b jar -o members.csv 'http://localhost:8090/api/v1/cohorts/2/export?privacy=1'
+\end{lstlisting}
+
+\apientry{GET cohorts/people}{Whom a cohort can be shared with}
+\begin{lstlisting}[style=signature]
+GET /api/v1/cohorts/people
+\end{lstlisting}
+The other enabled users, names only. Any user.
+\returns{\code{\{"items": [\{id, username, display\_name\}]\}}.}
+
+\section{Actions and jobs}
+\label{sec:http-api-work}
+
+\apientry{GET actions}{The actions}
+\begin{lstlisting}[style=signature]
+GET /api/v1/actions
+\end{lstlisting}
+The actions that can be run on recordings (\cref{chap:actions}), and the problems found reading
+their descriptions. Any user.
+\returns{\code{\{actions, problems\}}.}
+
+\apientry{POST actions/reload}{Read the actions again}
+\begin{lstlisting}[style=signature]
+POST /api/v1/actions/reload
+\end{lstlisting}
+Reads the actions' descriptions again from their folders. Admins.
+\returns{\code{\{actions, problems\}}.}
+
+\apientry{POST runs}{Run actions}
+\begin{lstlisting}[style=signature]
+POST /api/v1/runs   {"actions": [NAME...], "selection": {...}, "params": {...},
+                     "force": BOOL, "priority": N}
+\end{lstlisting}
+Queues a run: the actions on the recordings selected. Analysts and admins. Audited
+(\code{run}).
+\begin{params}
+\item[actions] The actions' names.
+\item[selection] Which recordings: \code{\{"encounters": [ID...]\}},
+  \code{\{"recordings": [ID...]\}}, \code{\{"search": \{...\}\}} (a search of
+  \code{GET encounters}), \code{\{"cohort": ID\}} (the encounters of its members) or
+  \code{\{"all": true\}}.
+\item[params] The actions' parameters.
+\item[force] \code{true}: run again where already done on the unchanged recording.
+\item[priority] 0 to 100 (default 0).
+\end{params}
+\returns{\code{\{run, recordings, queued, done\_already, pending\_already, not\_applicable\}}.}
+\raises{\code{403} without the analyst or admin role.}
+
+\apientry{GET jobs}{The jobs}
+\begin{lstlisting}[style=signature]
+GET /api/v1/jobs?state=&run=&limit=
+\end{lstlisting}
+The jobs, and their counts per state. Any user. A job's result (its summary) is not among
+them: it comes with the encounter's recordings (\code{GET encounters/\{id\}}), and with
+\code{GET recordings/\{id\}}.
+\begin{params}
+\item[state] Only the jobs in this state (\code{queued}, \code{running}, \code{done},
+  \code{failed}, \code{cancelled}).
+\item[run] Only the jobs of this run.
+\item[limit] 1 to 2000 (default 200).
+\end{params}
+\returns{\code{\{items, counts\}}.}
+
+\apientry{POST jobs/cancel}{Cancel jobs}
+\begin{lstlisting}[style=signature]
+POST /api/v1/jobs/cancel   {"job": ID} | {"run": ID} | {}
+\end{lstlisting}
+Cancels the queued and running jobs named: one job, the jobs of a run, or with \code{\{\}} all
+of them (admins only). Analysts cancel only the jobs of their own runs, admins any. Analysts and
+admins.
+\returns{\code{\{"cancelled": N\}}.}
+\raises{\code{403} a viewer, or \code{\{\}} by a user who is not an admin.}
+
+\apientry{GET history}{One's history}
+\begin{lstlisting}[style=signature]
+GET /api/v1/history
+\end{lstlisting}
+The encounters the user opened in the encounter panel (each opening a
+\code{GET encounters/\{id\}}), most recently opened first, with the number of views (up to 500).
+Patient pages are not recorded. Only the user sees it. Any user.
+\returns{\code{\{"items": [...]\}}.}
+
+\apientry{DELETE history/\{id\}}{Forget one encounter of one's history}
+\begin{lstlisting}[style=signature]
+DELETE /api/v1/history/{id}
+\end{lstlisting}
+Removes an encounter (\code{id}, its number) from the user's history. Any user.
+\returns{\code{\{"removed": N\}}.}
+
+\apientry{DELETE history}{Forget one's history}
+\begin{lstlisting}[style=signature]
+DELETE /api/v1/history
+\end{lstlisting}
+Clears the user's history. Any user.
+\returns{\code{\{"removed": N\}}.}
+
+\section{Users and the audit log}
+\label{sec:http-api-users}
+
+\apientry{GET users}{The users}
+\begin{lstlisting}[style=signature]
+GET /api/v1/users
+\end{lstlisting}
+The users (\cref{chap:users-privacy}). Admins.
+\returns{\code{\{"items": [...]\}}.}
+
+\apientry{POST users}{Add a user}
+\begin{lstlisting}[style=signature]
+POST /api/v1/users   {"username": NAME, "display_name": TEXT, "role": ROLE, "phi": BOOL,
+                      "password": PASSWORD}
+\end{lstlisting}
+Adds a user. Admins. Audited (\code{user\_added}). With proxy sign-in, the password may be left
+out: the account then gets a random password that nobody knows, since the institution's sign-in
+names the user (\cref{sec:sign-in-accounts}).
+\begin{params}
+\item[username] The user name.
+\item[display\_name] Optional.
+\item[role] \code{viewer}, \code{analyst} or \code{admin}.
+\item[phi] The PHI permission (default \code{false}).
+\item[password] At least 10 characters. Required with password sign-in; optional with proxy
+  sign-in.
+\end{params}
+\returns{\code{\{"id": ID\}}.}
+\raises{\code{400} an unknown role, a name taken, a password too short.}
+\begin{lstlisting}[style=shell]
+curl -s -b jar -H 'X-Medorama: 1' -H 'Content-Type: application/json' \
+  -d '{"username": "reader1", "role": "viewer", "password": "a-long-passphrase"}' \
+  http://localhost:8090/api/v1/users
+\end{lstlisting}
+
+\apientry{PATCH users/\{id\}}{Change a user}
+\begin{lstlisting}[style=signature]
+PATCH /api/v1/users/{id}   {"display_name", "role", "phi", "disabled", "password", "sign_out"}
+\end{lstlisting}
+Changes a user. Every field is optional. Admins. Audited (\code{user\_changed}, with what
+changed).
+\begin{params}
+\item[display\_name, role, phi, disabled] The new values.
+\item[password] A new password (a reset).
+\item[sign\_out] \code{true}: end the user's sessions on every device.
+\end{params}
+\returns{\code{\{\}}.}
+\raises{\code{400} an unknown role, or a change that would leave the catalog without an enabled
+admin.}
+
+\apientry{DELETE users/\{id\}}{Delete a user}
+\begin{lstlisting}[style=signature]
+DELETE /api/v1/users/{id}
+\end{lstlisting}
+Deletes a user. Admins. Audited (\code{user\_deleted}).
+\returns{\code{\{\}}.}
+\raises{\code{400} the last enabled admin.}
+
+\apientry{GET audit}{The audit log}
+\begin{lstlisting}[style=signature]
+GET /api/v1/audit?limit=
+\end{lstlisting}
+The latest entries of the audit log, latest first (\cref{chap:users-privacy}). Admins. In
+Privacy Mode an entry's \code{target} and \code{detail} are \code{[Withheld]} (a search's text
+may name a patient).
+\begin{params}
+\item[limit] 1 to 10\,000 (default 500).
+\end{params}
+\returns{\code{\{"items": [\{time, username, event, target, detail\}]\}}.}
+
+\apientry{GET audit/verify}{Whether the audit log's seals hold}
+\begin{lstlisting}[style=signature]
+GET /api/v1/audit/verify
+\end{lstlisting}
+Computes the chain of every seal of the audit log again, counts the entries and seals the
+database numbered against those left, and compares the seals with the export file
+(\code{audit\_export}), when it is set: each exported seal must be in the database, with the
+same hash. Admins.
+\returns{\code{\{seals, entries, unsealed, broken, exported\_seals\}}: \code{broken}
+\code{null}, or the first seal whose chain differs, what is missing, or an exported seal not in
+the database, and how; \code{exported\_seals} the seals of the export file (\code{null}
+without one).}
+\begin{lstlisting}[language=JSON]
+{"seals": 14, "entries": 1830, "unsealed": 12, "broken": null, "exported_seals": 14}
+\end{lstlisting}
+
+\section{The waveform viewer}
+\label{sec:http-api-viewer}
+
+\apientry{GET viewer}{The viewer's status}
+\begin{lstlisting}[style=signature]
+GET /api/v1/viewer
+\end{lstlisting}
+Whether a VitalStream viewer is available under the catalog (\cref{chap:viewers-in-medorama}).
+Any user.
+\returns{\code{\{mode, flavor, running, reason, url\}}: \code{mode} \code{embedded} (the
+catalog runs a viewer, at \code{url} \code{viewer/}), \code{link} (\code{viewer\_url} is set:
+\code{url} is it) or \code{none} (\code{reason} says why); \code{flavor} the viewer run
+(\code{cpp}, \code{rs}, \code{py}, or \code{custom} for a program named in the
+settings).}
+\begin{lstlisting}[language=JSON]
+{"mode": "embedded", "flavor": "rs", "running": true, "reason": "", "url": "viewer/"}
+\end{lstlisting}
+
+\apientry{POST viewer/start}{Start the viewer now}
+\begin{lstlisting}[style=signature]
+POST /api/v1/viewer/start
+\end{lstlisting}
+Starts the embedded viewer now, so that the first view is quick. Any user.
+\returns{the status, as \code{GET viewer}.}
+\raises{\code{404} no viewer runs under this catalog (\code{reason}); \code{503} it could not
+be started.}

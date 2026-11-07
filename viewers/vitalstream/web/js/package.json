@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "The VitalStream page's scripts: ES modules (this file lets Node load them for viewers/vitalstream/tests/web/; host.js is a classic script, read there as text only)"
+}

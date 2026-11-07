@@ -1,0 +1,22 @@
+The Rust crates compiled into these programs, and their licences
+=================================================================
+
+Written by cargo about (tools/about.toml) for this release, from the workspace's Cargo.lock.
+THIRD_PARTY_LICENSES.md describes the dependencies; LICENSE is Medorama's own licence.
+
+Crates, by licence
+------------------
+{{#each overview}}
+{{{name}}} ({{count}}):
+{{#each indices}}{{#with (lookup ../../licenses this)}}{{#each used_by}}  {{crate.name}} {{crate.version}}
+{{/each}}{{/with}}{{/each}}
+{{/each}}
+
+The licences' texts
+-------------------
+{{#each licenses}}
+==== {{{name}}} ({{{id}}}), used by:{{#each used_by}} {{crate.name}} {{crate.version}}{{/each}}
+
+{{{text}}}
+
+{{/each}}

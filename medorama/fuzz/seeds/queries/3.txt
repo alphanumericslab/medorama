@@ -1,0 +1,1 @@
+dx I21 AND (QT > 400ms OR "R axis" < -30)

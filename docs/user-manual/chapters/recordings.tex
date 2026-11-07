@@ -1,0 +1,674 @@
+% Part III: waveform recordings. Sources: docs/wfdb-collection.md (every section);
+% docs/adapters.md (what add-ons do; the protocol is chap:addons); docs/importing.md "Files";
+% docs/administration.md "Files and recordings", "Linking recordings", "Identifiers in
+% recordings"; docs/edf.md (users' part); viewers/vitalstream/docs/data-model.md. Checked against
+% libs/engine/src/sources/wfdb_folder.rs and sources/mod.rs, libs/engine/src/index.rs
+% (cache_key), medorama/src/tables.rs (files of rows), recordings.rs (find, add, check),
+% linkage.rs (relink), jobs.rs (automatic indexing), web/js/views/recordings.js, encounters.js.
+\chapter{Waveform recordings}
+\label{chap:recordings}
+
+This chapter describes the waveform recordings that Medorama reads, how they come into the
+catalog, how they find their encounters, and how they are indexed. It is written for
+administrators and data managers.
+
+A \emph{recording} is a long waveform recording of a patient: the bedside monitors' signals of an
+ICU stay, an ambulatory ECG (a Holter), an EEG, or a sleep study (polysomnography). Medorama
+reads WFDB records, folders of records and WFDB collections, EDF, EDF+, BDF and BDF+ files, and
+the formats that installed add-ons read. Recordings are shown in VitalStream
+(\cref{chap:vitalstream}), from an \emph{index} that the catalog builds once, and are linked to
+their patients' encounters. The patient's page shows them in the ICU, Holter, EEG or Sleep column
+of the Patient Journey. A recording, like every file, comes in only as a row of a table that names
+its patient (\cref{chap:importing}).
+
+\section{What a recording becomes}
+\label{sec:recordings-model}
+
+Whatever its format, a recording is read into the same parts (\cref{tab:recordings-model}).
+Three principles hold throughout:
+\begin{itemize}
+\item \textbf{Only what the recording states.} The readers do no resampling, interpolation, gap
+  filling, re-timing or deduplication: every sample drawn is a stored sample.
+\item \textbf{Ambiguity is shown, not resolved.} Where the recording does not settle something,
+  such as a break's exact length or a start time, the viewer says so.
+\item \textbf{Times are UTC}, as Unix seconds. The time zone shown is a setting of the viewer
+  only.
+\end{itemize}
+
+\begin{table}[htbp]
+\caption{What a recording is made of.}
+\label{tab:recordings-model}
+\begin{tabularx}{\linewidth}{@{}P{2.4cm}L@{}}
+\toprule
+{\tabhead Term} & {\tabhead Meaning} \\
+\midrule
+Channel & One signal as the user sees it (ECG lead II, ART, Pleth \dots), defined by a
+  modality, a label and a unit. \\
+Piece & Samples of one channel that the recording proves contiguous, at one constant sampling
+  rate: sample $i$ is at $t_0 + i/f_s$. Pieces are drawn apart, never joined. \\
+Lane & The pieces of a channel never overlap in time. A signal recorded twice at the same time
+  goes into a second lane, which is a channel of its own (\cref{sec:recordings-overlap}). \\
+Time not stated & A piece for which the recording states no time. It is placed next to its
+  neighbors and marked as such. \\
+Break & A place where contiguity is not proven, with its reason, its length when known, whether
+  that length is exact, how it was measured, and the channels it concerns. \\
+Vital-sign series & Values at their times, by name and unit. There is one series per name and
+  source; series are never merged. \\
+Alarm & An interval with a text, a kind and a level (1 advisory, 2 warning, 3 crisis). Alarm
+  colors are the only red on the viewers' pages. EDF+ annotations are events of the kind
+  \code{annotation}. \\
+Marker & A mark at a sample of a piece (an R wave, a pacing spike), by name. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Nothing is assumed that a recording does not state. A WFDB record whose header gives no sampling
+frequency is not read. A signal with a gain of 0 (uncalibrated) is shown in stored counts, with
+the unit \code{adu}. A signal whose header gives no units has none: WFDB's old defaults of
+250\,Hz, a gain of 200 and millivolts are not used. Missing samples are drawn as a gap in the
+line, never as zero, and zero is a value, never ``missing''.
+
+\section{Bringing recordings in}
+\label{sec:recordings-in}
+
+A recording comes in as the \code{file} of a table's row. The file becomes a recording when the
+row's or the table's category is a \textbf{recording category} (\code{icu}, \code{holter},
+\code{eeg} or \code{sleep}), or when neither the row nor the table names a category
+(\cref{chap:importing}). A recording without a category goes to the ICU column. The file may be
+one of the following:
+\begin{itemize}
+\item \textbf{A WFDB header} (\file{.hea}). The recording is that record only, or a
+  multi-segment record whole (\cref{sec:recordings-multi}).
+\item \textbf{A folder.} A \emph{WFDB folder}, one that holds WFDB records itself (a
+  \file{.hea} file or a \file{RECORDS} file) or an \file{index.csv}, is itself the recording,
+  taken whole with its subfolders, within the limits of \cref{sec:recordings-limits}. Any other
+  folder adds only the recordings directly inside it (WFDB records, WFDB folders, EDF files and
+  files an add-on reads); a subfolder that is not itself a WFDB folder is not searched.
+\item \textbf{An EDF, EDF+, BDF or BDF+ file} (\file{.edf}, \file{.bdf};
+  \cref{sec:recordings-edf}).
+\item \textbf{A file of a format that an installed add-on reads}, such as BedMasterEx
+  \file{.Stp} (\cref{sec:recordings-addons}).
+\end{itemize}
+
+The following rules keep recordings safe:
+\begin{itemize}
+\item \textbf{Recordings are only read.} The catalog stores paths, never copies. It never writes,
+  moves or deletes a recording, and never writes into a recording's folder (the folder that holds
+  a recording file, or anywhere inside a WFDB folder). A recording that lies where the catalog
+  writes (its results, indexes or home folder), or that holds one of them, is refused at import.
+\item \textbf{Inside \code{data\_roots}.} When the setting names folders, a recording outside
+  them is left out with a warning.
+\item \textbf{Once.} Paths are stored with symbolic links resolved, so a recording is never in
+  the catalog twice. A second table that names it claims it too, and the recording stays while
+  either table does.
+\item \textbf{Hidden entries} (names that start with \code{.}) are skipped when a folder is
+  searched.
+\item \textbf{WFDB recordings need WFDB support.} A Medorama built without it
+  (\cref{sec:installation-no-wfdb}) skips each WFDB record, folder of records or collection it
+  finds, and lists it with the reason ``this build has no WFDB support''.
+\end{itemize}
+A recording takes its row's category (ICU by default), and is linked to the row's encounter (\cref{sec:recordings-linking}), indexed in the background
+(\cref{sec:recordings-indexing}), and listed in \ui{Import} $\rightarrow$ \ui{Recordings}
+(\cref{sec:recordings-tab}).
+
+\screenshot{patient-holter.png}{A patient's page with a Holter recording in its column of the Patient Journey.}{fig:recordings-holter}
+
+\section{WFDB records}
+\label{sec:recordings-wfdb}
+
+Medorama and the three VitalStream viewers read WFDB records themselves, with any signal format
+the WFDB library reads (through wfdb-x). They read the same recording to the same index, byte for
+byte. A recording may be one record, a multi-segment record, a folder of records read as one
+session, or a WFDB collection (\cref{tab:recordings-forms}).
+
+\begin{table}[htbp]
+\caption{The forms of WFDB recordings.}
+\label{tab:recordings-forms}
+\begin{tabularx}{\linewidth}{@{}P{3.4cm}LP{3.2cm}@{}}
+\toprule
+{\tabhead Form} & {\tabhead What it is} & {\tabhead Format shown} \\
+\midrule
+One record & A header file (\file{rec.hea}) and the signal files it names &
+  \code{WFDB record} \\
+A multi-segment record & A master header (\code{name/n} on its record line) and its segments &
+  \code{WFDB multi-segment record} \\
+A folder of records & A folder without \file{index.csv}: every record in it and in its
+  subfolders, on one time axis & \code{WFDB records} \\
+A collection & A folder with an \file{index.csv} that lists its records, and CSV files that say
+  how they fit together & \code{WFDB collection} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{One record}
+\label{sec:recordings-one}
+
+A record's header file (\file{rec.hea}), opened in a viewer or named in a table, opens
+\emph{that record only}: its signals, read from the signal files its header names, with its
+\file{.mrk} markers. Its start is the header's base date and time, taken as UTC; a header that
+states no date and time gives data marked \emph{time not stated}, which starts at 0
+(1970-01-01). A record whose header states no sampling frequency, or one that is not a finite
+number greater than 0 (\code{nan}), is not read.
+
+\paragraph{Samples stated and samples held.} A header may state more samples than its signal
+files hold. The number of samples read is the least of the number the header states and, for
+each signal file whose signals all have a storage format of fixed size, the frames that file can
+hold: $\lceil 8 \times \text{file size in bytes} / \text{bits per frame} \rceil$, where a frame
+takes, for each signal of that file, its samples per frame (at least 1) times the bits of its
+format (8 and 80: 8; 16, 61 and 160: 16; 212: 12; 310 and 311: 32/3; 24: 24; 32: 32). Files of
+other formats (compressed) and files that do not exist are not counted. Reading also stops at
+the end of the data, however many samples are stated. The file's byte offset is not subtracted,
+so a well-formed record keeps the number its header states.
+
+\paragraph{Files the record reads} are the header, the signal files it names (an absolute name as
+given, a name starting with \code{\textasciitilde} in the home folder, any other next to the
+header), its \file{.mrk} file and, for a multi-segment record, those of its segments. A viewer
+opens none of them when it leads outside its data roots, symbolic links resolved
+(\cref{sec:formats-reference-roots}).
+
+\subsection{Multi-segment records}
+\label{sec:recordings-multi}
+
+A multi-segment record (WFDB's \code{name/n} record line, followed by $n$ segment lines) is read
+as one record.
+\begin{itemize}
+\item Its \textbf{segments} follow each other from the record's start (the master header's base
+  date and time), each at its offset: the samples of the segments before it, divided by the
+  record's sampling frequency. Each signal of each segment is a piece of the channel of its name.
+\item A \textbf{null segment} (\code{\textasciitilde}) is a break of known length (its samples
+  divided by the sampling frequency), shown with the reason \code{null segment}.
+\item A \textbf{layout segment} (the first segment, of length 0, of a record with a variable
+  layout) names the record's signals and holds no samples. In a variable layout, a segment holds
+  some of the signals; a signal absent from a segment is a break in its channel only.
+\item The record's \textbf{markers} are the master's \file{.mrk} file: sample numbers from the
+  record's start, and \code{chan} numbers of the master header's (the layout's) signals. Each
+  marker goes to the segment its sample falls in, and to the signal of that name there; a marker
+  in a null segment is left out.
+\item Opening one \textbf{segment's own header} (\file{rec\_0001.hea}) reads that segment
+  alone, as one record.
+\end{itemize}
+Segments are found next to their master header. Medorama and the viewers index a multi-segment
+record as one recording, whose files are the master header, the layout header, and every
+segment's header, signal files and markers (they make its index key,
+\cref{sec:formats-reference-key}).
+
+\subsection{A folder of records: one session}
+\label{sec:recordings-session}
+
+A folder without \file{index.csv} is read as \emph{one session}: every record in it and in its
+subfolders, on one time axis. This is how a patient's records, split into folders by device or by
+day, are seen together.
+\begin{enumerate}
+\item \textbf{Records} are the \file{.hea} files below the folder, at every level, in the order
+  of their path relative to the folder (\code{/} between folders, compared character by
+  character). Hidden entries and symbolic links are skipped. The segments and layout header of a
+  multi-segment record are part of that record, never records of their own.
+\item \textbf{Placement.} A record whose header states a base date and time starts there (UTC).
+  A record without one is placed after the data before it, in that order, marked \emph{time not
+  stated}.
+\item A record that cannot be read, whose header states no valid sampling frequency, or one of
+  whose files leads outside the data roots, is left out; the recording's notes say how many were
+  left out.
+\item A \file{RECORDS} file is not needed and not read. \file{vitals.csv}, \file{events.csv} and
+  \file{gaps.csv}, when present in the folder itself, are read as for a collection.
+\end{enumerate}
+When a tree of folders is searched for recordings (Medorama's import), a folder is a recording
+when it holds records itself (a \file{.hea} file or a \file{RECORDS} file) or an
+\file{index.csv}; it is then taken whole, its subfolders included. The viewers' \ui{Open multiple
+records\dots} opens any folder.
+
+\screenshot{vitalstream-session.png}{A folder of records read as one session in VitalStream: a record without a start time, marked time not stated, and a signal recorded twice in a second lane, II (2).}{fig:recordings-session}
+
+\subsection{WFDB collections}
+\label{sec:recordings-collection}
+
+A \emph{WFDB collection} is a folder of records with a few CSV files beside them, which say how
+the records fit together in time and what else the recording held: vital signs, alarms, breaks.
+Converters write collections (the STP add-on's \code{wfdb} export is one), and anyone can write
+one with a few lines of code.
+\begin{lstlisting}[style=text]
+recording/                      the collection (one recording)
+|-- index.csv                   the records, in order (required: it makes the folder a collection)
+|-- gaps.csv                    breaks between records (optional)
+|-- vitals.csv                  vital-sign values (optional)
+|-- events.csv                  alarms and other events with a duration (optional)
+|-- README.txt                  anything for people (ignored by the readers)
+|-- ecg/                        a folder per modality, each with its RECORDS file
+|   |-- RECORDS
+|   |-- ecg_250_0001.hea  ecg_250_0001.dat  ecg_250_0001.mrk
+|   `-- ...
+`-- pressure/
+    `-- ...
+\end{lstlisting}
+\begin{itemize}
+\item Records are standard WFDB records; each signal of each record becomes a piece of a channel.
+\item Every record's header states its sampling frequency: the readers assume none, so a
+  collection with a record that does not is not read.
+\item Records may sit in subfolders; \file{index.csv} names them by their path relative to the
+  collection, with \code{/} between folders (\code{ecg/ecg\_250\_0001}).
+\item The CSV files are UTF-8, comma-separated, with a header row, as Python's \code{csv} module
+  writes them (quotes around fields that need them). Columns not described here are ignored, so a
+  writer may add its own.
+\item Times are Unix seconds (UTC), written as decimal numbers.
+\item A collection lists its records itself, and is not subject to the limits of a folder
+  (\cref{sec:recordings-limits}).
+\end{itemize}
+
+\begin{table}[htbp]
+\caption{\file{index.csv}: one row per record, in the order the records were recorded.}
+\label{tab:recordings-index}
+\begin{tabularx}{\linewidth}{@{}P{2.4cm}P{1.6cm}L@{}}
+\toprule
+{\tabhead Column} & {\tabhead Required} & {\tabhead Meaning} \\
+\midrule
+\code{record} & Yes & The record's path relative to the collection, without extension. It
+  stays inside the collection: a name that is absolute (starts with \code{/}, \code{\textbackslash}
+  or \code{\textasciitilde}, or has a drive) or has a \code{..} component is not read \\
+\code{modality} & & The kind of signals (\code{ecg}, \code{pressure}, \code{resp},
+  \code{spo2} \dots); channels are grouped by it. Default \code{wfdb} \\
+\code{start\_unix} & & The time of the record's first sample; empty: the record states no time
+  (placed as below) \\
+\code{stretch} & & A label shared by the records of one stretch of contiguous data; records
+  without a start time that share it are placed together \\
+\bottomrule
+\end{tabularx}
+\end{table}
+Other columns of \file{index.csv} (\code{fs}, \code{n\_sig}, \code{signals}, \code{units},
+\code{sig\_len}, \code{duration\_s}, \code{start\_utc}, \code{time\_source},
+\code{time\_uncertainty\_s}, provenance, checksums) are for people and other programs: the
+readers take the rate, the signals and the length from the headers.
+
+\begin{table}[htbp]
+\caption{\file{gaps.csv}: one row per break in the data, or per change that started a new
+record.}
+\label{tab:recordings-gaps}
+\begin{tabularx}{\linewidth}{@{}P{4.4cm}L@{}}
+\toprule
+{\tabhead Column} & {\tabhead Meaning} \\
+\midrule
+\code{scope} & \code{all} (every channel), or the modality or channels it concerns \\
+\code{reason} & Why: \code{signal\_loss}, \code{corrupt\_bytes}, \dots{} The reasons
+  \code{channel\_absent}, \code{channel\_set\_change}, \code{label\_change} and
+  \code{packet\_count\_change} mark where a record was split while the data stayed contiguous:
+  they are not shown as breaks \\
+\code{end\_before\_unix}, \code{start\_after\_unix} & The end of the data before, and the start
+  of the data after, when known \\
+\code{gap\_s} & The length of the break, when known (even if neither end has a stated time) \\
+\code{gap\_uncertainty\_s}, \code{measured\_by}, \code{exact}, \code{notes} & How it was
+  measured: \code{exact} is \code{True} when \code{gap\_s} is exact \\
+\code{records\_before}, \code{records\_after} & The records on each side, separated by
+  \code{;}, by name or path \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{table}[htbp]
+\caption{\file{vitals.csv}: one row per value.}
+\label{tab:recordings-vitals}
+\begin{tabularx}{\linewidth}{@{}P{3.0cm}L@{}}
+\toprule
+{\tabhead Column} & {\tabhead Meaning} \\
+\midrule
+\code{time} & When the value was measured \\
+\code{label} (else \code{name}) & What was measured: \code{HR}, \code{SpO2}, \code{NBP-S} \dots \\
+\code{value} & The value (rows whose value is not a number are left out) \\
+\code{unit} & Its unit \\
+\code{validity} & Empty or \code{0}: valid; anything else: the row is left out \\
+\code{source} & Where the value came from, when a recording has several (the monitor's
+  numerics, an import) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+A label measured by one source is named by its label. When a label has values from several
+sources, the first source in the file keeps the plain label and the others are named with their
+source: \code{HR}, \code{HR [import]}. Series of different sources are never merged.
+
+\begin{table}[htbp]
+\caption{\file{events.csv}: alarms and other events that have a start and, possibly, an end.}
+\label{tab:recordings-events}
+\begin{tabularx}{\linewidth}{@{}P{2.4cm}L@{}}
+\toprule
+{\tabhead Column} & {\tabhead Meaning} \\
+\midrule
+\code{start\_unix} & The start (required) \\
+\code{end\_unix} & The end; empty: an instant \\
+\code{level} & The severity: 1 advisory, 2 warning, 3 crisis (shown by color) \\
+\code{text} & What is shown \\
+\code{kind} & The kind of event (\code{alarm}, the system that raised it \dots); default
+  \code{event} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+Events are kept when their start lies within a day of the recording's data (a guard against zero
+dates), sorted by start.
+
+\paragraph{Markers.} A record may have a \file{.mrk} annotation file (WFDB's MIT format): marks
+at samples, such as R waves or pacing spikes. An annotation's \code{chan} is the signal it belongs
+to. A marker's name is its auxiliary text when it has one (\code{R\_WAVE}), else the WFDB
+mnemonic of its code (\code{N}, \code{V}, \code{+} \dots). Markers are drawn on their signal and
+can be listed by name.
+
+\paragraph{How a collection is read.}
+\begin{enumerate}
+\item \textbf{Records} are taken in \file{index.csv} order, each signal a piece of its channel
+  (modality, signal description, unit). An \file{index.csv} without a \code{record} column is
+  refused (\code{index.csv has no record column}). A row whose \code{record} is empty, absolute
+  or has a \code{..} component is left out (under its name, or \code{row N} when empty, counting
+  the rows after the header from 1), with the reason \code{index.csv names a record outside its
+  folder (an absolute name, or one with ..)}; a record that cannot be read is left out with the
+  reason, as in a folder of records; the recording's notes say how many were left out, and a
+  collection of which no record can be read is refused.
+\item \textbf{Placement on the time axis.} A record with \code{start\_unix} starts there. A record
+  without one follows the data before it, after the break \file{gaps.csv} states before it
+  (\code{gap\_s} on a row of scope \code{all} whose \code{records\_after} names it), and records
+  of the same \code{stretch} start together. Such records are drawn as \emph{time not stated}:
+  their place is known relative to their neighbors, not on the clock.
+\item \textbf{Breaks} (\file{gaps.csv}, except the record splits) are drawn between the data,
+  with their reason and length; a break without stated times takes them from the records on each
+  side.
+\item \textbf{Vital signs, events and markers} as above.
+\end{enumerate}
+
+\paragraph{An example.} The smallest collection: one ECG record with a start time, and an alarm.
+\begin{lstlisting}[style=text]
+index.csv
+  record,modality,start_unix
+  ecg/rec_0001,ecg,1709287200.0
+events.csv
+  start_unix,end_unix,level,text,kind
+  1709287201,1709287203,2,HR HIGH 151 > 150,alarm
+ecg/RECORDS
+  rec_0001
+ecg/rec_0001.hea, ecg/rec_0001.dat
+\end{lstlisting}
+\file{viewers/vitalstream/testdata/generate.py} writes a complete synthetic one (three stretches,
+a break of stated length, a record without a start time, vital signs from two sources, alarms and
+markers) with the Python standard library only; \file{viewers/vitalstream/testdata/collection}
+is the test collection the viewers and Medorama are checked on.
+
+\subsection{Overlapping records and lanes}
+\label{sec:recordings-overlap}
+
+A signal recorded twice at the same time (two records of the same channel whose times overlap)
+is never drawn on top of itself: each piece goes into the first \emph{lane} of its channel that
+it does not overlap, and each further lane is a channel of its own, named with its lane:
+\code{II}, \code{II (2)}, \code{II (3)} \dots{} Pieces are placed in the order of the records
+(\file{index.csv}'s order, or their paths), and the signals of a record in header order. The
+recording's notes say so when it happens. A channel is a modality (\code{wfdb} for plain
+records), a signal description and a unit.
+
+\subsection{Limits}
+\label{sec:recordings-limits}
+
+So that opening a large folder by mistake cannot overwhelm a viewer, a folder of plain records is
+read only within the limits of \cref{tab:recordings-limits}. They are VitalStream settings
+(\code{max\_records}, \code{max\_depth}, \code{max\_scan\_s} in the viewer's settings file;
+\cref{chap:vitalstream}); Medorama has no such settings, and indexes a recording's folder within
+the defaults.
+
+\begin{table}[htbp]
+\caption{The limits on a folder of plain records.}
+\label{tab:recordings-limits}
+\begin{tabularx}{\linewidth}{@{}LP{1.6cm}P{1.8cm}@{}}
+\toprule
+{\tabhead Limit} & {\tabhead Default} & {\tabhead Over it} \\
+\midrule
+Header files below the folder (segments and layout headers counted) & 5000 & Refused \\
+Folder levels below the folder & 20 & Refused \\
+Seconds to count the records before opening (the viewers' summary) & 10 & Refused \\
+\bottomrule
+\end{tabularx}
+\end{table}
+A refusal says which limit was reached and what to do instead: open a subfolder, or describe the
+records in an \file{index.csv} (a collection, which lists its records itself and is not limited
+by these). Every recording, a collection included, has at most 100\,000 pieces (signals
+$\times$ records), and a folder's index key is computed from at most 200\,000 of its files
+within \code{max\_depth} levels (\cref{sec:formats-reference-limits}).
+Before opening a folder, the viewers show what it holds (records, segments, signals, time span,
+size), read from the headers alone; indexing starts only when it is confirmed, shows its
+progress, and can be cancelled.
+
+\section{EDF, EDF+, BDF and BDF+ files}
+\label{sec:recordings-edf}
+
+The European Data Format (EDF) is a widely used open format for physiological recordings: sleep
+studies (polysomnography), EEG, long-term ECG and many research datasets. Medorama, the three
+VitalStream viewers and the ECG viewer read four variants directly, without an add-on
+(\cref{tab:recordings-edf-variants}). The specifications are published at
+\url{https://www.edfplus.info/specs/}.
+
+\begin{table}[htbp]
+\caption{The variants of EDF that Medorama and its viewers read.}
+\label{tab:recordings-edf-variants}
+\begin{tabularx}{\linewidth}{@{}P{1.6cm}P{1.6cm}L@{}}
+\toprule
+{\tabhead Variant} & {\tabhead Samples} & {\tabhead What it adds} \\
+\midrule
+EDF & 16-bit & The original format (Kemp et al., 1992). \\
+EDF+ & 16-bit & Annotations, and recordings with interruptions (Kemp and Olivan, 2003). \\
+BDF & 24-bit & The BioSemi variant of EDF, used by high-resolution EEG systems. \\
+BDF+ & 24-bit & BDF with the EDF+ extensions. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+An EDF file is one recording. A file is read as EDF when its name ends in \file{.edf} or
+\file{.bdf}, in any letter case. The built-in reader takes precedence over any adapter that lists
+these extensions. Medorama and the three viewers read the same file to the same index, byte for
+byte. In VitalStream, an EDF file becomes the following:
+\begin{itemize}
+\item Each ordinary signal becomes a channel, with the signal's label and physical dimension
+  (\code{ECG}, \code{mV}). Signals may have different sampling rates. A second signal with the
+  same label becomes a channel named with its count, such as \code{ECG (2)}.
+\item The header's start date and time give the time axis. The time is taken as UTC, since EDF
+  does not state a time zone.
+\item EDF+ and BDF+ annotations become events in the \ui{Annotations} lane, with their text and
+  duration.
+\item An interrupted EDF+ or BDF+ recording (EDF+D) gives one stretch of data per uninterrupted
+  run, with a break between runs (``not recorded'').
+\end{itemize}
+The exact reading rules, which the three implementations follow, are specified in
+\cref{sec:formats-reference-edf}; what the viewer shows is described in
+\cref{sec:vitalstream-edf}.
+
+\paragraph{EEG and sleep studies in Medorama.} Medorama has two recording categories for these
+files, \textbf{EEG} (\code{eeg}) and \textbf{Sleep} (\code{sleep}), beside ICU and Holter. Each is
+a column of the patient page's journey, and its recordings open in VitalStream. A table's
+\code{category} column, the category chosen for the import, or the table's file name (with words
+such as \code{eeg}, \code{polysomnography}, \code{psg} or \code{sleep study}) chooses the
+category (\cref{chap:importing}). With the category \code{ecg}, an EDF file is not a recording
+but an attachment of its entry, opened by the ECG viewer (\cref{chap:ecg-imaging}).
+
+The demo made by \file{tools/make-demo-data.py} includes an overnight sleep study for the
+patient \code{P900004}: a two-hour EDF+ file (\file{sleep/P900004\_psg\_20240305.edf}) with EEG,
+EOG, ECG, airflow, thoracic effort and SpO2 signals, and its scoring (sleep stages and events) as
+annotations. The study has its own encounter in the sleep laboratory (\code{E9100010}), with a
+note, the \emph{Sleep study report}. Its table, \file{sleep\_index.csv}, links the file to the
+patient and the encounter:
+\begin{lstlisting}[style=text]
+patient_id,encounter_id,time,study,category,file
+P900004,E9100010,2024-03-05 22:30,Polysomnography,sleep,../sleep/P900004_psg_20240305.edf
+\end{lstlisting}
+
+\screenshot{patient-sleep.png}{The demo's EDF+ sleep study in the Sleep column of a patient's
+page (dark theme).}{fig:recordings-sleep}
+
+\paragraph{The patient's identity in the header.} An EDF header has two identification fields of
+80 characters each. EDF+ structures the \emph{local patient identification} as
+\code{code sex birthdate name}, with \code{X} for any part that is unknown, and the \emph{local
+recording identification} as \code{Startdate dd-MMM-yyyy admincode technician equipment}. These
+fields often hold protected health information, so they are handled as follows:
+\begin{itemize}
+\item The index never contains them, and neither does anything the viewers send to the browser.
+  VitalStream and the ECG viewer do not show them, in Medorama or on their own.
+\item Medorama's \code{identify} action reads them (\code{from\_edf} in
+  \file{medorama/src/identify.rs}). It stores the code, sex, birth date, name and admin code in
+  the catalog's identifier tables, next to the database's own values, so that an administrator
+  can check that the file belongs to the patient it is linked to
+  (\cref{sec:recordings-identifiers}). A plain EDF patient field, which has no structure, is kept
+  whole as the code.
+\item In Privacy Mode, EDF files and their annotations are de-identified before they leave the
+  server (\cref{sec:protecting-edf}).
+\end{itemize}
+
+\paragraph{Limits.}
+\begin{itemize}
+\item \textbf{A folder of EDF files is not yet one session.} VitalStream's \ui{Open multiple
+  records\dots} reads the WFDB records of a folder; open EDF files one at a time. The ECG viewer's
+  \ui{Open multiple records\dots} does list the EDF files of a folder.
+\item \textbf{Annotation-only files are refused.} An EDF+ file that holds only annotations (some
+  sleep-scoring files do) has no signal to draw. Its events cannot yet be shown over another
+  file's signals.
+\end{itemize}
+
+\section{Formats read by add-ons}
+\label{sec:recordings-addons}
+
+Medorama and the viewers read WFDB records and EDF files themselves. Every other recording
+format is read by an \emph{adapter}: a separate program, installed beside them in the adapter
+folder (the setting \code{adapters\_dir}), that turns a recording into the index the viewers draw
+from, and reads its samples when a view zooms in. Formats that are licensed, or that only some
+institutions may read, are distributed this way, as \emph{add-ons}, outside the repository. An
+adapter writes only the index files, into the folder it is given, and never anything next to a
+recording. It is called as a child process, and listens on no port.
+
+\paragraph{BedMasterEx \file{.Stp}.} The STP add-on (\code{stp-adapter}) reads the \file{.Stp}
+files of BedMasterEx: recordings of GE monitors (Unity and Carescape) and of Philips monitors
+(PIICiX and Viridia). It is private: it is licensed separately and released, as a prebuilt
+program, to institutions under agreement. It is not in Medorama's repository.
+
+Until an add-on is installed, Medorama and the viewers name none of its formats: a file of that
+format is treated like any other file they do not read. The viewers' file browsers do not list
+it, and opening it is refused (\code{not a recording this program reads}). An import skips the row
+that names it, with a warning, and keeps nothing of it. Once an administrator has installed the
+add-on on the server (never through the page) and restarted Medorama, remove that earlier import
+and import the table again. The files then come in as recordings, linked to their patients and
+indexed by the workers. Installing, checking and removing add-ons, and their
+protocol, are described in \cref{chap:addons}.
+
+With an adapter, the recording is indexed like any other: the index holds its channels, pieces,
+vital signs, alarms, breaks and markers, the format's label, and the adapter's name. Raw samples
+are read from the recording through the adapter when a view zooms in close enough. Indexes made
+through an adapter are shared like the others: the three viewers and Medorama read and write the
+same index folders. A failing adapter makes the recording unreadable, never the program; the
+indexing fails with the adapter's message.
+
+\section{Linking recordings to encounters}
+\label{sec:recordings-linking}
+
+A recording is linked to one or more encounters after every import and every indexing, in this
+order:
+\begin{enumerate}
+\item \textbf{By a database row} that names its file and its encounter (the \code{file} and
+  \code{encounter\_id} columns). The recording belongs to that encounter, as if linked manually.
+\item \textbf{By a bed stay's \code{recording\_file}.} A recording whose file name or path is a
+  bed stay's \code{recording\_file} (ignoring case) is linked to that bed stay's encounter.
+\item \textbf{By bed and time.} Bedside-monitor systems name their files
+  \code{UNIT\_BED-<Unix time>} (\file{ICU7\_12-1704106800.Stp}): the unit is the part of the name
+  before the first \code{\_}, the bed the rest before the last \code{-}, and the time the digits
+  after it (9 to 11 digits). A recording so named is linked to every encounter that has a bed stay
+  whose \code{care\_unit} and \code{bed} are its unit and bed (\code{care\_unit} + \code{\_} +
+  \code{bed}, ignoring case) and whose time overlaps the recording's. Before indexing, the
+  recording's time is the time in its name; after indexing, it is the real start and end. A bed
+  stay without an end is open.
+\end{enumerate}
+
+\paragraph{Decisions made manually} win over all of these, and outlive removing and importing the
+databases again. In an encounter's panel (\cref{chap:patients}), admins have, for each recording:
+\begin{itemize}
+\item \ui{Unlink} unlinks the recording, and it is \emph{never} linked to that encounter
+  automatically again.
+\item \ui{Forget manual link}, for a recording linked manually, forgets the decision, and
+  automatic linking resumes.
+\end{itemize}
+A recording with a manual link gets exactly its manual links. For administrators with the PHI
+permission, \ui{Review} lists the \ui{Recordings whose files disagree}: automatic links where the
+recording's own file names a patient other than the one in the databases. \ui{Keep the link}
+makes such a link manual; \ui{Unlink} never links the recording to that encounter again. Every decision is in the audit log.
+Recordings that match nothing are listed in \ui{Import} $\rightarrow$ \ui{Recordings} with
+\ui{Not linked to an encounter} (\cmd{medorama recordings -{}-unlinked}).
+
+\section{Indexing in the background}
+\label{sec:recordings-indexing}
+
+A recording is drawn from its \emph{index}: a folder in \code{index\_dir} that holds its
+channels, the envelopes of every piece (the minimum and maximum of every block of 32 samples, and
+of every four blocks above that), its vital signs, alarms, breaks and markers. The folder's name is
+the recording's \emph{index key}: a fingerprint of the index version, the recording's path and
+its files' names, sizes and modification times. A changed recording has a new key, and is indexed
+again.
+
+\begin{itemize}
+\item \textbf{Automatically.} With \code{auto\_index} on (the default), the server queues the
+  indexing of every recording that is new or changed, and the workers (\code{workers}, default 2)
+  index them one by one while it runs. The \ui{Jobs} tab shows the queue (\cref{chap:actions}).
+  Users who may run actions can also \ui{Index now} a recording that is not indexed.
+\item \textbf{Shared.} A recording whose current index is already in \code{index\_dir} (for
+  instance, the viewers' \code{cache\_dir}, pointed at the same folder) is marked indexed at once,
+  without indexing it again.
+\item \textbf{Times.} Once a recording is indexed, its start and end are its real ones, and its
+  format is the index's (\code{WFDB records}, \code{EDF+}, or the add-on's label). Links by bed
+  and time are computed again.
+\item \textbf{Identifiers.} The built-in action \code{identify} reads the identifiers that the
+  recording states, once per recording and again when its file changes. Medorama reads an EDF
+  header's fields itself, and asks an adapter for the formats it reads; WFDB records hold none
+  (\cref{sec:recordings-identifiers}).
+\end{itemize}
+
+\paragraph{Checking the files.} \ui{Re-check the files} (\ui{Import} $\rightarrow$
+\ui{Recordings}), \cmd{medorama check}, and the server every \code{check\_interval\_s} seconds
+(default 900; 0 means never) check every recording: whether it is still there, whether it
+changed, and whether its index folder is still there. A missing recording is kept, marked
+missing, until an administrator removes it, and is counted as back when it returns. A changed
+recording is indexed again, and a lost index is made again. The following command runs the check
+and prints a summary:
+\begin{lstlisting}[style=shell]
+medorama check
+# 1204 checked: 2 missing, 0 back, 3 changed, 0 index folders gone
+\end{lstlisting}
+
+\section{The Recordings tab}
+\label{sec:recordings-tab}
+
+\ui{Import} $\rightarrow$ \ui{Recordings}, for administrators, lists every recording, a page at
+a time. For each recording it shows the status, the name (with any error, and, for users with the
+PHI permission, what its file says of the patient), the kind and format, the start, the length,
+the encounters, the sources and the path, with the buttons \ui{View} (in VitalStream),
+\ui{Copy path}, \ui{Index now} and \ui{Remove}. The status is \code{new} (never indexed),
+\code{queued}, \code{indexing}, \code{ready}, \code{stale} (changed since it was indexed),
+\code{failed} or \code{missing} (not found at the last check). The search line takes words or
+\code{field:value} terms (\code{file:}, \code{path:}, \code{unit:}, \code{source:},
+\code{status:} \dots). \ui{Not linked to an encounter} keeps only the unlinked recordings, and
+\ui{Remove matching\dots} removes every recording the search finds, after saying how many.
+
+\paragraph{Removing recordings} takes them out of the catalog; the files are never touched. A
+recording's index and results are deleted too only when asked (the page asks; on the command
+line, \opt{-{}-purge-results}), and only inside \code{results\_dir} and \code{index\_dir}.
+Encounters stay. The following commands list the unlinked recordings, show what a removal would
+take out, and remove it:
+\begin{lstlisting}[style=shell]
+medorama recordings --unlinked                       # recordings no encounter holds
+medorama remove --search "unit:ICU7" --dry-run       # what would go
+medorama remove --search "unit:ICU7" --purge-results
+\end{lstlisting}
+
+\section{Identifiers in recordings}
+\label{sec:recordings-identifiers}
+
+\begin{phibox}
+Bedside monitors and EDF headers store patient identifiers in the recordings themselves. The
+action \code{identify} reads them: from an EDF header's patient and recording fields itself, and
+through the recording's adapter for other formats. A file that names several patients is
+flagged. The identifiers are kept in the catalog's database only, and shown only to users with
+the PHI permission outside Privacy Mode, so that a reviewer can check the databases against them.
+They appear in the Encounters table's \ui{In the files}, the encounter panel, \ui{Import}
+$\rightarrow$ \ui{Recordings}, and the searches \code{file-name:}, \code{file-id:} and
+\code{file-dob:}. They never reach job summaries, the viewers, actions' job descriptions,
+results folders or logs.
+
+The index holds no name, identifier or date of birth. A recording's path and file name may still
+identify a patient, however (bedside-monitor systems name files by unit, bed and time), and every
+value of a recording is patient data. Keep recordings, and the index folders made from them, on
+protected storage. In Privacy Mode, VitalStream opens recordings by token, never by path, and
+every time it shows is moved (\cref{sec:protecting-vitalstream}).
+\end{phibox}

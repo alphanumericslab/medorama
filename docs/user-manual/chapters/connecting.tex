@@ -1,0 +1,650 @@
+% Part III: connecting and building databases. Sources: docs/databases.md ("Choose a way in",
+% "What every database must say", "Connect an OMOP database", "Connect any SQL database through
+% views" with its "Canonical views reference", "Build a new database for Medorama", "Files:
+% recordings, ECGs and images", "Check the result"); docs/design/sources.md;
+% docs/administration.md, "Connected databases". Checked against medorama/src/sources/mod.rs
+% (connections, settings, views, checks, filters), sources/omop.rs (the OMOP views),
+% sources/link.rs (the registry), categories.rs (of_entry), main.rs (connections commands),
+% server.rs (connection_add) and web/index.html (the form).
+\chapter{Connecting and building databases}
+\label{chap:connecting}
+
+A \emph{connected database} is a database that Medorama reads in place, read-only, at each
+request, beside the catalog: an OMOP CDM instance, a research warehouse, a registry or a study's
+database. Nothing is copied from it but its persons' identifiers, once they are linked to the
+catalog's patients.
+
+This chapter is written for data managers and database engineers. It explains which way into
+Medorama to choose, what every database must say, how to connect an OMOP database and any other
+SQL database, how to build a new database that Medorama reads, and how a connected database's
+persons become the catalog's patients. Importing tables is the subject of \cref{chap:importing}.
+
+\section{Three ways in}
+\label{sec:connecting-ways}
+
+\begin{table}[htbp]
+\caption{The three ways a database reaches Medorama.}
+\label{tab:connecting-ways}
+\begin{tabularx}{\linewidth}{@{}P{2.4cm}LLL@{}}
+\toprule
+ & {\tabhead Import tables} & {\tabhead Connect an OMOP database} & {\tabhead Connect any other
+  database} \\
+\midrule
+What & CSV, Parquet, Excel or OpenDocument files, CLIF folders, known exports, and the tables
+  that \cmd{muse-py index} and \cmd{dicom-py index} write & An OMOP CDM 5.3 or 5.4 instance & A
+  research warehouse, a registry or a study's database, in any layout \\
+Where the data live & Copied into the catalog: each table is a database of the Databases tab,
+  kept as it came & In place: read at each request, never copied (only persons' identifiers, once
+  linked) & In place, as for OMOP \\
+Speed and freshness & Fastest searches; as current as the last import & Each search queries the
+  database; always current & The same as OMOP \\
+Engines & None needed & PostgreSQL (on-site, Amazon RDS and Aurora, Azure), SQLite files & The
+  same as OMOP \\
+What you write & Nothing, if the column names are recognized; otherwise a mapping & The
+  connection's settings & Three SQL views (\code{persons}, \code{visits}, \code{entries}) in a
+  TOML file \\
+Files (recordings, ECGs, images) & Yes, through a \code{file} column & No & No \\
+Removing & Removes everything it added & Disconnecting removes its links and what it added; the
+  database is untouched & The same as OMOP \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+To choose, answer these questions in order:
+\begin{enumerate}
+\item \textbf{Are they files} (recordings, ECGs, DICOM)? Then list them in a table with their
+  patients and import it. A connected database cannot bring files, and a file never enters
+  without its patient.
+\item \textbf{Is it an OMOP CDM database?} Connect it as \code{omop}, rather than exporting it.
+\item \textbf{Must the data stay in their database}, because they change daily or are too large
+  to copy? Connect it through views.
+\item \textbf{Is it a one-off extract, or a set of spreadsheets?} Import it.
+\end{enumerate}
+The three ways mix in one catalog. A person of a connected database is linked to the same patient
+as an imported row with the same patient ID or MRN (\cref{sec:connecting-registry}), so one
+patient's page can show imported laboratory results, an OMOP instance's diagnoses and a recording
+side by side.
+
+\screenshot{sources.pdf}{Sources: the catalog and the connected databases answer the same questions; their persons are linked to one registry of patients, and every answer leaves through the privacy gate.}{fig:connecting-sources}
+
+\section{What every database must say}
+\label{sec:connecting-must-say}
+
+Whatever the way in, the data must answer five questions for Medorama to place them.
+\begin{enumerate}
+\item \textbf{Who.} Every row names its patient by an identifier that the institution uses
+  consistently: a \code{patient\_id} (a study's or a system's ID), or an \code{mrn} (the medical
+  record number), with \code{mrn\_authority} when several systems issue MRNs. Names, date of
+  birth and sex describe a patient; they never identify one on their own.
+\item \textbf{When.} Every result, note, drug or file has a time: with an offset
+  (\code{2024-03-02T07:10:00-05:00}, \code{Z}), as local time in the catalog's or the
+  connection's time zone (\code{2024-03-02 07:10}), or in Unix seconds.
+\item \textbf{Where in the stay} (optional, recommended). The encounter or visit that the row
+  belongs to and, for imports, the bed stays (\code{care\_unit}, \code{bed}, \code{bed\_start},
+  \code{bed\_end}) that link bedside-monitor recordings to their encounters.
+\item \textbf{What.} A name (\code{Lactate}, \code{QTc}, \code{Vancomycin}) and, when there is
+  one, a value with its unit, a normal range and a flag, a code with its vocabulary
+  (\code{2524-7}, \code{LOINC}), or a text.
+\item \textbf{Which category.} The column of the Patient Journey that it belongs to, given by its
+  key (\cref{tab:connecting-keys}). The keys include \code{eeg} and \code{sleep}, the
+  categories of EEG recordings and sleep studies.
+\end{enumerate}
+
+\begin{table}[htbp]
+\caption{The category keys.}
+\label{tab:connecting-keys}
+\begin{tabularx}{\linewidth}{@{}P{1.3cm}LP{1.3cm}LP{1.3cm}LP{1.3cm}L@{}}
+\toprule
+{\tabhead Key} & {\tabhead Category} & {\tabhead Key} & {\tabhead Category} & {\tabhead Key} &
+  {\tabhead Category} & {\tabhead Key} & {\tabhead Category} \\
+\midrule
+\code{icu} & ICU & \code{vit} & Vitals & \code{lab} & Labs & \code{micro} & Microbiology \\
+\code{path} & Pathology & \code{ecg} & ECG & \code{holter} & Holter & \code{eeg} & EEG \\
+\code{sleep} & Sleep & \code{echo} & Echo & \code{cath} & Cath lab & \code{img} & Imaging \\
+\code{proc} & Procedures & \code{med} & Medications & \code{blood} & Transfusions &
+  \code{support} & Life support \\
+\code{dx} & Conditions & \code{obs} & Assessments & \code{note} & Notes & \code{allergy} &
+  Allergies \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+A connected database's entry may also give a category by its label or one of its words, as an
+imported row may (\cref{chap:importing}), but storing the keys themselves, in lower case, is the
+safest choice. A value that names no category is read as \code{lab}. An entry of \code{lab} is
+read as \code{vit} when it is a vital sign, recognized by its name (\code{heart rate},
+\code{SpO2}, \code{MAP} and so on) or by its LOINC code (\code{8867-4}, \code{8310-5},
+\code{8480-6}, \code{8462-4}, \code{8478-0}, \code{9279-1}, \code{59408-5}, \code{2708-6},
+\code{29463-7}, \code{8302-2}, \code{39156-5}, \code{8331-1}, \code{8332-9}, \code{8333-7}).
+
+\begin{phibox}
+Identifiers are protected data. Medorama keeps names, MRNs, account numbers and dates of birth in
+its identifier tables. Users without the PHI permission, and everyone in Privacy Mode, see
+placeholders and pseudonyms instead (\cref{chap:protecting}). Export or expose only the
+identifiers needed for linking: a study that needs no names or dates of birth should not provide
+them, since Medorama links by patient IDs and MRNs alone.
+\end{phibox}
+
+\section{A connection}
+\label{sec:connecting-connection}
+
+A connection is a row of the catalog's database: a name, a kind, the database's URL without its
+password, the password's file, and settings (\cref{tab:connecting-settings}). Only
+administrators connect and disconnect databases. Connecting (\code{connect}), linking and
+syncing (\code{link}: the persons linked, held and invalid) and disconnecting
+(\code{disconnect}) are written to the audit log.
+
+\begin{itemize}
+\item \textbf{Kinds.} The kind \code{omop} is an OMOP CDM 5.3 or 5.4 database, whose views are
+  built in (\cref{sec:connecting-omop}). The kind \code{sql} is any layout, read through views
+  that an administrator writes (\cref{sec:connecting-sql}).
+\item \textbf{Databases.} Medorama reads PostgreSQL (on-site, Amazon RDS and Aurora, Azure
+  Database for PostgreSQL, anything that speaks its protocol), given by a \code{postgres://} or
+  \code{postgresql://} URL, and SQLite files, given by a \code{sqlite:} URL
+  (\code{sqlite:/data/county/omop.sqlite}). Other engines (SQL Server, Oracle, Snowflake,
+  BigQuery) are not read directly yet; a PostgreSQL foreign-data wrapper reaches them in the
+  meantime.
+\item \textbf{Read only, enforced.} PostgreSQL sessions are opened with
+  \code{default\_transaction\_read\_only = on}, and SQLite files are opened read-only, for
+  queries only. Medorama therefore cannot write there, even with an account that could. Give it
+  an account that can only read as well.
+\item \textbf{The name} is written in criteria before a dot (\code{omop.lactate}). It is made of
+  letters, digits, \code{-} and \code{\_}, starts with a letter, has at most 40 characters, and
+  is not the name of another connection or of an imported database.
+\item \textbf{Secrets.} The password is read from a file (\opt{-{}-password-file}) or from the
+  environment variable \code{MEDORAMA\_SOURCE\_PASSWORD\_<NAME>}, which takes precedence. In the
+  variable's name, the connection's name is written in capitals, with every character other than
+  letters and digits written as \code{\_}: \code{omop-cdm} reads
+  \code{MEDORAMA\_SOURCE\_PASSWORD\_OMOP\_CDM}. A password given in the page is kept in
+  \file{<home>/secrets/<name>.password}, readable by its owner only, and deleted when the
+  database is disconnected. A password is never stored in the database, in a settings file, in a
+  URL or in the audit log, and it is never sent back. A URL that holds a password is refused.
+\item \textbf{Checked when added.} Each view must answer with its canonical columns, and the
+  version query (if any) with a value; otherwise the connection is refused.
+\end{itemize}
+
+\begin{xltabular}{\linewidth}{@{}P{3.6cm}P{2.6cm}L@{}}
+\caption{The settings of a connection (\cmd{medorama connections add}).}
+\label{tab:connecting-settings}\\
+\toprule
+\tabhead Option & \tabhead Default & \tabhead Meaning \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Option & \tabhead Default & \tabhead Meaning \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{NAME} & (Required) & The connection's name, as criteria write it \\
+\opt{-{}-kind} & (Required) & \code{omop} or \code{sql} \\
+\opt{-{}-url} & (Required) & \code{postgres://user@host/db?sslmode=require} (without a password),
+  or \code{sqlite:/path/to/file} \\
+\opt{-{}-password-file} & (None) & The file that holds the password; otherwise the variable
+  \code{MEDORAMA\_SOURCE\_PASSWORD\_<NAME>} \\
+\opt{-{}-ca-file} & (None) & Certificate authorities (PEM) for the server's certificate, besides
+  the system's \\
+\opt{-{}-schema} & The default schema & The schema of the database's tables (OMOP's CDM): a
+  plain name (letters, digits, \code{\_}) \\
+\opt{-{}-vocabulary-schema} & The CDM's & The schema of OMOP's vocabulary (\code{concept}), when
+  it is separate: a plain name \\
+\opt{-{}-timezone} & The catalog's & The time zone of the database's local times, an IANA name
+  such as \code{Europe/Paris} (an unknown one is refused). Without this option, the catalog's
+  time zone is written into the connection when it is added (by the command or the page) and
+  stays fixed from then on: changing the catalog's \code{timezone} later does not change it. On
+  PostgreSQL, a \code{timestamp} column (without a time zone) is read in it; a
+  \code{timestamptz} is an instant \\
+\opt{-{}-identifier} & \code{mrn} & What OMOP's \code{person\_source\_value} holds: \code{mrn},
+  \code{patient\_id} or \code{none} \\
+\opt{-{}-mrn-authority} & (None) & The authority that issued the database's MRNs, for persons
+  whose view gives none \\
+\opt{-{}-timeout-s} & 60 & Each query's time limit, in seconds (PostgreSQL only; SQLite files are
+  local and have none) \\
+\opt{-{}-max-rows} & 1{,}000{,}000 & The number of rows a criterion may read, and of persons a
+  sync reads \\
+\opt{-{}-views} & (None) & For the kind \code{sql}, a TOML file with the views \\
+\end{xltabular}
+
+\paragraph{In the page,} an administrator uses \ui{Import} $\rightarrow$ \ui{Databases}, in the
+card \ui{Add a database}, and then chooses \ui{Connect a database file} (an SQLite file on the
+server, inside \code{data\_roots}, never the catalog's own database; \cmd{connections add}
+checks the same) or \ui{Connect a database server} (a PostgreSQL server). A name already used is
+refused before anything is written (a password given in the page included). The form asks for:
+\begin{itemize}
+\item the \ui{Name};
+\item the \ui{Layout}: \ui{OMOP CDM 5.3 or 5.4}, or \ui{Any layout, through SQL views}, which
+  opens \ui{SQL views (any layout)} with the boxes \ui{persons}, \ui{visits}, \ui{entries} and
+  \ui{version};
+\item the \ui{File on this server}, or the \ui{Server} and its \ui{Password};
+\item the \ui{Schema} and the \ui{Vocabulary schema};
+\item \ui{Its patients are named by} (\ui{MRN}, \ui{patient ID} or \ui{nothing the catalog
+  knows}), the \ui{MRN authority}, and the \ui{Time zone of its times}.
+\end{itemize}
+\ui{Connect} checks the database and connects it. The card \ui{Connected databases} lists the
+connections, each with \ui{Check}, \ui{Link all} and \ui{Disconnect\dots}.
+
+The same can be done on the command line. The following commands connect an OMOP database on a
+PostgreSQL server and another in an SQLite file, then list, check, link and remove connections:
+\begin{lstlisting}[style=shell]
+medorama connections add omop --kind omop \
+    --url "postgres://reader@omop.example.org/cdm?sslmode=require" \
+    --password-file /etc/medorama/omop-password \
+    --schema cdm --vocabulary-schema vocab --mrn-authority HOSP --timezone America/New_York
+medorama connections add county --kind omop --url sqlite:/data/county/omop.sqlite --identifier mrn
+medorama connections list            # name, kind, URL, engine, persons linked
+medorama connections check omop      # each view answers; the data's version
+medorama connections sync omop       # link every person now (else as searches find them)
+medorama connections remove omop     # its links and what it added go; the database is untouched
+\end{lstlisting}
+
+\section{Connecting an OMOP database}
+\label{sec:connecting-omop}
+
+Medorama has the views of the OMOP CDM 5.3 and 5.4 built in. They read the tables \code{person},
+\code{visit\_occurrence}, \code{visit\_detail}, \code{care\_site}, \code{measurement},
+\code{observation}, \code{condition\_occurrence}, \code{drug\_exposure},
+\code{procedure\_occurrence}, \code{note}, \code{provider}, \code{concept} (in the vocabulary's
+schema) and \code{cdm\_source} (the version). Every one of these tables must exist, even if it is
+empty: a view that names a missing table fails its check, and the connection is refused when it
+is added. \code{cdm\_source} is therefore required in effect, since the version is read from it.
+
+\begin{xltabular}{\linewidth}{@{}P{3.2cm}L@{}}
+\caption{How each OMOP table is read.}
+\label{tab:connecting-omop}\\
+\toprule
+\tabhead OMOP table & \tabhead Read as \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead OMOP table & \tabhead Read as \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{person} & A person. \code{person\_id} is the key, and \code{person\_source\_value} is the
+  MRN or the patient ID, as the setting \code{identifier} says (\code{mrn}, the default;
+  \code{patient\_id}; or \code{none}, neither). The date of birth comes from
+  \code{birth\_datetime}, otherwise from \code{year\_of\_birth}, \code{month\_of\_birth} and
+  \code{day\_of\_birth} when all three are given. The sex comes from \code{gender\_concept\_id}
+  (8532 is \code{F}, 8507 is \code{M}, anything else none). No names are read. \\
+\code{visit\_occurrence} & A visit, with its start and end datetimes (otherwise dates) and its
+  unit: the name of its care site (\code{care\_site}), otherwise of its visit concept. It is an
+  intensive-care stay when a \code{visit\_detail} of the visit has the concept 32037 (intensive
+  care), or when its unit is named as an intensive-care unit (\code{ICU}, \code{MICU},
+  \code{CCU} and so on) \\
+\code{measurement} & \code{lab} (\code{vit} for vital signs), with the concept's name (otherwise
+  \code{measurement\_source\_value}), code and vocabulary; \code{value\_as\_number}, otherwise
+  the name of \code{value\_as\_concept\_id} or \code{value\_source\_value} as a text result; the
+  unit concept's code (UCUM), otherwise \code{unit\_source\_value}; and \code{range\_low} and
+  \code{range\_high} \\
+\code{observation} & \code{obs}, with the concept's name, code and vocabulary;
+  \code{value\_as\_number}, otherwise \code{value\_as\_string} or the value concept's name; and
+  the unit \\
+\code{condition\_occurrence} & \code{dx}, with the concept's name; the code and vocabulary of
+  the source concept (\code{condition\_source\_concept\_id}: ICD-10-CM), otherwise
+  \code{condition\_source\_value}; and the start and end \\
+\code{drug\_exposure} & \code{med}, with the concept's name, code and vocabulary, the start and
+  end, and \code{dose\_unit\_source\_value} \\
+\code{procedure\_occurrence} & \code{proc}, with the concept's name, code and vocabulary, and its
+  time \\
+\code{note} & \code{note}, with \code{note\_title} (otherwise the note type's name, otherwise
+  \code{Note}), the author (\code{provider\_name} of its \code{provider}) and \code{note\_text} \\
+\code{cdm\_source} & The version: the latest \code{source\_release\_date} and
+  \code{cdm\_release\_date} \\
+\end{xltabular}
+
+Times are read as the database's local times, in the connection's \code{timezone}. On SQLite,
+where OMOP's tools may store dates as Unix seconds, those are turned into text first. With
+\code{identifier = none}, no person is linked to an imported patient. Each person then becomes a
+patient of its own, with the patient ID \code{<connection>:<person key>}
+(\cref{sec:connecting-registry}).
+
+\section{Connecting any other database}
+\label{sec:connecting-sql}
+
+Any database that PostgreSQL or SQLite can query is connected through three \emph{canonical
+views}: SQL queries over its own tables that give Medorama's canonical columns. The views are the
+contract between Medorama and the database. Only these columns are read, so a view cannot pass a
+field that the privacy gate does not know, and the database's other columns stay where they are.
+The views are written in the database's own SQL dialect, and run as written: Medorama wraps each
+one as a subquery (\code{SELECT \dots{} FROM (your view) v WHERE person\_key IN (\dots)}) and
+translates nothing in it (PostgreSQL's \code{?} operators, \code{E''} strings, dollar quotes and
+comments are fine). A view must be a single \code{SELECT} statement without a trailing
+semicolon.
+
+\begin{table}[htbp]
+\caption{The canonical views.}
+\label{tab:connecting-views}
+\begin{tabularx}{\linewidth}{@{}P{1.6cm}LP{1.5cm}@{}}
+\toprule
+{\tabhead View} & {\tabhead Columns, in this order} & {\tabhead Required} \\
+\midrule
+\code{persons} & \code{person\_key}, \code{patient\_id}, \code{mrn}, \code{mrn\_authority},
+  \code{last\_name}, \code{first\_name}, \code{birth\_date}, \code{sex} & Yes \\
+\code{visits} & \code{visit\_key}, \code{person\_key}, \code{start\_time}, \code{end\_time},
+  \code{unit}, \code{icu} & No \\
+\code{entries} & \code{entry\_key}, \code{person\_key}, \code{visit\_key}, \code{category},
+  \code{time}, \code{end\_time}, \code{name}, \code{code}, \code{vocabulary}, \code{value\_num},
+  \code{value\_text}, \code{unit}, \code{ref\_low}, \code{ref\_high}, \code{flag},
+  \code{author}, \code{text} & Yes \\
+\code{version} & One value that changes when the data do (a load time, a count) & No \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Each column has a \emph{privacy class}, which decides what the gate does with it
+(\cref{tab:connecting-columns}).
+
+\begin{xltabular}{\linewidth}{@{}P{3.4cm}LP{3.0cm}@{}}
+\caption{The canonical columns, what they hold, and their privacy class.}
+\label{tab:connecting-columns}\\
+\toprule
+\tabhead Column & \tabhead Holds & \tabhead Class, and in Privacy Mode \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Column & \tabhead Holds & \tabhead Class, and in Privacy Mode \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{person\_key}, \code{visit\_key}, \code{entry\_key} & The database's own keys, of any type
+  (compared as text) & Key: never sent. Persons leave as pseudonyms, entries as tokens \\
+\code{patient\_id}, \code{mrn}, \code{mrn\_authority} & What links a person to the catalog's
+  patients, by the rules of an imported table. Give at least one of \code{patient\_id} and
+  \code{mrn} & Identifier (\code{patient\_id}, \code{mrn}): kept in the catalog's identifier
+  tables, and sent as placeholders \\
+\code{last\_name}, \code{first\_name}, \code{birth\_date} (\code{YYYY-MM-DD}) & The person's
+  description: empty strings when the database has none or should not give them & Identifier:
+  placeholders \\
+\code{sex} & \code{F}, \code{M} and so on & Clinical: as is \\
+\code{start\_time}, \code{end\_time}, \code{time} & Text in a form that imports read
+  (\code{2024-03-02 07:10}, ISO 8601 with an offset), in the connection's time zone, or Unix
+  seconds & Date: moved back by the patient's date offset \\
+\code{unit} (visits) & The ward or unit of the stay & Clinical \\
+\code{icu} & 1 for an intensive-care stay, otherwise 0 (a PostgreSQL boolean works too: cohort
+  searches compare \code{CAST(icu AS INT) = 1} in the database) & Clinical \\
+\code{category} & A category key (\cref{tab:connecting-keys}), or a word that the categories
+  recognize. An unrecognized one becomes \code{lab}, or \code{vit} when the entry's name or LOINC
+  code is a vital sign's & Clinical \\
+\code{name}, \code{code}, \code{vocabulary} & What the entry is: \code{Lactate}, \code{2524-7},
+  \code{LOINC} & Clinical \\
+\code{value\_num}, \code{value\_text}, \code{unit}, \code{ref\_low}, \code{ref\_high},
+  \code{flag} & A number or a text result, its unit, its normal range and its flag (\code{H},
+  \code{L}, \code{HH}, \code{LL}, \code{A} and so on) & Clinical \\
+\code{author} & Who wrote a note & Staff: \code{[Staff Name]} \\
+\code{text} & A note's text, which is free text & Free text: shown with the patient's own names
+  and date of birth replaced, and marked (the default), or withheld when an administrator
+  withholds the text of notes \\
+\end{xltabular}
+
+The views are SQL in the database's own dialect, in a TOML file given with \opt{-{}-views} (in the
+page, in the four boxes of \ui{SQL views (any layout)}). Each view's columns are named by its
+first query: in a \code{UNION ALL}, the later parts need no names. The following file presents a
+warehouse's patients, admissions, results and notes:
+\begin{lstlisting}[language=TOML]
+# warehouse-views.toml
+persons = '''
+  SELECT p.id AS person_key, p.study_id AS patient_id, p.mrn, 'HOSP' AS mrn_authority,
+         '' AS last_name, '' AS first_name, CAST(p.dob AS TEXT) AS birth_date, p.sex
+  FROM research.patients p'''
+visits = '''
+  SELECT a.id AS visit_key, a.patient_id AS person_key,
+         CAST(a.admitted AS TEXT) AS start_time, CAST(a.discharged AS TEXT) AS end_time,
+         a.ward AS unit, CASE WHEN a.icu THEN 1 ELSE 0 END AS icu
+  FROM research.admissions a'''
+entries = '''
+  SELECT 'l' || r.id AS entry_key, r.patient_id AS person_key, r.admission_id AS visit_key,
+         'lab' AS category, CAST(r.collected AS TEXT) AS time, NULL AS end_time,
+         r.test AS name, r.loinc AS code, 'LOINC' AS vocabulary, r.value AS value_num,
+         '' AS value_text, r.unit, r.low AS ref_low, r.high AS ref_high, r.flag,
+         '' AS author, '' AS text
+  FROM research.results r
+  UNION ALL
+  SELECT 'n' || n.id, n.patient_id, n.admission_id, 'note', CAST(n.written AS TEXT), NULL,
+         n.kind, '', '', NULL, '', '', NULL, NULL, '', n.author, n.body
+  FROM research.notes n'''
+version = "SELECT MAX(loaded_at) FROM research.loads"
+\end{lstlisting}
+The following commands connect the warehouse with these views and check it:
+\begin{lstlisting}[style=shell]
+medorama connections add warehouse --kind sql --url "postgres://reader@dw.example.org/research" \
+    --password-file /etc/medorama/dw-password --views warehouse-views.toml
+medorama connections check warehouse
+\end{lstlisting}
+
+\subsection{Performance}
+\label{sec:connecting-performance}
+
+Medorama asks the views only for what it needs:
+\begin{itemize}
+\item A patient's page reads the persons, visits and entries that it shows, with
+  \code{WHERE person\_key IN (\dots)}. What was read is kept for 30 seconds, because one page
+  reads it for its summary, journey and report.
+\item A cohort's criterion runs one query over \code{entries}, with the filters that the database
+  can apply itself: the category, the name (exact, or containing a word), a code's prefix, a
+  text, and whether there is a number. Medorama itself tests values in other units,
+  \code{latest}, dates and stays.
+\item The names of what a database holds are read once, for criteria written as text, and kept
+  for ten minutes.
+\end{itemize}
+Index the underlying tables on the person, the time, and the name or code by which entries are
+searched. A criterion that would read more than \code{max\_rows} rows is refused, with a message
+that asks to narrow it (a date range, a database). Connections are pooled per server, and a
+connection that the server closed is replaced.
+
+\section{Building a new database for Medorama}
+\label{sec:connecting-building}
+
+When a study builds its database from scratch, two \emph{lightweight databases} work without any
+server: a folder of CSV files, which you import, and a single SQLite file, which you connect.
+Choose by how the data will be used (\cref{tab:connecting-lightweight}).
+
+\begin{table}[htbp]
+\caption{Two lightweight databases for a study.}
+\label{tab:connecting-lightweight}
+\begin{tabularx}{\linewidth}{@{}P{3.6cm}LL@{}}
+\toprule
+ & {\tabhead A folder of CSV files} & {\tabhead An SQLite file with the canonical tables} \\
+\midrule
+Brings files (recordings, ECGs, images) & Yes & No (list the files in a CSV table beside it) \\
+Updated by & Importing again (remove the earlier import first) & Writing to the file; Medorama
+  reads it live \\
+Written with & Any spreadsheet or script & Any SQLite tool or library \\
+Needs & Nothing & Nothing (PostgreSQL works the same way, as a schema) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{A folder of CSV files.} Write one CSV file per kind of table, with the column names of
+\cref{tab:importing-columns}, and import them in this order:
+\begin{lstlisting}[style=text]
+study/
+  patients.csv       patient_id, sex, birth_date (only if needed)
+  encounters.csv     encounter_id, patient_id, admit_time, discharge_time
+  labs.csv           patient_id, encounter_id, time, name, value, unit, ref_low, ref_high,
+                     code, vocabulary
+  medications.csv    patient_id, encounter_id, time, end_time, name, value, unit
+  conditions.csv     patient_id, time, name, code, vocabulary
+  notes.csv          patient_id, time, name, text
+  recordings.csv     patient_id, time, category, file   (paths relative to this folder)
+\end{lstlisting}
+The file names choose the categories (\code{labs}, \code{medications}, \code{conditions},
+\code{notes}), and the \code{category} column of \file{recordings.csv} chooses each recording's
+(\code{icu}, \code{holter}, \code{eeg}, \code{sleep}). The following loop previews and imports
+the files:
+\begin{lstlisting}[style=shell]
+cd study
+for t in patients encounters labs medications conditions notes recordings; do
+  medorama import-table "$t.csv" --dry-run && medorama import-table "$t.csv" --source study
+done
+\end{lstlisting}
+
+\paragraph{An SQLite file with the canonical tables.} The simplest database that Medorama
+connects to is an SQLite file (or a PostgreSQL schema) whose tables are already the canonical
+views. The following SQL creates one:
+\begin{lstlisting}[language=SQL]
+-- study.sqlite: a database Medorama connects to as it is
+CREATE TABLE persons (
+  person_key    TEXT PRIMARY KEY,        -- the database's own key
+  patient_id    TEXT,                    -- the study's ID (links to imported patients)
+  mrn           TEXT,                    -- or the MRN, when the study may hold it
+  mrn_authority TEXT DEFAULT '',
+  last_name     TEXT DEFAULT '',         -- leave the identifiers empty when not needed
+  first_name    TEXT DEFAULT '',
+  birth_date    TEXT DEFAULT '',         -- YYYY-MM-DD
+  sex           TEXT DEFAULT ''          -- F, M, ...
+);
+CREATE TABLE visits (
+  visit_key  TEXT PRIMARY KEY,
+  person_key TEXT NOT NULL REFERENCES persons(person_key),
+  start_time TEXT, end_time TEXT,        -- 2024-03-02 07:10, or ISO 8601 with an offset
+  unit       TEXT DEFAULT '',
+  icu        INTEGER DEFAULT 0
+);
+CREATE TABLE entries (
+  entry_key  TEXT PRIMARY KEY,
+  person_key TEXT NOT NULL REFERENCES persons(person_key),
+  visit_key  TEXT REFERENCES visits(visit_key),
+  category   TEXT NOT NULL,              -- lab, vit, med, dx, proc, note, obs, ...
+  time       TEXT NOT NULL,
+  end_time   TEXT,
+  name       TEXT NOT NULL,
+  code       TEXT DEFAULT '', vocabulary TEXT DEFAULT '',
+  value_num  REAL, value_text TEXT DEFAULT '', unit TEXT DEFAULT '',
+  ref_low    REAL, ref_high REAL, flag TEXT DEFAULT '',
+  author     TEXT DEFAULT '', text TEXT DEFAULT ''
+);
+CREATE INDEX entries_person ON entries(person_key, time);
+CREATE INDEX entries_name ON entries(name);
+CREATE TABLE loads (loaded_at TEXT);     -- the data's version
+\end{lstlisting}
+Its views then only select the tables:
+\begin{lstlisting}[language=TOML]
+# study-views.toml
+persons = '''SELECT person_key, patient_id, mrn, mrn_authority, last_name, first_name,
+  birth_date, sex FROM persons'''
+visits = "SELECT visit_key, person_key, start_time, end_time, unit, icu FROM visits"
+entries = '''SELECT entry_key, person_key, visit_key, category, time, end_time, name, code,
+  vocabulary, value_num, value_text, unit, ref_low, ref_high, flag, author, text FROM entries'''
+version = "SELECT MAX(loaded_at) FROM loads"
+\end{lstlisting}
+The following commands connect the file, check it, and link its persons:
+\begin{lstlisting}[style=shell]
+medorama connections add study --kind sql --url sqlite:/data/study/study.sqlite \
+    --views study-views.toml
+medorama connections check study
+medorama connections sync study
+\end{lstlisting}
+\cmd{connections add} answers with the views it found and the version
+(\code{Connected study (sql): views persons, visits, entries; version 2024-03-05}), and
+\cmd{sync} with the number of persons linked. From the page, the file must lie inside the data
+roots, and it cannot be the catalog's own database.
+
+\paragraph{Choices to make when building one.}
+\begin{itemize}
+\item \textbf{Identifiers.} A study's own \code{patient\_id} is enough to link its persons to the
+  patients of other databases that use the same ID. Hold MRNs, names and dates of birth only when
+  they are needed.
+\item \textbf{Times.} Choose one time zone for the database and give it as the connection's
+  \code{timezone}, or store ISO 8601 times with offsets.
+\item \textbf{Codes.} Standard vocabularies (LOINC for results, ICD-10 for diagnoses, RxNorm for
+  drugs) let cohorts search by code across databases.
+\item \textbf{Categories.} Store the category keys themselves (\code{lab}, \code{med},
+  \code{dx}), in lower case.
+\item \textbf{Files} (recordings, ECGs, images) cannot be connected. List them in a small table
+  (\code{patient\_id}, \code{time}, \code{category}, \code{file}) and import it
+  (\cref{chap:importing}).
+\item \textbf{Already in OMOP?} Connect it as \code{omop}: there are no views to write.
+\end{itemize}
+
+\section{Checking a database}
+\label{sec:connecting-checking}
+
+\begin{itemize}
+\item \textbf{A connection.} \cmd{medorama connections check NAME} (in the page, \ui{Check})
+  asks each view for one row of its canonical columns and the version query for its value, and
+  prints how long the database took to answer
+  (\code{omop: answers in 41 ms; views persons, visits, entries; version 2024-01-31 / 2023-11-01}).
+  A view that does not answer is named, with the database's error. The same check runs when a
+  connection is added.
+\item \textbf{An import.} \cmd{medorama import-table TABLE -{}-dry-run} reads and checks every row
+  without keeping anything (\cref{chap:importing}).
+\item \textbf{After either.} The Databases tab lists the database. \ui{Review} lists the rows and
+  persons held back and the possible duplicates. A linked patient's page shows each entry in its
+  column of the Patient Journey (\cref{chap:patients}); a category that no database provides has
+  no column. \cmd{medorama sources list} shows what each source label contributed.
+\end{itemize}
+
+\section{The person registry and linking}
+\label{sec:connecting-registry}
+
+One person may be in several sources: imported tables, an OMOP instance, a warehouse. The
+\emph{registry} is the catalog's patients, each with a random pseudonym, its identifiers, its
+merges and its reviewed pairs. A connected database's persons are \emph{linked} to them by the
+following rules.
+\begin{itemize}
+\item \textbf{When.} A person is linked the first time a source names them (in a cohort's search
+  or a sync), so that a large database does not have to be copied in.
+  \cmd{medorama connections sync NAME} (\ui{Link all}) links every person at once, 2000 at a
+  time, and says how many were linked; the others are held for review, or have no valid
+  identifier. A sync reads every person in one query, within \code{max\_rows}, so a database with
+  more persons than \code{max\_rows} fails to sync. Raise \opt{-{}-max-rows}, or let searches
+  link the persons they find.
+\item \textbf{How.} A person's identifiers are read as a row of an imported table is, by the same
+  rules (\cref{chap:importing}): by patient ID (and its merges), otherwise by MRN of the same
+  authority (the view's \code{mrn\_authority}, otherwise the connection's), otherwise as a new
+  patient. A person whose patient ID and MRN name two different patients is held for Review, as an
+  imported row is. A person with neither is known by the connection's name and its key
+  (\code{omop:1234}), as a patient of its own.
+\item \textbf{What is copied.} Only what linking needs, kept as the connection's batch: the
+  patients it adds, their MRNs and their values (sex, date of birth). Disconnecting removes them,
+  as removing an imported database does.
+\item \textbf{Merges} move the links with the rest of the patient.
+\item \textbf{Never across sources by a guess.} Two sources' persons are the same patient only
+  by an identifier that both hold, or by a reviewer's merge. Columns are never mixed between
+  sources.
+\end{itemize}
+
+\paragraph{On the pages and in cohorts.} A linked patient's page shows the entries of every
+source in the same columns. A connected database's visits are listed after the encounters, and
+its entries are named by a token (\code{live:<connection>:<token>}, a keyed hash) that holds
+neither the entry's key nor its time (\cref{chap:patients}). A criterion is answered by every
+source that holds such data, and it can name one source, as it names one database:
+\code{omop.lactate > 4} (\cref{chap:cohorts}). A cohort records each source's version when it is
+made or refreshed.
+
+\paragraph{Failures.} A source that does not answer leaves a patient's page with what the other
+sources gave, and the page names it. A cohort's search over a source that does not answer fails
+with that source's name, because a result that silently missed a source would be wrong.
+
+\paragraph{Not there yet.} The following are not supported yet: FHIR servers; SQL Server, Oracle,
+Snowflake and BigQuery directly; files held by a connected database (its entries carry no
+attachment); pushing value thresholds down to the database when units agree; a connected
+database's visits as encounters of their own, and its data counted in the Patient Catalog's
+columns; and the notes of a connected database among the notes shown near an entry.
+
+\section{Disconnecting}
+\label{sec:connecting-removing}
+
+\cmd{medorama connections remove NAME} (in the page, \ui{Disconnect\dots}) removes the connection,
+its links, what linking added to the catalog, and the password file that the page kept. The
+database itself is not touched.
+
+\section{Checklist}
+\label{sec:connecting-checklist}
+
+\begin{enumerate}
+\item The account can only read, and its password is in a file, never in the URL.
+\item Every person is named by \code{patient\_id} or \code{mrn}, with \code{mrn\_authority} (in
+  the view, or the connection's) when MRNs come from several systems.
+\item Every dated row has a time in a readable form, and \code{timezone} is set for local times.
+\item Categories are given by their keys, or by names that make them clear.
+\item Values are numeric where they are numbers, with their units, and codes come with their
+  vocabularies.
+\item Identifiers are limited to what linking needs.
+\item The underlying tables are indexed on the person, the time, and the name or code.
+\item Files are listed in an imported table, inside \code{data\_roots}.
+\item A check comes before the real use; \cmd{connections sync} runs for cohorts that must see
+  every person; and Review is checked afterwards.
+\end{enumerate}

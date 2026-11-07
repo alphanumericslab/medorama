@@ -1,0 +1,635 @@
+% The PACS viewer in full: what it shows (cines at their frame rate, stacks with window and level,
+% structured reports, PDF, videos, pictures), the files it reads, the controls and keys, the
+% calipers, opening files and folders, the series list, the themes, the addresses, dicom-py
+% (serve, index, wfdb), the examples.
+% Sources: viewers/pacs/README.md, viewers/pacs/python/dicom/README.md,
+% viewers/pacs/examples/README.md, checked against viewers/pacs/index.html, app.js, dicom.js,
+% style.css and viewers/pacs/python/dicom/dicom_index_py/cli.py and page_server.py.
+\chapter{The PACS viewer}
+\label{chap:pacs-viewer}
+
+This chapter describes the PACS viewer: what it shows, the files it reads, its controls, and
+how to run it alone or with \cmd{dicom-py}. It is written for clinicians and researchers who
+review images, and for administrators who deploy the viewer.
+
+The PACS viewer shows cardiology and other DICOM studies (echo and other ultrasound loops,
+angiography (XA), CT, MR, nuclear medicine and X-ray), structured reports and PDF documents, and
+pictures and videos. It is one of Medorama's viewers, and also a page of its own that needs no
+installation. Open it on the website (\url{https://medorama.org/viewers/pacs/}),
+or open \file{viewers/pacs/index.html} from a clone, from disk or from any web server. Then choose
+\ui{Open record\dots} (a study's or series' files, a video, a picture, a PDF) or
+\ui{Open multiple records\dots} (a folder: every study in it and in its subfolders, listed by
+series), or drop files or a folder on the page. The files are read and drawn in the browser, and
+sent nowhere. The page has a light and a dark theme (\cref{sec:pacs-viewer-themes}).
+
+\begin{note}[For research]
+The PACS viewer is for research, not for diagnosis: a PACS used to make diagnoses is a regulated
+medical device.
+\end{note}
+
+\screenshot{echo.png}{The PACS viewer in the dark theme, as Medorama shows it (the bar above it is Medorama's, with a synthetic patient): a synthetic echocardiography loop, apical four-chamber view, playing at 30 frames per second; the series list on the left.}{fig:pacs-viewer-echo}
+
+% ==========================================================================================
+\section{What it shows}
+\label{sec:pacs-viewer-shows}
+
+The files opened together become a list of items, each shown in its own way. When the files come
+from several studies, the list groups them by study.
+
+\begin{xltabular}{\linewidth}{@{}P{2.0cm}P{5.0cm}L@{}}
+\caption{The items of the PACS viewer.}
+\label{tab:pacs-viewer-items}\\
+\toprule
+{\tabhead Item} & {\tabhead From} & {\tabhead Shown} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Item} & {\tabhead From} & {\tabhead Shown} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Cine loop & A multi-frame DICOM file of ultrasound, angiography, fluoroscopy, IVUS, OCT or
+  endoscopy, or any multi-frame file with a frame time or a cine rate; a video (MP4, M4V, WebM,
+  MOV, OGV); pictures given a frame rate & Played at its own rate (\code{FrameTime},
+  \code{CineRate}, the frame time vector; \code{fps=} for pictures), in a loop, frame by frame,
+  at $\frac{1}{4}\times$ to $2\times$ \\
+Stack & The single-frame DICOM images of one series (CT, MR, NM, X-ray), or a multi-frame file
+  that is not a cine & Ordered along the slice direction (else by instance number); the wheel or
+  \key{$\uparrow$} \key{$\downarrow$} move through it, and it can play too \\
+Still & One image or picture (PNG, JPEG, GIF, WebP, BMP) & As it is \\
+Report & A DICOM structured report (echo, cath, others) & Its measurements with their units, and
+  its text, in its sections; never the observer's or the patient's name, nor the subject
+  context (the subject's name, ID, UID, birth date; the accession number) \\
+Document & A DICOM encapsulated PDF, a PDF file & In the browser's PDF viewer; a DICOM document
+  whose MIME type is not \code{application/pdf} is shown elsewhere \\
+Elsewhere & A DICOM ECG or Holter waveform; a DICOM document that is not a PDF; a DICOM file
+  whose compression the browser does not decode & Said, in place of the image
+  (\cref{sec:pacs-viewer-elsewhere}) \\
+\end{xltabular}
+
+\screenshot{pacs.png}{A synthetic CT series (24 slices) as a stack, in the PACS viewer inside Medorama (dark theme): the series in the list, the slice and its position at the top right, the window and the level at the bottom left.}{fig:pacs-viewer-stack}
+
+\subsection{Reading the images}
+\label{sec:pacs-viewer-reading}
+
+\begin{itemize}
+\item \textbf{Window and level.} A drag on a gray image sets the window: to the right, a wider
+  window; down, a higher level. The presets of \ui{Window} set it at once; a double click resets
+  it (and the zoom and the position). Without a preset, the window is the file's, else one
+  computed from the first frame, kept for the whole item so that a cine does not flicker.
+\item Rescale slope and intercept are applied (CT in Hounsfield units), MONOCHROME1 is inverted,
+  non-square pixels are drawn to scale, and 8-bit images (display-ready: ultrasound,
+  angiography) show their whole range.
+\item \textbf{Zoom and pan.} \key{Ctrl} + wheel (\key{Cmd} + wheel on macOS) zooms, and so do
+  \ui{$-$} and \ui{+}, from 25\,\% to 800\,\%; \key{Shift} + drag pans, and so does a drag with
+  the middle button, or on a color image, a picture or a video.
+\item \textbf{A cine} plays as soon as it is chosen. \key{Space} plays or pauses it,
+  \key{$\leftarrow$} \key{$\rightarrow$} step one frame, \key{$\uparrow$} \key{$\downarrow$} go to the
+  previous or the next item.
+\item \textbf{A stack} opens at its middle image; the wheel, \key{$\uparrow$} \key{$\downarrow$} (or
+  \key{$\leftarrow$} \key{$\rightarrow$}, \key{PgUp} \key{PgDn}) move through it, \key{Home} and
+  \key{End} go to its first and last image, and \key{Space} plays it.
+\end{itemize}
+
+\begin{table}[htbp]
+\centering
+\caption{The window presets (for gray images).}
+\label{tab:pacs-viewer-presets}
+\begin{tabularx}{\linewidth}{@{}P{3.0cm}P{2.6cm}L@{}}
+\toprule
+\tabhead Preset & \tabhead Width & \tabhead Level \\
+\midrule
+\ui{Auto} & The file's, or computed & The file's, or computed \\
+\ui{Soft tissue} & 400 & 40 \\
+\ui{Lung} & 1500 & $-600$ \\
+\ui{Bone} & 1800 & 400 \\
+\ui{Brain} & 80 & 40 \\
+\ui{Liver} & 160 & 60 \\
+\ui{Cardiac} & 600 & 300 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+After a drag, the list shows \ui{Custom}. \ui{Window} is grayed out for color images, pictures
+and videos.
+
+\subsection{The corners}
+\label{sec:pacs-viewer-corners}
+
+The corners of the image show the series, the frame or slice, the window and the size, never the
+patient:
+\begin{itemize}
+\item top left: the series' description, the modality, the slice thickness and the heart rate,
+  when the file gives them;
+\item top right: \code{Frame 17 / 40} (a cine) or \code{Image 13 / 24} (a stack), and a slice's
+  location in millimeters;
+\item bottom left: the window and the level of a gray image (\code{W 400 $\cdot$ L 40});
+\item bottom right: the image's size in pixels, the zoom when it is not 100\,\%, and a cine's
+  frame rate times the speed (\code{160 $\times$ 120 $\cdot$ 30 fps}).
+\end{itemize}
+
+\subsection{Elsewhere: what the page does not show}
+\label{sec:pacs-viewer-elsewhere}
+
+\begin{itemize}
+\item A DICOM ECG waveform is said to open in the ECG viewer (\code{A DICOM ECG waveform: it opens
+  in the ECG viewer.}), which reads it (\cref{chap:ecg-viewer}).
+\item A DICOM Holter recording is said to be read another way: VitalStream does not read DICOM, so
+  the recording is converted to a WFDB record first, with \cmd{dicom-py wfdb}
+  (\cref{sec:pacs-viewer-dicom-py}), and that record opened in VitalStream (\code{A DICOM Holter
+  recording: VitalStream does not read DICOM. Convert it to a WFDB record (dicom-py wfdb FILE.dcm
+  OUT/) and open that record in VitalStream.}).
+\item A DICOM file in JPEG-LS, JPEG 2000 or a video transfer syntax (MPEG-2, MPEG-4, HEVC) names
+  its compression and says that browsers do not decode it, then how to read the file another way:
+  \code{To read the file, open it in a desktop DICOM viewer, or convert it to an uncompressed
+  transfer syntax first (for example gdcmconv --raw IN.dcm OUT.dcm; a video's frames with
+  ffmpeg).}
+\item A DICOM encapsulated document is shown only when its MIME type is \code{application/pdf},
+  and always as a PDF; a document of another type (HTML, XML, a 3D model) is said instead
+  (\code{A document of type TYPE: the viewer shows PDF documents only. Open it in a desktop
+  DICOM viewer.}).
+\end{itemize}
+
+% ==========================================================================================
+\section{The files it reads}
+\label{sec:pacs-viewer-files-read}
+
+DICOM Part 10 files, or bare datasets, in explicit or implicit VR little endian. Pixels may be
+native (8, 16 or 32 bits, signed or not, gray or RGB, planar or not), RLE, or JPEG:
+
+\begin{table}[htbp]
+\centering
+\caption{The JPEG transfer syntaxes the PACS viewer decodes.}
+\label{tab:pacs-viewer-jpeg}
+\begin{tabularx}{\linewidth}{@{}LP{4.6cm}@{}}
+\toprule
+\tabhead JPEG & \tabhead Decoded by \\
+\midrule
+Baseline and extended, 8 bits & The browser \\
+Extended, 12 bits (CT) & \file{jpeg.js} \\
+Lossless (process 14, any predictor, 2 to 16 bits) & \file{jpeg.js} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+A file has no more frames than its pixel data hold: a \code{NumberOfFrames} larger than that (a
+damaged or crafted header) is cut to the frames present.
+
+JPEG-LS, JPEG 2000 and the video transfer syntaxes (MPEG-2, MPEG-4, HEVC) are named but not
+decoded in the browser: the viewer says so, and the file is read another way, in a desktop DICOM
+viewer or converted first to an uncompressed transfer syntax, such as with \cmd{gdcmconv -{}-raw}
+(\cref{sec:pacs-viewer-elsewhere}). Big-endian and deflated files are not read
+(\code{big-endian DICOM files are not read here}, \code{deflated DICOM files are not read here}).
+A folder's \file{DICOMDIR}, its text files (\file{.txt}, \file{.md}, \file{.csv}, \file{.json},
+\file{.xml}, \file{.html}) and its hidden files are passed over. Besides DICOM, the viewer reads
+videos (MP4, M4V, WebM, MOV, OGV, as far as the browser plays them), pictures (PNG, JPEG, GIF,
+WebP, BMP) and PDF files; any other file is taken for DICOM.
+
+A file that cannot be read is listed with its reason when nothing else can be shown
+(\code{These files are not ones the viewer reads.}, with the first five reasons, such as
+\code{NAME: not a DICOM file} or \code{NAME: a DICOM object without an image}); among other files,
+it is passed over. A frame that cannot be decoded (a damaged file) is said in place of the image
+(\code{This frame cannot be decoded: \dots}), and the cine stops; the other items stay usable.
+
+% ==========================================================================================
+\section{The page}
+\label{sec:pacs-viewer-page}
+
+The header holds, from left to right: the name \ui{PACS} and the item's title (or the
+\code{name=} of the address), the controls of the image, and the buttons to open files. Below it,
+the series list on the left, and the image, with its corners and a slider under it.
+
+\begin{xltabular}{\linewidth}{@{}P{4.6cm}L@{}}
+\caption{The controls of the PACS viewer.}
+\label{tab:pacs-viewer-controls}\\
+\toprule
+{\tabhead Control} & {\tabhead Does} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Control} & {\tabhead Does} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\ui{\textless} (\key{$\leftarrow$}) & The previous frame or image \\
+The play button (\key{Space}) & Play or pause a cine, a stack or a video \\
+\ui{\textgreater} (\key{$\rightarrow$}) & The next frame or image \\
+The speed: \ui{$\frac{1}{4}\times$}, \ui{$\frac{1}{2}\times$}, \ui{1$\times$}, \ui{2$\times$} & The
+  playing speed, times the item's frame rate \\
+\ui{Window} & The window presets of gray images (\cref{tab:pacs-viewer-presets}) \\
+\ui{$-$} \ui{+} (\key{Ctrl} + wheel) & Smaller, larger \\
+\ui{Calipers} & Measure a distance (\cref{sec:pacs-viewer-calipers}) \\
+\ui{Server folders\dots} & The folders of the computer serving the page (\cmd{dicom-py serve}
+  only) \\
+\ui{Open record\dots} & Files: a study's or series' DICOM files, a video, a picture or a PDF \\
+\ui{Open multiple records\dots} & A folder: every study in it and in its subfolders \\
+The moon or sun button & Switches between the light and the dark theme \\
+The series list & The items, with a thumbnail, a title and a line (the modality, the series
+  number, and the number of images, or of frames and the frame rate, or \code{report},
+  \code{document}, \code{video}); under \ui{Study 1}, \ui{Study 2}, \dots{} when there are several
+  studies. A click shows an item \\
+The slider & The images or frames of the item \\
+\end{xltabular}
+
+The controls that do not apply to an item are grayed out: the frame controls for a single image,
+the window for color images, the zoom and the calipers for a report or a document.
+
+\begin{xltabular}{\linewidth}{@{}P{5.2cm}L@{}}
+\caption{The keys and mouse actions of the PACS viewer.}
+\label{tab:pacs-viewer-keys}\\
+\toprule
+{\tabhead Action} & {\tabhead Effect} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Action} & {\tabhead Effect} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\key{Space} & Play or pause \\
+\key{Esc} & Clear the calipers' points \\
+\key{$\leftarrow$} \key{$\rightarrow$} on a cine or a video & The previous, the next frame (a
+  video: a thirtieth of a second, paused) \\
+\key{$\uparrow$} \key{$\downarrow$} on a cine or a video & The previous, the next item of the list \\
+\key{$\uparrow$} \key{$\leftarrow$} \key{PgUp}, \key{$\downarrow$} \key{$\rightarrow$} \key{PgDn} on a
+  stack & The previous, the next image \\
+\key{Home}, \key{End} on a stack & The first, the last image \\
+Wheel over the image & The previous or the next frame or image \\
+\key{Ctrl} (or \key{Cmd}) + wheel & Zoom \\
+Drag on a gray image & The window: right wider, down a higher level \\
+\key{Shift} + drag; a drag with the middle button; a drag on a color image, picture or video &
+  Pan \\
+Double click & Reset the window (\ui{Auto}), the zoom and the position \\
+With \ui{Calipers} on, a click & A point of the calipers \\
+\end{xltabular}
+
+The keys work when the focus is not in a list or a text box.
+
+\subsection{Calipers}
+\label{sec:pacs-viewer-calipers}
+
+\ui{Calipers} turns the calipers on (the button is highlighted) or off. Click two points (a click
+also stops a playing cine): the viewer draws a dashed line between them and writes the distance.
+A third click starts again; \key{Esc} clears the points.
+
+\begin{table}[htbp]
+\centering
+\caption{The unit of the calipers' distance.}
+\label{tab:pacs-viewer-calipers}
+\begin{tabularx}{\linewidth}{@{}P{2.0cm}L@{}}
+\toprule
+\tabhead Distance in & \tabhead When \\
+\midrule
+Cm & The ultrasound region's scale (\code{PhysicalDeltaX}, \code{PhysicalDeltaY}) at the first
+  point \\
+Mm & The pixel spacing (\code{PixelSpacing}); for projection images, \code{ImagerPixelSpacing}
+  (marked \code{at the detector}) \\
+Mm & Pictures and videos opened with \code{mm=} (millimeters per pixel) \\
+Pixels & Otherwise \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Light and dark}
+\label{sec:pacs-viewer-themes}
+
+The PACS viewer has a light and a dark theme, and is dark until told otherwise, as reading
+rooms usually are. The moon button (in the light theme) or the sun button (in the dark theme)
+switches the theme, and the choice is remembered in the browser.
+\code{theme=light} or \code{theme=dark} in the address sets it for that page, without remembering
+it. The image itself is always drawn on black.
+
+% ==========================================================================================
+\section{Opening studies}
+\label{sec:pacs-viewer-open}
+
+\begin{table}[htbp]
+\centering
+\caption{The ways to open files in the PACS viewer.}
+\label{tab:pacs-viewer-open}
+\begin{tabularx}{\linewidth}{@{}P{4.2cm}L@{}}
+\toprule
+& \tabhead Opens \\
+\midrule
+\ui{Open record\dots} & The files chosen: a study's or a series' DICOM files, a video, a picture
+  or a PDF \\
+\ui{Open multiple records\dots} & A folder: every file in it and in its subfolders, grouped by
+  study and listed by series \\
+Drop & The files, or the folder, dropped on the page (a folder: every file in it and in its
+  subfolders, hidden ones passed over) \\
+\ui{Server folders\dots} & Shown only when the page is served by \cmd{dicom-py serve}: the folders
+  of the serving computer (\cref{sec:pacs-viewer-serve}) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Files and folders whose names start with \code{.} are passed over, among the files chosen and in
+a folder dropped: a dropped folder is walked through all its subfolders, every hidden file and
+folder left out, and each folder's entries are read in full (the browser gives them in batches,
+read until none is left). Every file is held in memory at
+once, so at most 5000 files and 4\,GB are read together; more is refused, with the advice to
+open one study's folder (\code{This folder holds N files (X GB): more than 5000 files or 4 GB,
+which are held in memory at once. Open one study's folder.}).
+
+\paragraph{How the list is made.} The files are read in the order of their names. Single-frame
+images of the same series form one stack (a stack of one image is a still); each multi-frame
+file is a cine or a stack of its own; each report, document, video and picture is an item. Pictures
+opened with \code{fps=} in the address, two or more, are one cine instead, in the order of their
+names. The items are listed by study, in the order the studies were met, then by series number,
+then by instance number, then by title. The first item is shown.
+
+% ==========================================================================================
+\section{Running and deploying}
+\label{sec:pacs-viewer-run}
+
+\begin{xltabular}{\linewidth}{@{}P{5.0cm}L@{}}
+\caption{The ways to run the PACS viewer.}
+\label{tab:pacs-viewer-run}\\
+\toprule
+{\tabhead How} & {\tabhead What it opens} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead How} & {\tabhead What it opens} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+The website, \url{https://medorama.org/viewers/pacs/} & The files you
+  pick or drop, read in your browser: they never leave your computer \\
+\file{viewers/pacs/index.html} from a clone, opened from disk (\code{file://}) & The same,
+  offline \\
+Any web server: copy the page's files (\file{index.html}, \file{style.css} and the \file{.js}
+  files of \file{viewers/pacs}) & The same; and files on that server, by address (\code{\#src=},
+  \code{\#list=}) \\
+\cmd{dicom-py serve} on the computer where the studies are & The same; and the folders of that
+  computer, under a root you choose (\ui{Server folders\dots}) \\
+Inside Medorama (\cmd{tools/install-medorama.sh}) & A patient's studies, as a tab of the
+  patient's page, de-identified by Medorama's server (\cref{chap:viewers-in-medorama}) \\
+\end{xltabular}
+
+The page needs no build and no dependencies; it uses nothing but the browser. For a quick look
+from a web server: \cmd{python3 -m http.server -{}-directory viewers/pacs}.
+
+\subsection{Served from a computer: \texorpdfstring{\cmd{dicom-py serve}}{dicom-py serve}}
+\label{sec:pacs-viewer-serve}
+
+The Python package \file{viewers/pacs/python/dicom} (\code{dicom\_index\_py}, the command
+\cmd{dicom-py}) serves the page together with the folders of the computer it runs on, so that
+studies on a server are read without copying them, through an SSH tunnel to its port (the
+commands to install it on each operating system are at \url{https://medorama.org/docs/install.html}). \cmd{serve}
+uses only the Python standard library; its module, \file{page\_server.py}, is the same file as
+\cmd{muse-py serve}'s.
+
+\begin{lstlisting}[style=shell]
+pip install ./viewers/pacs/python/dicom        # copies the page into the package
+dicom-py serve                                 # http://127.0.0.1:8081/browse: your home folder
+dicom-py serve --root /data/echo               # another folder
+dicom-py serve --set-password                  # once, on a shared machine (VitalStream's password)
+\end{lstlisting}
+
+\begin{lstlisting}[style=signature]
+dicom-py serve [--root DIR] [--host HOST] [--port N] [--auth-file FILE]
+               [--set-password | --clear-password] [--no-auth] [--no-browser]
+\end{lstlisting}
+
+\begin{params}
+\item[--root DIR] The folder served: only the files and folders under it are listed and served,
+  every symbolic link resolved (a link that leads outside is refused, and not listed). Default:
+  the home folder. It lies inside the root the package was installed with: a folder that
+  contains that root is narrowed to it, one outside it is refused.
+\item[--host HOST] Where it listens. Default: \code{127.0.0.1}. A request must name the server
+  by a loopback name, an IP address or this host; any other name is refused (no DNS rebinding).
+\item[--port N] Default: 8081.
+\item[--auth-file FILE] The password file, shared with VitalStream and \cmd{muse-py serve}.
+  Default: \file{\textasciitilde/.config/vitalstream/auth.json}.
+\item[--set-password] Set (or change) the password the page asks for, then exit (at least 8
+  characters, asked twice). For \cmd{muse-py serve} and \cmd{dicom-py serve}, a sign-in lasts 30
+  days, until the server stops, or until a browser signs out, which ends every sign-in; after a
+  wrong password the next try, from any browser, waits 1\,s, then 2, 4 \dots{} up to 60\,s.
+\item[--clear-password] Remove the password, then exit.
+\item[--no-auth] Run without asking for the password.
+\item[--no-browser] Do not open a browser window.
+\end{params}
+
+\paragraph{The server folders.} \file{browse} (titled \ui{PACS viewer: server folders}) lists the
+folders of a folder under the root, and the files the viewer reads: DICOM files, with the
+extension \file{.dcm} or \file{.dicom} or without an extension, videos (\file{.mp4},
+\file{.webm}, \file{.mov}), pictures (\file{.png}, \file{.jpg}, \file{.jpeg}) and PDFs, with their
+size. Hidden entries are neither listed nor served, and a folder shows its first 5000 entries. A
+click on a file opens it in the viewer (\code{\#src=files/PATH}); \ui{Open the records in this
+folder} opens every file of the folder (\code{\#list=list/PATH/}, at most 5000). The browser's
+Back button returns to the list. A file or a folder opened from \file{browse} is shown with
+\code{\#src=} (or \code{\#list=}), where the page hides its \ui{Server folders\dots} button; the
+page opened at its own address (\url{http://127.0.0.1:8081/}) shows \ui{Server folders\dots},
+which leads to the list, when \code{GET served} answers 200 \code{\{"viewer", "root"\}}
+(the requests of \cmd{serve}: \cref{sec:ecg-viewer-serve}). A folder's listing says when it
+holds more than 5000 entries (\code{"truncated": true}).
+
+Files are sent as they are read, in part when a browser asks for a range (\code{Range}), under a
+policy that runs nothing in them (\code{Content-Security-Policy: sandbox}); a kind of file the
+viewers do not read is sent as a download. The sign-in cookie is signed with a key of the
+running server too: browsers send a cookie to every port of a host, and another server on
+127.0.0.1 cannot use it.
+
+\paragraph{Fixed at install time.} As for \cmd{muse-py}, two variables of the environment are
+fixed in the package when it is installed: \code{VIEWER\_ROOT}, the most \cmd{serve} ever serves
+(\code{\textasciitilde} allowed; default the whole file system: a \opt{-{}-root} outside it is
+refused, one that contains it is narrowed to it), and \code{VIEWER\_PASSWORD=0}, for no password
+support. An editable install (\cmd{pip install -e}) serves the page from the clone; the variables,
+when given, are written into the clone (a file git ignores), and without them its root is the
+whole file system, with password support.
+
+\begin{lstlisting}[style=shell]
+VIEWER_ROOT=/data/echo VIEWER_PASSWORD=1 pip install ./viewers/pacs/python/dicom
+\end{lstlisting}
+
+\paragraph{On a server where the studies are:} install with a \code{VIEWER\_ROOT} that holds them,
+set a password once (\cmd{dicom-py serve -{}-set-password}), and start it without a browser, in
+\cmd{tmux} or as a service: \cmd{dicom-py serve -{}-root /data/echo -{}-no-browser}. From your
+computer: \cmd{ssh -N -L 8081:127.0.0.1:8081 user@server}, then open
+\url{http://127.0.0.1:8081/}. Without a password, anyone who can connect to the port can read the
+files under the root (\cref{chap:viewers-alone}).
+
+% ==========================================================================================
+\section{dicom-py: databases of DICOM studies}
+\label{sec:pacs-viewer-dicom-py}
+
+\cmd{dicom-py} also builds a database to import into Medorama from a folder of DICOM files, and
+converts DICOM ECGs to WFDB records. It uses pydicom and NumPy, which \cmd{pip} installs with it.
+
+\begin{lstlisting}[style=shell]
+dicom-py index /path/to/dicom -o imaging.csv   # a database: a row per loop, series, report
+dicom-py wfdb ECG.dcm out/                     # a DICOM ECG (12-lead or Holter) as a WFDB record
+medorama import-table imaging.csv              # then: the rows reach their patients
+dicom-py --version
+\end{lstlisting}
+
+\apientry{dicom-py index}{A database of DICOM studies}
+\begin{lstlisting}[style=signature]
+dicom-py index FOLDER -o CSV
+\end{lstlisting}
+Reads every DICOM file under \file{FOLDER} (hidden files and folders passed over), headers only,
+never the pixels, and writes a CSV with one row per object a viewer shows; a file it cannot read
+(a damaged header, sequences nested too deep) is listed on the standard error, and the others
+are indexed. It prints \code{CSV: N object(s)}, and \code{; M not linked}
+with each of them, and the reason, on the standard error.
+\begin{params}
+\item[-o, --output CSV] The CSV to write (required); the file paths in it are relative to its
+  folder.
+\end{params}
+
+\begin{xltabular}{\linewidth}{@{}P{4.4cm}L@{}}
+\caption{The rows of \cmd{dicom-py index}.}
+\label{tab:pacs-viewer-index-rows}\\
+\toprule
+{\tabhead Object} & {\tabhead Row} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Object} & {\tabhead Row} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+An ultrasound loop, an angiography run, any multi-frame file & One per file, with its frames and
+  frame rate \\
+A series of single-frame images (CT, MR, NM) & One per series, linking the series' folder: only
+  when that folder holds one patient's files (else it is listed as not linked, and no row is
+  written) \\
+A single image (an X-ray) & One per file \\
+A structured report (echo, cath \dots) & One per file; each measurement a column
+  \code{Name (unit)}, such as \code{Left Ventricular Ejection Fraction (\%)} (a repeated
+  measurement keeps its first value, or its mean when one is given); its text in
+  \code{interpretation} \\
+An encapsulated PDF & One per file \\
+A DICOM ECG (12-lead, Holter) & One per file; its measurements as the ECG viewer names them
+  (\code{QT (ms)}, \code{QRS (ms)}, \code{Vent. rate (bpm)} \dots), its statements in
+  \code{interpretation} \\
+\end{xltabular}
+
+The columns are \code{mrn} (the patient ID\phimark), \code{time} (the device's clock),
+\code{category} and \code{name}, then \code{modality}, \code{description}, \code{study\_uid},
+\code{series\_uid}, \code{images}, \code{frames} and \code{fps}; then the measurement columns,
+then \code{interpretation} and \code{file} (relative to the CSV). The categories are \code{echo}
+(ultrasound), \code{cath} (angiography, fluoroscopy, IVUS, OCT), \code{ecg} and \code{holter} (ECG
+waveforms), and \code{img} (everything else); a report or a PDF takes its category from its
+title's words (echo, cath, ECG). Columns of different databases are never merged by Medorama: an
+echo database's \code{LVEF (\%)} and a cath database's are distinct (\cref{chap:ecg-imaging}).
+
+\begin{phibox}
+The patient ID is written, because it is the key that links each row to its patient. Keep the
+database as PHI, with Medorama's databases, never in the repository. Names and dates of birth are
+never written.
+\end{phibox}
+
+\apientry{dicom-py wfdb}{A DICOM ECG as a WFDB record}
+\begin{lstlisting}[style=signature]
+dicom-py wfdb FILE OUT_DIR [--name NAME]
+\end{lstlisting}
+Converts the DICOM ECG \file{FILE} (12-lead or Holter) into a WFDB record in \file{OUT\_DIR}, and
+prints its path: format 16, at 1\,$\mu$V per unit, with the annotations' measurements and
+statements in the header's comments (each value on one line; each line of a text annotation a
+statement). The record opens in the ECG viewer and, for a Holter
+recording, in VitalStream.
+\begin{params}
+\item[--name NAME] The record's name. Default: the file's name without its extension.
+\end{params}
+
+% ==========================================================================================
+\section{Addresses}
+\label{sec:pacs-viewer-address}
+
+Another program opens the PACS viewer at a file, or a folder, by its address's fragment. The
+files are fetched with the page's own credentials; changing the fragment shows other files
+without reloading the page.
+
+\begin{table}[htbp]
+\centering
+\caption{The fragments of the PACS viewer's address.}
+\label{tab:pacs-viewer-address}
+\begin{tabularx}{\linewidth}{@{}P{4.6cm}L@{}}
+\toprule
+\tabhead Fragment & \tabhead Means \\
+\midrule
+\code{src=URL} & One file \\
+\code{list=URL} & A folder: \code{URL} answers \code{\{"files": [\dots]\}}, and each file is read
+  beside it \\
+\code{mm=0.2} & The millimeters per pixel of pictures and videos (the calipers) \\
+\code{fps=30} & The frame rate of pictures, which are then played as one loop \\
+\code{name=\dots} & The name to show \\
+\code{theme=light} or \code{dark} & The theme \\
+\code{who=\dots}, \code{what=\dots}, \code{pos=\dots}, \code{nav=\dots} & A host's context, shown in
+  place of the file's name (\cref{chap:viewers-alone}) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Opened at a file or a folder, the page hides its buttons that open files, \ui{Server
+folders\dots} and the theme button: the host decides what is shown. Medorama fills \code{mm} and
+\code{fps} from the columns of the row that linked the file (\code{pixel spacing (mm)},
+\code{frame rate (fps)}, \dots).
+
+% ==========================================================================================
+\section{The examples}
+\label{sec:pacs-viewer-examples}
+
+\file{viewers/pacs/examples/} holds synthetic DICOM objects to try the viewer with: every value
+and every image is invented, and no file describes a real person. They are written by
+\file{tools/make-viewer-examples.py} with the demo's generators. On the website, the examples page
+(\url{https://medorama.org/viewers/pacs/examples/}) has a link that opens
+each file in the live viewer; from a clone, open \file{viewers/pacs/index.html} and choose a file
+with \ui{Open record\dots}, or the whole folder with \ui{Open multiple records\dots}.
+
+\begin{table}[htbp]
+\centering
+\caption{The PACS viewer's examples.}
+\label{tab:pacs-viewer-examples}
+\begin{tabularx}{\linewidth}{@{}P{3.2cm}L@{}}
+\toprule
+\tabhead File & \tabhead What \\
+\midrule
+\file{echo\_a4c.dcm} & An echocardiography loop (ultrasound, apical four-chamber view, 30
+  frames): a dilated, poorly contracting left ventricle \\
+\file{angio\_lca.dcm} & A coronary angiography run (XA) of the left coronary artery \\
+\file{chest\_xray.dcm} & A frontal chest radiograph (DX) with a right lower-lobe opacity \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+% ==========================================================================================
+\section{Files and tests}
+\label{sec:pacs-viewer-files}
+
+\begin{table}[htbp]
+\centering
+\caption{The files of the PACS viewer (\file{viewers/pacs}).}
+\label{tab:pacs-viewer-files}
+\begin{tabularx}{\linewidth}{@{}P{3.6cm}L@{}}
+\toprule
+\tabhead File & \tabhead Contents \\
+\midrule
+\file{dicom.js} & The DICOM reader: elements, sequences, pixel data (native, RLE, JPEG: the
+  browser's or \file{jpeg.js}), windows, frame rate, ultrasound regions, structured reports,
+  encapsulated documents, waveforms; \file{viewers/ecg/dicom.js} is the same file (the tests
+  check it) \\
+\file{jpeg.js} & Lossless JPEG and 12-bit DCT JPEG, which browsers do not decode (no
+  dependencies) \\
+\file{host.js} & A host's context (\code{who}, \code{what}, \code{pos}, \code{nav}), shown in place
+  of the file's name; the same file in each viewer \\
+\file{app.js}, \file{index.html}, \file{style.css} & The page \\
+\file{python/dicom/} & \cmd{dicom-py}: databases of DICOM studies, DICOM ECGs as WFDB (pydicom),
+  and \cmd{serve} \\
+\file{examples/} & Synthetic DICOM objects to try the viewer with \\
+\file{tests/} & The tests of the page and of \cmd{dicom-py} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{lstlisting}[style=shell]
+node --test viewers/pacs/tests/*.test.js     # the page's reader (DICOM files made in the tests)
+pytest viewers/pacs/python/dicom/tests       # dicom-py, serve (its root and its password)
+\end{lstlisting}

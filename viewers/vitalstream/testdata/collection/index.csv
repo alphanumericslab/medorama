@@ -1,0 +1,7 @@
+record,modality,fs,n_sig,signals,units,sig_len,duration_s,start_utc,start_unix,time_source,time_uncertainty_s,stretch
+ecg/ecg_250_0001,ecg,250.0,2,II;V,mV;mV,1000,4.0,2024-03-01T10:00:00+00:00,1709287200.0,header time,0,stretch 0
+pressure/pressure_125_0001,pressure,125.0,1,ART,mmHg,500,4.0,2024-03-01T10:00:00+00:00,1709287200.0,header time,0,stretch 0
+ecg/ecg_250_0002,ecg,250.0,2,II;V,mV;mV,750,3.0,2024-03-01T10:00:05.500+00:00,1709287205.5,header time,0,stretch 1
+pressure/pressure_125_0002,pressure,125.0,1,ART,mmHg,375,3.0,2024-03-01T10:00:05.500+00:00,1709287205.5,header time,0,stretch 1
+ecg/ecg_250_0003,ecg,250.0,2,II;V,mV;mV,500,2.0,,,,,stretch 2
+pressure/pressure_125_0003,pressure,125.0,1,ART,mmHg,250,2.0,,,,,stretch 2

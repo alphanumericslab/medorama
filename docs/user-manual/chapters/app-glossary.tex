@@ -1,0 +1,194 @@
+% Appendix: the glossary. Sources: docs/user-guide.md ("Terms used in this guide"),
+% docs/protecting-patient-data.md ("Terms used on this page"), docs/architecture.md,
+% docs/readers.md, docs/sign-in.md, docs/edf.md, viewers/vitalstream/docs/data-model.md,
+% viewers/vitalstream/docs/naming.md, docs/security.md, docs/administration.md,
+% docs/wfdb-collection.md, docs/adapters.md.
+\chapter{Glossary}
+\label{chap:glossary}
+
+This glossary defines the terms used in this manual, in alphabetical order. A term in
+\textit{italics} within an entry has an entry of its own.
+
+\begin{description}
+\item[Action] Work done on \textit{recordings} in the background, as \textit{jobs}. Two actions
+  are built in: \code{index}, which prepares a recording for the viewers, and \code{identify}
+  (the \textit{identify action}). An administrator can install further actions as plug-ins: a
+  folder with an \file{action.toml} file. \Cref{chap:actions}.
+\item[Adapter] A separate program, named \file{<name>-adapter}, that reads a recording format
+  that Medorama and the viewers do not read themselves. It writes the \textit{index} of a
+  recording, returns its samples when a view zooms in, and states the identifiers the file
+  holds. It can be written in any language and speaks a small documented protocol.
+  \Cref{chap:addons}.
+\item[Add-on] An \textit{adapter} distributed on its own, outside the public repository, and
+  installed by an administrator with \cmd{medorama addons install}. For example, stp-adapter
+  reads BedMasterEx \file{.Stp} files; it is private and available to institutions under
+  agreement. \Cref{chap:addons}.
+\item[adu] The unit of a signal whose recording states no calibration. The value shown is the
+  stored count.
+\item[Alarm] An interval (start and end) of a recording with a text, a kind and a level: 1
+  (advisory), 2 (warning) or 3 (crisis). Alarms are the only elements that the pages draw in red.
+\item[Analyst] The \textit{role} that may do everything a viewer may do, and also run and cancel
+  actions.
+\item[Annotation] In an EDF+ or BDF+ file, a time-stamped text such as a sleep stage, an apnea or
+  an arousal. VitalStream shows annotations as events in its \ui{Annotations} lane. Their text is
+  free text and is handled like a note in Privacy Mode (\cref{sec:protecting-edf}).
+\item[Audit log] The append-only record of who signed in, imported, removed, searched
+  identifiers, viewed and exported. It is sealed every minute, so that a later change shows.
+  \Cref{chap:users-privacy}.
+\item[Authenticating reverse proxy] A web server placed in front of Medorama that signs users in
+  with the institution's method (single sign-on through OpenID Connect or SAML, Kerberos,
+  multi-factor authentication) and passes each request on with a header naming the user. It is
+  used with \textit{proxy sign-in}. \Cref{chap:sign-in}.
+\item[Batch] One import: the rows of one or more tables imported together, under a name and a
+  \textit{source}. Medorama records what each batch added, so that a batch can be removed with
+  everything it added. \Cref{chap:importing}.
+\item[BDF, BDF+] The BioSemi variants of \textit{EDF} and EDF+, with 24-bit samples. They are read
+  natively, like EDF.
+\item[Bed stay] Where a patient was during an \textit{encounter}: a unit, a bed, and the start
+  and end times. Bed stays link recordings by bed and time, or by the recording a row names
+  (\code{recording\_file}).
+\item[Break] A place in a recording where the data are not proven contiguous. A break has a
+  reason, a length when it is known, and whether that length is exact. The viewers shade breaks
+  in gray.
+\item[Catalog] Medorama's own database of patients, encounters, clinical entries, recordings,
+  users and the audit log (SQLite or PostgreSQL), with its settings in the \textit{home folder}
+  and its results and index folders. \cmd{medorama init} creates it. \Cref{chap:administration}.
+\item[Category] The clinical grouping of an \textit{item} (Labs, Vitals, ECG, ICU, Holter, EEG,
+  Sleep, Imaging and so on). It decides in which column of the Patient Journey the item appears
+  and which viewer opens its file. \Cref{sec:patients-categories}.
+\item[Channel] One signal as the user sees it (ECG lead II, ART, Pleth): a label, a unit and a
+  modality, made of \textit{pieces}.
+\item[CLIF] The Common Longitudinal ICU data Format, a data dictionary of ICU tables that
+  Medorama imports. \Cref{chap:clif}.
+\item[Cohort] A named set of patients, found across every database by criteria, and kept until
+  someone refreshes it. \Cref{chap:cohorts}.
+\item[Collection] See \textit{WFDB collection}.
+\item[Connected database] A database that Medorama reads in place, read-only, at each request,
+  instead of importing it: for example an OMOP CDM instance or a research warehouse read through
+  SQL views. Only the identifiers of its persons are copied into the catalog, when they are
+  linked to patients. \Cref{chap:connecting}.
+\item[CSN] An account (encounter) number. It is protected health information.
+\item[Data model] One of the four forms into which every \textit{reader} turns its format: a
+  recording's \textit{index}, an ECG record, a DICOM object, or rows of the catalog's canonical
+  columns. Past its reader, nothing depends on a file's format. \Cref{chap:readers}.
+\item[Data roots] The folders that files may come from: \code{data\_roots} in
+  \file{medorama.toml} (the files that imported rows name) and in \file{vitalstream.toml} (what a
+  standalone viewer may open). Files outside them are never read.
+\item[Database] In Medorama, every source of data about patients: an imported table (a CSV file,
+  a Parquet file or a spreadsheet), or a \textit{connected database}.
+\item[Date offset] The amount by which Privacy Mode moves a patient's dates back: the catalog's
+  offset plus the patient's own number of days (see \textit{spread\_days}). The intervals
+  between one patient's events are kept. \Cref{sec:protecting-dates}.
+\item[EDF, EDF+] The European Data Format, an open format for physiological recordings such as
+  sleep studies and EEGs. EDF+ adds annotations and interrupted recordings (EDF+D). Medorama, the
+  three VitalStream viewers and the ECG viewer read EDF, EDF+, BDF and BDF+ without an add-on.
+  \Cref{chap:recordings}.
+\item[Encounter] One hospital stay or visit of a patient, known by an \code{encounter\_id}. In
+  Privacy Mode it is named by its \textit{pseudonym}, \code{MO-E-XXXX-XXXX}.
+\item[Envelope] For each \textit{piece}, the minimum and the maximum of every block of 32
+  samples, and of every 4 blocks above that. The viewers draw long windows from envelopes.
+\item[Gateway] The part of Medorama that passes the VitalStream viewer's requests. It requires
+  Medorama's own sign-in, passes only the requests it lists, and checks each one against the
+  user's rights. \Cref{chap:viewer-api}.
+\item[Held-back row] An imported row that contradicts the catalog (for example, two patients for
+  one ID and one MRN, or an encounter of another patient). It is kept for the Review tab.
+  \Cref{chap:administration}.
+\item[Home folder] The folder of a catalog, which holds \file{medorama.toml}, the SQLite database,
+  the plug-ins and the import formats. By default it is
+  \file{\textasciitilde/.local/share/medorama}.
+\item[Identifier] A value that names a person directly: a name, a medical record number, a date
+  of birth, an account number, or an imported patient or encounter ID. Identifiers are kept only
+  in the catalog's identifier tables.
+\item[Identify action] The built-in action \code{identify}, which reads the identifiers that a
+  recording's own file states (for example the patient field of an EDF header, or what an add-on
+  reports) into the catalog's identifier tables, so that an administrator can check that the file
+  belongs to its patient. \Cref{chap:actions}.
+\item[Import format] A converter for a known export (GE MUSE metadata tables, CLIF tables, or a
+  site's own export described in TOML) that turns its rows into catalog rows as they are imported.
+  \Cref{chap:importing}.
+\item[Index] The files that let the viewers show days of waveforms at once: a recording's
+  structure, its envelopes, markers, vital signs, alarms and breaks, in a folder named by the
+  \textit{index key}. The three VitalStream viewers, Medorama and the adapters write
+  byte-identical indexes. \Cref{chap:formats-reference}.
+\item[Index key] The first 20 hexadecimal digits of a SHA-256 hash of a recording's real path and
+  fingerprint. It changes when the recording changes.
+\item[Item] One piece of a patient's data: a result, a vital sign, a drug, a code, a note, a
+  report, an ECG or an image, of a patient or an encounter, in a \textit{category}.
+\item[Lane] One of the channels into which a signal recorded twice at the same time is split, so
+  that it is never drawn on top of itself: \code{II}, \code{II (2)}. In VitalStream, also a row of
+  events such as the \ui{Annotations} lane.
+\item[Late block] A data block that a recording's file stored out of order. An adapter that puts
+  it back in order lists it, and the viewers mark it only with the \code{qc\_verbose} setting.
+\item[Marker] A named mark at a sample of a piece, such as an R wave or a pacing spike.
+\item[MRN] A medical record number, issued by an authority (\code{mrn\_authority}). It is
+  protected health information.
+\item[Multi-segment record] A WFDB record made of segments that follow each other, read as one
+  record. \Cref{chap:recordings}.
+\item[OMOP CDM] The Observational Medical Outcomes Partnership Common Data Model, versions 5.3 and
+  5.4, which Medorama reads as a connected database.
+\item[Patient] A person, known by a \code{patient\_id}. The patient's identifiers (name, MRN, date
+  of birth) are kept apart from the clinical data. In Privacy Mode the patient is named by the
+  pseudonym \code{MO-XXXX-XXXX}.
+\item[PHI] Protected health information: names, MRNs, dates of birth, account and encounter
+  numbers, real dates, and anything else that can identify a patient together with their health
+  data. This manual marks it with \phimark.
+\item[PHI permission] A right that an administrator gives to a user account, separately from the
+  \textit{role}. It lets the user leave Privacy Mode and see and search identifiers. Without it, a
+  user can never see identifiers. \Cref{chap:users-privacy}.
+\item[Piece] The samples of one channel that the recording proves contiguous, at one constant
+  sampling rate. The viewers draw pieces apart and never join them.
+\item[Placeholder] Fixed text that stands for a withheld value in Privacy Mode, such as
+  \code{[Patient Name]}, \code{[MRN]} or \code{[Withheld]}. A placeholder never reveals the length
+  or the form of the value it replaces.
+\item[Privacy gate] The server code that de-identifies answers and files for sessions in Privacy
+  Mode: it replaces identifiers, moves dates back, and refuses what it cannot de-identify. A last
+  layer of the server refuses any answer that the gate did not clear, so the gate fails closed.
+  \Cref{chap:protecting}.
+\item[Privacy Mode] The state of a session in which every answer passes the \textit{privacy gate},
+  so that no identifier reaches the browser. It is always on for users without the PHI
+  permission and on by default for other users; only administrators with the PHI permission start
+  with it off. \Cref{chap:protecting}.
+\item[Proxy sign-in] The sign-in method \code{proxy}, in which an \textit{authenticating reverse
+  proxy} signs users in and names them to Medorama in a header. Medorama believes the header only
+  on connections from the proxy's addresses. Accounts, roles and the PHI permission stay in
+  Medorama. \Cref{chap:sign-in}.
+\item[Pseudonym] A random code that stands for a patient (\code{MO-XXXX-XXXX}) or an encounter
+  (\code{MO-E-XXXX-XXXX}) in Privacy Mode, in exports and in actions' job descriptions. It is
+  drawn at random and stored, never derived from an identifier. \Cref{sec:protecting-pseudonyms}.
+\item[Reader] The code that reads one file format and produces one of the four \textit{data
+  models}. A new format needs one new reader. \Cref{chap:readers}.
+\item[Recording] A waveform recording, such as ICU bedside monitoring, a Holter ECG, an EEG or a
+  sleep study. It is a WFDB record, a folder of WFDB records read as one \textit{session}, a
+  \textit{WFDB collection}, an EDF, EDF+, BDF or BDF+ file, or a file that an installed add-on
+  reads. Each recording is linked to an encounter of its patient. \Cref{chap:recordings}.
+\item[Role] What a user may do: \code{viewer}, \code{analyst} or \code{admin}.
+\item[Root] The folder that a standalone viewer never leaves, fixed when the viewer is built. Its
+  \textit{data roots} may narrow it, but never widen it.
+\item[Seal] A SHA-256 chain of the audit log's entries written since the previous seal, made
+  every minute.
+\item[Session] For a user, one sign-in, which ends by time, by idleness or by signing out. For a
+  viewer, a folder of WFDB records opened together on one time axis.
+\item[Sign-in method] How Medorama learns who sends a request, chosen by the setting
+  \code{sign\_in}: \code{password} (Medorama's own accounts and passwords, the default) or
+  \code{proxy} (\textit{proxy sign-in}). All of it is in one module,
+  \file{medorama/src/signin.rs}. \Cref{chap:sign-in}.
+\item[Source] The label of the batches that came from one place. Removing a source removes what
+  every batch under it added.
+\item[spread\_days] The largest number of days that each patient's own share of the
+  \textit{date offset} may add: from 30 to 3650, 365 by default.
+\item[Timed] Whether a recording states the time of a piece. The viewers shade data without a
+  stated time in amber and label it \ui{time not stated}.
+\item[Token] What names a recording (\code{mo-rec:<n>}) or a file (\code{mo-f0003.dcm}) in Privacy
+  Mode, in place of its path and name.
+\item[Viewer] The \textit{role} that searches and looks at data and builds cohorts. Also each of
+  the programs that show recordings, ECGs and DICOM studies: VitalStream, the ECG viewer and the
+  PACS viewer.
+\item[VitalStream] The waveform viewer, in three implementations with the same page, API and
+  index: \cmd{vitalstream-py}, \cmd{vitalstream-rs} and \cmd{vitalstream-cpp}.
+  \Cref{chap:vitalstream}.
+\item[WFDB] The waveform database format of PhysioNet: a header (\file{.hea}), signal files and
+  annotation files. Medorama and the viewers read it with wfdb-x.
+\item[WFDB collection] A folder of WFDB records with an \file{index.csv} file (and optionally
+  \file{gaps.csv}, \file{vitals.csv} and \file{events.csv}) that says how the records fit together
+  in time. \Cref{chap:formats-reference}.
+\end{description}

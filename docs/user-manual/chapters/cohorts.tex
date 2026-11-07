@@ -1,0 +1,597 @@
+\chapter{Cohorts}
+\label{chap:cohorts}
+
+A \emph{cohort} is a named set of patients, found across every database by criteria, and kept.
+The \ui{Cohorts} tab, the first of the header and the one the page opens on, searches as the
+criteria change, shows why each patient matched, and saves all the matches (or the ticked ones)
+as a new cohort, or adds them to one. A cohort keeps its members until someone refreshes it; its
+definition records its criteria, where its members come from, and every patient added or
+removed manually.
+
+\screenshot{cohorts.png}{The Cohorts tab: an expression, the patients it finds and why each
+matched.}{fig:cohorts-builder}
+
+\section{The Cohorts tab}
+\label{sec:cohorts-tab}
+
+On the left, the tab lists the cohorts that the user may see: the user's own, those shared with
+the user, and the demo's. Each shows its number of patients and whose it is (``shared'' when the
+user shared it, ``from \dots'' with its owner's name when it was shared with the user, ``the
+demo''). A subcohort is listed under its parent. A click opens the cohort's page
+(\cref{sec:cohorts-page}).
+
+Above the list, \ui{New / Edit cohort} starts a new cohort. On a cohort's page it is a menu with
+\ui{New cohort}, \ui{Edit \dots} (when the user may edit the cohort), \ui{Clone \dots}, \ui{New
+subcohort of \dots}, \ui{Merge \dots{} with others\dots}, and \ui{Delete \dots} (for its owner,
+and for the demo's cohort, any administrator). \key{Esc} closes the menu.
+
+\section{Building the criteria}
+\label{sec:cohorts-builder}
+
+The criteria builder says who is \emph{included} and who is \emph{excluded}:
+\begin{itemize}
+\item \textbf{Include patients who meet any group (and all of a group's conditions).} The
+  conditions of a group are joined by \emph{and}, and the groups by \emph{or}. Without any
+  inclusion condition, every patient is included.
+\item \textbf{Exclude those who ever had.} An exclusion takes out every included patient who
+  \emph{ever} met it, in their whole history. The results list who was excluded, and why.
+\end{itemize}
+
+A new cohort starts with one expression line, where criteria are written as text
+(\cref{sec:cohorts-expressions}). The following buttons add lines:
+\begin{description}
+\item[\ui{+ and\dots}] A condition in the same group (a \ui{Lab or vital sign} line, whose kind
+  can then be changed).
+\item[\ui{+ and an expression}] An expression in the same group.
+\item[\ui{+ or another group}, \ui{+ Add a condition}] A new group (the latter when there is
+  none yet).
+\item[\ui{+ Write an expression}] A new group holding an expression.
+\item[\ui{+ Add an exclusion}] An exclusion (a \ui{Diagnosis} line, whose kind can be changed).
+\end{description}
+The $\times$ at the end of a line removes it. Each inclusion line begins with \ui{with} or
+\ui{without} (\ui{without} selects the patients who do not meet the condition), then the kind of
+condition (\cref{tab:cohorts-kinds}), and then its fields.
+
+\begin{xltabular}{\linewidth}{@{}P{3.4cm}P{4.2cm}L@{}}
+\caption{The kinds of condition of the builder.}
+\label{tab:cohorts-kinds}\\
+\toprule
+{\tabhead Kind} & {\tabhead Fields} & {\tabhead A patient meets it when} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Kind} & {\tabhead Fields} & {\tabhead A patient meets it when} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\ui{Expression} & The text & They meet the expression (\cref{sec:cohorts-expressions}) \\
+\ui{Lab or vital sign} & Name, value, \ui{latest only}, the database (\ui{any database}),
+  dates & A result or vital sign of that name has the value, within the dates; with a database
+  chosen, of exactly that name in it, else of any name containing it \\
+\ui{A database's column} & The database, the column, \ui{value} or \ui{contains}, the value or
+  the text, \ui{latest only} & A row of that database about them has the value (or the text) in
+  that column \\
+\ui{Diagnosis} & Code or name & A condition's code starts with it (\code{I21}), or its name
+  contains it (\code{sepsis}) \\
+\ui{Medication} & Name, dates & A drug or transfusion whose name contains it was given within
+  the dates \\
+\ui{Has data} & A category & They have data of that category (\code{ICU}, \code{Holter},
+  \code{EEG}, \code{Sleep}, \code{ECG} and so on) \\
+\ui{Encounter} & Unit, ICU (\ui{any}, \ui{with an ICU stay}, \ui{without an ICU stay}), dates
+  & An encounter overlaps the dates, in a unit whose name contains the text, with or without an
+  ICU stay \\
+\ui{Sex} & \code{F} or \code{M} & Their sex is that \\
+\ui{Age} & Value & Their age now (in years) has the value; the option is disabled (its title:
+  ``Age comes from the date of birth: it needs the PHI permission, out of Privacy Mode'') unless
+  the user has the PHI permission and is out of Privacy Mode \\
+\ui{Text in notes and reports} & The text (at least 3 letters) & An item's text contains it \\
+\ui{In a database} & The database & The database holds data about them \\
+\end{xltabular}
+
+\paragraph{Values.} A value is a comparison and a number. The comparisons are \ui{between}
+(\ui{from} and \ui{to}, inclusive, either of which may be left empty), \ui{>}, \ui{$\geq$},
+\ui{<}, \ui{$\leq$}, \ui{=} and \ui{$\neq$}. A unit may follow the number (the field offers
+\code{ms}, \code{s}, \code{\textmu V}, \code{mV}, \code{bpm}, \code{\textdegree}, \code{mmol/L}
+and \code{mg/dL}), and it is converted to the data's unit (\cref{sec:cohorts-units}). With
+\ui{latest only}, only each patient's latest value of that exact name counts (\code{latest QT}
+never reads a QTc), across the catalog and the connected databases; otherwise any value, at any
+time, counts.
+
+\paragraph{Dates.} \ui{from} and \ui{to} are days in the catalog's time zone, \ui{to} included.
+In Privacy Mode, the dates shown are moved back, and the dates of a condition (an encounter's,
+a result's, a drug's) are dates as shown: each patient's own dates are compared with them, so the
+cohort finds the patients whose shown dates fall in the range, and the criteria keep that meaning
+for every user who refreshes them (\cref{sec:protecting-dates}). An encounter without a discharge
+time counts as continuing until now.
+
+\begin{phibox}
+\ui{Age} comes from the date of birth. The server answers it only for users with the PHI
+permission who switched Privacy Mode off (``age comes from the date of birth: it needs the PHI
+permission''), and the builder disables the \ui{Age} option for everyone else. \ui{Text in notes
+and reports} searches the text of notes only for users who may read it (\cref{chap:patients});
+otherwise notes are left out. A column that identifies (MRN, names, date of birth, encounter
+number), or that is not mapped and is not a measurement, can be used only with the PHI
+permission, out of Privacy Mode. Searches made with the PHI permission that use age, text or
+expressions are written to the audit log (\code{phi\_search}), and so are criteria searched in
+Privacy Mode (\code{privacy\_search}).
+\end{phibox}
+
+\subsection{The results}
+\label{sec:cohorts-results}
+
+The search runs as the criteria change. An expression is checked as it is typed, and its
+meaning, in words, appears beside it (or the error; \cref{sec:cohorts-errors}). Above the
+results, the tab says ``\emph{N} patients match'', with the number excluded and the number
+ticked. The table lists the patients found, a hundred to a page, with \ui{Patient},
+\ui{Patient ID}, \ui{Sex}, \ui{Age}, \ui{Data} (the colors of their categories), and \ui{Why}:
+up to three reasons for each patient (``QTc 482 ms (ecg\_index) on 2024-01-03'', ``has ICU'',
+``no Holter''). A click on a patient's name opens the patient's page. Below the table, a fold
+lists the patients excluded, with \ui{Excluded for}.
+
+\paragraph{Saving.} The boxes at the start of the rows tick patients, and the box in the header
+ticks the whole page. Below the criteria, two choices save the result:
+\begin{itemize}
+\item \ui{Save all \emph{N} as a new cohort} (or \ui{Save the \emph{K} ticked as a new cohort}),
+  after a name is typed in the field \ui{New cohort's name};
+\item \ui{or add them to} a cohort that the user may change, followed by \ui{Add}. The patients
+  whom the cohort's definition does not select are recorded in it as added manually.
+\end{itemize}
+The new cohort's definition is the criteria as written, and its members are the patients saved.
+
+\section{The expression language}
+\label{sec:cohorts-expressions}
+
+Any line may be an expression: criteria written as text, parsed by the server
+(\file{medorama/src/expr.rs}) into the same structured query as the builder's lines. For
+example:
+\begin{lstlisting}[style=text]
+(age > 18 AND age < 85 AND female) OR (age > 18 AND age < 65 AND male AND QT > 400ms)
+\end{lstlisting}
+
+\subsection{Grammar}
+\label{sec:cohorts-grammar}
+
+\begin{lstlisting}[style=text]
+expression  :=  or
+or          :=  and  { OR and }
+and         :=  factor  { [AND] factor }       two conditions side by side mean both
+factor      :=  NOT factor  |  "(" or ")"  |  condition
+condition   :=  sex | age | has | diagnosis | medication | text | in | latest | name-test
+\end{lstlisting}
+
+\begin{itemize}
+\item \code{AND} binds before \code{OR}: \code{a OR b AND c} is \code{a OR (b AND c)}.
+\item The words \code{AND}, \code{OR}, \code{NOT} are read in any case (\code{and}, \code{Or});
+  \code{\&\&}, \code{||} and \code{!} mean the same.
+\item Two conditions written side by side, with nothing between them, mean both:
+  \code{female has ecg} is \code{female AND has ecg}.
+\item \code{NOT} applies to the factor that follows it: a condition or a bracketed group. It
+  keeps the patients who do \emph{not} meet it, including those who have no such data at all:
+  \code{NOT QT > 400ms} keeps the patients without any QT above 400\,ms, and those without a QT.
+\end{itemize}
+
+\paragraph{Tokens.}
+\begin{itemize}
+\item \textbf{Words} are made of letters, digits and \code{\_}, and may hold \code{.}, \code{-},
+  \code{/}, \code{\%}, \code{\textmu} and \code{\textdegree} after their first character
+  (\code{ecg\_index.QT}, \code{mmol/L}).
+\item \textbf{Quoted text}, between \code{"} and \code{"}, \code{'} and \code{'}, or typographic
+  double quotes, is one token, spaces included: \code{"R axis"}, \code{"pulmonary edema"}.
+  Quoted text is never a keyword.
+\item \textbf{Numbers}: digits, with a sign, a decimal point and an exponent
+  (\code{-30}, \code{0.4}, \code{1e3}). A unit may be written against the number:
+  \code{400ms}, \code{1.2mV}.
+\item \textbf{Comparisons}: \code{>}, \code{<}, \code{>=}, \code{<=}, \code{=} (or \code{==}),
+  \code{!=}, and the characters $\geq$, $\leq$, $\neq$. \textbf{Text}: \code{contains} (or
+  \code{mentions\_text}, or \code{\textasciitilde}).
+\end{itemize}
+
+\subsection{Conditions}
+\label{sec:cohorts-conditions}
+
+\Cref{tab:cohorts-conditions} lists every condition the language knows. Keywords are read in any
+case. Where a condition takes a \emph{text}, it is a quoted text or a single word (or a number),
+optionally after \code{=} or \code{contains}: \code{dx I21}, \code{dx = I21},
+\code{diagnosis "septic shock"}; several words need quotes.
+
+\begin{xltabular}{\linewidth}{@{}P{5.6cm}L@{}}
+\caption{The conditions of the expression language.}
+\label{tab:cohorts-conditions}\\
+\toprule
+{\tabhead Written} & {\tabhead A patient meets it when} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Written} & {\tabhead A patient meets it when} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{female}, \code{females}, \code{women}, \code{woman}, \code{F} & Their sex is F \\
+\code{male}, \code{males}, \code{men}, \code{man}, \code{M} & Their sex is M \\
+\code{sex} \emph{text}, \code{gender} \emph{text} & Their sex is the first letter of the text
+  (\code{sex = female}, \code{gender M}) \\
+\code{age} \emph{comparison number} [\emph{unit}] & Their age now, in years, compares so
+  (\code{age >= 65}, \code{age > 18 years}); the unit, if any, is \code{y}, \code{yr},
+  \code{yrs}, \code{year} or \code{years}, in any case. Needs the PHI permission, out of Privacy
+  Mode \\
+\code{has} \emph{category}, or a category's word alone & They have data of that category:
+  \code{has ecg}, \code{icu}, \code{holter}, \code{sleep}, \code{eeg}, \code{echo} and so on
+  (any word of a category, \cref{tab:patients-categories}) \\
+\code{diagnosis}, \code{dx}, \code{condition} \emph{text} & A condition's code starts with the
+  text, or its name contains it: \code{dx I21}, \code{diagnosis sepsis} \\
+\code{medication}, \code{medications}, \code{med}, \code{drug} \emph{text} & A drug or
+  transfusion whose name contains the text: \code{medication heparin} \\
+\code{text}, \code{mentions}, \code{notes} \emph{text} & An item's text contains it (at least 3
+  characters): \code{text "pulmonary edema"}; the text of notes only for users who may read
+  it \\
+\code{in} \emph{database} & The database holds data about them: \code{in ecg\_index},
+  \code{in "ecg\_index"} \\
+\code{latest} (or \code{last}) \emph{name-test} & Only each patient's latest value of a
+  column or a measurement of that exact name counts (\code{latest QTc >= 470}; \code{latest QT}
+  never reads a QTc), across the catalog and the connected databases; without it, any value,
+  ever \\
+\emph{name comparison number} [\emph{unit}] & A database's column, or results of that name,
+  compares so, in its unit: \code{QT > 400ms}, \code{"R axis" < -30},
+  \code{ecg\_index.QT > 0.4 s}, \code{labs.creatinine > 1.5} \\
+\emph{name} \code{contains} \emph{text}, \emph{name} \code{\textasciitilde} \emph{text} & A
+  column's text contains it, ignoring case:
+  \code{ecg\_index.interpretation contains "fibrillation"} \\
+\emph{name} \code{=} \emph{text}, \emph{name} \code{!=} \emph{text} & A column's text is (or is
+  not) exactly that, ignoring case: \code{ecg\_index.interpretation = "Sinus rhythm"} \\
+\emph{database}\code{.}\emph{name} \dots & The same, in the named database (connected
+  databases included: \code{demo\_omop.lactate > 4}) \\
+\end{xltabular}
+
+A word that is neither a keyword nor a category must be followed by a comparison or
+\code{contains}: \code{zzz} alone is the error ``what is "zzz"? (a name needs a comparison:
+zzz > 1)''.
+
+\subsection{Names: columns and results}
+\label{sec:cohorts-names}
+
+A \emph{name} is written alone (\code{QT}), in quotes when it has spaces (\code{"R axis"}), or
+after a database's name and a dot (\code{ecg\_index.QT}, \code{ecg\_index."R axis"}). A
+database is named as the Databases tab shows it (its file's name without \file{.csv},
+\file{.tsv}, \file{.txt}, \file{.xlsx} or \file{.xls}), ignoring case, or by its number
+(\code{\#12}); a beginning that only one database's name starts with is enough.
+
+\paragraph{Columns are never merged across databases.} A name refers to, in this order:
+\begin{enumerate}
+\item \textbf{a column} of a database: one whose header is the name, or whose header without its
+  unit is (\code{QT} for \code{QT (ms)}), or the one column whose name begins with those words
+  (\code{LAD} for \code{LAD stenosis (\%)}). When several databases have such a column (an ECG
+  database and a Holter database both with \code{QT}), the expression must say which, and the
+  error lists them: ``"QT" is a column of several databases (\dots): write which, e.g.
+  ecg\_index.QT'';
+\item else \textbf{results of that name} (items with a numeric value, such as a laboratory
+  result or a vital sign), ignoring case, in one database;
+\item else \textbf{a connected database's measurement}: one of that name, else the one name that
+  contains it. OMOP's concept names are long: when several contain the word, the error lists
+  them (``"lactate" names 3 measurements in omop: \dots; write which'') and the one meant is
+  written in quotes: \code{omop."Lactate [Moles/volume] in Blood" > 4}.
+\end{enumerate}
+When the results of that name are in several databases, the database must be named too.
+Nothing found is the error ``nothing is named \dots''.
+
+\subsection{Units}
+\label{sec:cohorts-units}
+
+A comparison's number is compared in the data's unit, converted from the unit written after it:
+\code{QT > 400ms} and \code{QT > 0.4 s} are the same condition. The units written after a number
+are \code{ms}, \code{s}, \code{sec}, \code{min}, \code{h}, \code{uV}, \code{\textmu V},
+\code{mV}, \code{V}, \code{bpm}, \code{\%}, \code{kg}, \code{g}, \code{mg}, \code{cm},
+\code{mm}, \code{m}, \code{\textdegree}, \code{deg}, \code{mmHg}, \code{mmol/L}, \code{mg/dL},
+\code{g/dL}, \code{ng/L}, \code{ng/mL}, and any unit written with a \code{/}, in any case.
+
+\begin{table}[htbp]
+\caption{The units converted into one another.}
+\label{tab:cohorts-units}
+\begin{tabularx}{\linewidth}{@{}P{2.4cm}L@{}}
+\toprule
+{\tabhead Quantity} & {\tabhead Units} \\
+\midrule
+Time & \code{s} (\code{sec}, \code{secs}, \code{second}, \code{seconds}), \code{ms}
+  (\code{msec}), \code{us}, \code{\textmu s} (\code{usec}), \code{min} (\code{minutes}),
+  \code{h} (\code{hr}, \code{hours}) \\
+Voltage & \code{V}, \code{mV}, \code{\textmu V} (\code{uV}) \\
+Rate & \code{bpm}, \code{/min}, \code{beats/min} \\
+Angle & \code{\textdegree}, \code{deg}, \code{degrees} \\
+Mass & \code{kg}, \code{g}, \code{mg} \\
+Length & \code{m}, \code{cm}, \code{mm} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{itemize}
+\item Units of the same quantity are converted: \code{0.15 mV} is \code{150 \textmu V}.
+\item The same unit, written in another case, compares as it is: \code{mmol/L} and
+  \code{mmol/l}.
+\item A number written without a unit is compared as it is, and only when the data hold one
+  unit: when they hold several, write the unit (\code{labs.creatinine > 1.5}). An age is in
+  years, with or without a unit of years (\code{age > 18}, \code{age > 18 years}). After a
+  number, \code{m} is read as \emph{male}, not as metres.
+\item Values in a unit that does not compare with the one written (mg/dL against
+  \code{glucose > 7 mmol/L}), or values without a unit, are left out, and the search says how
+  many. When none of the values compares, the condition is an error: units of different
+  quantities (\code{ms} and \code{mV}), or two different units not in \cref{tab:cohorts-units}
+  (\code{mmol/L} and \code{mg/dL} are not converted): ``QT is in ms: 5 mV does not compare with
+  it''.
+\end{itemize}
+\textbf{Saved criteria keep their meaning.} When a cohort is saved, each expression is kept
+together with what its names meant at that time, such as which database's \code{QT} column. A
+database imported later that would make a name ambiguous, or give it another meaning, does not
+change the cohort: a search of its criteria says so, and the cohort keeps the meaning it was
+saved with.
+A column's unit is the one its header gives in brackets (\code{QT (ms)}, \code{Lactate
+[mmol/L]}), or, for a few known ECG measurements written without one, the usual unit:
+\code{Vent. rate}, \code{Ventricular rate}, \code{Atrial rate}, \code{Heart rate} and \code{HR}
+in bpm; \code{PR}, \code{QRS}, \code{QT}, \code{QTc}, \code{QTcB}, \code{QTcF} and \code{RR} in
+ms; \code{P axis}, \code{R axis}, \code{QRS axis} and \code{T axis} in degrees. A result's unit
+is the one its row gives.
+
+\subsection{Errors}
+\label{sec:cohorts-errors}
+
+An expression that cannot be read shows its error beside it, with the position of the problem
+(``at 12: \dots''), and the search does not run until it is fixed. The errors include:
+\begin{itemize}
+\item ``the expression is empty''; ``a quote is not closed''; ``a ')' is missing'';
+\item ``a condition is expected here''; ``a condition is missing'';
+\item ``a comparison (>, <, >=, <=, =, !=) is expected''; ``a number is expected'';
+\item ``what is "\dots"? (a name needs a comparison: \dots{} > 1)'';
+\item ``this is not understood (an AND or OR missing?)'';
+\item ``no category "\dots" (ecg, icu, holter, imaging \dots)'';
+\item ``age is in years''; ``latest applies to a measurement or a column'';
+\item ``text is compared with = or contains'';
+\item ``no database "\dots" (databases: \dots)''; ``"\dots" names several databases: \dots'';
+\item the errors of names (\cref{sec:cohorts-names}) and units (\cref{sec:cohorts-units}).
+\end{itemize}
+
+\subsection{Examples}
+\label{sec:cohorts-examples}
+
+On the demo (\cref{chap:quickstart}):
+\begin{lstlisting}[style=text]
+labs.creatinine > 1.5 OR has icu              a result of the database labs, or an ICU stay
+QTc > 470ms AND female                         a column of ecg_index, in its unit (ms)
+latest ecg_index.QTc >= 470                    only each patient's latest ECG counts
+ecg_index.interpretation contains "fibrillation"
+"R axis" < -30                                 a column name with a space, in quotes
+has holter AND NOT has icu
+has sleep OR has eeg                           a sleep study or an EEG recording
+dx I21 OR diagnosis "myocardial infarction"
+medication heparin AND in icu_index
+text "pulmonary edema"
+(female OR age > 80) AND has echo              age needs the PHI permission
+\end{lstlisting}
+
+\section{A cohort's page}
+\label{sec:cohorts-page}
+
+At the top, a cohort's page shows its name, its number of patients, whose it is (``yours'';
+``\dots's, shared with you to read'' or ``to edit''; ``the demo, for every user''), when it was
+made, when its members were found, and the version of each connected database at that time. Its
+description follows, and then:
+\begin{itemize}
+\item the buttons \ui{Edit} (when the user may edit the cohort), \ui{Clone\dots},
+  \ui{Subcohort\dots}, \ui{Merge\dots}, \ui{Share\dots} (for its owner) and \ui{Delete\dots}
+  (for its owner, and for the demo's cohort, an administrator);
+\item its \textbf{definition} (\cref{sec:cohorts-definition});
+\item when the catalog has new data since the members were found, the notice ``New data since
+  the members were found'', with \ui{See who would join\dots};
+\item \ui{Refresh the members\dots} (\cref{sec:cohorts-refresh}), \ui{Open in Patient Catalog}
+  (its members as the patient list, \cref{chap:patients}), \ui{Run actions\dots} (on its
+  members' recordings, \cref{chap:actions}), and the exports
+  (\cref{sec:cohorts-export});
+\item the \textbf{members} (\cref{sec:cohorts-members});
+\item its \textbf{History} (\cref{sec:cohorts-history}).
+\end{itemize}
+
+\subsection{The definition}
+\label{sec:cohorts-definition}
+
+A cohort's definition is shown in words:
+\begin{description}
+\item[\ui{Made}] How the cohort was made (cloned from another cohort, the demo, and so on).
+\item[\ui{From}] Where its members come from, when not from the whole catalog: ``Subcohort of
+  \dots'', ``In \dots{} or \dots'' (a union), ``In \dots{} and \dots'' (an intersection), or ``In
+  \dots{} but not in \dots'' (a difference). Each cohort named is a link, and a deleted one is
+  marked ``(deleted: its last members are kept)''.
+\item[\ui{Criteria}] What includes a patient, and each exclusion (``never: \dots''). Without
+  criteria, it reads ``none: every member of its source'' or ``none: its members are added
+  manually''.
+\item[\ui{Added manually}, \ui{Removed manually}] The patients added or removed by hand,
+  identified by patient ID, never by name or MRN. A long list folds after the first 40 (\ui{and
+  \dots{} more}).
+\end{description}
+
+\subsection{Members}
+\label{sec:cohorts-members}
+
+The members' table shows each patient as the user's permissions allow (identifiers only with
+the PHI permission, pseudonyms in Privacy Mode), and how and when the patient was added:
+\ui{by the criteria}, \ui{by the definition} (for a cohort with a source), or \ui{added
+manually}. A user who may edit the cohort can do the following:
+\begin{itemize}
+\item Remove a member with the $\times$ at the end of its row (``Remove from the cohort
+  (recorded in its definition)''). The patient is then removed manually, and stays out when the
+  cohort is refreshed.
+\item Add patients by search. The box above the members runs the Patient Catalog's search
+  (\cref{chap:patients}) and lists the patients found, with members marked as such. \ui{Add the
+  \emph{K} ticked} or \ui{Add all \emph{N} found} adds them, and \ui{Clear} empties the search.
+  Patients whom the definition does not select are recorded as added manually, and adding a
+  patient who was removed manually ends that removal.
+\end{itemize}
+
+\section{Keeping and refreshing}
+\label{sec:cohorts-refresh}
+
+A cohort keeps its members as a list, a snapshot: new data change nothing until someone
+refreshes it. Its page says when the catalog has new data since its members were found.
+\ui{Refresh the members\dots} (or \ui{See who would join\dots}) first shows what the definition
+selects now (\ui{What the definition selects now}):
+\begin{itemize}
+\item the new patients who would join, each ticked (untick those not wanted);
+\item in a fold, the members whom the definition no longer selects, who would leave.
+\end{itemize}
+Members added manually stay, and members removed manually stay out. Three buttons then decide:
+\begin{description}
+\item[\ui{Add the \emph{N} new patients}] (or \ui{Add \emph{K} chosen patients}) Adds the
+  ticked patients, and nobody leaves.
+\item[\ui{Apply every change (\emph{N} join, \emph{M} leave)}] Applies the changes shown: the new
+  patients ticked join, and the members shown as leaving leave. Changes that appeared since the
+  preview are not applied, and the message says how many: refresh again to see them.
+\item[\ui{Cancel}] Changes nothing.
+\end{description}
+When nothing would change, the page says ``The members are up to date''. A refresh reads the data
+as the criteria were written: criteria on notes' text, ages, columns or expressions select other
+patients for a user who reads the data differently (in Privacy Mode instead of with the PHI
+permission, for example), so such a refresh is refused, and the message says how the criteria
+were written. A subcohort or a merge follows the cohorts it is made from only while the user may
+still read them; when one is no longer shared with the user, a refresh is refused. A refresh records the
+catalog's data version and each connected database's version at that time; its entry in the
+cohort's history names the connected databases that had new data.
+
+\section{Editing}
+\label{sec:cohorts-edit}
+
+\ui{Edit} opens the builder with the cohort's \ui{Name}, \ui{Description} and criteria (and,
+for a subcohort or a merge, where its members come from, set when it was made). The results show
+the patients the edited criteria select. \ui{Save the changes} saves the name, the description
+and the criteria; the criteria are then applied by a refresh, shown first: the cohort's page
+opens with who would join and who would leave. \ui{Cancel} changes nothing. Members are changed
+on the cohort's page, not in the builder.
+
+Criteria made elsewhere (through the API, \cref{chap:http-api}) that the builder cannot draw
+are shown read-only and kept as they are:
+\begin{itemize}
+\item inclusion criteria that are not groups of conditions are shown in words (``Criteria made
+  elsewhere, kept as they are''), until \ui{Replace them};
+\item an exclusion that is a group is kept as a read-only line (``A group made elsewhere, kept as
+  it is (not editable here)''), and saved unchanged; the $\times$ at its end removes it.
+\end{itemize}
+
+\section{Subcohorts, merges and clones}
+\label{sec:cohorts-derived}
+
+\paragraph{A subcohort} (\ui{Subcohort\dots}, or \ui{New subcohort of \dots}) is made with the
+builder, which then searches among the parent's members only. \ui{Save \dots{} as a subcohort
+of \dots} saves it. It follows its parent when it is refreshed: its members are chosen among the
+parent's members of that time.
+
+\paragraph{A merge} (\ui{Merge\dots}) makes a new cohort from this one and others, ticked in a
+list:
+\begin{description}
+\item[\ui{Union}] The patients in this cohort or in any of the others.
+\item[\ui{Intersection}] The patients in this cohort and in all of the others.
+\item[\ui{Difference}] The patients in this cohort and in none of the others.
+\end{description}
+\ui{Make the cohort}, after a name is typed, makes it. The merged cohorts are left as they are,
+and the new cohort follows them when it is refreshed.
+
+\paragraph{A clone} (\ui{Clone\dots}) is a cohort of the user's own, with the same definition
+and members (and following the same cohorts when refreshed); its name is first proposed as
+``\dots{} (copy)''. The cohort cloned does not change. Any cohort the user may see can be
+cloned.
+
+When a cohort that others are made from is deleted, they keep its last members and follow
+those from then on.
+
+\section{Sharing}
+\label{sec:cohorts-share}
+
+A cohort is private to its owner unless shared. \ui{Share\dots} (its owner only) lists the
+other users, each with \ui{May see it} and \ui{May edit it}; \ui{Save} applies the choice.
+Those who may edit it change its name, description, criteria and members, and refresh it; only
+its owner shares and deletes it. Each user sees the members as their own permissions allow:
+identifiers only with the PHI permission, out of Privacy Mode.
+
+\section{Deleting}
+\label{sec:cohorts-delete}
+
+\ui{Delete\dots} (its owner only) says first what happens: the patients in the cohort stay in
+the catalog, and the cohorts made from it keep its current members. \ui{Delete} then deletes it;
+it cannot be undone.
+
+\begin{note}[The cohort DEMO]
+The cohort \code{DEMO} exists when Medorama was installed with its demo. It is the one cohort
+whose deletion also removes its patients. Every user sees it, read-only, and any administrator
+may delete it. \ui{Delete\dots} first says what goes (its patients, encounters, bed stays, items
+and recordings, and its OMOP database \code{demo\_omop}), and \ui{Delete the demo} then removes
+all of it from the catalog (\cref{chap:quickstart}).
+\end{note}
+
+\section{History}
+\label{sec:cohorts-history}
+
+Each change to a cohort (made, renamed, criteria changed, members added or removed, refreshed,
+shared, cloned) is in its \ui{History}, at the bottom of its page (\ui{When}, \ui{Who},
+\ui{What}; ``command line'' for changes made there), and in the audit log
+(\cref{chap:administration}).
+
+\section{Exports}
+\label{sec:cohorts-export}
+
+The cohort's page exports the cohort as files to download (\cref{tab:cohorts-exports}). In
+Privacy Mode, the label reads \ui{Export (Privacy Mode)}, and the exports pass the privacy gate.
+They have the same columns, with identifiers as placeholders, patients named by their
+pseudonyms, dates moved back and ages above 89 as \code{90+}, and their file names end in
+\code{-privacy}.
+
+\begin{table}[htbp]
+\caption{A cohort's exports.}
+\label{tab:cohorts-exports}
+\begin{tabularx}{\linewidth}{@{}P{3.0cm}P{4.4cm}L@{}}
+\toprule
+{\tabhead Button} & {\tabhead File} & {\tabhead Holds} \\
+\midrule
+\ui{Members (CSV)} & \file{cohort-NAME.csv} & The members, one row per patient; for users with
+  the PHI permission, their identifiers too (MRN, names, date of birth, age) \\
+\ui{Definition (JSON)} & \file{cohort-NAME-criteria.json} & The criteria and the source as
+  stored, and the whole definition in words, with the patients added and removed manually \\
+\ui{Members' data (CSV)} & \file{cohort-NAME-data.csv} & Every database's rows about the
+  members, one cell per line: patient, database, line, column, value \\
+\ui{Excel} & \file{cohort-NAME.xlsx} & The members, the definition, and a sheet per database \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The columns exported are those the user may see (\cref{chap:databases-tab}). Every member is
+exported, however many. Times are written in UTC, marked \code{Z} (ISO 8601). A cell that a
+spreadsheet would run as a formula (text starting with \code{=}, \code{+}, \code{-} or
+\code{@}) is written after a \code{'}, so that it opens as text.
+
+\section{Connected databases in cohorts}
+\label{sec:cohorts-connected}
+
+Criteria are answered by every source that holds such data: the catalog, and each connected
+database (an OMOP instance, a warehouse; \cref{chap:connecting}). A condition, a drug, a text, a
+stay or a result found in any of them counts; sex, age and ``data in that database'' are
+answered by the catalog for every linked person. A connected database is named in criteria by
+the name it was connected with (\code{omop.lactate > 4}). Its persons are linked to the
+catalog's patients as their data are found, so that a person in several sources is one patient.
+A cohort records the version of each connected database when its members were found, shown on
+its page, and a refresh says which have new data.
+
+\section{Criteria as data}
+\label{sec:cohorts-json}
+
+Behind the builder, the criteria are a structured query, which the API takes and returns
+(\cref{chap:http-api}), and which another program can write:
+\begin{lstlisting}[language=JSON]
+{"version": 1,
+ "include": {"op": "or", "of": [
+     {"kind": "expression", "text": "QTc > 470ms AND female"},
+     {"op": "and", "of": [{"kind": "has", "category": "icu"},
+                          {"kind": "measurement", "name": "Lactate", "cmp": ">", "value": 4}]}]},
+ "exclude": [{"kind": "diagnosis", "text": "I21"}]}
+\end{lstlisting}
+An expression is a criterion or a group (\code{"op"}: \code{"and"}, \code{"or"} or
+\code{"not"}, \code{"of"}: a list); a criterion's \code{kind} is one of those of
+\cref{tab:cohorts-kinds} (\code{expression}, \code{measurement}, \code{column},
+\code{diagnosis}, \code{medication}, \code{has}, \code{encounter}, \code{sex}, \code{age},
+\code{text}, \code{database}), with \code{not} to invert it. A patient is in when they meet
+\code{include} (none: everyone) and no \code{exclude}, looked for in their whole history. The
+format: \cref{chap:formats-reference}.

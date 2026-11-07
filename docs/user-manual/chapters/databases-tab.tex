@@ -1,0 +1,176 @@
+% Part II: the Databases tab. Sources: docs/user-guide.md ("The Databases tab"); docs/databases.md;
+% medorama/web/js/views/databases.js; medorama/src/databases.rs; gate.rs (column_mask).
+\chapter{The Databases tab}
+\label{chap:databases-tab}
+
+The \ui{Databases} tab shows the same data as the patient pages, organized by database. It lists
+every database in use, with what it holds, and shows each one as a table of its rows as they
+were imported, every row linked to its patient and its file to its viewer. Databases are the
+only way data enter Medorama: a file (a recording, an ECG, an image) always comes with the row
+that names its patient. \Cref{chap:importing} describes how databases are imported, and
+\cref{chap:connecting} how they are connected.
+
+\screenshot{databases.png}{The Databases tab: every database in use, one of them unfolded into
+its rows.}{fig:databases-tab-list}
+
+\section{The list of databases}
+\label{sec:databases-tab-list}
+
+The list shows every database in use, newest first. Three kinds of databases appear in it:
+\begin{itemize}
+\item \textbf{imported tables} (CSV, Parquet or spreadsheet files, copied into the catalog), one
+  database per table, or per set of files imported together;
+\item \textbf{folders of recordings}, marked \ui{folder};
+\item \textbf{connected databases} (an OMOP instance, a warehouse, read in place), marked
+  \ui{connected} with their kind and engine (for example \ui{connected $\cdot$ OMOP $\cdot$
+  PostgreSQL}).
+\end{itemize}
+
+Each line gives the following:
+\begin{description}
+\item[\ui{Database}] The database's name: the file's name, or the name given when it was
+  imported or connected. Cohort criteria refer to it by this name (\cref{chap:cohorts}).
+\item[\ui{Holds}] The categories of data that its rows filled (\cref{chap:patients}).
+\item[\ui{Rows}] Its number of rows (for a connected database, \ui{live}).
+\item[\ui{Patients}] The number of patients it holds data about.
+\item[\ui{Source}] The source it was imported under, when that differs from its own name.
+\item[\ui{Imported}] When it was imported, and by whom.
+\end{description}
+When there are some, the line also gives the rows \ui{held back} for review and the items
+\ui{waiting} for a database that names their patient (\cref{chap:importing}).
+
+\paragraph{Unfolding a database.} A click on a database's line unfolds its table in place (the
+arrow at the start of the line turns), and a second click folds it again. Several tables can be
+open at once, and the open ones are remembered in this browser. Two kinds of lines do not
+unfold:
+\begin{itemize}
+\item A connected database, whose line says ``its data are read from it when a patient's page
+  opens or a cohort is searched''. Its persons, stays and entries appear on the patients' pages
+  (\cref{chap:patients}).
+\item A table imported before Medorama kept rows, whose line says ``Imported before rows were
+  kept: import it again to see it here''.
+\end{itemize}
+
+\paragraph{A page of its own.} \ui{Full page}, in an unfolded table, shows that database alone,
+at an address of its own (\code{\#/databases/12}). The page shows its categories, its numbers
+of rows and patients, its source, and when and by whom it was imported, with a search line
+across the page (``Search this database's rows''). The address keeps the search, the filters,
+the order and the page, so that the view can be reloaded or shared.
+
+\section{A database's table}
+\label{sec:databases-tab-table}
+
+The rows are shown \emph{as they were imported}: the file's own columns, under their own names,
+in their own order, a hundred rows to a page (\ui{$\langle$ Previous}, \ui{Next $\rangle$}).
+Two columns come before the file's columns:
+\begin{description}
+\item[\ui{Line}] The row's line in the file.
+\item[\ui{Patient}] The patient the row reached: the patient ID (in Privacy Mode, the
+  pseudonym), as a link to the patient's page at the entry the row made. A dash means that no
+  database names that patient yet.
+\end{description}
+The last column holds the row's link to its file (\cref{sec:databases-tab-files}) and, when the
+row is not an ordinary one, its status: \ui{patient, encounter} (a row that describes who the
+patient is, or an encounter), \ui{duplicate}, \ui{held back}, \ui{not read} or
+\ui{nothing to read}. Rows held back or not read are dimmed.
+
+The tooltip of a column's header tells what the column was mapped to when it was imported
+(``$\rightarrow$ \code{mrn}'', ``$\rightarrow$ \code{value}'' and so on), or ``not mapped''. A
+long cell is cut after 80 characters, and its tooltip shows it whole.
+
+\paragraph{Searching, filtering, sorting.}
+\begin{itemize}
+\item \textbf{Search.} The box above the table (``Search these rows''), or the search line of
+  the table's own page, keeps the rows in which every word is found in some cell, ignoring
+  case.
+\item \textbf{Filters.} The box under each column's name (\ui{filter}) keeps the rows whose
+  cell in that column contains the text, ignoring case. Filters combine with each other and with
+  the search.
+\item \textbf{Order.} A click on a column's name sorts the rows by that column, and a second
+  click sorts them in the other direction; an arrow shows which. Numbers are sorted as numbers,
+  then text, with empty cells last, whichever the direction and whichever database (SQLite or
+  PostgreSQL) holds the catalog. Without a sort, the rows are in the file's order. The search
+  and the filters take \code{\%} and \code{\_} as written.
+\end{itemize}
+
+\section{Rows, patients and files}
+\label{sec:databases-tab-files}
+
+Each row links to \emph{its patient}, and its file to its viewer. In the file's column, the cell
+shows the file's name, followed by one of these links:
+\begin{description}
+\item[\ui{VitalStream}] For a recording (ICU monitoring, a Holter, an EEG, a sleep study),
+  which opens in the VitalStream tab at its start, for a minute. When the catalog links to a
+  viewer running elsewhere, the recording opens in that viewer's browser tab.
+\item[\ui{ECG}] For a 12-lead ECG, which opens in the ECG tab.
+\item[\ui{PACS}] For a DICOM study, a series, an echo loop, a picture, a video or a PDF, which
+  opens in the PACS tab.
+\item[\ui{Open}] For any other file, which the browser opens in a new tab.
+\end{description}
+A viewer opened from a row says whose file it shows, as it does from the patient's page
+(\cref{chap:viewers-in-medorama}). The item's category and the file's kind decide which viewer
+opens which file (\cref{chap:ecg-imaging}).
+
+\section{Identifying columns}
+\label{sec:databases-tab-phi}
+
+\begin{phibox}
+A database's columns are of three kinds, according to how its import mapped them:
+\begin{itemize}
+\item \textbf{Mapped columns that do not identify} (a patient ID, an encounter ID, a time, a
+  test's name, a value, a unit and so on), and \textbf{measurement columns} (a column named like
+  a measurement with its unit, such as \code{QT (ms)} or \code{LVEF (\%)}, or a known ECG
+  measurement; \cref{chap:cohorts}). These are shown to everyone.
+\item \textbf{Identifying columns}: those mapped to an MRN, its authority, a last or first name,
+  a date of birth or an encounter (account) number\phimark.
+\item \textbf{Unrecognized columns}: columns that are not mapped and are not measurements.
+\end{itemize}
+Out of Privacy Mode, users with the PHI permission see, search, filter and sort every column.
+In Privacy Mode, every column is still listed under its imported name, so that the table keeps
+the shape of its source, but its cells are sent as follows:
+\begin{itemize}
+\item the cells of identifying columns become placeholders (\code{[MRN]},
+  \code{[Patient Name]}, \code{[Date of Birth]}, \code{[CSN]}), patient IDs become
+  \code{[Patient ID]}, file names \code{[File Name]} and the authors of notes
+  \code{[Staff Name]};
+\item the cells of unrecognized columns become \code{[Withheld]}, while measurement columns are
+  shown;
+\item the text of notes is shown, unless an administrator withholds \ui{The text of notes and
+  reports}, in which case it becomes \code{[Withheld]};
+\item the other cells pass the privacy gate: encounter IDs become pseudonyms, and dates move
+  back.
+\end{itemize}
+The search, the filters and the sort use the cells as you are shown them: pseudonyms in place
+of identifiers, each patient's dates moved back, notes without the patient's names. The search
+skips placeholders and \code{[Withheld]} cells (and the text of notes, when it is withheld); a
+filter on a placeholder column compares with the placeholder, and a sort by one of those columns
+is ignored, so that they cannot reveal what is withheld. Such searches and filters are written
+to the audit log (\code{privacy\_search}). An administrator chooses what Privacy Mode withholds
+(\cref{chap:users-privacy}); the rules are explained in \cref{chap:protecting}.
+\end{phibox}
+
+\section{Exporting and deleting (administrators)}
+\label{sec:databases-tab-admin}
+
+Administrators have three more buttons:
+\begin{description}
+\item[\ui{Import databases\dots}] Above the list, this button opens the \ui{Import} tab
+  (\cref{chap:importing}).
+\item[\ui{Export CSV}] In a table, this button exports the database as CSV, with its columns
+  under their imported names and its rows as imported. In Privacy Mode, the button reads
+  \ui{Export CSV (Privacy Mode)}, and the export has the same shape but passes the gate:
+  identifying cells become placeholders, patients are named by their pseudonyms, and dates move
+  back. A folder of recordings, or a table imported before rows were kept, has no rows to
+  export.
+\item[\ui{Delete\dots}] In a table, this button removes the database from the catalog. Medorama
+  first says what would go (so many recordings, patients, encounters, bed stays and items, and
+  what stays because another database also holds it). It then asks whether to delete the
+  catalog's indexes and results of the removed recordings as well (in the results folder only).
+  Files are never touched.
+\end{description}
+
+\paragraph{Changes show everywhere at once.} When a database is imported or deleted, here or in
+anyone else's browser, the change shows within seconds on every open page: the list, the
+patients' pages, the cohorts' searches, and the viewers, which close when their file is gone
+(\cref{chap:page}). \Cref{chap:importing} describes how to remove data and sources from the
+command line.

@@ -1,0 +1,129 @@
+# The website of Medorama (https://medorama.org/): the README of each folder
+# is its page, built with Jekyll by .github/workflows/pages.yml (Settings > Pages > Source:
+# GitHub Actions). The ECG and PACS viewers run live on it (viewers/ecg/, viewers/pacs/): they
+# are pages that read the files a visitor picks in the browser, which never leave the computer.
+
+title: Medorama
+description: >-
+  A unified patient-journey research platform linking EHR data, physiological waveforms,
+  imaging and laboratory results across databases.
+url: https://medorama.org
+baseurl: ""
+repository: alphanumericslab/medorama
+theme: jekyll-theme-minimal
+
+plugins:
+  - jekyll-seo-tag                # {% seo %} in _layouts/default.html
+  - jekyll-readme-index           # a folder's README.md is its page
+  - jekyll-relative-links         # links such as docs/security.md keep working
+  - jekyll-optional-front-matter  # Markdown files need no front matter
+  - jekyll-titles-from-headings   # page titles come from the first heading
+
+# Publish each Markdown file as its page only, not also as itself.
+optional_front_matter:
+  remove_originals: true
+readme_index:
+  remove_originals: true
+
+# Tabs above every page (_layouts/default.html). `url` is where a tab leads; `match` (default:
+# url) is the URL prefix of its pages, and `also` lists further prefixes that belong to it. A
+# page belongs to the tab whose prefix is the longest one that starts the page's URL
+# (/docs/security.html: Security, /docs/api.html: Documentation, /libs/engine/: Documentation);
+# any other page belongs to Overview. A tab with `sub` shows a second row of tabs on its pages,
+# chosen the same way. The ECG and PACS sub-tabs lead to their READMEs (website.md in each
+# folder), since each folder's own page is the viewer itself.
+tabs:
+  - { title: Overview,      url: / }
+  - { title: Install,       url: /docs/install.html }
+  - { title: Get started,   url: /docs/getting-started.html }
+  - { title: Medorama,      url: /medorama/ }
+  - title: Viewers
+    url: /viewers/
+    sub:
+      - { title: All viewers, url: /viewers/ }
+      - { title: VitalStream, url: /viewers/vitalstream/ }
+      - { title: ECG,         url: /viewers/ecg/README.html, match: /viewers/ecg/ }
+      - { title: PACS,        url: /viewers/pacs/README.html, match: /viewers/pacs/ }
+  - title: Security
+    url: /docs/security.html
+    also: [/docs/protecting-patient-data.html, /docs/sign-in.html, /PRIVACY.html, /SECURITY.html]
+  - title: Documentation
+    url: /docs/
+    also: [/libs/, /tools/, /THIRD_PARTY_LICENSES.html, /COMMERCIAL.html, /CLA.html]
+  - { title: Manual,        url: /docs/user-manual/ }
+
+# Publish the documentation and the two live viewers, not the sources, build outputs, tests and
+# local data. Links from a page to a file that is not published lead to it on GitHub
+# (_layouts/default.html).
+exclude:
+  - sample_data/
+  - target/
+  - Cargo.toml
+  - Cargo.lock
+  - deny.toml
+  - rustfmt.toml
+  - Makefile
+  - CITATION.cff
+  - CODE_OF_CONDUCT.md
+  - CONTRIBUTING.md
+  - viewers/ecg/README.md
+  - viewers/pacs/README.md
+  - medorama/src/
+  - medorama/tests/
+  - medorama/fuzz/
+  - medorama/web/
+  - medorama/actions/
+  - medorama/Cargo.toml
+  - medorama/openapi.yaml
+  - libs/engine/src/
+  - libs/engine/tests/
+  - libs/engine/Cargo.toml
+  - libs/signal-core/src/
+  - libs/signal-core/Cargo.toml
+  - tools/git-hooks/
+  - tools/*.py
+  - tools/*.sh
+  - tools/*.ps1
+  - docs/images/diagrams.py
+  - docs/user-manual/chapters/
+  - docs/user-manual/*.tex
+  - docs/user-manual/latexmkrc
+  - docs/user-manual/Makefile
+  - docs/user-manual/figures/
+  - docs/user-manual/check_manual.py
+  - viewers/ecg/tests/
+  - viewers/ecg/python/muse/muse_reader_py/
+  - viewers/ecg/python/muse/tests/
+  - viewers/ecg/python/muse/pyproject.toml
+  - viewers/ecg/python/muse/setup.py
+  - viewers/pacs/tests/
+  - viewers/pacs/python/dicom/dicom_index_py/
+  - viewers/pacs/python/dicom/tests/
+  - viewers/pacs/python/dicom/pyproject.toml
+  - viewers/pacs/python/dicom/setup.py
+  - viewers/vitalstream/sample_data/
+  - viewers/vitalstream/testdata/
+  - viewers/vitalstream/web/
+  - viewers/vitalstream/rust/src/
+  - viewers/vitalstream/rust/tests/
+  - viewers/vitalstream/rust/Cargo.toml
+  - viewers/vitalstream/rust/build.rs
+  - viewers/vitalstream/cpp/core/
+  - viewers/vitalstream/cpp/engine/
+  - viewers/vitalstream/cpp/vitalstream/
+  - viewers/vitalstream/cpp/cmake/
+  - viewers/vitalstream/cpp/build/
+  - viewers/vitalstream/cpp/CMakeLists.txt
+  - viewers/vitalstream/cpp/CMakePresets.json
+  - viewers/vitalstream/cpp/deps/
+  - viewers/vitalstream/python/vitalstream/vitalstream_py/
+  - viewers/vitalstream/python/vitalstream/tests/
+  - viewers/vitalstream/python/vitalstream/build/
+  - viewers/vitalstream/python/vitalstream/pyproject.toml
+  - viewers/vitalstream/python/vitalstream/setup.py
+  - viewers/vitalstream/tests/parity/*.py
+  - viewers/vitalstream/analysis_tools/matlab/*.m
+  - viewers/vitalstream/analysis_tools/python/
+  - viewers/vitalstream/install.sh
+  - viewers/vitalstream/install.ps1
+  - viewers/vitalstream/vitalstream.example.toml

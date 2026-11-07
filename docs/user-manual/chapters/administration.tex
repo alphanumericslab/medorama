@@ -1,0 +1,595 @@
+% Administration: setting up a catalog, its settings, PostgreSQL, running it, the commands, one
+% patient across databases, the Review tab, linking recordings, identifiers in recordings.
+% Sources: docs/administration.md; medorama/src/config.rs (settings and defaults), main.rs,
+% identity.rs, linkage.rs, review.rs, identify.rs, viewer.rs, server.rs (start_background).
+\chapter{Administration}
+\label{chap:administration}
+
+This chapter is for the administrator who sets up a catalog and looks after it. A
+\emph{catalog} is Medorama's own database of patients, encounters, clinical entries,
+recordings, users and the audit log, together with its settings. The chapter describes where a
+catalog lives, its settings, its database in SQLite or PostgreSQL, running the server, and the
+decisions that keep one patient one patient across databases.
+
+Other chapters cover the neighboring tasks. Users and Privacy Mode are described in
+\cref{chap:users-privacy}, and the two ways of signing in, Medorama's passwords or the
+institution's sign-in through a proxy, in \cref{chap:sign-in}. Deployment on servers and as a
+service is described in \cref{chap:deployment}, and add-ons in \cref{chap:addons}. Every command
+is described in full in \cref{chap:cli}, and every setting in \cref{chap:settings-reference}.
+Bringing data in is the subject of \cref{part:data}: imported tables in \cref{chap:importing},
+connected databases in \cref{chap:connecting}, and recordings in \cref{chap:recordings}.
+
+\section{The rules}
+\label{sec:administration-rules}
+
+These rules hold for every deployment, and the code enforces each of them.
+\begin{enumerate}
+\item \textbf{Recordings are only read.} The catalog stores paths, never copies. It never
+  writes, moves or deletes a recording, and never writes into a recording's folder, that is,
+  the folder that holds a recording file, or anywhere inside a WFDB folder. An import refuses a
+  recording that lies in such a position relative to the catalog's own folders (results,
+  indexes, home).
+\item \textbf{Removing affects the database only.} Removing a recording, an encounter, an import
+  or a source deletes catalog entries. With \emph{purge}, the catalog's own outputs for a
+  recording are deleted too, but only inside \code{results\_dir} and \code{index\_dir}. Every
+  removal can be previewed first.
+\item \textbf{Only administrators add or remove data and users.}
+\item \textbf{A file comes in only with its patient.} Databases are the only way in: a
+  recording, an ECG, an image or any other file enters as a row that names its patient (patient
+  ID, MRN or encounter) and links the file. No file is imported on its own.
+\item \textbf{Identifiers (PHI) live only in the catalog's database.} These are MRNs, names,
+  dates of birth, encounter numbers, and what the recordings' own files say about the patient
+  (\cref{sec:administration-identifiers}). They are sent, shown and searchable only for users with
+  the PHI permission who switched Privacy Mode off, and those users' searches and views are
+  written to the audit log. The viewers, the job descriptions given to actions, the results
+  folders and the indexes carry pseudonyms only.
+\item \textbf{Outputs go to configured folders.} Everything the catalog writes goes to
+  \code{results\_dir}, \code{index\_dir} or its home folder, all chosen when the catalog is
+  created.
+\end{enumerate}
+
+\section{Setting up a catalog}
+\label{sec:administration-catalog}
+
+A catalog needs two places, chosen when it is created (\cref{tab:administration-places}).
+
+\begin{xltabular}{\linewidth}{@{}P{2.4cm}P{4.6cm}L@{}}
+\caption{The two places of a catalog.}
+\label{tab:administration-places}\\
+\toprule
+\tabhead Place & \tabhead What goes there & \tabhead Advice \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Place & \tabhead What goes there & \tabhead Advice \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Home folder & \file{medorama.toml} (the settings), \file{medorama.sqlite} (the database),
+  \file{actions/} (plug-ins), \file{formats/} (import formats), \file{viewer/} (the settings and
+  log of the viewer the catalog runs), \file{secrets/} (connected databases' passwords) &
+  On a \textbf{local disk}: SQLite's locking is unreliable on network file systems such as NFS
+  or SMB home folders. Private to the account that runs the catalog, and encrypted: the
+  database holds identifiers. Default: \file{\textasciitilde/.local/share/medorama} (Windows:
+  \code{\%LOCALAPPDATA\%\textbackslash medorama}). \\
+Results folder & \file{index/} (the recordings' indexes) and \file{actions/} (the results of
+  actions) & Room for the indexes, roughly 1 to 5\,\% of the recordings' size; never a folder
+  that holds recordings. \\
+\end{xltabular}
+
+\cmd{medorama init} creates the catalog:
+\begin{lstlisting}[style=shell]
+medorama init --results /data/medorama-results                     # the default home folder
+medorama init --results /data/medorama-results --home ~/medorama   # or one of your own
+\end{lstlisting}
+The command asks twice for the password of the first user, \code{admin} (at least 10
+characters), who is an administrator with the PHI permission. It writes a commented
+\file{medorama.toml}, creates the database, makes the home folder readable by its owner only, and
+remembers the new catalog as the default for later commands. When users will sign in through the
+institution's proxy, name the first administrator as the proxy will name that person, with
+\opt{-{}-admin} (\cref{sec:sign-in-accounts}). Its options (\opt{-{}-index-dir}, \opt{-{}-admin},
+\opt{-{}-timezone}, \opt{-{}-port}, \opt{-{}-password-stdin}, \opt{-{}-database-url},
+\opt{-{}-database-password-file}, \opt{-{}-no-demo}) are listed in \cref{chap:cli}. A catalog
+starts empty unless the installer was given \opt{-{}-demo}: the demo, its use and its removal are
+described in \cref{chap:quickstart}; never install it where real patients are.
+
+\subsection{Which catalog a command uses}
+\label{sec:administration-which}
+
+Every command works on one catalog: the first of these that applies.
+\begin{enumerate}
+\item the global option \opt{-{}-home DIR}, given before or after the command;
+\item the environment variable \code{MEDORAMA\_HOME};
+\item the catalog that \cmd{init} created last, or the one that \cmd{medorama -{}-home DIR use}
+  chose, remembered in \file{\textasciitilde/.config/medorama/home} (Windows:
+  \code{\%APPDATA\%\textbackslash medorama\textbackslash home}), if that folder still holds a
+  \file{medorama.toml};
+\item the built-in home folder, \file{\textasciitilde/.local/share/medorama} (Windows:
+  \code{\%LOCALAPPDATA\%\textbackslash medorama}).
+\end{enumerate}
+\cmd{medorama serve} prints the catalog it uses, with its address and its viewer (\code{viewer:
+  ... (started on first use, in the VitalStream tab)}). A command run where there is no catalog says so
+(\code{no catalog in ...}) and explains how to create one or name another.
+
+\section{The settings: medorama.toml}
+\label{sec:administration-settings}
+
+The settings are in \file{<home>/medorama.toml}, which \cmd{init} writes with a comment above
+each setting. Relative paths are relative to the home folder; \code{\textasciitilde} stands for
+the home folder of the account. The server reads the file when it starts, so restart it after a
+change. A key that the program does not know is an error (\code{unknown settings: ...}), so that
+a mistyped setting is never silently ignored, and so is a value of the wrong type
+(\code{bad value for ...}). \Cref{tab:administration-settings} lists every setting with its default; the types and
+the details are in \cref{chap:settings-reference}.
+
+\begin{xltabular}{\linewidth}{@{}P{3.7cm}P{3.3cm}L@{}}
+\caption{The settings of \file{medorama.toml}, with their defaults.}
+\label{tab:administration-settings}\\
+\toprule
+\tabhead Setting & \tabhead Default & \tabhead Meaning \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Setting & \tabhead Default & \tabhead Meaning \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{results\_dir} & (set by \cmd{init}; required) & Where action results go:
+  \file{actions/<action>/r<recording>/j<job>/} \\
+\code{index\_dir} & \file{<results\_dir>/index} & The recordings' indexes, one folder per index
+  key \\
+\code{adapters\_dir} & \file{\textasciitilde/.local/share/medorama/adapters} (Windows:
+  \code{\%LOCALAPPDATA\%\textbackslash medorama\textbackslash adapters}) & The adapter folder
+  (\cref{chap:addons}) \\
+\code{database} & \file{medorama.sqlite} & The SQLite database file; it holds identifiers \\
+\code{database\_url} & (empty: SQLite) & A PostgreSQL database instead,
+  \code{postgres://user@host/db?sslmode=require}, without its password;
+  \code{MEDORAMA\_DATABASE\_URL} overrides it \\
+\code{database\_password\_file} & (none) & The file that holds that database's password;
+  \code{MEDORAMA\_DATABASE\_PASSWORD} overrides it \\
+\code{database\_ca\_file} & (none) & Certificate authorities (PEM) trusted for the database
+  server's certificate, besides the system's \\
+\code{host}, \code{port} & \code{127.0.0.1}, 8090 & Where the web interface and the API
+  listen \\
+\code{workers} & 2 & Jobs run at the same time (a value below 1 is read as 1) \\
+\code{auto\_index} & \code{true} & While the server runs, queue the indexing of new and changed
+  recordings \\
+\code{check\_interval\_s} & 900 & Re-check every recording this often, in seconds (0: never) \\
+\code{timezone} & \code{America/New\_York} & The time zone of times written without an offset,
+  and of the times shown \\
+\code{viewer} & \code{auto} & The VitalStream viewer the catalog runs: \code{auto}, \code{cpp},
+  \code{rs}, \code{py}, \code{none}, or a program's path (\cref{sec:administration-viewer}) \\
+\code{viewer\_url} & (empty) & Instead, a viewer running elsewhere, opened in a new browser
+  tab \\
+\code{qc\_verbose} & \code{false} & The viewer the catalog runs also marks (dashed outline) the
+  data a reader repaired, such as data blocks a file stored out of order; breaks are shaded
+  either way \\
+\code{data\_roots} & \code{[]} (anywhere) & The folders files may be imported from \\
+\code{actions\_dirs} & \code{["actions"]} & The folders of action plug-ins
+  (\cref{chap:actions}) \\
+\code{formats\_dirs} & \code{["formats"]} & The folders of import formats described in TOML
+  (\cref{chap:importing}) \\
+\code{session\_hours} & 12 & How long a sign-in lasts, in hours (a value below 1 is read as
+  1) \\
+\code{session\_idle\_minutes} & 60 & A sign-in unused this long ends (0: only
+  \code{session\_hours} ends it); the page's own checks for new data do not count as use \\
+\code{secure\_cookies} & \code{false} & \code{true} when the catalog is served over HTTPS \\
+\code{sign\_in} & \code{"password"} & How users sign in: \code{"password"} (Medorama's accounts)
+  or \code{"proxy"} (the institution's authenticating proxy; \cref{chap:sign-in}) \\
+\code{proxy\_user\_header} & \code{"X-Remote-User"} & Proxy mode: the header that names the
+  user \\
+\code{proxy\_addresses} & \code{["127.0.0.1", "::1"]} & Proxy mode: the IP addresses the proxy
+  connects from; the header is believed from these only \\
+\code{proxy\_logout\_url} & (empty) & Proxy mode: where \ui{Sign out} leads, the proxy's own
+  sign-out \\
+\code{key\_file} & (none) & The database key, for builds with encryption
+  (\cref{chap:deployment}) \\
+\code{audit\_export} & (none) & A file the audit log's sealed entries are appended to, on
+  storage the database's administrators cannot change (\cref{chap:users-privacy}) \\
+\end{xltabular}
+
+A new catalog's file, as \cmd{init} writes it (the comments shortened here):
+\begin{lstlisting}[language=TOML]
+results_dir = "/data/medorama-results"
+# index_dir = "/data/medorama-results/index"
+adapters_dir = "/home/medorama/.local/share/medorama/adapters"
+# database = "medorama.sqlite"
+host = "127.0.0.1"
+port = 8090
+workers = 2
+auto_index = true
+check_interval_s = 900
+timezone = "America/New_York"
+viewer = "auto"
+viewer_url = ""
+qc_verbose = false
+data_roots = []
+actions_dirs = ["actions"]
+formats_dirs = ["formats"]
+session_hours = 12
+session_idle_minutes = 60
+secure_cookies = false
+# sign_in = "proxy"
+# proxy_user_header = "X-Remote-User"
+# proxy_addresses = ["127.0.0.1", "::1"]
+# proxy_logout_url = "/oauth2/sign_out"
+# audit_export = "/var/log/medorama/audit.jsonl"
+\end{lstlisting}
+
+\begin{tip}
+Set \code{data\_roots} before the first import, to the folders that hold the data and nothing
+more: files outside them are refused at import, and the folders a user may browse are limited
+to them. \cmd{medorama import-clif} is the exception: unlike the page and the API, the command
+does not check its folder against \code{data\_roots}.
+\end{tip}
+
+Medorama has no setting for the limits on a WFDB folder (5000 header files, 20 folder levels,
+10\,s to count them): it indexes a recording's folder within those defaults. They are settings of
+the VitalStream viewers (\code{max\_records}, \code{max\_depth}, \code{max\_scan\_s};
+\cref{chap:settings-reference}).
+
+\section{The catalog in PostgreSQL}
+\label{sec:administration-postgres}
+
+SQLite, the default, suits one server: there is nothing to install, and the file can be
+encrypted. The catalog goes into \textbf{PostgreSQL} (14 or later) to run several Medorama
+servers on one catalog, for many users or large catalogs, or where the institution runs
+PostgreSQL already (on its own servers, Amazon RDS or Aurora, Azure Database for PostgreSQL).
+The same program does both, and every test runs on both.
+
+\begin{enumerate}
+\item \textbf{An empty database}, with an account for Medorama alone, owner of it:
+\begin{lstlisting}[language=SQL]
+CREATE ROLE medorama LOGIN PASSWORD '...';
+CREATE DATABASE medorama OWNER medorama;
+\c medorama
+CREATE EXTENSION IF NOT EXISTS pg_trgm;   -- the text search's index (needs a superuser once)
+\end{lstlisting}
+\item \textbf{The password} in a file that only the catalog's account can read
+  (\cmd{chmod 600}), or in \code{MEDORAMA\_DATABASE\_PASSWORD}; never in the URL: a
+  \code{database\_url} that holds a password is refused.
+\item \textbf{Create the catalog}; its settings and folders stay in the home folder:
+\begin{lstlisting}[style=shell]
+medorama init --results /data/medorama-results \
+    --database-url "postgres://medorama@db.example.org/medorama" \
+    --database-password-file /etc/medorama/db-password
+\end{lstlisting}
+  A database server on another host must offer TLS: Medorama requires it (unless the URL says
+  \code{sslmode=disable}) and verifies the server's certificate and name.
+  \code{database\_ca\_file} adds an authority (a private CA, Amazon RDS's bundle).
+\item \textbf{Several servers:} give each the same \file{medorama.toml} (the same
+  \code{database\_url} and \code{data\_roots}, the results and index folders on shared storage),
+  behind a reverse proxy (\cref{chap:deployment}). Any server answers any request; jobs are
+  taken one at a time from the shared queue; schema updates, taking a job, the automatic
+  indexing, imports and every change to patients and encounters (an import's chunk, a merge, a
+  connected database's persons linked) are done by one server at a time (advisory locks), so
+  that one MRN never names two patients. A new SQLite catalog opened by several processes at
+  once is created by one of them.
+\item \textbf{Connections:} each server opens at most 32 connections to the database (a request
+  waits for one beyond that), checks a connection that was idle before using it again, and,
+  unless the URL sets them, gives each connection 10 seconds to connect, TCP keepalives, and 5
+  minutes for a statement (\code{?connect\_timeout=\dots}, \code{keepalives=0},
+  \code{options=-c statement\_timeout=\dots} in the URL change them). The URL holds no password,
+  neither before the host nor as a parameter: Medorama refuses one that does.
+\end{enumerate}
+
+\textbf{A SQLite catalog moves to PostgreSQL} with every table and row, in one transaction (each
+table read a range of rows at a time, never whole), and each database's table of numbers
+(\code{dbcol\_<import>}) is built again in PostgreSQL:
+\begin{lstlisting}[style=shell]
+medorama copy-database --to "postgres://medorama@db.example.org/medorama" \
+    --password-file /etc/medorama/db-password
+\end{lstlisting}
+It prints the lines to add to \file{medorama.toml}. The SQLite file is left as it was: keep it as
+a backup, then delete it securely.
+
+\section{Running it}
+\label{sec:administration-running}
+
+\begin{lstlisting}[style=shell]
+medorama serve
+\end{lstlisting}
+Open \url{http://127.0.0.1:8090} and sign in. \key{Ctrl}+\key{C} stops the server (as does the
+\code{SIGTERM} of a service manager's stop): its plug-ins are stopped (TERM to each one's process
+group, KILL 5 seconds later), the jobs it was running go back to the queue, and the viewer it
+started stops with it; \cmd{medorama work} stops in the same way. At start-up, an import that a
+stop or a crash interrupted is removed (\cref{sec:importing-rule}). While it runs, in the
+background:
+\begin{itemize}
+\item \textbf{workers} (\code{workers}) run the queued jobs: indexing, derived series, actions;
+\item \textbf{automatic indexing} (\code{auto\_index}) queues new and changed recordings, every
+  15 seconds;
+\item every recording is \textbf{re-checked} every \code{check\_interval\_s} seconds: missing
+  recordings, changed ones, lost indexes;
+\item the audit log is \textbf{sealed} every minute (\cref{chap:users-privacy}).
+\end{itemize}
+Without the server, the commands do the same work: \cmd{medorama run index -{}-all} queues the
+indexing of every recording, and \cmd{medorama work} runs the queue in that process until it is
+empty. \cmd{medorama serve -{}-no-workers} serves the page only, while another process runs
+\cmd{work}.
+
+When the server listens on an address other than \code{127.0.0.1}, \code{localhost} or
+\code{::1} without \code{secure\_cookies = true}, it prints a warning: the page would be reachable
+from other machines without HTTPS. \Cref{chap:deployment} describes the ways to reach a server
+from elsewhere.
+
+\subsection{The waveform viewer}
+\label{sec:administration-viewer}
+
+Medorama runs one VitalStream viewer for its users, and shows it in its \ui{VitalStream} tab.
+The viewer programs are the standard ones, unchanged; the setting \code{viewer} chooses which one
+(\cref{tab:administration-viewer}).
+
+\begin{xltabular}{\linewidth}{@{}P{3.4cm}L@{}}
+\caption{The setting \code{viewer}.}
+\label{tab:administration-viewer}\\
+\toprule
+\tabhead Setting & \tabhead Viewer \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Setting & \tabhead Viewer \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{auto} (default) & The one that \cmd{tools/install-medorama.sh} installed (recorded in
+  \file{medorama.viewer} next to Medorama's program), else the first found of
+  \cmd{vitalstream-cpp}, \cmd{vitalstream-rs}, \cmd{vitalstream-py} \\
+\code{cpp}, \code{rs}, \code{py} & That viewer \\
+A path & That program \\
+\code{none} & No viewer: \ui{View} and the \ui{VitalStream} tab are grayed out, with the
+  reason \\
+(\code{viewer\_url} set) & The catalog runs none, and \ui{View} opens that viewer in a new
+  browser tab \\
+\end{xltabular}
+
+\paragraph{How it runs.} At the first \ui{View}, or the first visit of the tab, the catalog
+starts the viewer as a process of its own on \code{127.0.0.1} and a free port. It restarts the
+viewer if its process ends, or if a request cannot reach it and it then fails a health check, and
+stops it when the catalog stops. A request to a running viewer waits for no other request and
+costs no check, so a viewer busy with a large recording is never taken for a dead one. A viewer left running by an earlier run
+that ended otherwise is stopped and a new one started, so that the viewer always has the
+catalog's current settings and add-ons.
+
+The viewer's settings, \file{<home>/viewer/vitalstream.toml}, are rewritten at each start. They
+give it the catalog's \code{index\_dir} (every viewer writes the same index), its
+\code{adapters\_dir}, its time zone, its \code{data\_roots} and \code{qc\_verbose}, and
+\code{require\_password = true}, so that a viewer built without password support refuses to run
+under the catalog. The viewer's password file, \file{<home>/viewer/auth.json}, has a signing key
+that only the catalog knows. The catalog signs every request it passes on, users never see the
+viewer's sign-in, and the viewer's port is of no use to anyone else on the host. The viewer's
+output goes to \file{<home>/viewer/viewer.log}.
+
+\paragraph{The gateway.} The catalog passes the viewer's requests, at \file{/viewer/}, only after
+its own sign-in, and only the requests it lists (default deny), each checked against the user's
+rights. Administrators open recordings inside \code{data\_roots}; other users open only the
+recordings of the catalog. Every recording opened is written to the audit log (\code{view}). In
+Privacy Mode, recordings are opened by token, folders are not browsed, the gateway moves times
+both ways, and the texts of EDF+ annotations are treated like notes
+(\cref{sec:protecting-edf}). The gateway
+answers 413 to a request body over 1\,MiB, and 415 to a \code{POST} whose body is not sent as
+\code{application/json} (a body that is not valid JSON: 400); a \code{POST} must also carry
+\code{X-Medorama: 1}, as every changing request to the catalog does. In Privacy Mode, the
+viewer's error texts, which name files, are replaced by a fixed sentence. The rules, request by
+request, are in \cref{chap:viewer-api}.
+
+\paragraph{A viewer run by hand} (for oneself, on another port) can share the catalog's indexes:
+set its \code{cache\_dir} to the catalog's \code{index\_dir} and its \code{adapters\_dir} to the
+catalog's.
+
+\section{The commands}
+\label{sec:administration-commands}
+
+\opt{-{}-home DIR} is a global option: every command takes it, before or after the command's
+name. \cmd{medorama <command> -{}-help} shows its options.
+\Cref{tab:administration-commands} is an overview; \cref{chap:cli} gives each command and option
+in full.
+
+\begin{xltabular}{\linewidth}{@{}P{7.4cm}L@{}}
+\caption{The commands of \cmd{medorama}, in brief.}
+\label{tab:administration-commands}\\
+\toprule
+\tabhead Command & \tabhead Does \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Command & \tabhead Does \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\cmd{init -{}-results DIR ...} & Create a catalog \\
+\cmd{-{}-home DIR use} & Make that catalog the default for later commands \\
+\cmd{serve [-{}-host H] [-{}-port N] [-{}-no-workers]} & The web interface, the API, the
+  background work \\
+\cmd{import-table FILE... [-{}-name N] [-{}-source S] [-{}-category C] [-{}-mapping F]
+  [-{}-format F] [-{}-dry-run]} & Import a database: CSV, Parquet or a spreadsheet
+  (\cref{chap:importing}) \\
+\cmd{import-clif FOLDER [-{}-source S] [-{}-dry-run]} & A CLIF folder: each table a database
+  (\cref{chap:clif}). Unlike the page and the API, the command does not check the folder against
+  \code{data\_roots} \\
+\cmd{formats [-{}-check FILE]} & The import formats; check a format file \\
+\cmd{imports list}, \cmd{imports remove ID [-{}-purge-results] [-{}-dry-run]} & The imports;
+  remove one with what it added \\
+\cmd{sources list}, \cmd{sources remove NAME [-{}-purge-results] [-{}-dry-run]} & The sources;
+  remove everything from one \\
+\cmd{connections add NAME -{}-kind omop|sql -{}-url URL ...}, \cmd{list}, \cmd{check NAME},
+  \cmd{sync NAME}, \cmd{remove NAME} & Connected databases (\cref{chap:connecting}) \\
+\cmd{demo add [DIR]}, \cmd{demo remove [-{}-dry-run]} & Load the demo (the installer's, or a
+  folder made by \file{tools/make-demo-data.py}); remove it with everything it added
+  (\cref{chap:quickstart}) \\
+\cmd{addons list}, \cmd{addons install PROGRAM}, \cmd{addons remove NAME} & Add-ons
+  (\cref{chap:addons}) \\
+\cmd{list [-{}-q SEARCH] [-{}-unit U] [-{}-status S] [-{}-limit N] [-{}-phi] [-{}-json]} &
+  encounters; \opt{-{}-limit} default 100; identifiers only with \opt{-{}-phi} \\
+\cmd{recordings [-{}-q SEARCH] [-{}-unlinked] [-{}-limit N] [-{}-json]} & Recordings;
+  \opt{-{}-limit} default 100 \\
+\cmd{remove ID|PATH... [-{}-search Q] [-{}-purge-results] [-{}-dry-run]} & Remove recordings from
+  the catalog (the files are untouched) \\
+\cmd{remove-encounters ID...|-{}-search Q|-{}-all [-{}-dry-run]} & Remove encounters with their
+  bed stays and items (the recordings stay) \\
+\cmd{check} & Re-check the recordings: missing, changed, lost indexes \\
+\cmd{actions} & The installed actions \\
+\cmd{run ACTION... -{}-all|-{}-encounter ID...|-{}-recording ID...|-{}-search TEXT|-{}-cohort N
+  [-{}-force] [-{}-param A.K=V] [-{}-priority N]} & Queue actions \\
+\cmd{work [-{}-workers N]} & Run the queue in this process until it is empty \\
+\cmd{jobs [-{}-state S] [-{}-limit N] [-{}-json]}, \cmd{cancel -{}-job N|-{}-run N|-{}-all} & The
+  queue (\opt{-{}-limit} default 50); \cmd{cancel -{}-job N -{}-run M} cancels job N only if it
+  belongs to run M \\
+\cmd{user add NAME -{}-role R [-{}-phi] [-{}-display-name D] [-{}-password-stdin|-{}-no-password]},
+  \cmd{user list}, \cmd{user set NAME [-{}-role R] [-{}-phi true|false] [-{}-disabled true|false]
+  [-{}-display-name D] [-{}-password|-{}-password-stdin]}, \cmd{user remove NAME} & Users
+  (\cref{chap:users-privacy}); \cmd{user set}'s \opt{-{}-phi} and \opt{-{}-disabled} take a value
+  (\opt{-{}-disabled true}) \\
+\cmd{audit [-{}-limit N]}, \cmd{audit -{}-verify}, \cmd{audit -{}-seal},
+  \cmd{audit -{}-seal -{}-verify} & The audit log (\opt{-{}-limit} default 50); whether its seals
+  hold; seal it now; seal, then check \\
+\cmd{copy-database -{}-to URL [-{}-password-file F] [-{}-ca-file F]} & Copy a SQLite catalog into
+  an empty PostgreSQL one (the password file, else \code{MEDORAMA\_DATABASE\_PASSWORD};
+  \opt{-{}-ca-file}: certificate authorities, PEM, besides the system's) \\
+\end{xltabular}
+
+\paragraph{Rights.} The commands act directly on the database, with administrator rights and
+the PHI permission, as the operating-system user who can read the home folder; the audit log
+records them as \code{local:<user>}. \cmd{list} shows identifiers only with \opt{-{}-phi}.
+Whoever can read the home folder can read the database anyway, so run the catalog under a
+dedicated account, and let people use the web page.
+
+\section{One patient across databases}
+\label{sec:administration-identity}
+
+The catalog keeps one patient one patient across databases, in the way of a master patient
+index: what each database said is kept, the catalog's view is computed from it, and decisions are
+kept apart from the data.
+
+\begin{itemize}
+\item \textbf{Matching patients:} by \code{patient\_id} (or an ID merged into another one), else
+  by an MRN of the same authority (\code{mrn\_authority}; ignoring case and surrounding spaces).
+  A row with an MRN but no \code{patient\_id} gets a pseudonymous ID from the catalog
+  (\code{GEN-000001}, \code{GEN-000002}, \dots), the same for that MRN after any removal and
+  re-import, and never given to another.
+\item \textbf{Values:} each field shows the newest batch's value; removing that batch brings back
+  the previous one. A patient may have MRNs of several authorities; \code{mrn:} searches find any
+  of them.
+\item \textbf{A row is held back} when it contradicts the catalog: kept, with a warning, for the
+  Review tab (\cref{sec:administration-review}), and counted as a conflict in the import's
+  preview (\cref{tab:administration-held}).
+\end{itemize}
+
+\begin{xltabular}{\linewidth}{@{}P{6.6cm}L@{}}
+\caption{Rows held back, and what applying them does.}
+\label{tab:administration-held}\\
+\toprule
+\tabhead Problem & \tabhead Applying it \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Problem & \tabhead Applying it \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Its \code{patient\_id} and its MRN belong to two different patients & Merges the MRN's patient
+  into the ID's \\
+Its MRN belongs to a patient with another \code{patient\_id} & Records the two IDs as one
+  person \\
+The patient already has another MRN of the same authority & Adds the MRN \\
+Its encounter belongs to another patient & Moves the encounter, with its items \\
+\end{xltabular}
+
+The catalog never re-assigns a patient on its own on the strength of an MRN. \textbf{A merge}
+moves the patient's encounters, MRNs, values, items and sources to the other patient; later rows
+that name the merged ID go to the other patient, and the merged patient's pseudonym stays an
+alias of the survivor. A merge cannot be undone: removing and re-importing the batches does not
+split it either.
+
+\section{The Review tab}
+\label{sec:administration-review}
+
+The \ui{Review} tab, for administrators, gathers what needs a person's decision
+(\cref{tab:administration-review}). Every decision is kept, outlives re-imports, and is written
+to the audit log (\code{apply\_held\_row}, \code{dismiss\_held\_row}, \code{merge\_patients},
+\code{distinct\_patients}, \code{link\_decision}).
+
+\begin{xltabular}{\linewidth}{@{}P{3.2cm}P{5.6cm}L@{}}
+\caption{The lists of the Review tab.}
+\label{tab:administration-review}\\
+\toprule
+\tabhead List & \tabhead Shows & \tabhead Decisions \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead List & \tabhead Shows & \tabhead Decisions \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\ui{Held-back rows} & Rows in conflict with the catalog (\cref{tab:administration-held});
+  without the PHI permission, their columns without identifiers & Apply (with the fix shown) or
+  dismiss \\
+\ui{Possible duplicate patients} (PHI users) & The same name and date of birth; first and last
+  names swapped; day and month of birth swapped; the same last name, first initial and date of
+  birth & Merge into either one; different people (never suggested again) \\
+\ui{Recordings whose files disagree} (PHI users) & Automatic links where the recording's own
+  file names another patient (\cref{sec:administration-identifiers}) & Keep the link (it becomes
+  manual, and is not shown again); unlink (never linked automatically again) \\
+\ui{Items waiting} & Items that no database names yet, grouped by the keys they wait with &
+  none: they are matched when a database names their patient or encounter \\
+\end{xltabular}
+
+\section{Linking recordings}
+\label{sec:administration-linking}
+
+A recording is linked to an encounter after every import and every indexing:
+\begin{enumerate}
+\item \textbf{by a database row} that names its file and the encounter (the \code{file}
+  column), or by a bed stay's \code{recording\_file};
+\item \textbf{by bed and time:} the unit and bed of its name (bedside-monitor systems name files
+  \code{UNIT\_BED-<Unix time>}) equal a bed stay's \code{care\_unit}, an underscore and its
+  \code{bed} (ignoring case), and its time span overlaps the stay: before indexing, the time in
+  its name; after, its real start and end.
+\end{enumerate}
+\textbf{Decisions made manually} win over both, and outlive removing and re-importing the
+databases: \textbf{link} (the recording gets exactly its manual links) and \textbf{never}
+(\ui{Unlink}: never linked to that encounter automatically). The recordings that match nothing
+are listed under \ui{Import} $\rightarrow$ \ui{Recordings} $\rightarrow$ \ui{Not linked to an
+encounter}, and by \cmd{medorama recordings -{}-unlinked}. When recordings are not linked, check
+the databases' times first: a time zone that differs from the setting \code{timezone} moves every
+bed stay.
+
+\section{Identifiers in recordings}
+\label{sec:administration-identifiers}
+
+Some recording files store the patient's identifiers themselves. Bedside monitors write them
+into their files, and an EDF or BDF header has a patient field and a recording field. The
+built-in action \code{identify} reads these identifiers, once per recording and again when the
+file changes, so that an administrator can check that each file belongs to the patient it is
+linked to. WFDB records hold none.
+\begin{itemize}
+\item \textbf{EDF, EDF+, BDF and BDF+ files} are read by Medorama itself (\code{from\_edf} in
+  \file{medorama/src/identify.rs}). EDF+ structures the patient field as
+  \code{code sex birthdate name} and the recording field as
+  \code{Startdate dd-MMM-yyyy admincode technician equipment}; \code{identify} keeps the code
+  (as the patient ID), the sex, the date of birth, the name and the admin code (as the encounter
+  ID), and leaves out the parts written \code{X} (unknown). A plain EDF or BDF patient field has
+  no structure and is kept whole, as the patient ID. The engine and the viewers never put these
+  fields into an index or any answer (\cref{sec:protecting-edf}).
+\item \textbf{Formats read by an add-on}, such as the \file{.Stp} files of BedMasterEx, are read
+  through the recording's adapter (\cref{chap:addons}), which answers \code{identify}.
+\end{itemize}
+A file that names several patients is flagged. The identifiers are kept in the table
+\code{recording\_identifiers} only, and are shown only to users with the PHI permission who are
+out of Privacy Mode: in the Encounters list's \ui{In the files}, in the encounter panel, in
+\ui{Import} $\rightarrow$ \ui{Recordings}, and through the searches \code{file-name:},
+\code{file-id:} and \code{file-dob:}, so that a reviewer can check the databases against them.
+They never reach job summaries, the viewers, the actions' job descriptions, the results folders
+or the logs.
+
+\begin{phibox}
+What a recording's file says about its patient\phimark{} is protected health information, like
+the identifiers of the databases: it is kept in the catalog's database and nowhere else, and a
+link that a file contradicts is listed in the Review tab for a person to decide.
+\end{phibox}

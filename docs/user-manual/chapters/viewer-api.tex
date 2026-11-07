@@ -1,0 +1,651 @@
+% The viewers' HTTP interfaces: VitalStream's viewer API, version 1 (the authority is
+% viewers/vitalstream/rust/src/server.rs, which the C++ and Python viewers match), the rules of
+% Medorama's gateway for it (medorama/src/gateway.rs), the addresses of the ECG and PACS viewers
+% (viewers/README.md) and the requests of their `serve` command (page_server.py).
+\chapter{The viewer API}
+\label{chap:viewer-api}
+
+Each viewer is a web page. VitalStream's page talks to its own server through the
+\emph{viewer API}, version 1, described in full in this chapter; the ECG and PACS viewers read
+the files they are given in the browser, and are told what to show by their address. This
+chapter is the reference of these interfaces: the requests of VitalStream's server, the rules
+under which \md{} passes them on, the addresses of the three viewers, and the requests of the
+small server that the ECG and PACS viewers' command \cmd{serve} runs. The viewers themselves
+are described in \cref{chap:vitalstream}, \cref{chap:ecg-viewer} and \cref{chap:pacs-viewer};
+their commands and options in \cref{chap:cli}.
+
+\section{VitalStream's viewer API}
+\label{sec:viewer-api-vitalstream}
+
+The three VitalStream servers, \cmd{vitalstream-py}, \cmd{vitalstream-rs} and
+\cmd{vitalstream-cpp}, implement the same API and give the same answers to the same requests;
+a test of the repository (\file{viewers/vitalstream/tests/parity/viewer\_parity.py}) checks it.
+A change that breaks the API gets a new version, under \file{api/v2/}.
+
+\subsection{Conventions}
+\label{sec:viewer-api-conventions}
+
+\begin{itemize}
+\item \textbf{Paths.} Every path is relative to where the viewer is served, so that the page
+  also works under a path prefix (behind a reverse proxy, a cluster's portal, or \md{}'s
+  \file{/viewer/}): \code{api/v1/config} is
+  \code{http://localhost:8060/api/v1/config} for \cmd{vitalstream-rs} on its default port, and
+  \code{https://portal.example.org/node/8060/api/v1/config} behind a portal.
+\item \textbf{Times} are Unix seconds (UTC). A value that is not a number (NaN) is sent as
+  \code{null}.
+\item \textbf{Files.} Only files and folders inside the data roots (the setting
+  \code{data\_roots}, \cref{chap:settings-reference}) are listed, read or opened; a path is
+  checked after its symbolic links are resolved, so a link that leads outside the data roots is
+  refused.
+\item \textbf{Datasets.} A recording, once opened, is a \emph{dataset}, named by its
+  \emph{key}: the first 20 hexadecimal digits of a hash of the index format's version, the
+  recording's real path and its fingerprint (the sizes and times of its files), so that the key
+  changes when the recording changes. The key is the same in every viewer and in \md{}. The
+  index and the terms of the answers (channels, pieces, breaks, vital signs, alarms, markers)
+  are described in \cref{chap:formats-reference}.
+\item \textbf{Answers} are JSON. \textbf{Errors} are \code{\{"detail": "..."\}} with the status
+  codes of \cref{tab:viewer-api-status}.
+\end{itemize}
+
+\begin{xltabular}{\linewidth}{@{}P{1.4cm}L@{}}
+\caption{The status codes of the viewer API.}
+\label{tab:viewer-api-status}\\
+\toprule
+{\tabhead Status} & {\tabhead Meaning} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Status} & {\tabhead Meaning} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{400} & A bad request: a host the server does not answer for, a missing, repeated or
+  malformed query parameter, an unknown channel, a bad body, a path that is not a recording the
+  viewer reads, \code{t1} not after \code{t0}. Every viewer answers a malformed query parameter
+  with \code{400}, never \code{422}. \\
+\code{401} & Sign-in required (\cref{sec:viewer-api-signin}). \\
+\code{403} & A path not allowed: outside the data roots (which lie inside the viewer's root; a
+  path is checked after its symbolic links are resolved), a file of the record that is, or a
+  folder that cannot be read; or a request from another site. \\
+\code{404} & No such file or folder, no dataset indexed under that key, or no index being built
+  under it (\code{cancel}). \\
+\code{405} & A known path asked with another method (\code{\{"detail": "Method Not
+  Allowed"\}}). \\
+\code{413} & A request body over its limit. \\
+\code{415} & A \code{POST} to the API whose body is not JSON. \\
+\code{429} & A password sent before the delay after wrong ones has passed (the C++ viewer). \\
+\code{422} & A folder over one of the limits on a folder of records, or a folder without
+  records (\code{scan}, \code{open}); the \code{detail} says which limit and what to do
+  instead. \\
+\code{500} & A fault while reading a dataset, or another failure of the server while
+  answering. \\
+\end{xltabular}
+
+\subsection{Checks on every request}
+\label{sec:viewer-api-checks}
+
+The server checks every request before it routes it, in this order. The Rust viewer is the
+reference; the other viewers give the same statuses and the same checks, and the parity test
+compares them.
+\begin{enumerate}
+\item \textbf{Host.} The \code{Host} header (or, without one, the request's authority) must
+  name a host the server answers for, compared without its port and in any letter case:
+  \code{localhost}, \code{127.0.0.1}, \code{::1} (\code{[::1]}), the \code{host} the server
+  listens on (unless that is \code{0.0.0.0} or \code{::}), or a name in the setting
+  \code{allowed\_hosts} (\code{"*"} allows any). Otherwise the answer is \code{400}. This
+  defeats DNS rebinding, where another site's name is made to point at the viewer's address. A
+  viewer behind a reverse proxy that passes the public host name on lists that name in
+  \code{allowed\_hosts}; \md{}'s gateway sends \code{127.0.0.1:<port>}.
+\item \textbf{Requests that change something} (any method other than \code{GET} and
+  \code{HEAD}): an \code{Origin} header, when present, must be \code{http://} or
+  \code{https://} followed by a host allowed as in 1 (no path), and \code{null} and any other
+  origin are refused (\code{403}); \code{Sec-Fetch-Site: cross-site} is refused (\code{403});
+  and a \code{POST} under \file{api/} must have \code{Content-Type: application/json}
+  (parameters such as \code{; charset=utf-8} allowed; \code{415} otherwise). Another site's page
+  cannot send such a request without the browser asking the server first, and the server never
+  allows it.
+\item \textbf{Sign-in} (\cref{sec:viewer-api-signin}): \code{401} without it.
+\item \textbf{Routing:} an unknown path is \code{404}, and a known path with another method
+  \code{405}.
+\end{enumerate}
+
+\textbf{Bodies.} \code{POST api/v1/open} and \code{POST api/v1/cancel} take a JSON object of at
+most 64\,KiB, and \code{POST login} a form of at most 4\,KiB; a larger body is \code{413}.
+\code{open} takes \code{path} (a string) and \code{reindex} (a boolean, default \code{false});
+\code{cancel} takes \code{key} (a string). Any other type, such as \code{\{"reindex": "yes"\}},
+is \code{400}, and so is a body that is not a JSON object (an array, a number); unknown fields
+are ignored.
+
+\textbf{Query parameters} are \code{application/x-www-form-urlencoded}. A parameter given twice
+(\code{ch=0\&ch=1}) is \code{400}. Numbers are checked strictly, and anything else is
+\code{400}:
+\begin{itemize}
+\item a time or other number (\code{t0}, \code{t1}, \code{t}) is a finite decimal number, with
+  nothing around it (not even a space): \code{-inf}, \code{nan}, \code{0x10}, \code{1\_0} and
+  \code{1e400} are refused;
+\item an integer (\code{px}) is digits with an optional sign, within 64 bits;
+\item \code{ch} is a comma-separated list of channel ids, digits only, each the id of a channel
+  of the dataset. An id given more than once is answered once, in the order first given, and at
+  most 64 distinct ids are taken;
+\item \code{names} (\code{vitals}) is a \code{\textbar}-separated list of series names. A name
+  given more than once is answered once, at most 512 distinct names are taken, and names the
+  dataset does not have are left out of the answer;
+\item in \code{window}, \code{vitals} and \code{markers}, \code{t1} must be greater than
+  \code{t0}. Times far outside the recording are allowed and simply find no data.
+\end{itemize}
+
+\textbf{Answers} carry \code{X-Content-Type-Options: nosniff}. The page and the sign-in page
+carry the Content Security Policy \code{default-src 'self'; script-src 'self'; style-src 'self';
+img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action
+'self'}; they have no inline script or style (the sign-in page links \file{static/login.css}).
+
+\subsection{Signing in}
+\label{sec:viewer-api-signin}
+
+When a password is set (with \opt{-{}-set-password} of any of the three viewers: one password,
+in one file, for all of them, \cref{chap:cli}), every request except the page itself
+(\code{GET /}), \code{POST login}, \code{POST logout} and \code{GET static/...} needs the
+sign-in cookie, named \code{vitalstream\_<port>} after the server's port; without it, the API
+answers \code{401} \code{\{"detail": "sign in required"\}}, and the page shows a sign-in form
+(with the status \code{401}). The cookie is
+\code{vitalstream\_<port>=<expiry>.<HMAC-SHA256(secret, expiry)>}, signed with the password
+file's secret and valid for 30 days (\code{HttpOnly}, \code{Path=/}, \code{SameSite=Lax}, and
+\code{Secure} when the setting \code{secure\_cookie} is \code{true}, for a viewer behind an HTTPS
+proxy). A cookie whose signature is in the password file's \code{revoked} list is refused.
+Without a password set, no request needs a cookie.
+
+Passwords are checked one at a time (scrypt uses 16\,MiB). After wrong passwords from one client
+address, the next password from it is checked only after a delay: $2^n-1$ seconds after $n$
+wrong ones (1, 3, 7, 15\,s), at most 30\,s; the count is kept 15 minutes after the last wrong
+password, and a right password clears it. The Rust and Python viewers hold such a request until
+the delay has passed; the C++ viewer does not hold it: until the delay has passed it answers
+\code{429} with \code{Retry-After} (the seconds left) and the sign-in page.
+
+\apientry{GET /}{The page}
+\begin{lstlisting}[style=signature]
+GET /
+\end{lstlisting}
+The viewer's page; before sign-in (with a password set), the sign-in form, with the status
+\code{401}.
+
+\apientry{GET static/...}{The page's files}
+\begin{lstlisting}[style=signature]
+GET static/{path}
+\end{lstlisting}
+The page's scripts, styles and pictures. Need no sign-in.
+\raises{\code{404} no such file.}
+
+\apientry{POST login}{Sign in}
+\begin{lstlisting}[style=signature]
+POST login   (form: password=PASSWORD)
+\end{lstlisting}
+Checks the password sent by the sign-in form (\code{application/x-www-form-urlencoded}, at
+most 4\,KiB), sets
+the sign-in cookie and redirects (\code{303}) to \code{./}. A wrong password is answered, after
+a pause of one second, with the form again and the status \code{401}. Without a password set,
+only redirects to \code{./}.
+
+\apientry{POST logout}{Sign out}
+\begin{lstlisting}[style=signature]
+POST logout
+\end{lstlisting}
+Removes the sign-in cookie and redirects (\code{303}) to \code{./}. When the request carries a
+valid sign-in cookie, that sign-in also ends on the server: its signature is added to
+\code{revoked} in the password file (\code{\{"<signature>": <expiry>\}}, kept until the
+expiry), so that a copy of the cookie no longer works, also after a restart.
+
+\subsection{The requests}
+\label{sec:viewer-api-requests}
+
+\apientry{GET api/v1/config}{The server's settings for the page}
+\begin{lstlisting}[style=signature]
+GET api/v1/config
+\end{lstlisting}
+What the page needs to know about the server.
+\returns{\code{timezone} (the time zone in which times are shown), \code{data\_roots},
+\code{home} (the home folder of the account that runs the viewer), \code{start} (the folder the
+file browser opens at: the home folder if it lies inside the data roots, else the first data
+root), \code{places} (the shortcuts of the Open dialog: \code{\{name, path\}} for the home
+folder, the repository's \file{sample\_data} folder when the viewer runs from the repository,
+and each data root other than the home folder and the root of the file system), \code{sep} (the
+path separator, \code{/} or \code{\textbackslash}), \code{version} (of the viewer),
+\code{qc\_verbose} (the setting) and \code{limits} (\code{max\_records}, \code{max\_depth},
+\code{max\_scan\_s}: the limits on a folder of records, \cref{chap:recordings}).}
+\begin{lstlisting}[language=JSON]
+{"timezone": "America/New_York", "data_roots": ["/data/icu"], "home": "/home/reader1",
+ "start": "/data/icu", "places": [{"name": "/data/icu", "path": "/data/icu"}], "sep": "/",
+ "version": "0.1.0", "qc_verbose": false,
+ "limits": {"max_records": 5000, "max_depth": 20, "max_scan_s": 10.0}}
+\end{lstlisting}
+
+\apientry{GET api/v1/browse}{A folder's entries}
+\begin{lstlisting}[style=signature]
+GET api/v1/browse?path=FOLDER&hidden=BOOL
+\end{lstlisting}
+The entries of a folder, for the file browser.
+\begin{params}
+\item[path] The folder; default the \code{start} folder of \code{config}.
+\item[hidden] \code{true} (or \code{1}, \code{yes}, \code{on}): also the hidden entries (names
+  that begin with \code{.}) and the segments and layout headers of the multi-segment records of
+  the folder. Default \code{false}.
+\end{params}
+Each entry has a \code{name}, a \code{path}, a \code{type} and \code{link} (whether it is a
+symbolic link):
+\begin{itemize}
+\item \code{dir}: a folder;
+\item \code{wfdb}: a folder that holds WFDB records itself, or a WFDB collection
+  (\cref{chap:recordings});
+\item \code{record}: a WFDB record, its \file{.hea} file: \code{name} without \file{.hea},
+  \code{kind} \code{wfdb}, \code{label} \code{WFDB record} or \code{WFDB multi-segment record};
+\item \code{file}: a recording file, with its \code{kind}, the format's \code{label} and its
+  \code{size} in bytes. It is an EDF or BDF file (\code{kind} \code{edf}, \code{label}
+  \code{EDF}, \code{EDF+}, \code{BDF} or \code{BDF+}; \cref{sec:vitalstream-edf}), or a file
+  that an installed adapter reads (\cref{chap:addons});
+\item \code{broken}: a symbolic link that leads nowhere.
+\end{itemize}
+Not listed: the entries that lead outside the data roots, the signal files and every other file
+that no reader reads, and (without \code{hidden}) the hidden entries and the segments of the
+multi-segment records. Folders come first, then records and files, each by name (ignoring
+case); at most 5000 entries are listed.
+\returns{\code{\{path, type: "dir", kind, entries, truncated, parent\}}: \code{kind} the
+folder's own kind (\code{wfdb}, or \code{null}), \code{truncated} \code{true} when entries were
+left out after 5000, \code{parent} the folder above (\code{null} at the top of the data roots).
+A path to a recording file (a WFDB record's \file{.hea}, an EDF or BDF file, or a file an
+adapter reads) answers
+\code{\{"path": PATH, "type": "file"\}}.}
+\raises{\code{400} neither a folder nor a recording; \code{403} outside the data roots, or a
+folder that cannot be read; \code{404} no such folder.}
+\begin{lstlisting}[language=JSON]
+{"path": "/data/icu/demo", "type": "dir", "kind": "wfdb", "truncated": false,
+ "parent": "/data/icu",
+ "entries": [{"name": "bed01", "path": "/data/icu/demo/bed01", "type": "dir", "link": false},
+             {"name": "rec0001", "path": "/data/icu/demo/rec0001.hea", "type": "record",
+              "kind": "wfdb", "label": "WFDB record", "link": false}]}
+\end{lstlisting}
+
+\apientry{GET api/v1/complete}{Complete a path}
+\begin{lstlisting}[style=signature]
+GET api/v1/complete?prefix=TEXT
+\end{lstlisting}
+The paths that begin with a prefix, for the path field of the Open dialog: the entries of the
+prefix's folder whose names begin with its last part (ignoring case), as \code{browse} lists
+them; hidden names only when the last part begins with \code{.}; no broken links. A leading
+\code{\textasciitilde} is the home folder.
+\begin{params}
+\item[prefix] The text typed; empty: the \code{start} folder.
+\end{params}
+\returns{\code{\{"items": [\{path, type\}]\}}: up to 50, folders ending with the separator;
+none for a folder outside the data roots.}
+
+\apientry{GET api/v1/scan}{What opening a folder would read}
+\begin{lstlisting}[style=signature]
+GET api/v1/scan?path=PATH
+\end{lstlisting}
+What opening a folder or a WFDB record would read, from the headers alone, within the limits on
+a folder of records: any folder (its records and those of its subfolders, as one session) or a
+record (\cref{chap:recordings}). The Open dialog shows it before a folder is opened.
+\begin{params}
+\item[path] The folder, or the record's \file{.hea} file.
+\end{params}
+\returns{\code{path}, \code{format}, \code{records}, \code{segments} (of the multi-segment
+records), \code{signals} (their names), \code{duration\_s} (the records' total length),
+\code{t\_range} (\code{[first, last]} of the records with a stated time, or \code{null}),
+\code{untimed} (the number of records without one), \code{bytes} (the size of the records'
+files), \code{skipped} (the number of records that cannot be read) and \code{scan\_s} (how long
+the scan took).}
+\raises{\code{400} neither a folder nor a WFDB record; \code{403}, \code{404} as for
+\code{browse}; \code{422} a folder over a limit (more than \code{max\_records} records, records
+nested more than \code{max\_depth} levels deep, more than \code{max\_scan\_s} seconds to count
+them), or without records.}
+\begin{lstlisting}[language=JSON]
+{"path": "/data/icu/demo/bed01", "format": "WFDB collection", "records": 24, "segments": 0,
+ "signals": ["II", "V", "PLETH", "RESP"], "duration_s": 86400.0,
+ "t_range": [1767225600.0, 1767312000.0], "untimed": 0, "bytes": 412318720, "skipped": 0,
+ "scan_s": 0.04}
+\end{lstlisting}
+
+\apientry{POST api/v1/open}{Open a recording}
+\begin{lstlisting}[style=signature]
+POST api/v1/open   {"path": PATH, "reindex": BOOL}
+\end{lstlisting}
+Opens a recording: a WFDB record (its \file{.hea} file), a folder (its records and those of its
+subfolders as one session, or a WFDB collection), an EDF or BDF file, or a file an adapter
+reads. When its index
+exists, the dataset is ready at once; otherwise its index is built in the background, at most
+\code{index\_workers} at a time (\cref{chap:settings-reference}). A folder that is not a
+collection is first checked against the limits, as \code{scan} does. Opening a recording whose
+index is being built answers \code{indexing} again, without starting a second one.
+\begin{params}
+\item[path] The recording.
+\item[reindex] \code{true}: build the index again even if it exists. Default \code{false}.
+\end{params}
+\returns{\code{\{key, state\}}: \code{state} \code{ready}, or \code{indexing} (follow it with
+\code{GET api/v1/datasets/\{key\}}). If building the index fails in any way, the dataset's
+state becomes \code{error}, never stays \code{indexing}.}
+\raises{\code{400} a body that is not a JSON object, a field of the wrong type, or a path that
+is not a recording the viewer reads; \code{403}, \code{404} as for \code{browse}, and
+\code{403} for a WFDB record any of whose files (its header, the signal files it names, its
+segments, its \file{.mrk} file) leads outside the data roots
+(\cref{sec:formats-reference-roots}); \code{413} a body over 64\,KiB; \code{415} a body that is
+not \code{application/json}; \code{422} a folder over a limit, as for \code{scan}.}
+\begin{lstlisting}[style=shell]
+curl -s -H 'Content-Type: application/json' -d '{"path": "/data/icu/demo/rec0001.hea"}' \
+  http://localhost:8060/api/v1/open
+\end{lstlisting}
+\begin{lstlisting}[language=JSON]
+{"key": "3fa94c0d2b7e18a65c91", "state": "indexing"}
+\end{lstlisting}
+
+\apientry{POST api/v1/cancel}{Stop building an index}
+\begin{lstlisting}[style=signature]
+POST api/v1/cancel   {"key": KEY}
+\end{lstlisting}
+Stops the index being built under a key. The dataset's state then becomes \code{cancelled},
+and nothing of it is left in the index folder.
+\begin{params}
+\item[key] The dataset's key, as \code{open} answered it.
+\end{params}
+\returns{\code{\{key, state: "cancelling"\}}; \code{\{key, state: "cancelled"\}} for an index
+whose building was already cancelled.}
+\raises{\code{404} no index being built under that key, nor cancelled.}
+
+\apientry{GET api/v1/datasets/\{key\}}{A dataset}
+\begin{lstlisting}[style=signature]
+GET api/v1/datasets/{key}
+\end{lstlisting}
+A dataset's state and, once ready, its description.
+\returns{one of:
+\code{\{state: "indexing", progress: \{state, fraction, elapsed\_s\}\}} (\code{fraction} from
+0 to 1); \code{\{state: "error", error\}}; \code{\{state: "cancelled"\}};
+\code{\{state: "ready", dataset\}}, where \code{dataset} has its \code{key}, \code{name},
+\code{path}, \code{kind}, \code{format} and \code{description}, \code{t\_range}
+(\code{[first, last]}), \code{time\_resolution\_s}, \code{channels}, \code{pieces} (each
+\code{\{id, ch, t0, fs, n, timed\}}), \code{vitals} (the vital-sign series, each
+\code{\{name, unit, n\}}), \code{alarms}, \code{gaps} (the breaks), \code{untimed} (the untimed
+spans), \code{late\_blocks} (late data blocks), \code{markers} (\code{\{names, count\}}),
+\code{skipped}, \code{notes} and \code{indexed\_s}.}
+\raises{\code{404} no dataset indexed under that key; \code{403} a dataset whose recording lies
+outside the data roots and was not opened through this server.}
+
+\apientry{GET api/v1/datasets/\{key\}/window}{Waveform samples}
+\begin{lstlisting}[style=signature]
+GET api/v1/datasets/{key}/window?t0=T&t1=T&px=N&ch=0,1
+\end{lstlisting}
+The samples of channels over a time span, at about \code{px} points across: the samples
+themselves when there are few enough, else the minimum and maximum of each bucket (an
+envelope), from the index's levels.
+\begin{params}
+\item[t0, t1] The time span (required; \code{t1} after \code{t0}).
+\item[px] The width in points (default 1200), clamped to 16 to 8000.
+\item[ch] The channels, comma-separated channel numbers (none: no channel).
+\end{params}
+\returns{\code{\{t0, t1, channels\}}: \code{channels} gives, for each channel asked (by its
+number, as text), the blocks of its pieces that cover \code{[t0, t1]}, in order of piece id,
+each \code{\{piece, kind: "raw", t0, dt, y\}} (samples \code{y}, the first at \code{t0}, then
+every \code{dt} seconds) or \code{\{piece, kind: "env", t0, dt, min, max\}} (the minimum and
+maximum of each bucket of \code{dt} seconds). When more than \code{px} pieces of a channel fall
+in the window, only the first piece (in order of \code{t0}, then id) to start in each pixel
+column is answered, so a channel never has more than \code{px} blocks.}
+\raises{\code{400} \code{t0} or \code{t1} missing or not numbers, \code{t1} not after
+\code{t0}, \code{ch} not a list of the dataset's channel ids (\cref{sec:viewer-api-checks}).}
+\begin{lstlisting}[language=JSON]
+{"t0": 1767225600.0, "t1": 1767225610.0,
+ "channels": {"0": [{"piece": 0, "kind": "raw", "t0": 1767225600.0, "dt": 0.004,
+                     "y": [0.12, 0.15, 0.21]}]}}
+\end{lstlisting}
+
+\apientry{GET api/v1/datasets/\{key\}/vitals}{Vital-sign series}
+\begin{lstlisting}[style=signature]
+GET api/v1/datasets/{key}/vitals?t0=T&t1=T&px=N&names=HR|SpO2
+\end{lstlisting}
+The values of vital-sign series over a time span.
+\begin{params}
+\item[t0, t1] The time span (required).
+\item[px] The width in pixels (default 1200), clamped to 16 to 8000.
+\item[names] The series, separated by \code{\textbar}; a name the dataset does not have is left
+  out.
+\end{params}
+\returns{an object with one entry per series: \code{\{unit, kind: "points", t, v\}} (its
+points in the span), or, when there are more than three points per pixel column,
+\code{\{unit, kind: "env", t, min, max\}} (the minimum and maximum of each column, at the
+column's first time).}
+
+\apientry{GET api/v1/datasets/\{key\}/vitals\_at}{The vital signs at a time}
+\begin{lstlisting}[style=signature]
+GET api/v1/datasets/{key}/vitals_at?t=T
+\end{lstlisting}
+The latest value of every vital sign at a time, no older than 10 minutes.
+\begin{params}
+\item[t] The time (required).
+\end{params}
+\returns{a list of \code{\{name, unit, value, t\}}.}
+\begin{lstlisting}[language=JSON]
+[{"name": "HR", "unit": "bpm", "value": 82.0, "t": 1767225598.0},
+ {"name": "SpO2", "unit": "%", "value": 97.0, "t": 1767225590.0}]
+\end{lstlisting}
+
+\apientry{GET api/v1/datasets/\{key\}/markers}{Waveform markers}
+\begin{lstlisting}[style=signature]
+GET api/v1/datasets/{key}/markers?t0=T&t1=T&ch=0,1
+\end{lstlisting}
+The waveform markers (beat labels, events marked on a signal) of channels over a time span.
+\begin{params}
+\item[t0, t1] The time span (required).
+\item[ch] The channels, comma-separated.
+\end{params}
+\returns{\code{\{names, items, truncated\}}: each item \code{[channel, time, name index]}, the
+index into \code{names}; at most 20\,000 items, and then \code{truncated} is \code{true}.}
+
+\apientry{GET api/v1/docs}{Interactive documentation}
+\begin{lstlisting}[style=signature]
+GET api/v1/docs
+GET api/v1/openapi.json
+\end{lstlisting}
+The interactive documentation of the API, and its OpenAPI description: the Python viewer only.
+
+\subsection{Through Medorama}
+\label{sec:viewer-api-gateway}
+
+\md{} runs a VitalStream viewer under its own address, \file{/viewer/}, behind its sign-in
+(\cref{chap:viewers-in-medorama}). Its gateway passes on only the requests that the page needs,
+each with its rule (\cref{tab:viewer-api-gateway}); it refuses everything else (\code{404}
+\code{not available through the catalog}), the viewer's own \code{login} and \code{logout}
+included. Each request passed on carries the viewer's sign-in cookie, made by \md{}; the
+user's \md{} cookie is never passed on. A change of the viewer API must be given a rule in the
+gateway, or \md{} refuses the new request.
+
+\begin{xltabular}{\linewidth}{@{}P{4.2cm}L@{}}
+\caption{The requests that \md{}'s gateway passes to VitalStream, and their rules.}
+\label{tab:viewer-api-gateway}\\
+\toprule
+{\tabhead Request} & {\tabhead Rule} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Request} & {\tabhead Rule} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{GET /}, \code{GET static/...} & The page, for signed-in users; without a session, a
+  redirection to \md{}'s page. \\
+\code{GET api/v1/config} & Passes. For users who are not admins, \code{places}, \code{start}
+  and \code{home} point into the folders of the catalog's recordings, and \code{data\_roots} is
+  empty; in Privacy Mode all four are empty. \\
+\code{GET api/v1/browse}, \code{GET api/v1/complete} & Admins: inside \md{}'s
+  \code{data\_roots} (anywhere when it is empty). Other users: only the folders that lead to
+  recordings in the catalog, showing only those recordings (\code{browse} needs a
+  \code{path}). Refused in Privacy Mode (\code{403}: folder and file names may identify). \\
+\code{GET api/v1/scan} & As \code{open}; refused in Privacy Mode. \\
+\code{POST api/v1/open} & Admins: inside \code{data\_roots}; other users: only recordings in
+  the catalog. In Privacy Mode, a recording is opened by its token (\code{mo-rec:<id>}), never
+  by a path. Audited (\code{view}). A JSON body is required (\code{415} otherwise). \\
+\code{POST api/v1/cancel} & Only the indexes of datasets the user opened through the gateway. \\
+\code{GET api/v1/datasets/\{key\}...} & Only the datasets the user opened through the gateway.
+  In Privacy Mode, the times the page sends (\code{t0}, \code{t1}, \code{t}) are moved forward
+  by the recording's offset before they reach the viewer, the dataset's \code{path} and
+  \code{name} are replaced (the token, \code{[Recording]}), and the times of \code{t\_range}
+  and of the markers moved back. The texts of the dataset's annotations (its events of the kind
+  \code{annotation}, from EDF+ files) are treated like the text of notes: they read
+  \code{[Annotation]} when Privacy Mode withholds notes' text, and otherwise have the patient's
+  names and date of birth replaced (\code{gate\_annotations} in \file{medorama/src/gateway.rs};
+  \cref{sec:protecting-vitalstream}). \\
+\end{xltabular}
+
+Every answer then passes the privacy gate like any other answer of \md{}
+(\cref{chap:protecting}): in Privacy Mode the times in its JSON move back and identifiers are
+replaced, the viewer's own error texts (which name files) are replaced by a fixed sentence, and
+the records of a folder it left out (\code{skipped}) are named by number. A request body larger
+than 1\,MiB is refused (\code{413}). A request through the gateway that changes something
+(\code{open}, \code{cancel}) must carry \code{X-Medorama: 1}, as every changing request to
+\md{} does (the viewer's page sends it), and be JSON (\code{Content-Type: application/json}),
+which another site's page cannot send unasked. The viewer's page under \file{/viewer/} is served
+with a Content Security Policy of its own scripts and styles only (\code{default-src 'self';
+script-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors
+'self'}).
+
+\section{The addresses of the viewers}
+\label{sec:viewer-api-addresses}
+
+A viewer is told what to show by the fragment of its address (after \code{\#}), so that another
+program can open it at a file (\cref{tab:viewer-api-fragments}). Changing the fragment shows
+another file without reloading the page. The files are fetched with the page's own credentials
+(same origin), so that a viewer served by \md{} reads exactly what \md{} lets its user read,
+through \code{api/v1/patients/\{id\}/file/\{item\}/...} (\cref{chap:http-api}).
+
+\begin{xltabular}{\linewidth}{@{}P{1.9cm}P{4.0cm}L@{}}
+\caption{The fragments of the viewers' addresses.}
+\label{tab:viewer-api-fragments}\\
+\toprule
+{\tabhead Viewer} & {\tabhead Fragment} & {\tabhead Means} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Viewer} & {\tabhead Fragment} & {\tabhead Means} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+ECG & \code{src=URL} & The file: a WFDB header (its signal files, and a multi-segment record's
+  segments, are read beside it: \code{URL}'s folder followed by their names), a MUSE XML or
+  DICOM ECG, a JSON ECG, a picture or a PDF. \\
+PACS & \code{src=URL} & One file. \\
+PACS & \code{list=URL} & A folder: \code{URL} answers \code{\{"files": ["IM0001.dcm", ...]\}},
+  and each file is read at \code{URL} followed by its name. \\
+PACS & \code{mm=...}, \code{fps=...} & The millimeters per pixel of pictures and videos; the
+  frame rate of pictures (one loop). \\
+ECG & \code{shift=...}, \code{cap90=1} & For a host that de-identifies in the page: the
+  report's dates and the record's start moved back, ages above 89 years shown as 90+ (\md{}
+  de-identifies on its server
+  instead). \\
+ECG, PACS & \code{name=...} & The name to show. \\
+All three & \code{theme=light} or \code{dark} & The colors, as the host's: applied, not
+  remembered as the viewer's own choice (VitalStream's theme button still switches them).
+  \md{} passes its page's theme to every viewer tab, when it opens and when it changes. \\
+All three & \code{who=...}, \code{what=...}, \code{pos=...}, \code{nav=back,prev,next} & A host's
+  context: whose file it is and what it is, shown in place of the file's name, with the buttons
+  \ui{Patient} and \ui{\textless}~\ui{\textgreater}, which the viewer only reports to the host
+  page (\code{postMessage}, same origin). Without them, the file's name shows. \\
+ECG & \code{compact=1} & The paper alone, fitted to the frame (shown inside another page). \\
+VitalStream & \code{path=...\&t0=...\&t1=...} & A recording on the server (its path), at a time
+  span (Unix seconds). \\
+VitalStream & \code{browse=FOLDER} & The file browser, open at a folder. \\
+\end{xltabular}
+
+For example, \md{}'s patient page draws an ECG on paper with the ECG viewer at
+\code{viewers/ecg/\#src=/api/v1/patients/3/file/52\&name=ecg.xml\&theme=light\&compact=1}
+(the values URL-encoded), and VitalStream opens a recording at a span with
+\code{\#path=/data/icu/demo/rec0001.hea\&t0=1767225600\&t1=1767229200} (inside \md{}, with the
+host's context and \code{theme=} after it).
+
+\section{The ECG and PACS viewers' server}
+\label{sec:viewer-api-serve}
+
+The ECG and PACS viewers are pages that read in the browser the files they are given. The
+command \cmd{serve} of their Python packages, \cmd{muse-py serve} (the ECG viewer, port 8080 by
+default) and \cmd{dicom-py serve} (the PACS viewer, port 8081 by default), also serves the
+page from a computer together with the files under a folder of it, the \emph{root}: on a
+server where the data are, reached through an SSH tunnel, as for VitalStream. Its options are
+in \cref{chap:cli}. The server uses only the Python standard library; it is the same in both
+packages.
+
+\begin{itemize}
+\item \textbf{Root.} Only the files and folders under the root are listed and served, every
+  symbolic link resolved (a link that leads outside is refused); hidden entries (names that
+  start with \code{.}) are neither listed nor served. The root is \opt{-{}-root}
+  (default: the home folder), and lies inside the root the package was installed with
+  (\code{VIEWER\_ROOT} at installation; default: the whole file system), never outside it.
+\item \textbf{Host.} A request must name the server by a loopback name, an IP address or this
+  host (\opt{-{}-host}); any other name is refused (\code{421}; no DNS rebinding).
+\item \textbf{Password} (optional): the same file and scheme as VitalStream's, so one password
+  serves all the viewers. It is set once with \opt{-{}-set-password} (at least 8 characters);
+  the page then asks for it, in the cookie \code{viewer\_<viewer>\_<port>}
+  (\code{viewer\_ecg\_8080}). For \cmd{muse-py serve} and \cmd{dicom-py serve}, a sign-in lasts
+  30 days, until the server stops, or until a browser signs out, which ends every sign-in; after
+  a wrong password the next try, from any browser, waits 1\,s, then 2, 4 \dots{} up to 60\,s.
+  The cookie is signed with a key of the running server too: browsers send a cookie to every
+  port of a host, and another server on 127.0.0.1 cannot use it. A package installed with
+  \code{VIEWER\_PASSWORD=0} has no password support: it ignores a password already set in the
+  file, never asks for one, and \opt{-{}-set-password} and \opt{-{}-clear-password} fail
+  (\code{this viewer was installed without password support}). Without a password, anyone who
+  can connect to the port can read the files under the root; the server says so when it starts.
+\item \textbf{Requests} (\cref{tab:viewer-api-serve}). Without the sign-in cookie (a password
+  being set), \code{GET /} answers the sign-in form and every other request \code{401}
+  \code{\{"detail": "sign in required"\}}. Errors are \code{\{"detail": "..."\}}. The server
+  keeps no log of the paths asked for.
+\item \textbf{Files} are sent as they are read, in part when a browser asks for a range
+  (\code{Range}), under a policy that runs nothing in them (\code{Content-Security-Policy:
+  sandbox}); a kind of file the viewers do not read is sent as a download.
+\end{itemize}
+
+\begin{xltabular}{\linewidth}{@{}P{3.6cm}L@{}}
+\caption{The requests of \cmd{muse-py serve} and \cmd{dicom-py serve}.}
+\label{tab:viewer-api-serve}\\
+\toprule
+{\tabhead Request} & {\tabhead Answer} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Request} & {\tabhead Answer} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{GET /} & The viewer's page (or, before sign-in, the sign-in form, \code{401}); its other
+  files by their names (\code{GET app.js}). \\
+\code{GET browse?path=REL} & A folder under the root, as an HTML page (\ui{server folders}):
+  its subfolders and the files the viewer opens, each a link that opens it in the page
+  (\code{./\#src=files/REL\&name=NAME}). The ECG viewer lists \file{.hea}, \file{.xml},
+  \file{.json}, \file{.dcm}, \file{.pdf}, \file{.png}, \file{.jpg} and \file{.jpeg} files; the
+  PACS viewer \file{.dcm}, \file{.dicom}, \file{.mp4}, \file{.webm}, \file{.mov}, \file{.png},
+  \file{.jpg}, \file{.jpeg}, \file{.pdf} and files without an extension, with a link
+  \ui{Open the records in this folder} (\code{\#list=list/REL/}) when the folder has such files.
+  Hidden names are left out; at most 5000 entries, and the page says so when there are more.
+  \code{403} for a path that is not a folder
+  under the root. A file or a folder opened from this list is shown with \code{\#src=} (or
+  \code{\#list=}), where the page hides its \ui{Server folders\dots} button: the browser's Back
+  button returns to the list. \\
+\code{GET files/REL} & A file under the root, whole or the range asked (\code{Range}).
+  \code{403} outside the root or hidden, \code{404} not a file. \\
+\code{GET list/REL/} & A folder's files (not its subfolders, not hidden ones, at most 5000) as
+  \code{\{"files": [NAME...]\}}, with \code{"truncated": true} when there are more, for the PACS
+  viewer's \code{\#list=}. Without the final
+  \code{/}, the file \code{REL}, as \code{files/}. \\
+\code{GET served} & \code{\{"viewer": "ecg" | "pacs", "root": FOLDER\}}: tells the page that it
+  is served this way, so that it shows its \ui{Server folders\dots} button. \\
+\code{POST login} & The sign-in form's password (form field \code{password}, at most 4\,KiB):
+  sets the cookie and redirects (\code{303}) to \code{./}; a wrong password answers the form
+  again with \code{401} and \code{Retry-After}, the wait before the next try (1\,s, then 2,
+  4 \dots{} up to 60\,s); a password sent before the wait has passed is not checked
+  (\code{429}). \\
+\code{POST logout} & Removes the cookie, ends every sign-in, and redirects to \code{./}. \\
+\end{xltabular}
+
+\code{REL} is a path relative to the root, with \code{/} between folders.
+\begin{lstlisting}[style=shell]
+muse-py serve --root /data/ecg --no-browser
+curl -s http://127.0.0.1:8080/served
+dicom-py serve --root /data/pacs --port 8081
+curl -s http://127.0.0.1:8081/list/study01/
+\end{lstlisting}

@@ -1,0 +1,356 @@
+% Part I: a first tour with the demo. Sources: docs/getting-started.md; docs/administration.md
+% ("The demo"); tools/make-demo-data.py (what the demo holds); medorama/src/main.rs (init's and
+% demo add's messages), demo.rs.
+\chapter{Quick start: the demo}
+\label{chap:quickstart}
+
+This chapter takes a first-time user or an administrator from a fresh clone of the repository
+to a running Medorama with invented patients, and then through a short tour: a patient, a
+cohort, a recording and Privacy Mode. It ends by removing the demo. The whole procedure takes
+about fifteen minutes, most of which is the build. Deploying Medorama for other people is the
+subject of \cref{chap:administration} and \cref{chap:deployment}.
+
+\begin{note}[Research use only]
+Medorama is research software, not a medical device. Try it on the demo first, and put real
+patient data in it only on a server that your institution has approved (\cref{chap:security}).
+\end{note}
+
+\section{What the demo holds}
+\label{sec:quickstart-demo}
+
+The \emph{demo} is a set of invented patients for trying Medorama and for showing what it does.
+Everything in it is synthetic: \file{tools/make-demo-data.py} invents the names, numbers,
+signals and pictures. The demo holds:
+\begin{itemize}
+\item six patients, \code{P900001} to \code{P900006} (MRNs \code{SYN0000001} to
+  \code{SYN0000006}), with their encounters and bed stays, laboratory results, vital signs,
+  medications, diagnoses, microbiology, allergies and notes;
+\item short ICU recordings (WFDB collections with ECG, arterial pressure, SpO2 pleth,
+  respiration, vital signs, alarms and R-wave markers) and a 24-hour Holter ECG;
+\item an overnight sleep study for patient \code{P900004}: a two-hour EDF+ file
+  (\file{sleep/P900004\_psg\_20240305.edf}) with EEG, EOG, ECG, airflow, thoracic effort and
+  SpO2 signals, scored with sleep stages, obstructive apneas, oxygen desaturations and arousals
+  as annotations. The study has its own encounter in the sleep laboratory (\code{E9100010}), its
+  recording starts at 22:30 New York time, and a note, the \emph{Sleep study report}, sums it up;
+\item 12-lead ECGs (WFDB, GE MUSE XML, DICOM, PDF and PNG), chest X-rays and CT series, echo
+  loops and reports, and a coronary angiography run;
+\item another hospital's OMOP database, which adds earlier stays and results to two of the
+  patients.
+\end{itemize}
+
+In the catalog, the demo is a cohort named \code{DEMO} that holds its patients. Every user sees
+this cohort, read-only, and each demo patient's page is marked \ui{DEMO}. The demo's tables are
+imported under the source \code{DEMO}, one database per table (\code{patients},
+\code{encounters}, \code{labs}, \code{vitals}, \code{ecg\_index}, \code{icu\_index},
+\code{holter\_index}, \code{sleep\_index} and the others), and its OMOP database is connected
+as \code{demo\_omop}.
+
+\begin{note}
+The demo is off by default: a catalog starts empty unless the demo was asked for. Install it
+only where Medorama is tried, demonstrated or taught, never on a server meant for real patients.
+\end{note}
+
+\section{Install with the demo}
+\label{sec:quickstart-install}
+
+Medorama needs Git, Python 3.9 or later, a C compiler and Rust 1.88 or later. The installer
+installs Rust in the user's account when it is missing (\cref{chap:installation} gives the
+commands for each system, and the website gives them at
+\url{https://medorama.org/docs/install.html}). It builds Medorama, one VitalStream waveform viewer and the database
+tools into a \file{.venv} folder inside the clone.
+
+On Linux or macOS, the following commands clone the repository, run the installer with the Rust
+viewer and the demo (this takes a few minutes), and activate the environment:
+\begin{lstlisting}[style=shell]
+git clone https://github.com/alphanumericslab/medorama.git && cd medorama
+tools/install-medorama.sh --viewer rs --demo
+source .venv/bin/activate
+\end{lstlisting}
+Activate the environment again in every new terminal.
+
+On Windows, the same steps run in PowerShell, with the Microsoft C++ Build Tools installed:
+\begin{lstlisting}[language=PowerShell]
+git clone https://github.com/alphanumericslab/medorama.git; cd medorama
+powershell -ExecutionPolicy Bypass -File tools\install-medorama.ps1 -Viewer rs -Demo
+.venv\Scripts\Activate.ps1
+\end{lstlisting}
+
+The option \opt{-{}-viewer rs} builds the Rust VitalStream viewer, which needs nothing beyond
+Rust. The default, the C++ viewer, also needs a C++20 compiler. With \opt{-{}-demo}, the
+installer writes the demo's files (about 60\,MB) into \file{.venv/share/medorama/demo} and names
+that folder in \file{.venv/bin/medorama.demo}, where \cmd{medorama init} finds it.
+
+\section{Create the catalog}
+\label{sec:quickstart-init}
+
+The \emph{catalog} is Medorama's own database: its patients, their encounters and data, the
+links to their files, and the users. Its settings and database live in a \emph{home folder}, by
+default \file{\textasciitilde/.local/share/medorama} (on Windows
+\file{\%LOCALAPPDATA\%\textbackslash medorama}). A catalog also needs a \emph{results folder},
+which holds the recordings' indexes and the results of actions.
+
+The following command creates the catalog with its results folder:
+\begin{lstlisting}[style=shell]
+medorama init --results ~/medorama-results
+\end{lstlisting}
+On Windows, the same command in PowerShell is:
+\begin{lstlisting}[language=PowerShell]
+medorama init --results $HOME\medorama-results
+\end{lstlisting}
+
+\cmd{init} asks twice for the password of the first user, \code{admin}, who has the PHI
+permission. The password needs at least 10 characters. \cmd{init} then says where the catalog
+is and, because the installer made the demo, loads it as that administrator:
+\begin{lstlisting}[style=text]
+Catalog created in /home/user/.local/share/medorama
+  settings: /home/user/.local/share/medorama/medorama.toml
+  database: ... (holds identifiers: keep it private)
+  results:  /home/user/medorama-results
+  indexes:  /home/user/medorama-results/index
+  admin:    admin (with PHI permission)
+Later commands use this catalog without --home (remembered in ...).
+Loading the demo from .../.venv/share/medorama/demo ...
+Demo loaded: 6 patient(s), ... encounter(s), ... item(s), ... recording(s) from ... table(s),
+and the OMOP database demo_omop; the cohort DEMO holds them
+Deleting the cohort DEMO (an admin) removes all of it: medorama demo remove does the same.
+\end{lstlisting}
+The other options of \cmd{init} (\opt{-{}-home}, \opt{-{}-index-dir}, \opt{-{}-timezone},
+\opt{-{}-port}, a PostgreSQL database and \opt{-{}-no-demo}) are described in
+\cref{chap:administration}.
+
+\section{Serve, and sign in}
+\label{sec:quickstart-serve}
+
+The following command starts the server, which serves the web page and the API and indexes the
+demo's recordings in the background:
+\begin{lstlisting}[style=shell]
+medorama serve
+\end{lstlisting}
+\cmd{serve} prints the address of the page, the catalog and the viewer it runs:
+\begin{lstlisting}[style=text]
+Medorama: open http://127.0.0.1:8090/
+  catalog: /home/user/.local/share/medorama
+  database: ...
+  viewer: rs (started on first use, in the VitalStream tab)
+  ...
+\end{lstlisting}
+The server listens only on this computer (127.0.0.1) by default. To reach it from another
+computer, use an SSH tunnel or an HTTPS reverse proxy (\cref{chap:deployment}).
+\key{Ctrl}+\key{C} in the terminal stops the server.
+
+To sign in:
+\begin{enumerate}
+\item Open \url{http://127.0.0.1:8090} in a browser on the same computer.
+\item Type \code{admin} as the \ui{User name}, and the password chosen above.
+\item Click \ui{Sign in}.
+\end{enumerate}
+The page opens on the \ui{Cohorts} tab. The administrator holds the \emph{PHI permission}, the
+right to see identifiers such as names, medical record numbers (MRNs) and dates of birth. For
+administrators, \emph{Privacy Mode} starts off, so the demo's invented names are visible. For
+every other user, Privacy Mode starts on (\cref{chap:protecting}).
+
+The top bar has three ways to the patients (\ui{Cohorts}, \ui{Patient Catalog},
+\ui{Databases}), the viewers' tabs (\ui{ECG}, \ui{PACS}, \ui{VitalStream}), and the work tabs at
+the right (\ui{History}, \ui{Actions}, \ui{Jobs}, \ui{Review}, \ui{Import}, \ui{Admin}). The
+\ui{Privacy Mode} switch and the theme button are at the far right (\cref{chap:page}).
+
+While the server runs, its workers index the demo's recordings within seconds. The recordings'
+overviews, and the heart rate that the index job derives from the Holter's ECG, appear once that
+is done. The \ui{Jobs} tab shows the queue (\cref{chap:actions}).
+
+\section{A first tour}
+\label{sec:quickstart-tour}
+
+\subsection{A patient}
+\label{sec:quickstart-patient}
+
+To open a patient's page, click the cohort \ui{DEMO} in the list on the left of \ui{Cohorts},
+then a patient among its members, such as \ui{Doe, Jane} (patient ID \code{P900001}). You can
+also open \ui{Patient Catalog}, which lists every patient with the kinds of data each one has,
+and click a row. The patient's page has the following parts (\cref{chap:patients}):
+\begin{itemize}
+\item The \emph{patient bar} at the top shows the name, sex, age and date of birth, the patient
+  ID and pseudonym, the MRN, the span of the data, any allergies, and the mark \ui{DEMO}.
+\item The patient column on the left lists the encounters, the medications of the latest stay
+  and the conditions.
+\item The \emph{Patient Journey} in the middle draws every item on one time line, newest on
+  top, with one column per clinical category (ICU, Vitals, Labs, ECG, Holter, Sleep and so on).
+  Hover over a mark to see what it is, and click it to open it.
+\item On the right, the \emph{report} lists every entry by day, newest first, and the
+  \emph{detail} shows the entry chosen.
+\end{itemize}
+
+Try the following on patient \code{P900001}:
+\begin{enumerate}
+\item Click a \emph{12-lead ECG} entry in the report. The detail shows its measurements, the
+  interpretation and the tracing on paper. Its button \ui{Open in ECG} opens it in the \ui{ECG}
+  tab, with layouts, gain and calipers.
+\item Type \code{creatinine} in the report's search box. The report keeps the entries that
+  mention it, with the words highlighted.
+\item Click an \emph{ICU monitoring} entry. The detail shows the recording's main vital signs
+  over its whole length, and a click on them opens VitalStream at that moment
+  (\cref{sec:quickstart-recording}).
+\item Click an encounter on the left. The journey then shows only that encounter, unfolded, and
+  the encounter's chip above the journey (with $\times$) shows all of them again.
+\end{enumerate}
+
+Patient \code{P900004} (Ade Okafor) has a 24-hour Holter, whose entry shows the heart rate found
+from its ECG over the whole day, and an overnight EDF+ sleep study in the \ui{Sleep} column of
+the journey (\cref{fig:patients-sleep}). The sleep study belongs to its own encounter in the
+sleep laboratory, whose \emph{Sleep study report} appears among the notes. Other patients have echo loops, CT series and an
+angiography run, which open in the \ui{PACS} tab.
+
+\subsection{A cohort}
+\label{sec:quickstart-cohort}
+
+A \emph{cohort} is a named set of patients, found across every database by criteria and kept.
+To build one:
+\begin{enumerate}
+\item Open \ui{Cohorts}. The page opens on a new cohort, with the criteria builder and one
+  empty expression line.
+\item Type the following expression:
+\begin{lstlisting}[style=text]
+labs.creatinine > 1.5 OR has icu
+\end{lstlisting}
+  The expression is checked as it is typed, and its meaning, in words, appears beside it. The
+  patients who meet it are listed below, each with the reason it matched.
+\item Type a name in the field \ui{New cohort's name}, and click \ui{Save all \dots{} as a new
+  cohort}.
+\end{enumerate}
+The cohort's page then shows its definition, its members, and what can be done with it
+(refresh, clone, merge, share, export). The following expressions are other examples to try on
+the demo:
+\begin{lstlisting}[style=text]
+has holter
+has sleep
+female AND has ecg
+in ecg_index AND NOT has icu
+\end{lstlisting}
+\Cref{chap:cohorts} describes the expression language, every operator and every action on a
+cohort.
+
+\subsection{A recording}
+\label{sec:quickstart-recording}
+
+From an \emph{ICU monitoring} entry of a patient's page, click the vital signs in the detail at
+the moment you want to see, or click \ui{Open in VitalStream}. The \ui{VitalStream} tab opens the
+recording at that moment, with every channel, the vital signs, the alarms and the breaks on one
+time axis. Zoom with the mouse wheel, from the whole stay down to single samples. The tab's
+title says whose recording it is: \ui{$\langle$ Patient} returns to the entry on the patient's
+page, and \ui{$\langle$} and \ui{$\rangle$} step to the patient's other recordings
+(\cref{chap:viewers-in-medorama}).
+
+Open the sleep study of patient \code{P900004} the same way. Its EDF+ annotations (sleep stages,
+apneas, desaturations and arousals) appear as events in VitalStream's \ui{Annotations} lane.
+VitalStream's own controls are described in \cref{chap:vitalstream}.
+
+The first time a recording is opened, it may still be indexing. Its status appears in the
+\ui{Jobs} tab.
+
+\subsection{Privacy Mode}
+\label{sec:quickstart-privacy}
+
+\emph{Privacy Mode} shows the same data without any identifier. The server, not the browser,
+removes the identifiers, so none of them reaches the page. As \code{admin}, the session starts
+out of Privacy Mode, and identifiers are shown. To see Privacy Mode:
+\begin{enumerate}
+\item Click \ui{Privacy Mode} at the right of the top bar. The page reloads.
+\item Look at Jane Doe's page again.
+\end{enumerate}
+The following has changed:
+\begin{itemize}
+\item The name is \code{[Patient Name]}, the MRN \code{[MRN]} and the date of birth
+  \code{[Date of Birth]}.
+\item Patient and encounter IDs are replaced by \emph{pseudonyms}: random codes such as
+  \code{MO-D5QM-Y1X5} for a patient and \code{MO-E-QMC6-E2VA} for an encounter.
+\item Every date moves back, by the catalog's offset (about a hundred years by default) plus the
+  patient's own number of days, so the intervals between the patient's events stay the same.
+\item File names become tokens such as \code{mo-f0000.hea}, and the ECG and PACS tabs receive
+  files that the server has de-identified.
+\item Staff names in notes become \code{[Staff Name]}, and a search for a name or an MRN is
+  refused.
+\end{itemize}
+Click \ui{Privacy Mode} again to leave it.
+
+\screenshot{privacy.png}{A demo patient's page in Privacy Mode: a pseudonym and placeholders
+in place of identifiers, and dates moved back.}{fig:quickstart-privacy}
+
+A user without the PHI permission always works this way. To see it for yourself, add such a user
+from a second terminal, with the environment activated. The following command adds a user with
+the role \code{viewer} and asks for the new user's password:
+\begin{lstlisting}[style=shell]
+medorama user add reader --role viewer
+\end{lstlisting}
+Then sign in as \code{reader} in a private browser window. \Cref{chap:protecting} explains how
+the privacy gate works, and what it cannot clean (for example, text burned into images).
+
+\paragraph{The theme.} The theme button at the far right of the top bar switches the page
+between its light and its dark theme. Until you choose, the page follows the system's setting,
+and the viewers in its tabs follow the page (\cref{chap:page}).
+
+\section{Removing the demo}
+\label{sec:quickstart-remove}
+
+When you are done with the demo, an administrator deletes the cohort \code{DEMO}:
+\begin{enumerate}
+\item Open the cohort \code{DEMO} in \ui{Cohorts}.
+\item Click \ui{Delete\dots}. The page first says what will go: so many patients, encounters,
+  bed stays, items and recordings.
+\item Click \ui{Delete the demo}.
+\end{enumerate}
+This removes, in one step:
+\begin{itemize}
+\item every patient, encounter, bed stay, result, note and file link that the demo's tables
+  added, and the demo's recordings, with the catalog's indexes and results of them;
+\item the connection \code{demo\_omop} (the OMOP file itself is not touched);
+\item the cohort \code{DEMO}. Cohorts made from it keep their members as they were, without the
+  demo's patients.
+\end{itemize}
+Nothing else changes: what another source also holds stays, and the demo's files stay where
+they are. The demo is the only cohort whose deletion also removes its patients; deleting any
+other cohort leaves its patients in the catalog. Only administrators can delete the demo, and
+other users see the cohort without the \ui{Delete\dots} button.
+
+The same can be done from the command line. The first command reports what would be removed,
+and the second removes it:
+\begin{lstlisting}[style=shell]
+medorama demo remove --dry-run
+medorama demo remove
+\end{lstlisting}
+Every step is recorded in the audit log (\code{demo\_add}, \code{demo\_remove}).
+
+\section{Loading the demo later}
+\label{sec:quickstart-later}
+
+\cmd{medorama demo add} loads the installer's demo into the catalog in use, for example after
+\cmd{medorama init -{}-no-demo} or after deleting the demo. Only administrators may run it.
+\cmd{medorama demo add DIR} loads a demo folder that you made yourself. The following commands
+write the demo's files into a folder and then load them, with the demo's OMOP database and the
+cohort \code{DEMO}:
+\begin{lstlisting}[style=shell]
+.venv/bin/python tools/make-demo-data.py ~/medorama-demo
+medorama demo add ~/medorama-demo
+\end{lstlisting}
+A catalog holds the demo once: \cmd{demo add} refuses while the cohort \code{DEMO} exists. If the
+catalog has \code{data\_roots}, the demo's folder must be inside one of them.
+
+\file{tools/make-demo-data.py} needs NumPy and wfdb-x in \file{.venv}. Without the Python viewer
+there, the following command adds them first:
+\begin{lstlisting}[style=shell]
+.venv/bin/pip install numpy "wfdb-x @ https://github.com/alphanumericslab/wfdb-x/archive/\
+a707ba9ec1624241793bf41b938b219d76005526.tar.gz#subdirectory=python"
+\end{lstlisting}
+Type it as one line, without the backslash and the line break.
+
+Running the installer again without \opt{-{}-demo} removes \file{.venv/bin/medorama.demo}, and
+catalogs created after that start empty. A catalog that already holds the demo keeps it.
+\cmd{init -{}-no-demo} creates an empty catalog even while \file{medorama.demo} is there.
+
+\section{Next}
+\label{sec:quickstart-next}
+
+Real data are databases like the synthetic ones. \Cref{part:data} explains how to import
+tables, connect databases, and link recordings, ECGs and images. Running Medorama for others, as
+a service, on PostgreSQL, behind HTTPS and with backups, is described in
+\cref{chap:administration} and \cref{chap:deployment}. Security and privacy reviewers should read
+\cref{chap:architecture}, \cref{chap:protecting} and \cref{chap:security}.

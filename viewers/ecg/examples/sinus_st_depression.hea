@@ -1,0 +1,35 @@
+sinus_st_depression 12 500 5000  9:20:00 20/02/2024
+sinus_st_depression.dat 16 1000/mV 16 0 39 -7078 0 I
+sinus_st_depression.dat 16 1000/mV 16 0 29 5880 0 II
+sinus_st_depression.dat 16 1000/mV 16 0 -11 13061 0 III
+sinus_st_depression.dat 16 1000/mV 16 0 -34 -32169 0 aVR
+sinus_st_depression.dat 16 1000/mV 16 0 25 22677 0 aVL
+sinus_st_depression.dat 16 1000/mV 16 0 9 9474 0 aVF
+sinus_st_depression.dat 16 1000/mV 16 0 22 -14594 0 V1
+sinus_st_depression.dat 16 1000/mV 16 0 21 11030 0 V2
+sinus_st_depression.dat 16 1000/mV 16 0 25 23576 0 V3
+sinus_st_depression.dat 16 1000/mV 16 0 28 7613 0 V4
+sinus_st_depression.dat 16 1000/mV 16 0 26 -27227 0 V5
+sinus_st_depression.dat 16 1000/mV 16 0 32 -24238 0 V6
+# Age: 74
+# Sex: F
+# Device: MAC 5500 HD
+# Filters: 0.05-150 Hz, 60 Hz notch
+# Program: Marquette 12SL v243
+# Vent. rate: 72 bpm
+# Atrial rate: 72 bpm
+# PR: 154 ms
+# QRS: 90 ms
+# QT: 346 ms
+# QTc: 379 ms
+# QTcF: 368 ms
+# R axis: 58 °
+# T axis: 44 °
+# P axis: 52 °
+# ST I: -0.07 mV
+# ST II: -0.07 mV
+# ST V4: -0.12 mV
+# ST V5: -0.16 mV
+# ST V6: -0.10 mV
+# Dx: Normal sinus rhythm; ST depression, consider subendocardial injury or digitalis effect; Abnormal ECG
+# synthetic, not a patient

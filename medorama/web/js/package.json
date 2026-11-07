@@ -1,0 +1,5 @@
+{
+  "private": true,
+  "type": "module",
+  "description": "The Medorama page's scripts: ES modules (this file lets Node load them for tests/web/)"
+}

@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security problem (privately)
+    url: https://github.com/alphanumericslab/medorama/security/advisories/new
+    about: Vulnerabilities are reported privately, never in a public issue (SECURITY.md).
+  - name: Documentation
+    url: https://github.com/alphanumericslab/medorama/tree/main/docs
+    about: Installing, building, administration, the user guide, security.

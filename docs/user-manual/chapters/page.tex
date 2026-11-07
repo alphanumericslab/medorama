@@ -1,0 +1,293 @@
+\chapter{The page}
+\label{chap:page}
+
+Medorama is used through one web page, served by \cmd{medorama serve} (by default at
+\url{http://127.0.0.1:8090}). This chapter is for every user. It describes what is common to the
+whole page: signing in, the header and its tabs, the addresses, the light and dark themes, the
+Privacy Mode switch, the notices, the keyboard and the History tab. The following chapters take
+the tabs one by one.
+
+\section{Signing in}
+\label{sec:page-signing-in}
+
+How the page signs users in depends on the catalog's sign-in method, which an administrator
+chooses with the setting \code{sign\_in} (\cref{chap:sign-in}). The page asks the server which
+method is in use when it shows the sign-in screen.
+
+\paragraph{With Medorama's passwords} (the default), the page opens on a sign-in form with the
+fields \ui{User name} (the account's name, for example \code{admin}) and \ui{Password}, and the
+button \ui{Sign in}. An administrator creates the accounts, in the \ui{Admin} tab or with
+\cmd{medorama user add} (\cref{chap:users-privacy}); \cmd{medorama init} creates the first one,
+\code{admin}.
+\begin{itemize}
+\item A wrong user name or password is reported above the form. After 5 failed sign-ins, a user
+  name is locked for a minute (``too many failed attempts'').
+\item A sign-in lasts \code{session\_hours} (12 hours by default), and ends sooner when it is not
+  used for \code{session\_idle\_minutes} (60 minutes by default). The page's own checks for new
+  data do not count as use. When the session has ended, the next request brings the sign-in form
+  back.
+\item Changing a password or disabling a user ends that user's sessions.
+\end{itemize}
+
+\paragraph{With the institution's sign-in} (\code{sign\_in = "proxy"}), an authenticating proxy
+in front of Medorama signs the user in before the page loads, for example through single sign-on
+and multi-factor authentication. The page shows no form. When the proxy has not signed the user
+in, or the proxy's session has ended, the page says so and offers \ui{Sign in}, which loads the
+page again through the proxy. When the proxy names someone for whom Medorama has no account, the
+page shows the server's reason: ``Your institution's sign-in names you \textit{name}, and
+Medorama has no account of that name: ask an administrator.''
+
+\paragraph{The user menu.} The round button at the right of the header shows the user's
+initials. It opens a menu with the user's name, role and, for users with the PHI permission, the
+mark \ui{PHI}, and these commands:
+\begin{description}
+\item[\ui{Change password}] asks for the current password, then twice for the new one (at least
+  10 characters); the user then signs in again.
+\item[\ui{Sign out}] ends this session. With the institution's sign-in, it leads to the proxy's
+  own sign-out address (the setting \code{proxy\_logout\_url}), or to the signed-out screen when
+  none is set.
+\item[\ui{Sign out everywhere}] ends the user's sessions on every computer and browser.
+\end{description}
+With the institution's sign-in, Medorama's passwords are not used, so the menu hides
+\ui{Change password} and \ui{Sign out everywhere}, and \ui{Admin} $\rightarrow$ \ui{Users}
+shows no password field and no \ui{Reset password}.
+
+\section{The header}
+\label{sec:page-header}
+
+The header, at the top of every screen, holds from left to right the name Medorama, the
+\ui{$\langle$} and \ui{$\rangle$} buttons (\ui{Back} and \ui{Forward}: the browser's history of
+this page), the tabs, the \ui{Privacy Mode} switch, the theme button and the user menu.
+
+The tabs are in three groups (\cref{tab:page-tabs}):
+\begin{itemize}
+\item \ui{Cohorts}, \ui{Patient Catalog} and \ui{Databases} are three ways to the patients. The
+  page opens on \ui{Cohorts}.
+\item After a separator, \ui{ECG}, \ui{PACS} and \ui{VitalStream} are the viewers.
+\item At the right, in a quieter style, \ui{History}, \ui{Actions}, \ui{Jobs}, \ui{Review},
+  \ui{Import} and \ui{Admin} hold the work. Some of them are shown only to the roles that use
+  them.
+\end{itemize}
+
+\begin{xltabular}{\linewidth}{@{}P{2.6cm}P{2.4cm}L@{}}
+\caption{The tabs of the header.}
+\label{tab:page-tabs}\\
+\toprule
+{\tabhead Tab} & {\tabhead Shown to} & {\tabhead Shows} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Tab} & {\tabhead Shown to} & {\tabhead Shows} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\ui{Cohorts} & Everyone & Find patients across every database by criteria, with why each
+  matched; save them as named cohorts; edit, clone, merge, refine, refresh, share and export
+  them (\cref{chap:cohorts}). \\
+\ui{Patient Catalog} & Everyone & Every patient, latest encounter first, with the kinds of data
+  each has; a patient's page; the table of encounters (\cref{chap:patients}). \\
+\ui{Databases} & Everyone & Every database in use, each unfolding into its rows as imported
+  (\cref{chap:databases-tab}). \\
+\ui{ECG}, \ui{PACS} & Everyone & The ECG and PACS viewers, at the file a patient's page or a
+  database's row sent them. Dimmed until something is opened in them
+  (\cref{chap:viewers-in-medorama}). \\
+\ui{VitalStream} & Everyone & The waveform viewer the catalog runs. Grayed out, with the reason
+  in its tooltip, when no viewer is linked to the catalog; absent when the catalog links to a
+  viewer running elsewhere, which opens in a browser tab of its own. \\
+\ui{History} & Everyone & The encounters the user opened in the encounter panel
+  (\cref{sec:page-history}). \\
+\ui{Actions} & Analysts, admins & Run actions on recordings (\cref{chap:actions}). \\
+\ui{Jobs} & Everyone & The queue of jobs; a number by the tab counts the running and queued
+  ones (\cref{chap:actions}). \\
+\ui{Review} & Admins & Rows held back, possible duplicate patients, recordings whose files
+  disagree with the databases; a number by the tab counts what is open
+  (\cref{chap:importing}). \\
+\ui{Import} & Admins & Add databases, the connected databases, import formats, sources and
+  imports, the recordings; while an import runs, a bar by the tab shows its progress
+  (\cref{chap:importing}, \cref{chap:connecting}, \cref{chap:recordings}). \\
+\ui{Admin} & Admins & Users, settings, add-ons, dates and times, Privacy Mode's settings, the
+  audit log (\cref{chap:administration}, \cref{chap:users-privacy}). \\
+\end{xltabular}
+
+\paragraph{Roles.} A \code{viewer} searches and looks, keeps a history and makes cohorts. An
+\code{analyst} may also run and cancel actions. An \code{admin} may also add and remove data,
+review identities, manage users and settings, and read the audit log. The PHI permission, given
+per user, lets a user leave Privacy Mode. Roles and the permission are described in
+\cref{chap:users-privacy}.
+
+\section{Addresses}
+\label{sec:page-addresses}
+
+Every screen has its own address, after the \code{\#} of the page's URL
+(\cref{tab:page-addresses}). The browser's back and forward buttons, and the header's
+\ui{$\langle$} and \ui{$\rangle$}, move between the patient page and the viewers. A screen can be
+reloaded, bookmarked, or sent to someone who may see it. An address that the page does not know
+opens \ui{Cohorts}.
+
+\begin{xltabular}{\linewidth}{@{}P{6.2cm}L@{}}
+\caption{The addresses of the page's screens.}
+\label{tab:page-addresses}\\
+\toprule
+{\tabhead Address} & {\tabhead Screen} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Address} & {\tabhead Screen} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{\#/cohorts} & A new cohort: the criteria builder \\
+\code{\#/cohorts/7}, \code{\#/cohorts/7/edit} & A cohort; its editing \\
+\code{\#/cohorts/new?within=7} & A new subcohort of cohort 7 \\
+\code{\#/patients?q=\dots\&has=ecg,!icu\&cohort=7} & The Patient Catalog, with its search,
+  its filters and a cohort's members \\
+\code{\#/encounters} & The table of encounters \\
+\code{\#/patient/12?item=\dots\&enc=\dots\&q=\dots\&mode=\dots} & A patient's page, with the
+  entry chosen, the encounter shown, the report's search and its mode \\
+\code{\#/databases}, \code{\#/databases/12} & The databases; one on a page of its own \\
+\code{\#/viewer?path=\dots\&t0=\dots\&t1=\dots} & VitalStream, at a recording and a time span \\
+\code{\#/ecg?src=\dots}, \code{\#/pacs?src=\dots}, \code{\#/pacs?list=\dots} & The ECG and PACS
+  viewers, at a file or a folder \\
+\code{\#/history}, \code{\#/actions}, \code{\#/jobs} & History, Actions (\code{?cohort=7}: on a
+  cohort's members), Jobs \\
+\code{\#/review}, \code{\#/import}, \code{\#/recordings}, \code{\#/admin} & The admins' tabs \\
+\end{xltabular}
+
+\paragraph{Changes show everywhere at once.} Every open page asks the server for the catalog's
+data version every 5 seconds, and at once after it has changed something itself. An import or a
+removal, made here or in anyone else's browser, changes that version. The patient pages, the
+lists and the tables then redraw, and a viewer showing a file that is gone closes with a note
+(\cref{sec:page-notices}).
+
+\section{Light and dark}
+\label{sec:page-themes}
+
+The page and every viewer have a light and a dark theme. The page starts in the system's setting,
+that is, the light or dark appearance of the operating system or the browser. The theme button at
+the right of the header (a half-filled circle, titled \ui{Light or dark}) switches between the
+two themes. The choice is remembered in this browser, for this page, and then applies instead of
+the system's setting.
+
+The three viewers, in their tabs, follow the page's theme: the page sets it in their address
+(\code{theme=light} or \code{theme=dark}) when a tab opens and when the theme changes. A viewer
+applies it without remembering it as its own choice; VitalStream's own theme button, in its
+toolbar, still switches its theme (\cref{chap:vitalstream}).
+
+The screenshots of this manual show the dark theme, except those of the ECG viewer, which is
+shown in both themes (\cref{chap:ecg-viewer}).
+
+\screenshot{patient-icu.png}{The dark theme: a patient's page with an ICU recording at a
+glance in the detail. Synthetic data.}{fig:page-dark}
+
+Both themes use the same colors, each tuned to keep its contrast. The hues come from palettes
+designed for color-vision deficiencies (Okabe-Ito, Paul Tol). Red is reserved for alarms. Amber
+and orange mark abnormal and critical values and errors, and, in Privacy Mode, the warning
+triangle on files that may show identifiers; blue marks a low value. No category of data uses
+these colors.
+
+\section{Dates and times}
+\label{sec:page-dates}
+
+Every page writes dates and times in the catalog's time zone (the setting \code{timezone}), in
+the order and on the clock that an administrator chooses for everyone in \ui{Admin}
+(\ui{Dates and times}): 2024-01-31, 01/31/2024, 31/01/2024 or 31.01.2024, with a 24-hour or
+12-hour clock. Exports and
+the API keep ISO 8601. In Privacy Mode, the dates shown are moved back
+(\cref{sec:page-privacy}).
+
+\section{The Privacy Mode switch}
+\label{sec:page-privacy}
+
+The \ui{Privacy Mode} button of the header shows and changes the session's mode:
+\begin{itemize}
+\item \textbf{On} (the button filled): no identifier is shown, and dates are moved back. Its
+  tooltip reads ``Privacy Mode is on: no identifier is shown, dates are moved back. Click to show
+  identifiers.''
+\item \textbf{Off} (the button plain): identifiers are shown. The tooltip reads ``Privacy Mode
+  is off: identifiers are shown. Click to hide them.''
+\item \textbf{Locked on}, for users without the PHI permission: a click only says ``Privacy Mode
+  is always on for your account''.
+\end{itemize}
+Administrators with the PHI permission start with Privacy Mode off; everyone else starts with it
+on. A click asks the server to switch the session's mode, and the server writes the change to
+the audit log. The page then reloads, so that nothing identified stays on the screen. In a narrow
+window, the button shows only its symbol.
+
+\begin{phibox}
+The switch only asks; the server decides. In Privacy Mode the server sends no identifier at
+all: placeholders (\code{[Patient Name]}, \code{[MRN]}), pseudonyms (\code{MO-XXXX-XXXX}),
+moved dates and de-identified files take their place before anything leaves it. The page cannot
+show what it is not sent. When a viewer's tab shows a picture, a PDF, a video or a DICOM file,
+whose pixels or pages are sent as they are, the tab is marked with an amber warning triangle,
+because such a file may show burned-in identifiers. What Privacy Mode withholds, and how dates
+move, is explained in \cref{chap:protecting}.
+\end{phibox}
+
+\section{Notices}
+\label{sec:page-notices}
+
+\begin{itemize}
+\item \textbf{Messages} appear at the bottom of the page for a few seconds. They say what an
+  action did (``Saved'', ``Indexing queued'', ``3 patients added to \dots''); errors appear in
+  amber, a little longer. A screen never fails silently: whatever goes wrong is reported there.
+\item \textbf{Confirmations} come before every removal, saying first what would go
+  (\cref{chap:databases-tab}, \cref{chap:cohorts}).
+\item \textbf{A viewer whose file is gone} (its database was deleted) closes, and its tab says
+  so: ``What this ECG tab showed was removed from the catalog (its database was deleted).''
+\item \textbf{A patient no longer in the catalog} (its databases deleted, or merged into
+  another): the patient's page says so, with a link to the Patient Catalog.
+\item \textbf{A connected database that did not answer}: the patient's page marks it
+  (``omop: not available'') and shows the other sources (\cref{chap:patients}).
+\item \textbf{New data since a cohort's members were found}: the cohort's page says so, and
+  offers to see who would join (\cref{chap:cohorts}).
+\item \textbf{Counts by the tabs}: the jobs running and queued (\ui{Jobs}), what waits for
+  review (\ui{Review}), the progress of the imports running (\ui{Import}).
+\end{itemize}
+
+\section{The keyboard}
+\label{sec:page-keyboard}
+
+\begin{table}[htbp]
+\caption{Keys of the page.}
+\label{tab:page-keys}
+\begin{tabularx}{\linewidth}{@{}P{3.4cm}L@{}}
+\toprule
+{\tabhead Key} & {\tabhead Does} \\
+\midrule
+\key{/} & In the Patient Catalog and on a patient's page (when no field has the focus): puts the
+  focus in the patient search. \\
+\key{Enter} & In the Patient Catalog's search, when it finds one patient: opens their page. In
+  the suggestions of a patient's page: opens the patient chosen. On an entry of the report, an
+  encounter, a trend or a note: chooses it, as a click does. \\
+\key{Space} & On an entry of the report, an encounter, a trend or a note: chooses it. \\
+\key{$\uparrow$} \key{$\downarrow$} & In the suggestions of the search for another patient:
+  move the choice. \\
+\key{Esc} & Closes the suggestions, the encounter panel, and the \ui{New / Edit cohort}
+  menu. \\
+\key{Tab} & Moves through the page's controls; after a screen is drawn, the focus is on it, so
+  that \key{Tab} goes on from there. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The browser's own keys for back and forward (for example \key{Alt}+\key{$\leftarrow$}) move in
+the page's history, as the header's \ui{$\langle$} \ui{$\rangle$} do. The viewers have keys of
+their own (\cref{part:viewers}).
+
+\section{The History tab}
+\label{sec:page-history}
+
+\ui{History} lists the encounters that the user opened in the encounter panel, from the table
+of encounters (\cref{chap:patients}), from \ui{Review}, or from the History itself; each opening
+is a \code{GET encounters/\{id\}}. The list shows the most recent first, with the status of
+their recordings, the encounter, the patient (and, for users with the PHI permission, the
+name\phimark), the admission, when it was last opened, and how many times. Patient pages are not
+recorded. Only the user sees their own history.
+
+\begin{itemize}
+\item A click on a row opens the encounter's panel again.
+\item The $\times$ at the end of a row (\ui{Remove from your history}) removes that encounter.
+\item \ui{Clear history} empties it, after a confirmation.
+\end{itemize}

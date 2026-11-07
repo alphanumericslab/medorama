@@ -1,0 +1,379 @@
+% Add-ons: adapters that read recording formats Medorama and the viewers do not read themselves.
+% What they are, installing them (medorama addons install), how the programs use them, the
+% adapter protocol in full, writing one, security, and the add-ons known (the STP add-on).
+% Sources: docs/adapters.md; medorama/src/addons.rs, main.rs (addons); libs/engine/src/adapters.rs
+% (PROTOCOL = 1, describe, default_folder).
+\chapter{Add-ons}
+\label{chap:addons}
+
+This chapter explains adapters: separate programs that let Medorama and the VitalStream viewers
+read recording formats they do not read themselves. It is written for administrators who install
+an add-on, and for developers who write an adapter for a new format.
+
+Medorama and the VitalStream viewers read WFDB records and EDF, EDF+, BDF and BDF+ files
+themselves (\cref{chap:recordings}). Every other recording format is read by an
+\textbf{adapter}: a program, installed beside them, that turns a recording into the index the
+viewers draw from (\cref{chap:formats-reference}), and returns its samples when a view zooms in.
+Formats that are licensed, or that only some institutions may read, are distributed this way, as
+\textbf{add-ons}, outside the public repository. When to write an adapter rather than a built-in
+reader is discussed in \cref{sec:readers-recordings}. This chapter describes what an adapter is,
+how an administrator installs one, how the programs use it, the protocol that an adapter speaks,
+and the add-ons known.
+
+\section{What an adapter is}
+\label{sec:addons-what}
+
+\begin{xltabular}{\linewidth}{@{}P{3.0cm}L@{}}
+\caption{An adapter.}
+\label{tab:addons-adapter}\\
+\toprule
+\tabhead Aspect & \tabhead An adapter \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Aspect & \tabhead An adapter \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+A program & An executable named \file{<name>-adapter} (\file{stp-adapter}; on Windows,
+  \file{stp-adapter.exe}). \\
+Where & An \textbf{adapter folder}: \file{\textasciitilde/.local/share/medorama/adapters} by
+  default (on Windows, \code{\%LOCALAPPDATA\%\textbackslash medorama\textbackslash adapters}).
+  The setting \code{adapters\_dir} of Medorama (\file{medorama.toml}) and of the viewers
+  (\file{vitalstream.toml}, or \opt{-{}-adapters-dir}) names another. \\
+What it reads & The formats it lists when asked (\code{describe}), each with a recording kind, a
+  label and file extensions. \\
+What it writes & Only the index files, into the folder it is given; never anything next to a
+  recording. \\
+How it is called & By Medorama and by each viewer, as a child process, with the commands of
+  \cref{sec:addons-protocol}. Nothing runs as a server or listens on a port. \\
+\end{xltabular}
+
+Medorama and the viewers name no add-on's format. Until its adapter is installed, a file of that
+format is treated like any other file they do not read: the file browsers do not list it, and
+opening it is refused (\code{not a recording this program reads}). The built-in readers take
+precedence over an adapter that lists the same extensions (\file{.hea}, \file{.edf},
+\file{.bdf}).
+
+\section{Installing an add-on}
+\label{sec:addons-installing}
+
+An add-on arrives as an archive for one system,
+\file{<name>-adapter-<version>-<os>-<arch>.tar.gz} (Linux, macOS) or \file{.zip} (Windows),
+holding the program, its license and \file{INSTALL.txt}. An administrator installs it on the
+server, never through the page, because an adapter is a program that runs with the catalog's
+rights.
+
+\paragraph{1. Unpack it, and allow the system to run it.} Programs downloaded from the internet
+are blocked until you allow them. The following commands unpack the archive on Linux and macOS,
+and remove macOS's quarantine mark (otherwise Gatekeeper refuses to run the program):
+\begin{lstlisting}[style=shell]
+tar -xzf stp-adapter-0.1.0-linux-x86_64.tar.gz                  # Linux and macOS
+xattr -d com.apple.quarantine stp-adapter-0.1.0-*/stp-adapter   # macOS only (Gatekeeper)
+\end{lstlisting}
+On Windows, the following commands unpack the archive and unblock the program:
+\begin{lstlisting}[language=PowerShell]
+Expand-Archive stp-adapter-0.1.0-windows-amd64.zip .
+Unblock-File stp-adapter-0.1.0-windows-amd64\stp-adapter.exe
+\end{lstlisting}
+
+\paragraph{2. Install it, as the account that runs the catalog} (or with \opt{-{}-home} naming
+the catalog), so that it goes into that catalog's adapter folder (\code{adapters\_dir}). The
+following commands install it and list the installed adapters:
+\begin{lstlisting}[style=shell]
+medorama addons install stp-adapter-0.1.0-linux-x86_64/stp-adapter
+medorama addons list            # name, version, implementation, formats, program
+\end{lstlisting}
+\cmd{addons install} checks the program first: it must be named \file{<name>-adapter}
+(\file{.exe} on Windows), answer \code{describe}, and speak this protocol's version. It then
+copies the program into the adapter folder (creating the folder if needed; on Unix with mode
+0755), replacing an installed adapter of the same name, and asks the copy to describe itself
+again. Installing and removing are written to the audit log (\code{addon\_install},
+\code{addon\_remove}). \cmd{medorama addons remove stp} removes an adapter by name.
+
+\paragraph{3. Restart Medorama} (\cmd{systemctl -{}-user restart medorama}, or stop and start
+\cmd{medorama serve}). The programs list their adapters when they start. Stopping Medorama also
+stops the VitalStream viewer it runs, so the next viewer sees the add-on too. \ui{Admin}
+$\rightarrow$ \ui{Add-ons} then lists it.
+
+\paragraph{4. Import again the tables that named such files before.} An import skips a recording
+that no installed reader reads, and that no viewer opens either (\code{line N: FILE: not a
+recording Medorama reads. A format read by an add-on needs it installed ...}), and keeps nothing
+of it. Once the add-on is installed, remove that earlier import (\ui{Import} $\rightarrow$
+\ui{Sources}, or \cmd{medorama imports list} and then \cmd{medorama imports remove ID}) and
+import the table again. The files then come in as recordings, linked to their patients and
+indexed by the workers. Importing the table again without removing the first import makes a
+second copy of the database.
+
+\paragraph{The viewers on their own.} Without Medorama, copy the program into the viewers'
+adapter folder (by default the same, \file{\textasciitilde/.local/share/medorama/adapters}, or
+their \code{adapters\_dir} setting), make it executable on Linux and macOS (\cmd{chmod 755}),
+unblock it as in step 1, and restart the viewer.
+
+\begin{xltabular}{\linewidth}{@{}P{5.6cm}L@{}}
+\caption{Problems when installing an add-on.}
+\label{tab:addons-problems}\\
+\toprule
+\tabhead Problem & \tabhead Cause and remedy \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Problem & \tabhead Cause and remedy \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\cmd{install}: \code{an adapter's program is named <name>-adapter} & The file was renamed.
+  Install the program as it came in the archive. \\
+\cmd{install}: \code{describe} fails, ``cannot be opened'', ``permission denied'' & The system
+  blocks the program. Repeat step 1 (\cmd{xattr} on macOS, \cmd{Unblock-File} on Windows), or
+  run \cmd{chmod 755}. \\
+\cmd{install}: \code{speaks protocol N; this program speaks 1} & The add-on was built for another
+  Medorama version. Ask for the release that matches yours. \\
+\cmd{addons list} shows it, but its files are still refused & The server was not restarted
+  (step 3), or it runs as another account whose \code{adapters\_dir} is elsewhere. Run
+  \cmd{medorama addons list} as that account. \\
+Recordings named by an earlier import are missing & They were skipped before the add-on was
+  installed. Remove that import and import the table again (step 4). \\
+\end{xltabular}
+
+\section{How the programs use adapters}
+\label{sec:addons-use}
+
+\begin{enumerate}
+\item \textbf{At start}, each program lists its adapter folder and asks every
+  \file{*-adapter} program to \code{describe} itself, once. When two adapters have the same
+  name, the first in name order is used.
+\item \textbf{Browsing.} A file whose extension an adapter lists is a recording of that adapter's
+  kind.
+\item \textbf{Indexing.} The program creates a temporary index folder, runs
+  \code{index FILE FOLDER} and shows the progress lines. It then adds the fields it owns
+  (\code{path}, \code{name}, \code{key}, \code{index\_version}, \code{engine},
+  \code{indexed\_s}, and \code{kind}, \code{format}, \code{adapter}) to the \file{meta.json}
+  that the adapter wrote, and renames the folder into place.
+\item \textbf{Viewing.} Envelopes, markers and vital signs come from the index. Raw samples, when
+  a view zooms in close enough, are read from the recording itself through the adapter's
+  \code{serve} session. There is one session per adapter, started at the first request and kept
+  open, and started again once if it has ended. The sessions of different adapters answer side
+  by side; one adapter's requests are answered in turn.
+\item \textbf{Identifiers} (Medorama only). The built-in action \code{identify} asks the adapter
+  for the identifiers the file states (\code{identify FILE}), and keeps them in the catalog's
+  database only (\cref{chap:administration}).
+\end{enumerate}
+Indexes written through an adapter are shared like the others: the three viewers and Medorama
+read and write the same index folders, and the three implementations of the stp-adapter write
+the same bytes.
+
+\section{The protocol}
+\label{sec:addons-protocol}
+
+This is version 1 of the protocol. Every command writes its answer on the standard output as
+JSON (UTF-8, one object per line), and its errors on the standard error, with a nonzero exit
+status. Paths are given as
+arguments, as the operating system names them.
+
+\apientry{describe}{What the adapter reads}
+\begin{lstlisting}[style=signature]
+<name>-adapter describe
+\end{lstlisting}
+Prints one object: the adapter's name, its version, the protocol version it speaks, an
+informative \code{implementation}, and its formats, each a recording kind, a label and the file
+extensions (without the dot, in lowercase). A program refuses an adapter whose \code{protocol} is
+not 1.
+\begin{lstlisting}[language=JSON]
+{"name": "stp", "version": "0.1.0", "protocol": 1, "implementation": "rs",
+ "formats": [{"kind": "stp", "label": "BedMasterEx .Stp", "extensions": ["stp"]}]}
+\end{lstlisting}
+
+\apientry{detect}{Whether files are of its formats}
+\begin{lstlisting}[style=signature]
+<name>-adapter detect PATH...
+\end{lstlisting}
+Prints one line per path: \code{\{"path": ..., "kind": "stp"\}}, with \code{kind} \code{null}
+when the file is not of its formats.
+
+\apientry{index}{Index a recording}
+\begin{lstlisting}[style=signature]
+<name>-adapter index PATH DIR
+\end{lstlisting}
+Writes the index files of the recording at \code{PATH} into the existing, empty folder
+\code{DIR}. It prints \code{\{"progress": f\}} lines (\code{f} from 0 to 1, a few per second at
+most), and then \code{\{"done": true\}}.
+
+The index follows the index format (\cref{chap:formats-reference}) in everything but the fields
+the calling program adds (\cref{sec:addons-use}, step 3): a \file{meta.json} with
+\code{channels}, \code{pieces}, \code{vitals}, \code{alarms}, \code{gaps}, \code{untimed},
+\code{marker\_names}, \code{skipped}, \code{notes}, \code{time\_resolution\_s} and
+\code{reader}, and every array file. An adapter may add keys of its own (\code{vendor}, and
+\code{description}, a sentence shown with the recording), and keep in \code{reader} whatever it
+needs to read samples later. The programs never interpret \code{reader}. An adapter that puts
+data the file stored out of order back in order lists those blocks in \code{late\_blocks}: the
+viewers do not shade them as breaks, and mark them only with their \code{qc\_verbose} setting.
+
+\apientry{identify}{The identifiers a file states}
+\begin{lstlisting}[style=signature]
+<name>-adapter identify PATH...
+\end{lstlisting}
+Prints one line per path, \code{\{"path": ..., "identifiers": \{...\} or null, "others": [\{...\},
+...]\}}, or \code{\{"path": ..., "error": "..."\}}. A set of identifiers has the fields
+\code{full\_name}, \code{last\_name}, \code{first\_name}, \code{patient\_id},
+\code{encounter\_id}, \code{birth\_date} (\code{YYYY-MM-DD}) and \code{sex}, each a string,
+empty when the file does not state it. \code{identifiers} is the first set the file states, and
+\code{others} lists the different sets found after it (at most 10). Only Medorama asks for
+identifiers. The example below is invented:
+\begin{lstlisting}[language=JSON]
+{"path": "/data/demo/rec_0001.stp", "identifiers": {"full_name": "TEST, PATIENT",
+ "last_name": "TEST", "first_name": "PATIENT", "patient_id": "SYN0001", "encounter_id": "",
+ "birth_date": "1950-01-01", "sex": "F"}, "others": []}
+\end{lstlisting}
+
+\apientry{serve}{A session for samples}
+\begin{lstlisting}[style=signature]
+<name>-adapter serve
+\end{lstlisting}
+A session on the standard input and output, until the standard input closes. Each request is one
+line of JSON:
+\begin{lstlisting}[language=JSON]
+{"op": "read", "index": "/path/to/the/index/folder", "piece": 3, "a": 1000, "b": 3500}
+\end{lstlisting}
+It asks for the physical samples \code{a} to \code{b - 1} of piece \code{piece} of the recording
+indexed in \code{index}, whose \file{meta.json} now holds the recording's \code{path}. The answer
+is one line, \code{\{"n": k\}}, followed at once by \code{k} little-endian 64-bit floats (NaN for
+the samples the recording marks missing), or one line \code{\{"error": "..."\}} with nothing
+after it. An adapter answers requests in order, may keep recordings open between them, and ends
+when its standard input closes.
+
+\apientry{-{}-version}{The adapter's version}
+\begin{lstlisting}[style=signature]
+<name>-adapter --version
+\end{lstlisting}
+Prints \code{<program> <version>} on one line.
+
+\section{Limits and environment}
+\label{sec:addons-limits}
+
+The calling program holds every adapter to the limits of \cref{tab:addons-limits}, so that a
+faulty or stuck adapter makes one recording unreadable and never holds up the program. The Rust
+engine (\file{libs/engine/src/adapters.rs}) defines them; the C++ and Python viewers apply the
+same.
+
+\begin{xltabular}{\linewidth}{@{}P{1.6cm}P{7.0cm}L@{}}
+\caption{The limits on an adapter's commands.}
+\label{tab:addons-limits}\\
+\toprule
+\tabhead Command & \tabhead Limit & \tabhead When it is exceeded \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Command & \tabhead Limit & \tabhead When it is exceeded \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{describe} & 30\,s for the whole command; at most 16\,MiB of output & The adapter is
+  stopped (killed) and not listed \\
+\code{identify} & 60\,s per path of the command; at most 16\,MiB of output. The paths are passed
+  in commands whose arguments total at most 24\,000 bytes (one path per command at least) & The
+  adapter is stopped; the identifiers are not read \\
+\code{index} & 300\,s without a line of output (a progress line resets the time), and 300\,s for
+  the adapter to exit once its output ends; lines of at most 1\,MiB. A cancelled index stops the
+  adapter within a tenth of a second & The adapter is stopped; the index fails, and nothing is
+  left in the index folder \\
+\code{serve} & 60\,s without a byte of an answer; an answer line of at most 1\,MiB. The program
+  asks for at most $2^{20}$ samples in one request and splits longer reads. The answer's
+  \code{n} must be a whole number from 0 to \code{b - a}; fewer samples than asked mean that the
+  piece ends there & The session is stopped (below) \\
+\end{xltabular}
+
+\paragraph{A session out of step is stopped.} After an answer that breaks the protocol (not a
+JSON object, an \code{n} outside \code{0 \dots{} b - a}, bytes beyond the samples announced, the
+session ending inside an answer, or no answer in time), the program stops the session and starts
+a new one at the next request; the request fails. An answer \code{\{"error": "..."\}} keeps the
+session. A session that has ended before a request is started again once for that request.
+
+\paragraph{Standard error} is read while the adapter runs, so an adapter that writes much there
+never blocks; the program keeps its last 64\,KiB and never prints them in its log. When
+\code{index} fails, the error shown with the recording ends with the last non-blank line of the
+adapter's standard error (at most 200 characters, control characters removed); when
+\code{describe} fails, the program's log shows the same line. What \code{identify} and
+\code{serve} write there is not shown at all, since it could carry identifiers.
+
+\paragraph{The environment} of an adapter is cleared, except for \code{PATH}, \code{HOME},
+\code{USERPROFILE}, \code{TMP}, \code{TEMP}, \code{TMPDIR}, \code{LANG}, the \code{LC\_*}
+variables, and on Windows \code{SYSTEMROOT}, \code{SYSTEMDRIVE}, \code{WINDIR}, \code{COMSPEC},
+\code{PATHEXT}, \code{LOCALAPPDATA} and \code{APPDATA} (names compared ignoring case on
+Windows). Medorama keeps secrets in its environment (the database password, its key); an adapter
+never sees them. An adapter must not depend on any other variable: what it needs to know comes
+in its arguments and requests.
+
+\section{Writing an adapter}
+\label{sec:addons-writing}
+
+An adapter can be written in any language. The engines' building blocks make it short in the
+three languages that the repository uses:
+\begin{itemize}
+\item \textbf{Rust.} The crates \code{recording-engine} (\code{common}, with channels, pieces,
+  envelopes and vital-sign series; and \code{index::write\_arrays}) and \code{signal-core}
+  (values and Python-compatible JSON). The test adapter of \file{libs/engine/tests/adapters.rs}
+  is an example.
+\item \textbf{C++.} The C++ project's libraries \code{vs\_engine} and \code{vs\_core}
+  (\file{engine/common.hpp}, and \file{engine/index.hpp} with \code{write\_arrays}). Add
+  \file{viewers/vitalstream/cpp} to a CMake project with \code{VS\_BUILD\_VIEWER=OFF}
+  (\cref{chap:settings-reference}).
+\item \textbf{Python.} \code{vitalstream\_py.common} and
+  \code{vitalstream\_py.index.write\_arrays}. \file{libs/engine/tests/fake\_adapter.py}, the mock
+  adapter that every engine's tests use, is an example.
+\end{itemize}
+An adapter must meet these rules:
+\begin{itemize}
+\item It writes only into the folder that \code{index} is given, and nothing at all for the other
+  commands.
+\item It never prints identifiers except in answer to \code{identify} (on standard output; never
+  on standard error), and never writes them into the index.
+\item It answers within the limits (\cref{sec:addons-limits}).
+\item Times are Unix seconds (UTC), as in the index format.
+\item The same recording gives the same index bytes every time: the index holds no time stamps of
+  the indexing and no absolute paths of temporary files.
+\item It is tested with the viewers. \cmd{viewers/vitalstream/tests/parity/index\_parity.py
+  -{}-adapters-dir DIR FILE...} indexes a recording with every built viewer through the adapter
+  and checks that the results are byte-identical.
+\end{itemize}
+
+\section{Security}
+\label{sec:addons-security}
+
+\begin{itemize}
+\item \textbf{An adapter is code that runs with the rights of the program that calls it} (the
+  catalog's service account, or a viewer's user). Install only adapters from their publisher, and
+  keep the adapter folder writable by its owner only (the default folder is in that user's home).
+\item \textbf{It reads recordings, which may hold identifiers.} It must not send anything over the
+  network, and it writes only into the index folder it is given. The stp-adapter opens no
+  network connection and writes no other file.
+\item \textbf{The identifiers it reads} (\code{identify}) go only to Medorama's database, as other
+  identifiers do (\cref{chap:users-privacy}). The index holds none.
+\item \textbf{A failing adapter} (a crash, or a malformed answer) makes the recording unreadable,
+  never the program. The indexing fails with the adapter's message, and a session that ended is
+  started again once. An adapter that stops answering is stopped after a time limit
+  (\cref{sec:addons-limits}).
+\item \textbf{It gets none of the program's secrets:} its environment is cleared except for a
+  short allow-list, and its standard error never reaches the program's log.
+\end{itemize}
+
+\section{The add-ons known}
+\label{sec:addons-known}
+
+\paragraph{The STP add-on} (\file{stp-adapter}) reads the \file{.Stp} files of BedMasterEx,
+which records the waveforms, vital signs and alarms of GE bedside monitors (Unity, Carescape) and
+Philips bedside monitors (PIICiX, Viridia). It indexes them for the viewers, reads their samples
+on demand through its \code{serve} session, and answers \code{identify} with the identifiers the
+file states. It opens no network connection and writes no file other than the index. Its three
+implementations (Rust, C++ and Python) write the same index bytes for the same file. It describes its
+format as \code{BedMasterEx .Stp}, of kind \code{stp}, with the extension \code{stp}.
+
+\begin{note}[License]
+The STP add-on is private. It is licensed separately and released, as a prebuilt program for
+their systems, to institutions under agreement. It is not part of the public repository, and
+Medorama names none of its formats: until it is installed, \file{.Stp} files are files that
+Medorama and the viewers do not read.
+\end{note}

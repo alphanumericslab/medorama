@@ -1,0 +1,910 @@
+% Part III: importing tables. Sources: docs/importing.md ("Importing tables: reference", with its
+% column reference); docs/databases.md ("Import tables", "Import a known export", "Describe your
+% own export in TOML"); docs/administration.md (Databases, Import formats, Imports and sources);
+% docs/edf.md (EDF files in imported tables). Checked against medorama/src/tables.rs (columns, synonyms,
+% rows, files), imports.rs (batches), linkage.rs (mappings, identity), categories.rs, util.rs
+% (times), formats/ (known exports), patient/files.rs (viewer hints, kinds), main.rs (commands),
+% web/index.html and web/js/views/sources.js (the page).
+\chapter{Importing tables}
+\label{chap:importing}
+
+Everything Medorama knows about patients comes from \emph{databases}. In Medorama, a database is
+either a table imported into the \emph{catalog} (Medorama's own database of patients,
+encounters, entries, users and settings) or a \emph{connected database} that Medorama reads in
+place. Most databases are tables exported from an institution's systems: an EHR's patients,
+encounters, results and notes, an ECG management system's index, a PACS index, or the bedside
+monitors' bed assignments.
+
+This chapter is the reference for importing such tables. It is written for data managers and
+for the people who prepare the exports. It states what a table must hold, how its columns are
+recognized, how its rows find their patients, how files come in with them, and how a table is
+imported, checked and removed. Other ways in are described elsewhere:
+\begin{itemize}
+\item a database that should stay where it is (an OMOP CDM instance, a research warehouse) can be
+  connected instead (\cref{chap:connecting});
+\item a CLIF folder is imported table by table (\cref{chap:clif});
+\item recordings, ECGs and images come in as files named by such tables (\cref{chap:recordings},
+  \cref{chap:ecg-imaging}).
+\end{itemize}
+The Databases tab, which shows every imported table as it came, is described in
+\cref{chap:databases-tab}.
+
+\section{The rule: databases are the only way in}
+\label{sec:importing-rule}
+
+A file (a recording, an ECG, a DICOM study, a PDF) enters the catalog only as a row of a table,
+and that row names its patient. No file can be added on its own, so no file is ever without its
+patient.
+
+Tables can come in \emph{any order}. An item whose patient or encounter no table has named yet
+\emph{waits}, and is matched as soon as another table names it. There is one exception: a row
+that names only its encounter (no \code{patient\_id}, no \code{mrn}) and holds no item, such as a
+row of a table of bed stays by encounter, needs that encounter to be known already, from an
+earlier import or an earlier line of the same table (\cref{sec:importing-rows}).
+
+An import can be undone: removing an imported database removes everything it added, and nothing
+that another import also added: the links its rows gave recordings go, and a generated patient ID
+(\code{GEN-\dots}) that its rows replaced with a patient ID comes back, unless another database
+names the patient by that ID. Only administrators import and remove databases, and every import
+and every removal is written to the audit log.
+
+An import is all or nothing. Imports run one at a time; one that starts while another runs waits
+(its progress says \emph{waiting}). On SQLite, a table is stored a chunk of rows at a time, so
+that other changes (a page's edits, the audit log) are written between its chunks; until it ends,
+its database is \emph{loading} in the imports list, and what only it adds is not shown on the
+pages, in cohorts or in exports. An import that stops part way (an error, a cancel, the server or
+the command stopped) is removed as a whole: at once, or when the catalog next starts. A CLIF
+folder is one import: a table that fails removes the folder's tables imported before it.
+
+\screenshot{import-flow.pdf}{Importing a database: a table's rows describe patients, encounters and bed stays, carry items, and name files, which become recordings or attachments.}{fig:importing-flow}
+
+\section{Table formats}
+\label{sec:importing-formats}
+
+A table is one file with one header row (\cref{tab:importing-formats}). Several files with the
+same columns can make one database (\cref{sec:importing-cli}).
+
+\begin{table}[htbp]
+\caption{What a table may be.}
+\label{tab:importing-formats}
+\begin{tabularx}{\linewidth}{@{}P{2.8cm}L@{}}
+\toprule
+{\tabhead Property} & {\tabhead Rule} \\
+\midrule
+Kinds & CSV (comma-separated, UTF-8, with or without a byte-order mark), Parquet (in the page
+  and by \cmd{medorama import-table}), Excel
+  (\file{.xlsx}, \file{.xls}) and OpenDocument (\file{.ods}). Of a spreadsheet, only the first
+  sheet is read, and a spreadsheet larger than 100\,MB is refused (it is read whole: save a
+  larger table as CSV). The kind is recognized from the file's first bytes, not its name. \\
+Encoding and separator & A file whose columns are separated by semicolons or tabs, a UTF-16
+  file, and a file that is not UTF-8 (Latin-1, Windows-1252) are refused, with a message that
+  says which; they are not guessed at, so that no text is read wrongly. Save the table as CSV in
+  UTF-8 (``CSV UTF-8'' in Excel). \\
+Header & The first row: one name per column. Names are matched ignoring case, spaces and
+  punctuation (\code{Test Name}, \code{test\_name} and \code{TESTNAME} are the same). When two
+  columns would be read as the same catalog field (\code{value,value}), the first is; the other
+  is kept as imported only, and the report says so. \\
+Rows & One row per patient, encounter, bed stay, result, note or file, or several of these at
+  once: one row may describe a patient, the patient's encounter and a result. Empty rows are
+  skipped. \\
+Cells & Text or numbers. Leading and trailing spaces are removed, and an empty cell means ``no
+  value''. In a spreadsheet, dates are written as \code{YYYY-MM-DD HH:MM:SS} (or
+  \code{YYYY-MM-DD} at midnight) and read in the catalog's time zone, and whole numbers have no
+  decimal point. \\
+Size & Up to 1\,GiB per upload in the page. The command line has no limit: a CSV or Parquet file
+  is read row by row, 5000 rows at a time, so a table of millions of rows needs little memory. A
+  spreadsheet is read whole. \\
+Kept as imported & Every cell is kept under its column's own name. The Databases tab shows the
+  table as it came (\cref{chap:databases-tab}), and removing the database removes everything it
+  added. A table of more than 500 columns is kept whole too; criteria on its columns read its
+  cells (slower) rather than a table of its numbers. \\
+Warnings & A row that cannot be read is named by its line in its file (\code{line 12};
+  \code{b.csv, line 12} for a database of several files). \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Column names are never changed. A column that the catalog does not recognize is kept and shown
+with the table under its own name. Such a column is one of the \emph{database's own columns},
+which the import lists and which cohorts can search (\cref{chap:cohorts}). For a table converted
+by an import format (\cref{sec:importing-known}), the columns kept are the converted ones.
+
+\section{Columns the catalog recognizes}
+\label{sec:importing-columns}
+
+The catalog has a fixed set of columns, the \emph{catalog fields}, in six groups
+(\cref{tab:importing-columns}). A table's column is read as one of them when its name is one that
+the catalog recognizes, or when it is mapped to it by hand (\cref{sec:importing-mappings}). Each
+catalog field takes at most one of the table's columns, and each of the table's columns goes to
+at most one catalog field.
+
+Names are compared in lower case, after removing everything but letters and digits.
+\Cref{tab:importing-columns} writes the names that way: \code{Patient ID}, \code{patient\_id} and
+\code{PATIENTID} are all \code{patientid}. The catalog first looks for each field by its own name
+(\code{patient\_id}, \code{bed\_start} and so on), and then by the other names, so that a column
+\code{note\_type} meant for \code{name} is not taken by another field first. A column named
+\code{unit}, in a table that also has a \code{bed} column and neither a \code{value} nor a
+\code{care\_unit} column, is read as the care unit. \Cref{tab:importing-columns} is the complete
+list (\code{GROUPS} and \code{SYNONYMS} in \file{medorama/src/tables.rs}).
+
+\begin{xltabular}{\linewidth}{@{}P{3.0cm}P{5.4cm}L@{}}
+\caption{The catalog's columns and the names that recognize them (lower case, letters and
+digits only).}
+\label{tab:importing-columns}\\
+\toprule
+\tabhead Catalog column & \tabhead Recognized names & \tabhead Meaning \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Catalog column & \tabhead Recognized names & \tabhead Meaning \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\multicolumn{3}{@{}l}{\textbf{Patient}} \\
+\code{patient\_id} & \code{patientid}, \code{patient}, \code{subjectid}, \code{subject},
+  \code{pid}, \code{personid} & The institution's or the study's patient ID \\
+\code{mrn} & \code{mrn}, \code{medicalrecordnumber}, \code{medrecno}, \code{mrno} & The medical
+  record number\phimark \\
+\code{mrn\_authority} & \code{mrnauthority}, \code{authority}, \code{assigningauthority} & The
+  system that issued the MRN, when there are several \\
+\code{last\_name} & \code{lastname}, \code{surname}, \code{familyname} & The family
+  name\phimark \\
+\code{first\_name} & \code{firstname}, \code{givenname} & The given name\phimark \\
+\code{birth\_date} & \code{birthdate}, \code{dob}, \code{dateofbirth} & The date of
+  birth\phimark \\
+\code{sex} & \code{sex}, \code{gender} & \code{F}, \code{M}, or as written \\
+\addlinespace
+\multicolumn{3}{@{}l}{\textbf{Encounter}} \\
+\code{encounter\_id} & \code{encounterid}, \code{encounter}, \code{visitid}, \code{visit},
+  \code{admissionid}, \code{hadmid}, \code{stayid} & A visit or a stay \\
+\code{csn} & \code{csn}, \code{accountnumber}, \code{account}, \code{fin} & The account or
+  financial number\phimark \\
+\code{admit\_time} & \code{admittime}, \code{admit}, \code{admissiontime}, \code{admitted},
+  \code{admitdate}, \code{admissiondate} & The start of the stay \\
+\code{discharge\_time} & \code{dischargetime}, \code{discharge}, \code{dischtime},
+  \code{discharged}, \code{dischargedate} & The end of the stay \\
+\code{admit\_unit} & \code{admitunit}, \code{admissionunit} & The unit of admission \\
+\code{disposition} & \code{disposition}, \code{dischargedisposition} & Where the patient went \\
+\addlinespace
+\multicolumn{3}{@{}l}{\textbf{Location (a bed stay)}} \\
+\code{care\_unit} & \code{careunit}, \code{ward}, \code{location} & The unit. The stays in an
+  intensive-care unit make the ICU column \\
+\code{bed} & \code{bed}, \code{bedlabel} & The bed \\
+\code{bed\_start} & \code{bedstart}, \code{intime}, \code{transferin} & When the patient arrived
+  in the bed \\
+\code{bed\_end} & \code{bedend}, \code{outtime}, \code{transferout} & When the patient left it \\
+\code{recording\_file} & \code{recordingfile}, \code{recording}, \code{recordingname} & A bed
+  stay's recording, by its file name or path (ignoring case). It links that recording to the
+  encounter directly, instead of by bed and time (\cref{chap:recordings}) \\
+\addlinespace
+\multicolumn{3}{@{}l}{\textbf{Item}} \\
+\code{category} & \code{category}, \code{kind} & The item's column on the patient page
+  (\cref{sec:importing-categories}) \\
+\code{name} & \code{name}, \code{test}, \code{testname}, \code{item}, \code{parameter},
+  \code{label}, \code{drug}, \code{medication}, \code{description}, \code{notetype},
+  \code{type}, \code{study} & What was measured, given or written \\
+\code{time} & \code{time}, \code{datetime}, \code{charttime}, \code{date}, \code{timestamp},
+  \code{resulttime}, \code{collected}, \code{performed}, \code{starttime}, \code{start} & When
+  it happened (\cref{sec:importing-times}) \\
+\code{end\_time} & \code{endtime}, \code{end}, \code{stop}, \code{stoptime} & When it ended (a
+  drug, a support) \\
+\code{value} & \code{value}, \code{result}, \code{valuenum}, \code{resultvalue}, \code{dose},
+  \code{amount}, \code{measurement} & A number, or a text result \\
+\code{unit} & \code{unit}, \code{units}, \code{uom}, \code{valueuom} & The value's unit \\
+\code{ref\_low} & \code{reflow}, \code{low}, \code{lower}, \code{normallow}, \code{rangelow} &
+  The low end of the normal range \\
+\code{ref\_high} & \code{refhigh}, \code{high}, \code{upper}, \code{normalhigh},
+  \code{rangehigh} & The high end of the normal range \\
+\code{flag} & \code{flag}, \code{abnormal}, \code{abnormalflag} & Abnormal or critical
+  (\cref{sec:importing-rows}) \\
+\code{code} & \code{code}, \code{icd}, \code{icd10}, \code{cpt}, \code{loinc}, \code{ndc},
+  \code{rxnorm} & A code (ICD-10, LOINC and so on) \\
+\code{vocabulary} & \code{vocabulary}, \code{codesystem}, \code{system} & The code's
+  vocabulary \\
+\code{text} & \code{text}, \code{note}, \code{notetext}, \code{report}, \code{reporttext},
+  \code{interpretation}, \code{comment}, \code{comments}, \code{body}, \code{impression},
+  \code{reaction}, \code{finding}, \code{findings}, \code{conclusion} & A note's or a report's
+  text. It is free text, which may name the patient\phimark \\
+\code{author} & \code{author}, \code{provider}, \code{clinician}, \code{physician} & Who wrote
+  it \\
+\code{service} & \code{service}, \code{department}, \code{specialty} & The service \\
+\code{domain} & \code{domain} & \code{measurement}, \code{drug}, \code{observation},
+  \code{condition}, \code{procedure} or \code{note}; otherwise taken from the category \\
+\addlinespace
+\multicolumn{3}{@{}l}{\textbf{File}} \\
+\code{file} & \code{file}, \code{path}, \code{filepath}, \code{image}, \code{link},
+  \code{filename} & A recording or an attachment (\cref{sec:importing-files}) \\
+\addlinespace
+\multicolumn{3}{@{}l}{\textbf{Other}} \\
+\code{source} & \code{source} & The row's source label, which overrides the import's
+  \opt{-{}-source} for that row (\cref{sec:importing-batches}) \\
+\end{xltabular}
+
+\paragraph{Measurement columns.} A column of the database's own becomes a \emph{measurement
+column}, a number that cohorts can search and compare in its unit (\code{QT > 0.4 s}), in two
+cases:
+\begin{itemize}
+\item its name carries a unit in round or square brackets (\code{QT (ms)}, \code{LVEF (\%)},
+  \code{Lactate [mmol/L]}); the unit is the text in the last pair of brackets, at most 12
+  characters;
+\item its name is a known ECG measurement on its own, in its usual unit: \code{Vent. rate},
+  \code{Ventricular rate}, \code{Atrial rate}, \code{Heart rate} and \code{HR} are in bpm;
+  \code{PR}, \code{QRS}, \code{QT}, \code{QTc}, \code{QTcB}, \code{QTcF} and \code{RR} in ms;
+  \code{P axis}, \code{R axis}, \code{QRS axis} and \code{T axis} in degrees.
+\end{itemize}
+These rules are \code{measure\_column} and the list \code{MEASURES} in
+\file{medorama/src/tables.rs}.
+
+\section{How a row is read}
+\label{sec:importing-rows}
+
+Each row may carry, in any combination, a patient, an encounter with a bed stay, an item and a
+file. Medorama reads a row as follows.
+\begin{itemize}
+\item \textbf{A patient or an encounter} is read from a row that names a patient
+  (\code{patient\_id} or \code{mrn}) and either describes the patient or the encounter (a name,
+  a date of birth, the sex, an admission or a discharge, a unit, a disposition, a bed stay, a
+  recording file) or holds nothing else (a row of a linkage table). The rules are those of
+  \cref{sec:importing-patients}.
+\item \textbf{A bed stay by its encounter.} A row that names an encounter but no patient (no
+  \code{patient\_id}, no \code{mrn}) and describes the encounter, as in a table of bed stays by
+  encounter, belongs to the encounter's patient. When the row holds no item, that encounter must
+  already be in the catalog, or on an earlier line of the same table. Otherwise the row is
+  refused (\code{line N: no encounter E (import its encounters first)}).
+\item \textbf{An item} is read from a row that has a \code{name}, a \code{value}, a \code{text}
+  or a \code{file}, and a key: \code{patient\_id}, \code{mrn}, \code{encounter\_id} or
+  \code{csn}. A row without a key is refused (\code{no patient\_id, mrn, encounter\_id or csn}).
+  The item's name is its \code{name}; otherwise, for a file, the file's name without its
+  extension; otherwise the category's label.
+\item \textbf{Values.} A \code{value} that is a number (\code{4.1}, \code{-2}, \code{1e3}) is
+  stored as a number and can be compared in cohorts; any other value (\code{positive},
+  \code{<0.5}) is stored as text. \code{ref\_low} and \code{ref\_high} give the normal range and
+  must be numbers. A \code{flag} of \code{HH}, \code{LL}, \code{C}, \code{crit},
+  \code{critical}, \code{panic}, \code{AA} or \code{!} marks the value critical (shown in
+  orange). A flag of \code{H}, \code{L}, \code{A}, \code{abn}, \code{abnormal}, \code{high},
+  \code{low}, \code{pos}, \code{positive}, \code{R}, \code{resistant} or \code{detected} marks
+  it abnormal (shown in amber), as does a value outside its range. Flags are compared ignoring
+  case.
+\item \textbf{Units.} Write the unit as the source system does (\code{mmol/L}, \code{mg/dL},
+  \code{bpm}). Cohorts compare values in the unit that a criterion names, converting between
+  units where they can.
+\item \textbf{Duplicates.} A row identical to an item already stored is not stored again. The
+  item is then held by both databases, and stays while either of them does.
+\item \textbf{Refused rows.} A row whose time or range cannot be read is refused, with its line
+  number and the reason (\code{line 12: not a time: "..."}), and the other rows are imported.
+  The report shows at most 50 such warnings.
+\end{itemize}
+
+\Cref{tab:importing-smallest} lists the smallest table of each kind. Any other recognized column
+may be added.
+
+\begin{table}[htbp]
+\caption{The smallest table of each kind.}
+\label{tab:importing-smallest}
+\begin{tabularx}{\linewidth}{@{}P{3.3cm}P{4.2cm}L@{}}
+\toprule
+{\tabhead Table} & {\tabhead Required columns} & {\tabhead Usual additions} \\
+\midrule
+Patients & \code{patient\_id} or \code{mrn} & \code{last\_name}, \code{first\_name},
+  \code{birth\_date}, \code{sex}, \code{mrn\_authority} \\
+Encounters & \code{encounter\_id}, and \code{patient\_id} or \code{mrn} & \code{admit\_time},
+  \code{discharge\_time}, \code{admit\_unit}, \code{disposition}, \code{csn} \\
+Bed stays & \code{encounter\_id}, \code{care\_unit}, \code{bed\_start} & \code{bed},
+  \code{bed\_end}, \code{recording\_file} \\
+Results, vital signs, drugs, diagnoses & \code{patient\_id} or \code{mrn}; \code{name};
+  \code{time} & \code{encounter\_id}, \code{value}, \code{unit}, \code{ref\_low},
+  \code{ref\_high}, \code{flag}, \code{code}, \code{vocabulary}, \code{category} \\
+Notes and reports & \code{patient\_id} or \code{mrn}; \code{time}; \code{text} & \code{name} (the
+  note's type), \code{author}, \code{service}, \code{encounter\_id} \\
+Medications & \code{patient\_id} or \code{mrn}; \code{name}; \code{time}; the category
+  \code{med} & \code{end\_time}, \code{value} and \code{unit} (the dose), \code{code},
+  \code{vocabulary} (RxNorm) \\
+Conditions, procedures, allergies & \code{patient\_id} or \code{mrn}; \code{name}; the category
+  \code{dx}, \code{proc} or \code{allergy} & \code{code}, \code{vocabulary}, \code{time},
+  \code{end\_time}; for an allergy, \code{text} (the reaction) \\
+Files (recordings, ECGs, imaging, documents) & \code{patient\_id} or \code{mrn}; \code{file} &
+  \code{time}, \code{encounter\_id}, \code{category}, measurement columns (\code{QTc (ms)}), the
+  bed columns \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Categories}
+\label{sec:importing-categories}
+
+Each item falls into a \emph{category}, which is its column in the Patient Journey and its group
+in the report (\cref{chap:patients}). The categories follow the way a physician reads a chart,
+not the systems the data came from: one database may fill several categories, and several
+databases one. An item's category is decided in this order:
+\begin{enumerate}
+\item the category that its row's \code{category} column names;
+\item otherwise, the category chosen for the table: \opt{-{}-category} on the command line,
+  \ui{Kind of data} or \ui{Items are} in the page, or the category of the table's import format;
+\item otherwise, the category that the table's file name or column names suggest: the first word
+  of the file name (words of two letters or more), or the first column name, that names a
+  category (\file{labs.csv}, \file{ecg\_index.csv}, \file{sleep\_index.csv});
+\item otherwise, a category from its domain: a \code{drug} is Medications, a \code{condition}
+  Conditions, a \code{procedure} Procedures, a \code{note} Notes and an \code{observation}
+  Assessments. A measurement named like a vital sign (\code{HR}, \code{heart rate},
+  \code{SpO2}, \code{temp}, \code{SBP}, \code{MAP}, \code{NBP}, \code{blood pressure},
+  \code{EtCO2}, \code{CVP}, \code{weight}, \code{height} and so on) is Vitals, and any other is
+  Labs.
+\end{enumerate}
+A category is named by its key, its label or one of its words (\cref{tab:importing-categories}),
+in any letter case. The same words find a category in the patient page's search. The list is
+\code{CATEGORIES} in \file{medorama/src/categories.rs}.
+
+The \emph{recording categories} are ICU (\code{icu}), Holter (\code{holter}), EEG (\code{eeg})
+and Sleep (\code{sleep}). Their files are recordings, indexed in the background and opened in
+VitalStream. The files of the other categories are attachments of their item, opened by that
+category's viewer (\cref{sec:importing-files}).
+
+\begin{xltabular}{\linewidth}{@{}P{1.4cm}P{2.3cm}L@{}}
+\caption{The categories: their keys, labels and the words that name them.}
+\label{tab:importing-categories}\\
+\toprule
+\tabhead Key & \tabhead Label & \tabhead Words \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Key & \tabhead Label & \tabhead Words \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{icu} & ICU & icu, intensive care, critical care, monitoring, bedside monitoring, waveforms,
+  bedmaster \\
+\code{vit} & Vitals & vit, vital, vitals, vital signs, vital sign, flowsheet \\
+\code{lab} & Labs & lab, labs, laboratory, chemistry, hematology, coagulation, blood gas, blood
+  gases \\
+\code{micro} & Microbiology & micro, microbiology, culture, cultures, sensitivity,
+  sensitivities \\
+\code{path} & Pathology & path, pathology, biopsy, biopsies, cytology, histology \\
+\code{ecg} & ECG & ecg, ekg, 12-lead, 12 lead, electrocardiogram, muse \\
+\code{holter} & Holter & holter, ambulatory ecg, event monitor, patch monitor \\
+\code{eeg} & EEG & eeg, electroencephalography, electroencephalogram, neurophysiology, ieeg,
+  seeg \\
+\code{sleep} & Sleep & sleep, sleep study, sleep studies, polysomnography, psg \\
+\code{echo} & Echo & echo, echocardiography, echocardiogram, tte, tee \\
+\code{cath} & Cath lab & cath, cath lab, catheterization, cardiac catheterization, angiography,
+  angiogram, coronary angiography, xa, ivus, oct, pci \\
+\code{img} & Imaging & imaging, img, radiology, ct, mri, x-ray, xray, ultrasound, dicom, pacs \\
+\code{proc} & Procedures & proc, procedure, procedures, surgery, operation, operations, cpt \\
+\code{med} & Medications & med, meds, medication, medications, drug, drugs, mar, pharmacy \\
+\code{blood} & Transfusions & blood, transfusion, transfusions, blood product, blood products,
+  blood bank \\
+\code{support} & Life support & support, life support, ventilation, ventilator, respiratory
+  support, dialysis, crrt, ecmo \\
+\code{dx} & Conditions & dx, condition, conditions, diagnosis, diagnoses, problem, problems,
+  problem list, icd \\
+\code{obs} & Assessments & obs, observation, observations, assessment, assessments, score,
+  scores \\
+\code{note} & Notes & note, notes, clinical note, clinical notes, document, documents, report,
+  reports \\
+\code{allergy} & Allergies & allergy, allergies, intolerance, intolerances (shown with the
+  patient, not as a journey column) \\
+\end{xltabular}
+
+\section{How rows find their patients}
+\label{sec:importing-patients}
+
+The catalog keeps one patient one patient across databases, in the way of a master patient
+index: what each database said is kept, the catalog's view is computed from it, and decisions
+are kept apart from the data (\cref{chap:administration}). Rows find their patients by the
+following rules.
+\begin{itemize}
+\item \textbf{A patient} is named by \code{patient\_id} (or by an ID that was merged into another
+  one), otherwise by an MRN of the same authority (\code{mrn\_authority}). A patient ID is
+  compared exactly, as text; MRNs are compared ignoring case and surrounding spaces, and an
+  empty authority is the catalog's default one. Give \code{mrn\_authority} whenever MRNs from
+  different systems could collide. A row with an MRN but no \code{patient\_id} gets a
+  pseudonymous ID from the catalog (\code{GEN-000001} and so on), which stays the same for that
+  MRN after any removal and new import, and is never given to another patient. Names, date of
+  birth and sex describe a patient; they never identify one on their own.
+\item \textbf{Values.} Each field shows the newest batch's value, and removing that batch brings
+  back the previous one. A patient may have MRNs of several authorities.
+\item \textbf{An encounter} is named by \code{encounter\_id} (otherwise by \code{csn}) and
+  belongs to the row's patient. An encounter belongs to one patient: a row that gives it to
+  another patient is held back for review.
+\item \textbf{An item} (a result, a note, a file) is matched by the first key it has: its
+  encounter (\code{encounter\_id}, otherwise \code{csn}), or else its patient (\code{mrn},
+  otherwise \code{patient\_id}) and its time, which select the patient's encounter whose stay
+  covers that time. An item of a known patient outside every encounter stays with the patient.
+  An item that no database names yet waits, and is matched when one does.
+\item \textbf{Recordings} also find their encounters by bed and time, by \code{recording\_file},
+  or by their BedMaster file names (\code{UNIT\_BED-<time>}; \cref{chap:recordings}).
+\item \textbf{Possible duplicates} (two IDs for one person) are listed in \ui{Review}, where an
+  administrator with the PHI permission merges them or marks them as different people.
+\end{itemize}
+
+\paragraph{Held-back rows.} A row that contradicts the catalog is \emph{held back}: it is kept,
+with a warning, for the \ui{Review} tab, and counted as a conflict in the preview
+(\cref{tab:importing-held}). The catalog never reassigns a patient on its own on the strength of
+an MRN. A merge moves the patient's encounters, MRNs, values, items and sources to the other
+patient, and later rows that name the merged ID go to the other patient. A merge cannot be
+undone.
+
+\begin{table}[htbp]
+\caption{Why a row is held back, and what applying it in Review does.}
+\label{tab:importing-held}
+\begin{tabularx}{\linewidth}{@{}LL@{}}
+\toprule
+{\tabhead Problem} & {\tabhead Applying it} \\
+\midrule
+Its \code{patient\_id} and MRN belong to two different patients & Merges the MRN's patient into
+  the ID's patient \\
+Its MRN belongs to a patient with another \code{patient\_id} & Records the two IDs as one
+  person \\
+The patient already has another MRN of the same authority & Adds the MRN \\
+Its encounter belongs to another patient & Moves the encounter (with its items) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{Times and time zones}
+\label{sec:importing-times}
+
+Times are read as \cref{tab:importing-times} describes, in this order. A time without an offset
+is local time in the catalog's time zone, the setting \code{timezone} of \file{medorama.toml}
+(default \code{America/New\_York}; \cref{chap:settings-reference}). Set it before the first
+import, because it decides how every local time is read (\code{parse\_time} in
+\file{medorama/src/util.rs}).
+
+\begin{table}[htbp]
+\caption{The times a table may hold.}
+\label{tab:importing-times}
+\begin{tabularx}{\linewidth}{@{}P{6.8cm}L@{}}
+\toprule
+{\tabhead Written} & {\tabhead Read as} \\
+\midrule
+\code{1709381400} (only a number greater than $10^8$; a smaller one is not a time, and one of
+  $10^{11}$ or more is refused: it counts milliseconds) & Unix seconds \\
+\code{2024-03-02T07:10:00-05:00}, \code{2024-03-02T12:10:00Z},
+  \code{2024-03-02 12:10:00+00:00} & That moment: the offset or \code{Z} is used, and a space
+  may replace the \code{T} \\
+\code{2024-03-02 07:10:00}, \code{2024-03-02T07:10:00} (with or without fractions of a
+  second), \code{2024-03-02 07:10}, \code{2024-03-02T07:10}, \code{03/02/2024 07:10:00},
+  \code{03/02/2024 07:10}, \code{02.03.2024 07:10} & Local time \\
+\code{2024-03-02}, \code{03/02/2024}, \code{02.03.2024} & Local midnight \\
+Excel and OpenDocument dates & As the spreadsheet stores them, in local time \\
+A Parquet timestamp & An instant (\code{isAdjustedToUTC}), or a local time in the catalog's
+  time zone when the column says it is not adjusted to UTC \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+A date with slashes is read in the order the catalog writes its dates (\ui{Admin}
+$\rightarrow$ \ui{Dates and times}): day first (\code{03/02/2024} is February 3) when they are
+written day/month/year, else month first, the American way (\code{03/02/2024} is March 2).
+Choose that setting before importing tables with such dates. A date with dots
+(\code{02.03.2024}) is always day first. A year has its four digits: \code{03/02/24} is refused
+(\code{write the year with its four digits}), never read as the year 24. A time before 1900 or
+after 2200 is refused, and a date of birth before 1880 or in the future. CLIF's times are UTC: a
+CLIF table's time written without an offset is read as UTC, not in the catalog's time zone.
+
+A local time that a
+daylight-saving change skips (02:30 on the day the clocks go forward) is read with the offset in
+force after the change. In New York, 02:30 on March 10, 2024 is read as
+\code{2024-03-10T02:30-04:00}, the moment shown as 01:30. Anything else is not a time, and the
+row is refused. A date of birth is written \code{YYYY-MM-DD}, \code{MM/DD/YYYY} or
+\code{YYYYMMDD}.
+
+\section{Files}
+\label{sec:importing-files}
+
+\paragraph{Where.} A \code{file} cell holds a path to a file or a folder. On the command line, a
+relative path is read from the table's folder; for a table uploaded in the page, it is read from
+the server's working folder, so give absolute paths in tables meant for the page. When the
+setting \code{data\_roots} names folders (the \emph{data roots}), every file must lie inside one
+of them. An empty \code{data\_roots}, the default, allows any folder; on a server that holds real
+data, set it. A file outside the data roots, or one that does not exist, is left out with a
+warning (``no such file'', ``is outside the configured data\_roots''), and the rest of the row
+is imported. Files are read where they are, never copied, moved or written, and they are shown
+only to users who may see the patient.
+
+\paragraph{What they become.} What a file becomes depends on the row's category, or else the
+table's (\cref{tab:importing-files}).
+\begin{itemize}
+\item \textbf{A recording}, when the category is a recording category (ICU, Holter, EEG or
+  Sleep) or when neither the row nor the table names one, and the file is one that Medorama can
+  read as a recording:
+  \begin{itemize}
+  \item a WFDB record (its \file{.hea} file; a multi-segment record is taken whole). A WFDB
+    header brings in that record only;
+  \item a folder. A folder is itself the recording when it is a WFDB folder (one that holds
+    WFDB records itself, a \file{.hea} or a \file{RECORDS} file, or an \file{index.csv}, which
+    makes it a WFDB collection), read with its subfolders as one session. Any other folder adds
+    only the recordings directly inside it (WFDB records, WFDB folders, files that an add-on
+    reads; hidden names are skipped), and a subfolder that is not itself a WFDB folder is not
+    searched;
+  \item an EDF, EDF+, BDF or BDF+ file (\file{.edf} or \file{.bdf}, in any letter case);
+  \item a file of a format that an installed add-on reads, such as BedMasterEx \file{.Stp}
+    files with stp-adapter (a private add-on, available to institutions under agreement).
+  \end{itemize}
+  Recordings are added to the catalog, linked to the row's encounter, indexed in the background
+  and shown in VitalStream (\cref{chap:recordings}). They take the row's category, and ICU when
+  none is given. A recording reaches its patient's page through an encounter: give the row's
+  \code{encounter\_id}, or let the recording find its encounter by bed and time. A recording
+  that belongs to no encounter is kept in the catalog's list of recordings but is shown on no
+  patient's page; a row that names a recording with its patient but no \code{encounter\_id} says
+  so in the import report (\code{names no encounter\_id: it is linked only by its bed and time,
+  else to no patient}). The encounter a row gives its recording is a link of the import (method
+  \code{file}), not a decision by hand: removing the import removes the link, and a decision made
+  by hand in \ui{Review} wins over it.
+\item \textbf{Nothing}, when such a row names a file that is neither a recording that Medorama
+  reads nor a file that a viewer opens (for example a format read by an add-on that is not
+  installed). The row is left out with a warning (\code{line N: FILE: not a recording Medorama
+  reads. A format read by an add-on needs it installed \dots}), and nothing of it is kept. Once
+  the add-on is installed, remove that import and import the table again (\cref{chap:addons}).
+\item \textbf{An attachment} of the row's item in every other case, opened by the category's
+  viewer. For example, an EDF file whose row has the category \code{ecg} is an attachment, which
+  the ECG viewer opens.
+\end{itemize}
+
+\begin{table}[htbp]
+\caption{What a row's file becomes, by category.}
+\label{tab:importing-files}
+\begin{tabularx}{\linewidth}{@{}P{2.6cm}LP{2.6cm}@{}}
+\toprule
+{\tabhead Category} & {\tabhead Files} & {\tabhead Opened in} \\
+\midrule
+ICU, Holter, EEG, Sleep (or none) & WFDB records, folders of records and collections; EDF, EDF+,
+  BDF and BDF+ files; formats read by add-ons, such as BedMasterEx \file{.Stp} with
+  stp-adapter & VitalStream, as a recording \\
+ECG & A WFDB header with its signal files, GE MUSE XML, a DICOM ECG, an EDF or BDF file, the
+  ECG viewer's JSON form, a picture (PNG, JPEG), a PDF & The ECG viewer \\
+Echo, Cath lab, Imaging & DICOM files (with or without an extension), a DICOM series' folder,
+  videos, pictures (a folder of them, with a frame rate, is one loop), PDF & The PACS viewer \\
+Any other & A picture, a PDF, a video, a text file & The entry's detail, on the patient page \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{In Privacy Mode,} the privacy gate sends only the files it can de-identify or mark:
+WFDB headers and \file{.dat} signal files, GE MUSE XML, DICOM, EDF and BDF files, pictures,
+videos and PDF. It refuses the rest: JSON ECGs, text files, and signal files with an extension
+other than \file{.dat} (\code{file\_kind} in \file{medorama/src/gate.rs};
+\cref{sec:protecting-files}, \cref{sec:ecg-imaging-privacy}).
+
+\paragraph{Hints for the viewers.} Columns of the same row tell the viewers what a picture or a
+video does not say: its scale (\code{pixel spacing (mm)}, \code{mm per pixel},
+\code{pixel size (cm)} and so on) and its frame rate (\code{fps}, \code{frame rate (fps)},
+\code{frame rate (Hz)}). The first positive number of each kind counts, and a unit other than
+those of \cref{tab:ecg-imaging-hints} is ignored. \Cref{chap:ecg-imaging} describes these hints,
+and the databases of ECGs and of DICOM studies that \cmd{muse-py index} and \cmd{dicom-py index}
+write from the files themselves.
+
+\section{Import formats}
+\label{sec:importing-known}
+
+A known export is recognized by its columns and converted as it is imported. The rows stored are
+the converted ones, and the import records its format. On the command line, \opt{-{}-format}
+chooses \code{auto} (the default: recognized by its columns), \code{none} (the table as it is),
+or a format's key. In the page, \ui{Format} does the same (\ui{Recognize it from its columns} by
+default), and a table recognized as a known export is labeled with that format. The built-in
+formats are listed in \cref{tab:importing-known}. \cmd{medorama formats} lists them all, with the
+format files it could not read, and so does the \ui{Import formats} card of the \ui{Import} tab.
+
+\begin{table}[htbp]
+\caption{The built-in import formats.}
+\label{tab:importing-known}
+\begin{tabularx}{\linewidth}{@{}P{3.4cm}L@{}}
+\toprule
+{\tabhead Format} & {\tabhead What it is, and what it becomes} \\
+\midrule
+\code{ge-muse} & GE MUSE ECG metadata, with one row per resting 12-lead ECG and the elements of
+  its XML file as columns (\code{PatientDemographics/PatientID},
+  \code{RestingECGMeasurements/QTCorrected} and so on). It is recognized by its columns. Each row
+  becomes an ECG with its file linked and its patient found by MRN; the measurements become
+  columns with their units (\code{QTc (ms)}), and the confirmed and computer statements become
+  text. Staff, visit numbers, rooms, beds and the beat list are left out. \\
+\code{ge-muse-patient-id} & The same, with the patient found by a patient ID (a research ID, not
+  an MRN). It is never recognized on its own: name it with \opt{-{}-format}. \\
+\code{clif-\dots} & One format per table of CLIF, the Common Longitudinal ICU data Format, in CSV
+  or Parquet (\cref{chap:clif}). \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{A site's own formats.} A site describes its own exports in TOML files, one per format
+(\file{<key>.toml}), in a folder of the setting \code{formats\_dirs} (default
+\file{<home>/formats}). No code and no new build are needed. For example:
+\begin{lstlisting}[language=TOML]
+key = "acme-ecg"                  # --format acme-ecg
+label = "ACME ECG export"
+category = "ecg"
+detect = ["EcgFile", "PatId", "AcqDate"]   # recognized when a table has all these columns
+required = ["mrn", "file"]        # rows with these empty are left out (counted)
+
+[[column]]
+name = "mrn"                      # a catalog column, or one of the database's own
+from = "PatId"
+[[column]]
+name = "time"
+from = "AcqDate"
+date = "%m-%d-%Y"                 # read in this form, written as ISO 8601
+time_from = "AcqTime"
+time = "%H:%M:%S"
+[[column]]
+name = "QTc (ms)"                 # a measurement: its unit in its name
+from = "QTc"
+number = true
+[[column]]
+name = "interpretation"
+join = "Statement/{n}/Text"       # numbered columns, in order, joined
+\end{lstlisting}
+A column that a format does not describe is left out, so a format keeps only what it names. It
+should not keep identifying columns other than the patient's (staff, account numbers).
+\cmd{medorama formats -{}-check FILE} checks a format file before it is installed. Every key of
+such a file is described in \file{medorama/src/formats/declared.rs}, and a worked example is in
+the repository's \file{docs/databases.md} (``Describe your own export in TOML''). An export that
+a description cannot express needs a converter written in Rust (\cref{sec:readers-add}).
+
+\section{Column mappings}
+\label{sec:importing-mappings}
+
+A table whose columns have other names is read through a \emph{mapping}, which pairs each catalog
+field with the table's header that holds it.
+
+\paragraph{In the page,} each catalog field has a drop-down list of the table's headers, filled
+in from the names that the catalog recognizes. Change any of them. \ui{Save mapping as\dots}
+keeps the mapping under a name, and the \ui{saved mapping\dots} list chooses it again for the
+next export of the same kind.
+
+\paragraph{On the command line,} \opt{-{}-mapping FILE} gives a mapping in TOML, either under
+\code{[columns]} or at the top level of a file that holds nothing else:
+\begin{lstlisting}[language=TOML]
+# mapping.toml: catalog column = the table's header
+[columns]
+patient_id = "PAT_ID"
+mrn = "Hosp No"
+encounter_id = "PAT_ENC_CSN_ID"
+name = "Analyte"
+value = "Res"
+time = "Specimen taken"
+\end{lstlisting}
+A mapping can also be written in JSON, as one object: \code{\{"mrn": "Hosp No", "name":
+"Analyte"\}}. Headers are matched ignoring case, and a key that is not a catalog field is an
+error. With a mapping, the other names of \cref{tab:importing-columns} are not looked for. A
+header is read as a catalog field only if the mapping names it for that field, or if the header
+is that field's own name, ignoring case (\code{mrn}, \code{TIME}, \code{patient\_id}), and the
+mapping names no other header for that field. Columns that are not mapped are kept as the
+database's own columns, and the import lists them.
+
+\section{Importing in the page}
+\label{sec:importing-page}
+
+\screenshot{import.png}{The Import tab's Add a database card, with Import tables chosen.}{fig:importing-page}
+
+Administrators import tables in \ui{Import} $\rightarrow$ \ui{Databases}, in the card \ui{Add a
+database}, with the choice \ui{Import tables}:
+\begin{enumerate}
+\item Choose the \ui{Kind of data} (the category of the tables' items; \ui{Any kind (from the
+  files)} by default) and the \ui{Format}.
+\item Drop the files on the drop zone, or click \ui{choose files}. The files may be CSV, Parquet
+  or spreadsheets, up to 1\,GiB per upload, and the files of one database are uploaded together.
+  Each file is read at once and shown in a card, with its format if it is a known export, its
+  rows, how many of its columns are mapped, \ui{Items are} (its category), the saved mappings,
+  its name and its source. Under \ui{Columns}, the card lists the catalog's fields by group, each
+  with its drop-down list. Users with the PHI permission also see the file's \ui{First rows}.
+  \ui{$\times$} leaves a file out.
+\item With several files, choose \ui{Each file a database of its own} or \ui{One database from
+  these files (the same columns)}, which needs a name.
+\item Click \ui{Preview all} to read every row and count what it would add, keeping nothing
+  (\cref{sec:importing-dry-run}).
+\item Click \ui{Import all} to import. Files that describe patients and encounters are imported
+  first, so that the items of the others find them at once.
+\end{enumerate}
+Imports run on the server, in the background. You may leave the page: the \ui{Import} tab shows
+their progress (rows, share done, time left) wherever you are. \ui{Cancel} stops an import, and
+nothing of it is kept, so the catalog stays as it was before. When an import ends, each file's
+card reports what was added (new patients, new encounters, bed stays, items, recordings, attached
+files), the items already there, the rows held back, the database's own columns, and the
+warnings. A table larger than the upload limit is imported on the server, with the command line.
+
+\section{Importing on the command line}
+\label{sec:importing-cli}
+
+\begin{lstlisting}[style=signature]
+medorama import-table FILE... [--format auto|none|KEY] [--mapping FILE] [--category CAT]
+                              [--name NAME] [--source LABEL] [--dry-run]
+\end{lstlisting}
+\begin{params}
+\item[FILE...] The table, or several files with the same columns (the same once converted, for a
+  known export), which make one database. Each file is read row by row. Several files need
+  \opt{-{}-name}.
+\item[--format] A known export: \code{auto} (the default), \code{none} or a format's key
+  (\cref{sec:importing-known}).
+\item[--mapping FILE] A column mapping, in TOML or JSON (\cref{sec:importing-mappings}).
+\item[--category CAT] The category of the table's items, when a row names none: a key, a label
+  or a word of \cref{tab:importing-categories}.
+\item[--name NAME] The batch's name: the database's name in the Databases tab. Default: the
+  first file's name.
+\item[--source LABEL] The rows' source label. Default: the name. A \code{source} column
+  overrides it, row by row.
+\item[--dry-run] Check and count only; store nothing.
+\end{params}
+The following commands show the common uses:
+\begin{lstlisting}[style=shell]
+medorama import-table encounters.xlsx                    # patients, encounters, bed stays
+medorama import-table labs.csv --source labs-2025        # results; the category from the name
+medorama import-table ecg_index.csv --category ecg       # ECGs, pictures, PDFs, by their files
+medorama import-table icu_index.csv                      # rows linking recordings to encounters
+medorama import-table muse/*.csv --name muse_ecg         # several files, one database
+medorama import-table export.csv --mapping mapping.toml --source "EHR extract 2024-03"
+\end{lstlisting}
+Relative file paths are read from the folder of the first file. In a terminal, the import shows
+its progress on one line. It then prints one line of counts, such as
+(\code{import 12: 865 rows: 0 patient(s) and 0 encounter(s) added, 865 item(s) added (0 already
+there, 0 waiting), 0 recording(s) added, 0 file(s) attached, 0 row(s) held back}), and then the
+database's own columns and the warnings. A CLIF folder is imported with
+\cmd{medorama import-clif} (\cref{chap:clif}). Every command is described in full in
+\cref{chap:cli}, and the HTTP requests that the page uses in \cref{chap:http-api}.
+
+\section{Dry runs}
+\label{sec:importing-dry-run}
+
+A dry run (\opt{-{}-dry-run}, or the page's \ui{Preview all}) reads and checks every row as the
+import does, reports what it would add, match and hold back, and then keeps nothing. It takes
+about as long as the import: an ECG list of 500{,}000 rows takes under a minute on SQLite. Run
+one before every new kind of table. It shows the columns recognized and those kept as the
+database's own, the rows that would be held back, the rows refused, and the items that would
+wait.
+
+\section{Examples}
+\label{sec:importing-examples}
+
+The following tables use the demo's synthetic patients. A patients table:
+\begin{lstlisting}[language=CSV]
+MRN,Last Name,First Name,DOB,Sex,Patient ID
+SYN0000001,Doe,Jane,1950-03-04,F,P900001
+\end{lstlisting}
+Encounters, and their bed stays by encounter (imported after the encounters):
+\begin{lstlisting}[language=CSV]
+Encounter ID,Patient ID,CSN,Admit Time,Discharge Time,Admit Unit
+E9100002,P900001,9000000102,2023-12-28 07:40,2024-01-09 13:00,Cardiology
+\end{lstlisting}
+\begin{lstlisting}[language=CSV]
+Encounter ID,Care Unit,Bed,Bed Start,Bed End
+E9100002,ICU7,12,2024-01-01 11:00,2024-01-03 11:00
+\end{lstlisting}
+Laboratory results, matched by MRN and encounter; every column is recognized as it is:
+\begin{lstlisting}[language=CSV]
+MRN,Encounter ID,Test Name,Result,Units,Ref Low,Ref High,Abnormal Flag,Collected,Code,Code System
+SYN0000001,E9100002,Lactate,4.1,mmol/L,0.5,2,H,2024-01-02 06:10,2524-7,LOINC
+\end{lstlisting}
+An index of ECGs, with their files and measurements:
+\begin{lstlisting}[language=CSV]
+patient_id,encounter_id,time,QT (ms),QTc (ms),interpretation,file
+P900001,E9100002,2024-01-02 08:00,410,452,Sinus tachycardia,ecg/ecg_P900001_20240102.hea
+\end{lstlisting}
+ICU recordings (their encounters are also found by bed and time, from BedMaster file names such
+as \file{ICU7\_12-1704106800.Stp}):
+\begin{lstlisting}[language=CSV]
+patient_id,encounter_id,file
+P900001,E9100002,icu/recording.Stp
+\end{lstlisting}
+A sleep study: an EDF+ file in the Sleep category, from the demo's \file{sleep\_index.csv} (the
+demo's table also names the encounter):
+\begin{lstlisting}[language=CSV]
+patient_id,encounter_id,time,study,category,file
+P900004,E9100010,2024-03-05 22:30,Polysomnography,sleep,../sleep/P900004_psg_20240305.edf
+\end{lstlisting}
+\file{tools/make-demo-data.py} writes a complete synthetic set of such tables and files, for
+trying an import end to end. The installers' \opt{-{}-demo} option loads it into a new catalog as
+the cohort DEMO (\cref{chap:quickstart}).
+
+\section{After an import}
+\label{sec:importing-after}
+
+\begin{itemize}
+\item \textbf{The Databases tab} shows the table as imported, each row with its patient and its
+  file (\cref{chap:databases-tab}).
+\item \textbf{Review} (administrators) lists the rows held back, the possible duplicate patients
+  and the items waiting for their patient or encounter (\cref{chap:administration}).
+\item \textbf{Recordings} are indexed by the workers in the background; the Jobs tab shows the
+  queue (\cref{chap:recordings}).
+\item \textbf{The patients' pages} show each item in its column of the Patient Journey.
+\item \textbf{The audit log} holds the import, with its counts.
+\end{itemize}
+
+\subsection{Batches and sources}
+\label{sec:importing-batches}
+
+Each import is a \emph{batch} with a name and a \emph{source} label. Both default to the table's
+file name, and a \code{source} column sets the label row by row. Medorama records what each
+batch added. The same recording, patient, encounter or item may come from several batches, and
+so may the values: each batch's name, date of birth, admission time and so on are kept apart.
+The \ui{Import} tab lists the batches and sources in its \ui{Sources} and \ui{Imports} cards
+(\cmd{medorama sources list}, \cmd{medorama imports list}).
+
+\subsection{Removing}
+\label{sec:importing-removing}
+
+Removing deletes catalog entries only, and files on disk are never touched
+(\cref{tab:importing-removing}). Every removal can be previewed, with \opt{-{}-dry-run} or with
+the page's confirmation, which says what would go.
+
+\begin{table}[htbp]
+\caption{What each removal takes out.}
+\label{tab:importing-removing}
+\begin{tabularx}{\linewidth}{@{}P{4.6cm}LP{3.0cm}@{}}
+\toprule
+{\tabhead Remove} & {\tabhead Takes out} & {\tabhead Leaves} \\
+\midrule
+A batch (\ui{Imports}, \ui{Remove\dots}; \cmd{imports remove ID}) & What it added, its values,
+  its held-back rows & Anything another batch also has; files on disk \\
+A source (\ui{Sources}, \ui{Remove\dots}; \cmd{sources remove NAME}) & What every batch added
+  under that source & The same \\
+The encounters a search finds (\cmd{remove-encounters -{}-search Q}) & Those encounters, with
+  their bed stays and items & Recordings (they become unlinked) \\
+The recordings a search finds (\cmd{remove -{}-search Q}) & Those recordings (with
+  \opt{-{}-purge-results}, their indexes and results too) & Encounters \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+After a removal, the fields of what stays show the values that the remaining batches gave, links
+are computed again (decisions made manually still apply; the links the batch's rows gave its
+recordings go), a generated patient ID (\code{GEN-\dots}) that the batch replaced comes back
+where no other batch names the patient by the ID it gave, and items whose encounter went away go
+back to their patient, or wait. Removing a connected database's batch disconnects it (its
+password file in \file{<home>/secrets} goes too). \opt{-{}-purge-results} (on \cmd{imports remove},
+\cmd{sources remove} and \cmd{remove}) also deletes the catalog's indexes and results of the
+removed recordings, inside \code{results\_dir} and \code{index\_dir} only. The following commands
+list the imports, preview a removal, and remove an import and a source:
+\begin{lstlisting}[style=shell]
+medorama imports list
+medorama imports remove 12 --dry-run      # what would go
+medorama imports remove 12
+medorama sources remove "EHR extract 2024-03"
+\end{lstlisting}
+
+\section{Privacy}
+\label{sec:importing-privacy}
+
+\begin{phibox}
+\begin{itemize}
+\item Names, MRNs, account numbers and dates of birth are kept in the catalog's identifier
+  tables, and in the imported rows as they came. Users without the PHI permission, and every user
+  in Privacy Mode, see placeholders and pseudonyms instead (\cref{chap:protecting}). The first
+  rows of a table, in the page, are shown only to users with the PHI permission.
+\item Export the identifiers needed for linking and nothing more. A study that needs no names or
+  dates of birth should not import them: the catalog links by IDs and MRNs alone.
+\item Free text (notes, reports, interpretations) may name patients and staff. By default,
+  Privacy Mode shows it with the patient's own names and date of birth replaced, and marked. An
+  administrator can withhold it instead (\ui{Admin} $\rightarrow$ \ui{Privacy Mode}: \ui{The
+  text of notes and reports}).
+\item File paths and names may identify a patient (bedside-monitor systems name files by unit,
+  bed and time). They never leave the server in Privacy Mode.
+\item Recordings themselves may hold identifiers, such as the patient field of an EDF header.
+  The viewers never show them, and in Privacy Mode the gate de-identifies EDF files as they are
+  sent (\cref{sec:protecting-edf}).
+\item Keep exports for import on an encrypted disk, delete them once imported, and never commit
+  them to a repository.
+\end{itemize}
+\end{phibox}
+
+\section{Checklist}
+\label{sec:importing-checklist}
+
+\begin{enumerate}
+\item \code{timezone} is set in \file{medorama.toml}, and \code{data\_roots} covers the files'
+  folders.
+\item The patients table comes first. Any order works, but a first table of patients makes
+  matching easy to check. Encounters come before the bed stays that name only their encounter.
+\item Each table is a UTF-8 CSV file, a Parquet file or a spreadsheet with one header row. Every
+  row names its patient (\code{patient\_id} or \code{mrn}, with \code{mrn\_authority} when MRNs
+  come from several systems), and times are in one of the forms of \cref{tab:importing-times}.
+\item Categories are given (a \code{category} column, \opt{-{}-category}), or file names and item
+  names make them clear. Recordings of EEG and sleep studies have the category \code{eeg} or
+  \code{sleep}.
+\item Values are numeric where they are numbers, with their units, and codes come with their
+  vocabularies.
+\item File paths are relative to the table's folder (on the command line) or absolute, inside
+  \code{data\_roots}.
+\item A dry run shows what would be added, matched and held back.
+\item After the import, \ui{Review} shows held-back rows and duplicates, and the Databases tab
+  shows the table as imported.
+\end{enumerate}

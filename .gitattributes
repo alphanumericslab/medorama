@@ -1,0 +1,26 @@
+# Line endings: every text file is stored with LF.  Files that must stay byte-exact on every
+# system (test recordings, fixtures, WFDB data) are never converted, so the tests and the
+# parity checks give the same result on Windows, where Git may otherwise check text files out
+# with CRLF.
+* text=auto eol=lf
+
+# Byte-exact test data
+viewers/vitalstream/testdata/**      -text
+medorama/tests/fixtures/**           -text
+medorama/fuzz/seeds/**               -text
+*.dat                  binary
+*.atr                  binary
+*.tim                  binary
+*.mrk                  binary
+*.vit                  binary
+*.alr                  binary
+*.pdf                  binary
+*.png                  binary
+*.gz                   binary
+
+# Windows scripts keep CRLF; shell scripts and the git hook must keep LF to run.
+*.ps1                  text eol=crlf
+*.cmd                  text eol=crlf
+*.bat                  text eol=crlf
+*.sh                   text eol=lf
+tools/git-hooks/*      text eol=lf

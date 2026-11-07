@@ -1,0 +1,532 @@
+% Part II: the Patient Catalog, the patient's page, the journey, the report, the detail, the
+% encounters. Sources: docs/user-guide.md ("The Patient Catalog and the patient page",
+% "Encounters and recordings", "Searching"); medorama/src/categories.rs; medorama/web/index.html,
+% js/views/patients.js, patient.js, encounters.js, js/patient/*.js.
+\chapter{Patients}
+\label{chap:patients}
+
+This chapter describes how to find a patient and read everything known about them. It is
+written for clinicians, researchers and data managers. The \ui{Patient Catalog} tab lists every
+patient of the catalog. A click on a patient opens the patient's page, which shows everything
+known about the patient on one time line: who they are, their encounters, the Patient Journey, a
+report of every entry and the detail of the entry chosen. The \ui{Encounters} table, beside the
+list of patients, lists the encounters with their bed stays and recordings. How the patients'
+data are brought in is the subject of \cref{part:data}.
+
+\section{Concepts}
+\label{sec:patients-concepts}
+
+\begin{table}[htbp]
+\caption{What the patient pages show.}
+\label{tab:patients-concepts}
+\begin{tabularx}{\linewidth}{@{}P{2.4cm}L@{}}
+\toprule
+{\tabhead Term} & {\tabhead Meaning} \\
+\midrule
+Patient & A person, known by a patient ID (\code{P900001}). The patient's identifiers (name,
+  MRN, date of birth) are kept apart from the clinical data, in the catalog's identifier
+  tables. \\
+Encounter & One hospital stay or visit of a patient, known by an encounter ID
+  (\code{E9100002}). \\
+Bed stay & Where the patient was during an encounter: the unit, the bed, and the start and end
+  times. \\
+Item & One piece of a patient's data (a laboratory result, a vital sign, a drug, a code, a
+  note, a report, an ECG, an image), belonging to a patient or an encounter and to a
+  \emph{category} (\cref{tab:patients-categories}). \\
+Recording & A waveform recording, such as ICU monitoring, a Holter ECG, an EEG or a sleep
+  study. It is a WFDB record (single- or multi-segment), a folder of WFDB records read as one
+  session, a WFDB collection, an EDF, EDF+, BDF or BDF+ file, or a file that an installed
+  add-on reads. Each recording is linked to an encounter of its patient. \\
+Entry & One line of a patient's report: an item, a panel of results taken together, a day of
+  vital signs, or a recording. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{The Patient Catalog}
+\label{sec:patients-catalog}
+
+\screenshot{patients.png}{The Patient Catalog: every patient, latest encounter first, with the
+kinds of data each has.}{fig:patients-catalog}
+
+The list shows the patients, the one with the latest encounter first, a hundred to a page
+(\ui{$\langle$ Previous}, \ui{Next $\rangle$}). Its columns are \ui{Patient} (the
+name\phimark{} for users who see identifiers, otherwise the patient ID), \ui{Patient ID},
+\ui{MRN}\phimark, \ui{Sex}, \ui{Age}, \ui{Born}\phimark, \ui{Encounters} (their number),
+\ui{Latest encounter}, \ui{Where} (its unit), \ui{Data} (the categories of data the patient
+has, and the connected databases that hold data about the patient) and \ui{Items}. A click on a
+row opens the patient's page. In Privacy Mode, patients are named by their pseudonyms, and the
+identifying columns are not shown.
+
+\paragraph{Searching.} The search line finds patients as you type. A word matches any of the
+searchable fields, \code{field:value} looks in one field only, and quotes keep words with
+spaces together. The fields are the following:
+\begin{itemize}
+\item \code{patient}, \code{encounter}, \code{sex}, \code{unit}, and \code{has}, which names a
+  category (\code{has:icu});
+\item with the PHI permission and Privacy Mode off, also \code{name}, \code{first},
+  \code{last}, \code{mrn} and \code{dob}\phimark.
+\end{itemize}
+In Privacy Mode, or without the PHI permission, a word never matches an identifier, and an
+identifier field is an error. Patients are then found by their pseudonym (\code{MO-\dots}),
+encounter, unit or sex. In Privacy Mode every search, filter and sort uses only what you are
+shown: pseudonyms, tokens and placeholders, and each patient's dates as they are shown, so a
+search for a real identifier or a real date finds nothing, and lists are ordered by the dates
+you see. Such searches are written to the audit log (\code{privacy\_search}). \key{Enter} opens the patient when the search finds exactly one, and
+\key{/} puts the focus in the search line from anywhere on the screen.
+
+\paragraph{Filtering by kind of data.} After \ui{Filter by}, one button per category of data
+(\cref{tab:patients-categories}) filters the list. A first click keeps the patients who have
+data of that category, a second click keeps those who have none, and a third click clears the
+filter. The filters combine (``Patients with ECG, without ICU''), and \ui{Remove filters} clears
+them all.
+
+\paragraph{Adding to a cohort.} \ui{Add to cohort\dots} adds every patient that the current
+search and filters find to a cohort that the user may change: choose the cohort and click
+\ui{Add \dots{} patients}. The patients whom the cohort's definition does not select are listed
+in it as \emph{added manually} (\cref{chap:cohorts}).
+
+\paragraph{A cohort's members.} A cohort's \ui{Open in Patient Catalog} opens the list limited
+to its members. The chip \ui{Cohort: \dots} at the top says so, and its $\times$ shows every
+patient again.
+
+\paragraph{Encounters.} The buttons \ui{Patients} and \ui{Encounters} at the right switch
+between the list of patients and the table of encounters (\cref{sec:patients-encounters}).
+
+\section{The patient's page}
+\label{sec:patients-page}
+
+\screenshot{patient.png}{A patient's page: the patient bar, the encounters and conditions, the
+Patient Journey, the report and the detail of an ECG.}{fig:patients-page}
+
+From left to right, the page shows who the patient is, what happened (as a picture), and what
+it was (as text). It has the following parts:
+\begin{itemize}
+\item the \textbf{search line}, across the page, which shows the patient as a chip ($\times$
+  closes the page and returns to the Patient Catalog) and searches for another patient, with
+  suggestions as you type (\key{$\uparrow$} \key{$\downarrow$} to choose, \key{Enter} to open,
+  \key{Esc} to close);
+\item the \textbf{patient bar}, across the page (\cref{sec:patients-bar});
+\item the \textbf{patient column}, on the left: encounters, medications, conditions
+  (\cref{sec:patients-column});
+\item the \textbf{Patient Journey}, in the middle (\cref{sec:patients-journey});
+\item the \textbf{report} and the \textbf{detail}, on the right (\cref{sec:patients-report},
+  \cref{sec:patients-detail}).
+\end{itemize}
+The page's address holds the entry chosen, the encounter shown, and the report's search and
+mode, so that the browser's Back and Forward buttons, reloading and sharing the address keep
+them.
+
+\subsection{The patient bar}
+\label{sec:patients-bar}
+
+The patient bar shows the following:
+\begin{itemize}
+\item the name\phimark{} (in Privacy Mode, \code{[Patient Name]}), and \ui{DEMO} for a patient
+  of the demo;
+\item the sex and age, with the date of birth\phimark{} for users who may see it (in Privacy
+  Mode, ages above 89 are shown as \code{90+});
+\item the patient ID and the pseudonym (in Privacy Mode, the pseudonym alone);
+\item the MRNs\phimark, with their issuing authority when there are several;
+\item the span of the data, from first to last, and the number of encounters (the catalog's, and
+  the stays and visits of connected databases);
+\item the allergies, in amber with a warning sign. The bar says ``No allergy recorded'' when a
+  database holds allergies but none for the patient, and ``Allergies: not recorded'' when no
+  database holds allergies;
+\item when a connected database did not answer, its name followed by ``not available''. The
+  page then shows the other sources, without what that database holds.
+\end{itemize}
+
+\subsection{The patient column}
+\label{sec:patients-column}
+
+\begin{description}
+\item[\ui{Encounters}] Each encounter, newest first, with whether it is inpatient or
+  outpatient, the units it went through (\code{Cardiology $\rightarrow$ ICU7}), its encounter
+  ID, its length in days and its dates. A click shows only that encounter in the journey and
+  the report, unfolded. A second click, or the encounter's chip above the journey, shows all of
+  them again. The stays and visits held by connected databases follow, each with its source.
+\item[\ui{Medications}] The drugs of the latest stay, with their dose and since or until when.
+\item[\ui{Conditions}] The diagnoses, with their ICD-10 code and date.
+\end{description}
+
+\section{The Patient Journey}
+\label{sec:patients-journey}
+
+The journey is a picture of the patient's whole history. Time runs upward, with the newest
+items on top, as in the report. There is one column per category, each with its color and its
+name written vertically at the top.
+
+\subsection{The categories}
+\label{sec:patients-categories}
+
+The categories are the clinical groupings a physician reads a chart by, after HL7 v2's
+diagnostic service sections and FHIR's resources and observation categories, not the
+databases the data came from. One database may fill several columns (an imaging index holds
+imaging and echo), and several databases may fill one. Only the categories that some database
+provides are shown. \Cref{tab:patients-categories} lists them in the journey's order, after the
+\ui{Encounters} column, which draws the encounters as light bands behind everything.
+
+\begin{xltabular}{\linewidth}{@{}P{2.4cm}P{1.4cm}L@{}}
+\caption{The categories: the journey's columns, in order, with their keys and the words that
+name them.}
+\label{tab:patients-categories}\\
+\toprule
+{\tabhead Category} & {\tabhead Key} & {\tabhead Words that name it} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Category} & {\tabhead Key} & {\tabhead Words that name it} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+ICU & \code{icu} & icu, intensive care, critical care, monitoring, bedside monitoring, waveforms,
+  bedmaster \\
+Vitals & \code{vit} & vit, vital, vitals, vital signs, vital sign, flowsheet \\
+Labs & \code{lab} & lab, labs, laboratory, chemistry, hematology, coagulation, blood gas, blood
+  gases \\
+Microbiology & \code{micro} & micro, microbiology, culture, cultures, sensitivity,
+  sensitivities \\
+Pathology & \code{path} & path, pathology, biopsy, biopsies, cytology, histology \\
+ECG & \code{ecg} & ecg, ekg, 12-lead, 12 lead, electrocardiogram, muse \\
+Holter & \code{holter} & holter, ambulatory ecg, event monitor, patch monitor \\
+EEG & \code{eeg} & eeg, electroencephalography, electroencephalogram, neurophysiology, ieeg,
+  seeg \\
+Sleep & \code{sleep} & sleep, sleep study, sleep studies, polysomnography, psg \\
+Echo & \code{echo} & echo, echocardiography, echocardiogram, tte, tee \\
+Cath lab & \code{cath} & cath, cath lab, catheterization, cardiac catheterization, angiography,
+  angiogram, coronary angiography, xa, ivus, oct, pci \\
+Imaging & \code{img} & imaging, img, radiology, ct, mri, x-ray, xray, ultrasound, dicom, pacs \\
+Procedures & \code{proc} & proc, procedure, procedures, surgery, operation, operations, cpt \\
+Medications & \code{med} & med, meds, medication, medications, drug, drugs, mar, pharmacy \\
+Transfusions & \code{blood} & blood, transfusion, transfusions, blood product, blood products,
+  blood bank \\
+Life support & \code{support} & support, life support, ventilation, ventilator, respiratory
+  support, dialysis, crrt, ecmo \\
+Conditions & \code{dx} & dx, condition, conditions, diagnosis, diagnoses, problem, problems,
+  problem list, icd \\
+Assessments & \code{obs} & obs, observation, observations, assessment, assessments, score,
+  scores \\
+Notes & \code{note} & note, notes, clinical note, clinical notes, document, documents, report,
+  reports \\
+Allergies & \code{allergy} & allergy, allergies, intolerance, intolerances (shown in the patient
+  bar, not as a column) \\
+\end{xltabular}
+
+A category is named by its key, its label or any of its words, ignoring case. These names work
+in a table's \code{category} column, in a table's file name, in a cohort's criteria
+(\code{has holter}, \code{has sleep}) and in the report's search (\code{micro}). An item's
+category is decided in this order:
+\begin{enumerate}
+\item the category that its row names, in a \code{category} column;
+\item otherwise, the category chosen for its table when the table was imported;
+\item otherwise, the category that its table's file name names (\file{sleep\_index.csv} is
+  Sleep, \file{psg\_studies.csv} is Sleep, \file{eeg.csv} is EEG);
+\item otherwise, a category from its domain and name: a drug is Medications, a condition
+  Conditions, a procedure Procedures, a note Notes, an observation Assessments, a measurement
+  named like a vital sign (such as \code{heart rate}, \code{spo2} or \code{map}) Vitals, and any
+  other measurement Labs.
+\end{enumerate}
+\Cref{chap:importing} describes how tables are imported.
+
+\subsection{What the columns show}
+\label{sec:patients-columns}
+
+\begin{itemize}
+\item \textbf{Six-hour cells.} Every item fills its six-hour cell. Stays, drugs and recordings
+  are drawn as bars.
+\item \textbf{Thin columns.} Laboratory results, vital signs and medications are split into one
+  thin column per test, sign or drug (the most frequent ones), so that a stay reads as a
+  heatmap. Single categories get a narrow column, wide enough for their name written
+  vertically.
+\item \textbf{ICU is the stay, not the monitor.} The ICU column shows the whole time spent in an
+  intensive-care unit, taken from the bed stays, as a light bar. Each recording made during the
+  stay is a solid bar over it, from its first sample to its last. That span is known once the
+  recording is indexed; before then, an hour is shown, dashed. Each bar opens its entry, however
+  short. A unit counts as intensive care when its name says so (\code{ICU}, \code{ICU7},
+  \code{MICU}, \code{CCU}, \code{ITU}, ``intensive'', ``critical care'' and so on).
+\item \textbf{Holter, EEG and sleep recordings} each have their own column, with a bar as long
+  as the recording.
+\item \textbf{Abnormal values} are amber and \textbf{critical} ones orange, in every column. Red
+  is reserved for alarms, and no category takes either color. A value is critical when its row
+  flags it so (\code{HH}, \code{LL}, \code{C}, \code{critical}, \code{panic} and so on), and
+  abnormal when it is flagged (\code{H}, \code{L}, \code{A}, \code{abnormal}, \code{positive},
+  \code{resistant}, \code{detected} and so on) or lies outside its reference range.
+\item \textbf{Folding.} Quiet stretches of more than twenty days shrink to a hatched band, so
+  that busy days get the room.
+\item \textbf{A long history scrolls} under fixed column names when years of care no longer
+  fit. The journey opens at the top (the newest items), and choosing an entry in the report
+  scrolls it into sight.
+\end{itemize}
+
+\subsection{Using the journey}
+\label{sec:patients-journey-use}
+
+\begin{itemize}
+\item \textbf{Hover} over a mark to see what it is: the category, the test, how many items,
+  whether they are abnormal or critical, and when.
+\item \textbf{Click} a mark to open its entry in the report and the detail. For a cell, this is
+  the newest entry of that column in that time. A click on an encounter's band shows only that
+  encounter.
+\item \textbf{Click a column's name} to hide that category from the journey and the report. Its
+  name is then struck through, and a second click shows it again. The choice is remembered in
+  this browser.
+\item \textbf{Choose an encounter}, in the patient column or on its band, to show only that
+  encounter, unfolded. Its chip above the journey ($\times$) shows all of them again (``All
+  encounters'').
+\item \ui{$-$} and \ui{+} zoom out and in.
+\end{itemize}
+
+\section{The report}
+\label{sec:patients-report}
+
+The report lists the patient's entries, newest first, in one of three modes:
+\begin{description}
+\item[\ui{Timeline}] The entries by day. Each day's heading gives the date and where the
+  patient was: the encounter, the hospital day, and the unit and bed (\code{E9100002 $\cdot$
+  hospital day 3 $\cdot$ ICU7 bed 12}). The laboratory results taken at one moment form one
+  panel, and the vital signs form one entry per day.
+\item[\ui{By category}] The entries grouped by category, in the journey's order.
+\item[\ui{Trends}] Every measurement as a small chart (a sparkline), with its number of values,
+  its last value and whether it is abnormal or critical. A click opens the entry of that value.
+  A series is kept per name and unit: values in mg/dL and in mmol/L are two lines, not one.
+\end{description}
+Each entry shows its time, its category's color, its title, the number of abnormal values, a
+summary, and an arrow when it opens a viewer or a file. A click (or \key{Enter}) chooses the
+entry: the detail shows it, and the journey marks it.
+
+\subsection{Searching a patient}
+\label{sec:patients-search}
+
+The report's search box (``Search everything about this patient: notes, results, codes\dots'')
+looks through every text the patient has: the names of tests, drugs and codes, values, results,
+notes and reports. The search shortens the report but does not change the journey. It reads the
+patient's own items only, and in Privacy Mode their text as you are shown it: an entry is not
+found by the patient's name, an identifier or a staff name that the page replaces. The words
+found are highlighted, with a snippet of the text around them, and the number of entries found
+in each category is shown above.
+
+\screenshot{patient-search.png}{Searching a patient: the entries that mention
+``creatinine'', the words highlighted.}{fig:patients-search}
+
+\begin{itemize}
+\item Words are alternatives: \code{ecg icu} finds the ECGs and the ICU monitoring.
+\item A category's name finds all of that category: \code{labs}, \code{notes}, \code{ecg},
+  \code{holter}, \code{sleep}, \code{micro}, \code{imaging} and so on
+  (\cref{tab:patients-categories}).
+\item Any part of a word matches (\code{lactat}), ignoring case. Quotes keep words together:
+  \code{"two words"}.
+\item \code{lactate > 4} and \code{hb<8} find values above or below a number (with \code{>},
+  \code{<}, \code{>=}, \code{<=} or \code{=}).
+\item A word found nowhere is matched to the closest word in the patient's text
+  (\code{sepsys} finds \code{sepsis}), and the report says so (``\code{sepsys}: showing
+  \code{sepsis}'').
+\item The search does not understand negation: \code{no signs of sepsis} is found by
+  \code{sepsis}.
+\item The $\times$ in the box clears the search.
+\end{itemize}
+
+\begin{phibox}
+The text of notes is searched and shown to users with the PHI permission who switched Privacy
+Mode off. In Privacy Mode it is also searched and shown by default, with two protections: the
+patient's own names and date of birth are replaced (\code{[Patient Name]}, \code{[Date of
+Birth]}), and the text is marked with an amber warning triangle (``Free text: it may name the
+patient (the de-identified view cannot remove names from it).''), because it may still name the
+patient or others. An administrator can withhold notes in Privacy Mode instead, with \ui{The text
+of notes and reports} in \ui{Admin} $\rightarrow$ \ui{Privacy Mode} (the key \code{notes};
+\cref{sec:protecting-notes}). Notes are then found by their title only, and the detail says
+``The text of notes is shown to users with the PHI permission''.
+\end{phibox}
+
+\section{The detail}
+\label{sec:patients-detail}
+
+The detail shows the entry chosen. Until one is chosen, it says ``Choose an entry, or a mark in
+the journey''. Its heading gives the entry's title, when it was, where the patient was, and the
+databases it came from. \ui{$\langle$} and \ui{$\rangle$} step to the previous and next entry of
+the same kind. Below the heading, the detail shows, depending on the entry:
+\begin{itemize}
+\item \textbf{a panel of results}, as a table of \ui{Test}, \ui{Value}, \ui{Unit},
+  \ui{Reference}, \ui{Previous} and \ui{This stay} (the test over the stay, as a small chart),
+  with abnormal values flagged (\code{H}, \code{L}). A day of vital signs shows \ui{Sign},
+  \ui{Last}, \ui{Unit}, \ui{Reference} and \ui{$\pm$12 h} (the twelve hours before and after);
+\item \textbf{an item's fields}, as its row gave them, and its text (a note, a report);
+\item \textbf{an attached file}:
+  \begin{itemize}
+  \item a 12-lead ECG (WFDB, GE MUSE XML, DICOM, EDF, JSON), drawn on paper by the ECG viewer
+    itself in the detail, or a PNG, JPEG or PDF ECG shown as it is;
+  \item a picture, a PDF or a video, shown in the detail;
+  \item the buttons \ui{Open in ECG} or \ui{Open in PACS}, which open the file in that viewer's
+    tab (\cref{chap:viewers-in-medorama}). ECGs open in the ECG viewer. Echo loops, angiography
+    runs, images, DICOM series and folders, PDFs and videos of the Echo, Cath lab and Imaging
+    categories open in the PACS viewer;
+  \end{itemize}
+\item \textbf{a recording} (\cref{sec:patients-recordings});
+\item \textbf{the notes written around that time}, since notes belong to their encounter. The
+  first one is open and the others open with a click; a second click opens the note as the
+  entry.
+\end{itemize}
+
+\section{Recordings on the page}
+\label{sec:patients-recordings}
+
+\screenshot{patient-holter.png}{A Holter recording: its own column in the journey, and its heart
+rate over the whole day in the detail.}{fig:patients-holter}
+
+A recording is an entry of its patient's report, in its category: ICU, Holter, EEG or Sleep.
+Its detail shows the recording at a glance:
+\begin{itemize}
+\item \textbf{an ICU recording} shows \ui{Recorded} (how much of its length holds samples),
+  \ui{Waveforms} (its channels), \ui{Vital signs} (how many), \ui{Where} (unit, bed and
+  format), and its main vital signs over its whole length, with its gaps;
+\item \textbf{a recording with an ECG and no heart rate of its own}, such as a Holter ECG or a
+  sleep study, shows \ui{Recorded}, \ui{Leads}, \ui{Heart rate} (the mean, in bpm) and
+  \ui{Range}, and the heart rate over the whole recording.
+\end{itemize}
+A click on the chart (\ui{Whole recording}: ``click to open the viewer at that moment'') opens
+VitalStream there, on a minute around the moment clicked. \ui{Open in VitalStream} opens the
+recording at its start. Before the recording is indexed, the detail says ``Not indexed yet: its
+overview appears once indexing is done.'' When no viewer is linked to the catalog, the detail
+says so instead of offering the button.
+
+\paragraph{Heart rate from the ECG.} A Holter ECG or a sleep study has no heart rate reported by
+a monitor. For every recording that has an ECG lead and no heart rate of its own, the index job
+derives one from the ECG; this is not a separate action. QRS complexes are found by a
+Pan--Tompkins detector, an hour at a time. For each minute, the job then takes the median of the
+beat-to-beat rates and their 5th to 95th percentile range. Minutes with fewer than 10 plausible
+beats (30 to 250\,bpm) are left out (\cref{chap:actions}).
+
+\paragraph{EEG recordings and sleep studies.} EEGs and sleep studies (polysomnography) usually
+come as EDF, EDF+, BDF or BDF+ files, which Medorama reads without an add-on. They are
+recordings like ICU monitoring and Holter ECGs, in the EEG and Sleep columns of the journey, and
+they open in VitalStream. There, EDF+ annotations, such as sleep stages, apneas and arousals,
+appear as events in the \ui{Annotations} lane, and an interrupted recording (EDF+D) shows a
+break between its parts. The patient and recording fields of an EDF header can identify the
+patient, so the viewers never show them; in Privacy Mode, EDF files and their annotations are
+de-identified as described in \cref{sec:protecting-edf}. A folder of EDF files is not yet opened
+as one session, and a file that holds only annotations (some scoring files do) is not yet shown.
+
+\screenshot{patient-sleep.png}{The demo's overnight sleep study (an EDF+ file) on its patient's page: the Sleep column of the journey, and the study's entry in the report and the detail.}{fig:patients-sleep}
+
+\Cref{chap:recordings} describes how recordings are brought in and linked to their encounters.
+
+\section{Encounters and bed stays}
+\label{sec:patients-encounters}
+
+\ui{Encounters}, beside \ui{Patients} in the Patient Catalog, is the table of encounters. It has
+one row per encounter, with a status dot for its recordings, the encounter, the patient, the
+admission and discharge, its units, its number of recordings and its source. For users with the
+PHI permission out of Privacy Mode, it also shows the MRN, the name and the date of
+birth\phimark, and \ui{In the files} (\cref{sec:patients-in-files}).
+
+\paragraph{Finding encounters.} The search line takes words or \code{field:value} terms
+(\cref{tab:patients-fields}; the \ui{?} beside it lists the fields). \ui{Unit}, \ui{From},
+\ui{To} and the status filter narrow the table. The search never depends on letter case, and a
+value matches anywhere in the field: \code{name:smi} finds Smith, and \code{dob:1950-03} finds
+March 1950. Every term must match, and an unknown field is an error whose message lists the
+fields. In Privacy Mode every field holds what you are shown: \code{encounter} and
+\code{patient} the pseudonyms, \code{file} the recordings' tokens (\code{mo-rec:12}),
+\code{admit} and \code{discharge} the dates as shown. The same syntax serves the recordings of
+\ui{Import} and the commands
+\cmd{medorama list -{}-q}, \cmd{medorama recordings -{}-q} and \opt{-{}-search}.
+
+\begin{table}[htbp]
+\caption{The fields of the encounters' search (\phimark: only with the PHI permission, out of
+Privacy Mode).}
+\label{tab:patients-fields}
+\begin{tabularx}{\linewidth}{@{}P{3.2cm}L@{}}
+\toprule
+{\tabhead Field} & {\tabhead Finds} \\
+\midrule
+\code{encounter}, \code{patient} & The encounter ID, the patient ID \\
+\code{source} & The source that brought it (\code{source:"ICU pilot"}) \\
+\code{unit}, \code{bed} & A unit or bed of its stays \\
+\code{admit}, \code{discharge} & A date, in local time (\code{admit:2024-01}) \\
+\code{disposition}, \code{sex}, \code{status} & The discharge disposition, the patient's sex,
+  the recordings' status \\
+\code{file} & The names of its linked recordings \\
+\code{name}, \code{first}, \code{last}, \code{dob}, \code{mrn}, \code{csn}\phimark & The
+  patient's identifiers, the encounter number \\
+\code{file-name}, \code{file-id}, \code{file-dob}\phimark & What the linked recordings' files
+  say about the patient \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{The status of recordings.} Each recording has a status, shown as a dot
+(\cref{tab:patients-status}). An encounter shows the most urgent status among its recordings,
+in this order: \code{missing}, \code{failed}, \code{indexing}, \code{queued}, \code{stale},
+\code{new}, \code{ready}. An encounter without recordings has a dashed ring.
+
+\begin{table}[htbp]
+\caption{The status of a recording.}
+\label{tab:patients-status}
+\begin{tabularx}{\linewidth}{@{}P{1.6cm}P{2.6cm}P{3.8cm}L@{}}
+\toprule
+{\tabhead Status} & {\tabhead Filter} & {\tabhead Dot} & {\tabhead Means} \\
+\midrule
+\code{ready} & \ui{Indexed} & Green & Indexed, and the index matches the recording as it is
+  now \\
+\code{queued} & \ui{Queued} & Amber & Indexing is waiting for a worker \\
+\code{indexing} & \ui{Indexing} & Amber, pulsing, with its percentage & Being indexed \\
+\code{new} & \ui{Not indexed} & Gray & Never indexed \\
+\code{stale} & \ui{Changed} & Purple ring & Changed since it was indexed \\
+\code{failed} & \ui{Failed} & Amber & Indexing failed, or was cancelled; the error (or
+  \emph{indexing was cancelled}) is shown. A cancelled recording is not indexed again on its
+  own: \ui{Index now} indexes it \\
+\code{missing} & \ui{Missing} & Amber & Not found at the last check \\
+(none) & \ui{No recordings} & Dashed ring & An encounter without recordings \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{Selecting encounters.} The boxes at the start of the rows select encounters, and the
+box in the header selects the whole page. \ui{Run actions on selected\dots} (for analysts and
+administrators) runs actions on their recordings (\cref{chap:actions}). Administrators also have
+\ui{Remove selected} and \ui{Remove matching\dots} (every encounter that the search finds). Both
+first say what would go, and then remove the encounters with their items and links. The
+recordings stay in the catalog, unlinked, and no file is touched.
+
+\paragraph{The encounter panel.} A click on a row opens the encounter's panel at the side of the
+page (\key{Esc} or $\times$ closes it) and adds the encounter to the user's History
+(\cref{chap:page}). The panel shows:
+\begin{itemize}
+\item the patient (a link to the patient's page), the sex, the admission and discharge, the
+  source and the disposition, and, for users with the PHI permission, the name, MRN, date of
+  birth and encounter number\phimark;
+\item \ui{Bed stays}, with \ui{Unit}, \ui{Bed}, \ui{From} and \ui{To};
+\item \ui{Recordings}, each with its status, name, kind and format, how it was linked, its start
+  and length, any error, and its buttons: \ui{View} (which opens it in VitalStream),
+  \ui{Copy path}, \ui{Index now} (for analysts and administrators, when it is not indexed), and,
+  for administrators, \ui{Remove}, and \ui{Unlink} or \ui{Forget manual link}
+  (\cref{chap:recordings});
+\item \ui{Items}, the encounter's items (all of them or by domain) and the patient's items
+  outside encounters, with their time, domain, name, value, code and source;
+\item for administrators, \ui{Remove this encounter from the catalog}.
+\end{itemize}
+
+\subsection{Identifiers in the recordings}
+\label{sec:patients-in-files}
+
+\begin{phibox}
+Bedside monitors and EDF files often store patient identifiers inside the recordings
+themselves. For users with the PHI permission out of Privacy Mode, the Encounters table shows
+what the encounter's recordings say (\ui{In the files}), with a tick when it agrees with the
+databases and a warning sign when it differs or names another patient. The encounter panel
+shows these values beside the databases' values (``In the file: \dots''). The action
+\code{identify} reads these identifiers into the catalog's database only (\cref{chap:actions}).
+Recordings whose files disagree with the databases are listed for administrators in
+\ui{Review} (\cref{chap:recordings}).
+\end{phibox}
+
+\section{Connected databases on the page}
+\label{sec:patients-connected}
+
+A patient's page shows the entries of every source in the same columns: the catalog's, and
+those of the connected databases (an OMOP instance, a warehouse) whose persons are linked to the
+patient. A connected database's stays and visits are listed after the catalog's encounters,
+with the database's name. Its results, conditions, drugs and notes appear in the journey and the
+report, and the detail names their source. These data are read from the database when the page
+opens, and never copied. When the database does not answer, the patient bar says so.
+\Cref{chap:connecting} describes how to connect databases.

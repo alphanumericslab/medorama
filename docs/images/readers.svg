@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 560" width="1000" height="560" role="img" aria-labelledby="t d">
+<title id="t">Readers and data models</title><desc id="d">Each file format has its own reader. Every reader produces one of four data models: a recording index, an ECG record, DICOM objects, or catalog tables; the viewers and Medorama use only the models.</desc>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#4B5563"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#B97A00"/></marker></defs>
+<rect x="0" y="0" width="1000" height="560" rx="14" fill="#FFFFFF"/>
+<g font-family="Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#1F2937">
+<text x="24" y="34" font-size="17" font-weight="700" fill="#1F2937" text-anchor="start">Readers: one per format, four data models</text>
+<text x="24" y="54" font-size="12" font-weight="400" fill="#4B5563" text-anchor="start">Past its reader, a format is like any other: the viewers, cohorts and the privacy gate know only the data models.</text>
+<text x="24" y="84" font-size="12" font-weight="650" fill="#6B7280" text-anchor="start">Formats</text>
+<text x="296" y="84" font-size="12" font-weight="650" fill="#6B7280" text-anchor="start">Readers</text>
+<text x="626" y="84" font-size="12" font-weight="650" fill="#6B7280" text-anchor="start">Data model</text>
+<text x="832" y="84" font-size="12" font-weight="650" fill="#6B7280" text-anchor="start">Used by</text>
+<rect x="24" y="96" width="240" height="98.0" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4"/>
+<text x="36" y="117" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start"></text>
+<text x="36" y="118.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">WFDB: records, multi-segment</text>
+<text x="36" y="134.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">records, folders of records</text>
+<text x="36" y="151.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">EDF, EDF+, BDF, BDF+</text>
+<text x="36" y="167.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">licensed formats (BedMaster .Stp)</text>
+<rect x="296" y="96" width="300" height="98.0" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="308" y="117" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start"></text>
+<text x="308" y="118.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">built in, in Rust, C++ and Python</text>
+<text x="308" y="134.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(byte-identical; WFDB through wfdb-x)</text>
+<text x="308" y="151.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">add-ons: programs in any language</text>
+<text x="308" y="167.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">that speak the adapter protocol</text>
+<rect x="626" y="96" width="176" height="98.0" rx="9" fill="#E4F4EE" stroke="#009E73" stroke-width="1.4"/>
+<text x="638" y="117" font-size="12.5" font-weight="650" fill="#0B4A38" text-anchor="start">Recording index</text>
+<text x="638" y="136.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">channels, pieces, envelopes,</text>
+<text x="638" y="152.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">events (index-format.md)</text>
+<rect x="832" y="96" width="144" height="98.0" rx="9" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.4"/>
+<text x="844" y="117" font-size="13.5" font-weight="650" fill="#1F2937" text-anchor="start"></text>
+<text x="844" y="118.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">VitalStream;</text>
+<text x="844" y="134.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Medorama (heart</text>
+<text x="844" y="151.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">rate, cohorts)</text>
+<path d="M264 145.0 L296 145.0" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M596 145.0 L626 145.0" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M802 145.0 L832 145.0" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="24" y="208.0" width="240" height="81.5" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4"/>
+<text x="36" y="229.0" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start"></text>
+<text x="36" y="230.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">WFDB, EDF, GE MUSE XML,</text>
+<text x="36" y="246.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">DICOM ECG, the JSON form;</text>
+<text x="36" y="263.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">PDF and pictures (as they are)</text>
+<rect x="296" y="208.0" width="300" height="81.5" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="308" y="229.0" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start"></text>
+<text x="308" y="230.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">the ECG viewer’s readers: one</text>
+<text x="308" y="246.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">per format, in one registry</text>
+<text x="308" y="263.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(JavaScript); muse-py (Python)</text>
+<rect x="626" y="208.0" width="176" height="81.5" rx="9" fill="#E4F4EE" stroke="#009E73" stroke-width="1.4"/>
+<text x="638" y="229.0" font-size="12.5" font-weight="650" fill="#0B4A38" text-anchor="start">ECG record</text>
+<text x="638" y="248.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">leads in mV, rate, the</text>
+<text x="638" y="264.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">report; JSON form</text>
+<rect x="832" y="208.0" width="144" height="81.5" rx="9" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.4"/>
+<text x="844" y="229.0" font-size="13.5" font-weight="650" fill="#1F2937" text-anchor="start"></text>
+<text x="844" y="230.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">ECG viewer</text>
+<path d="M264 248.75 L296 248.75" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M596 248.75 L626 248.75" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M802 248.75 L832 248.75" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="24" y="303.5" width="240" height="81.5" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4"/>
+<text x="36" y="324.5" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start"></text>
+<text x="36" y="325.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">DICOM: echo and angiography</text>
+<text x="36" y="342.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">loops, CT, MR, X-ray, SR;</text>
+<text x="36" y="358.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">pictures, video, PDF</text>
+<rect x="296" y="303.5" width="300" height="81.5" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="308" y="324.5" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start"></text>
+<text x="308" y="325.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">dicom.js and jpeg.js (the</text>
+<text x="308" y="342.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">browser), dicom-py (Python),</text>
+<text x="308" y="358.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">dicom.rs (the privacy gate)</text>
+<rect x="626" y="303.5" width="176" height="81.5" rx="9" fill="#E4F4EE" stroke="#009E73" stroke-width="1.4"/>
+<text x="638" y="324.5" font-size="12.5" font-weight="650" fill="#0B4A38" text-anchor="start">DICOM objects</text>
+<text x="638" y="343.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">frames, measurements,</text>
+<text x="638" y="360.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">reports</text>
+<rect x="832" y="303.5" width="144" height="81.5" rx="9" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.4"/>
+<text x="844" y="324.5" font-size="13.5" font-weight="650" fill="#1F2937" text-anchor="start"></text>
+<text x="844" y="325.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">PACS viewer</text>
+<path d="M264 344.25 L296 344.25" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M596 344.25 L626 344.25" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M802 344.25 L832 344.25" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="24" y="399.0" width="240" height="81.5" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4"/>
+<text x="36" y="420.0" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start"></text>
+<text x="36" y="421.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">CSV, Excel, Parquet tables;</text>
+<text x="36" y="437.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">known exports (GE MUSE, CLIF);</text>
+<text x="36" y="454.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">OMOP and other SQL databases</text>
+<rect x="296" y="399.0" width="300" height="81.5" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="308" y="420.0" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start"></text>
+<text x="308" y="421.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">tables.rs; formats/ (converters,</text>
+<text x="308" y="437.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">or a TOML description: no code);</text>
+<text x="308" y="454.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">sources/ (read-only SQL views)</text>
+<rect x="626" y="399.0" width="176" height="81.5" rx="9" fill="#E4F4EE" stroke="#009E73" stroke-width="1.4"/>
+<text x="638" y="420.0" font-size="12.5" font-weight="650" fill="#0B4A38" text-anchor="start">Catalog tables</text>
+<text x="638" y="439.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">patients, encounters,</text>
+<text x="638" y="455.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">entries (canonical columns)</text>
+<rect x="832" y="399.0" width="144" height="81.5" rx="9" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.4"/>
+<text x="844" y="420.0" font-size="13.5" font-weight="650" fill="#1F2937" text-anchor="start"></text>
+<text x="844" y="421.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">patient pages, cohorts,</text>
+<text x="844" y="437.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Databases</text>
+<path d="M264 439.75 L296 439.75" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M596 439.75 L626 439.75" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M802 439.75 L832 439.75" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<text x="24" y="510.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">A new format is one new reader. A reader written in another language plugs in through the adapter protocol (recordings),</text>
+<text x="24" y="528.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">the ECG JSON form, DICOM, or a table with the canonical columns (docs/readers.md).</text>
+</g></svg>

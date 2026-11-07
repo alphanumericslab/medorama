@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 552" width="1000" height="552" role="img" aria-labelledby="t d">
+<title id="t">The privacy gate: how an answer leaves in Privacy Mode</title><desc id="d">The session decides the mode; in Privacy Mode JSON answers have identifiers replaced, dates moved back and patient names removed from text; files are de-identified by kind, passed with a warning, or refused.</desc>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#4B5563"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#B97A00"/></marker></defs>
+<rect x="0" y="0" width="1000" height="552" rx="14" fill="#FFFFFF"/>
+<g font-family="Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#1F2937">
+<text x="24" y="34" font-size="17" font-weight="700" fill="#1F2937" text-anchor="start">The privacy gate: what leaves in Privacy Mode</text>
+<text x="24" y="54" font-size="12" font-weight="400" fill="#4B5563" text-anchor="start">The catalog keeps every identifier as imported; the gate decides at the moment of sending. Nothing identifying reaches the browser.</text>
+<rect x="24" y="84" width="200" height="98" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4"/>
+<text x="36" y="105" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start">Request</text>
+<text x="36" y="124.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">the signed-in user (signin.rs)</text>
+<text x="36" y="140.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">+ Privacy Mode choice</text>
+<text x="36" y="157.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(set by POST privacy,</text>
+<text x="36" y="173.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">audited)</text>
+<rect x="260" y="84" width="236" height="98" rx="9" fill="#FDF1DC" stroke="#B97A00" stroke-width="1.4"/>
+<text x="272" y="105" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">Mode</text>
+<text x="272" y="124.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">no PHI permission: always on</text>
+<text x="272" y="140.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">PHI permission: on by default</text>
+<text x="272" y="157.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(off by default for admins)</text>
+<text x="272" y="173.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">answered as without PHI</text>
+<rect x="532" y="84" width="200" height="98" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="544" y="105" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">Handler</text>
+<text x="544" y="124.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">reads the catalog;</text>
+<text x="544" y="140.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">files named by tokens;</text>
+<text x="544" y="157.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">searches of identifiers</text>
+<text x="544" y="173.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">refused</text>
+<rect x="768" y="84" width="208" height="98" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4"/>
+<text x="780" y="105" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start">Browser</text>
+<text x="780" y="124.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">pseudonyms,</text>
+<text x="780" y="140.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">[Patient Name], [MRN] …</text>
+<text x="780" y="157.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">dates moved back</text>
+<path d="M224 133 L260 133" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M496 133 L532 133" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<text x="744" y="214" font-size="12" font-weight="600" fill="#5C3D00" text-anchor="middle">the answer, on its way out</text>
+<rect x="24" y="230" width="300" height="186" rx="9" fill="#FDF1DC" stroke="#B97A00" stroke-width="1.4"/>
+<text x="36" y="251" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">JSON answers</text>
+<text x="36" y="270.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">1  identifiers replaced (the dictionary):</text>
+<text x="52" y="286.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">patient IDs → MO- pseudonyms</text>
+<text x="52" y="303.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">encounter IDs → MO-E- pseudonyms</text>
+<text x="52" y="319.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">MRNs, CSNs → [MRN], [CSN]</text>
+<text x="52" y="336.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">recordings’ paths → mo-rec tokens</text>
+<text x="36" y="352.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">2  dates and times moved back (per patient)</text>
+<text x="36" y="369.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">3  ages above 89 → 90+; staff → [Staff Name]</text>
+<text x="36" y="385.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">4  the patient’s own names in text → placeholder</text>
+<rect x="348" y="230" width="300" height="186" rx="9" fill="#FDF1DC" stroke="#B97A00" stroke-width="1.4"/>
+<text x="360" y="251" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">Files, by kind</text>
+<text x="360" y="270.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">WFDB header: identifying comments out,</text>
+<text x="376" y="286.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">dates moved, file names → tokens</text>
+<text x="360" y="303.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">GE MUSE XML: demographics, staff,</text>
+<text x="376" y="319.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">order out; dates moved</text>
+<text x="360" y="336.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">DICOM: header rewritten (PS3.15 Basic</text>
+<text x="376" y="352.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Profile), pixels as they are</text>
+<text x="360" y="369.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">EDF, BDF: header de-identified,</text>
+<text x="376" y="385.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">annotation texts out</text>
+<text x="360" y="402.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">WFDB samples: numbers only, as they are</text>
+<rect x="672" y="230" width="304" height="186" rx="9" fill="#FDF1DC" stroke="#B97A00" stroke-width="1.4"/>
+<text x="684" y="251" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">Passed with a warning, or refused</text>
+<text x="684" y="270.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">pictures, videos, PDF: as they are,</text>
+<text x="700" y="286.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">marked x-medorama-may-contain-phi</text>
+<text x="700" y="303.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(the page shows an amber warning triangle)</text>
+<text x="684" y="319.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">DICOM: marked too (burned-in text)</text>
+<text x="684" y="336.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">any other kind of file: refused</text>
+<text x="684" y="352.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">notes’ text: through the gate, marked</text>
+<text x="700" y="369.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(free text may still identify)</text>
+<rect x="24" y="436" width="952" height="100" rx="9" fill="#FDF1DC" stroke="#B97A00" stroke-width="1.4"/>
+<text x="36" y="457" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">Last layer: fail closed</text>
+<text x="36" y="476.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">every answer of a Privacy Mode session passes server.rs privacy: JSON through the gate; a file only if the gate cleared it;</text>
+<text x="36" y="492.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">any other answer carrying data is refused and logged. A new endpoint that forgets the gate cannot leak: its answer is refused.</text>
+<text x="36" y="509.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Proof: tests/privacy.rs seeds identifiers in every format and checks no byte of any page, file or export holds them.</text>
+<path d="M614 182 L614 198 L174 198 L174 230" fill="none" stroke="#B97A00" stroke-width="1.5" marker-end="url(#ag)"/>
+<path d="M614 198 L498 198 L498 230" fill="none" stroke="#B97A00" stroke-width="1.5" marker-end="url(#ag)"/>
+<path d="M614 198 L824 198 L824 230" fill="none" stroke="#B97A00" stroke-width="1.5" marker-end="url(#ag)"/>
+</g></svg>

@@ -1,0 +1,53 @@
+[package]
+name = "vitalstream-rs"
+version = "0.1.0"
+description = "VitalStream viewer (Rust): browse physiological recordings (WFDB folders; other formats through adapters) in a web browser"
+readme = "README.md"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+name = "vitalstream_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vitalstream-rs"
+path = "src/main.rs"
+
+[dependencies]
+recording-engine.workspace = true
+signal-core.workspace = true
+indexmap.workspace = true
+sha2.workspace = true
+clap.workspace = true
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query", "form", "json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+scrypt = { version = "0.11", default-features = false, optional = true }
+hmac = { version = "0.12", optional = true }
+getrandom = { version = "0.3", optional = true }
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+chrono-tz = { version = "0.10", default-features = false }
+rpassword = { version = "7", optional = true }
+include_dir = "0.7"
+mime_guess = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+default = ["password", "wfdb"]
+# The password the page can ask for (`--set-password`). Without it (`--no-default-features`, or
+# install.sh --no-password) the viewer has no password code at all, and refuses to run where
+# one is required (`require_password`, set by Medorama).
+password = ["dep:scrypt", "dep:hmac", "dep:getrandom", "dep:rpassword"]
+# WFDB records and folders (the engine's `wfdb` feature, with wfdb-x).  Without it
+# (`--no-default-features --features password`) the viewer holds no wfdb-x code: opening a WFDB
+# record or folder is refused ("this build has no WFDB support"); every other format reads as usual.
+wfdb = ["recording-engine/wfdb"]
+
+[dev-dependencies]
+tempfile.workspace = true
+tower = { version = "0.5", features = ["util"] }

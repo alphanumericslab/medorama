@@ -1,0 +1,90 @@
+{
+  "version": 5,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "release",
+      "displayName": "Release (Ninja)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "nowfdb",
+      "displayName": "Release without WFDB support (no wfdb-x: VS_WFDB=OFF)",
+      "inherits": "release",
+      "binaryDir": "${sourceDir}/build/nowfdb",
+      "cacheVariables": {
+        "VS_WFDB": "OFF"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug (Ninja)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "viewer",
+      "displayName": "The viewer only, without tests (tools/install-medorama.sh)",
+      "inherits": "release",
+      "binaryDir": "${sourceDir}/build/viewer",
+      "cacheVariables": {
+        "VS_BUILD_TESTS": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "release",
+      "configurePreset": "release"
+    },
+    {
+      "name": "nowfdb",
+      "configurePreset": "nowfdb"
+    },
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    },
+    {
+      "name": "viewer",
+      "configurePreset": "viewer",
+      "targets": [
+        "vitalstream-cpp"
+      ]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "release",
+      "configurePreset": "release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "nowfdb",
+      "configurePreset": "nowfdb",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "debug",
+      "configurePreset": "debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

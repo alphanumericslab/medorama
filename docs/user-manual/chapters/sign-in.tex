@@ -1,0 +1,582 @@
+% Sign-in and institutional authentication: the two methods (password, proxy), their settings,
+% proxy sign-in's behavior and security requirements, the setup procedure, example proxy
+% configurations, accounts without a password, adding a method in code, the viewers' own sign-in.
+% Sources: docs/sign-in.md; the code is the authority: medorama/src/signin.rs (Method, identify,
+% login, logout, method), config.rs (sign_in_method), server.rs (session_user, my_password,
+% user_add), users.rs (get_by_login, unusable_password), main.rs (user add --no-password),
+% web/js/main.js (showLogin), web/js/views/admin.js; tests: medorama/tests/signin.rs.
+\chapter{Sign-in and institutional authentication}
+\label{chap:sign-in}
+
+This chapter explains how users sign in to Medorama, and how an institution connects Medorama to
+its own sign-in: single sign-on through OpenID Connect or SAML (for example Microsoft Entra ID,
+Okta, Google or Shibboleth), Kerberos, multi-factor authentication or a VPN. It is written for
+administrators who deploy Medorama and for integrators who adapt it. What users may see once
+they are signed in is explained in \cref{chap:protecting}, and the security review is
+\cref{chap:security}.
+
+\section{Two ways to sign in}
+\label{sec:sign-in-methods}
+
+Medorama separates two questions:
+\begin{itemize}
+\item \textbf{Who is asking?} This is the job of the \emph{sign-in method}. All of it lives in
+  one module, \file{medorama/src/signin.rs}.
+\item \textbf{What may that user do and see?} Medorama decides this in the same way for every
+  method, from the user's account: the role (viewer, analyst or administrator), the PHI
+  permission and Privacy Mode (\cref{chap:users-privacy}).
+\end{itemize}
+
+\screenshot{sign-in.pdf}{Sign-in is one seam: either method identifies the user, and everything
+after it (roles, the PHI permission, Privacy Mode, the privacy gate) is the same.}{fig:sign-in-seam}
+
+The setting \code{sign\_in} in \file{medorama.toml} chooses the method
+(\cref{tab:sign-in-methods}).
+
+\begin{xltabular}{\linewidth}{@{}P{2.6cm}P{5.6cm}L@{}}
+\caption{The two sign-in methods.}
+\label{tab:sign-in-methods}\\
+\toprule
+\tabhead \code{sign\_in} & \tabhead Who the user is & \tabhead Typical use \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead \code{sign\_in} & \tabhead Who the user is & \tabhead Typical use \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{password} (the default) & The account whose name and password were entered on Medorama's
+  sign-in form & A single team, a test installation, a server reached through an SSH tunnel or a
+  VPN \\
+\code{proxy} & The account named in a request header by the institution's authenticating
+  reverse proxy, on requests that come from that proxy & Single sign-on (OpenID Connect, SAML),
+  Kerberos, multi-factor authentication, an access gateway \\
+\end{xltabular}
+
+With \code{proxy}, the proxy performs the institution's own sign-in, including any multi-factor
+authentication, and Medorama never sees a password. Accounts, roles and the PHI permission still
+live in Medorama, under the names the proxy gives the users. With either method, every request
+handler receives the signed-in user in the same form (\code{server::Auth(User)}), so the rest of
+Medorama does not depend on the method.
+
+\section{Settings}
+\label{sec:sign-in-settings}
+
+The settings in \cref{tab:sign-in-settings} are read from \file{medorama.toml} in the catalog's
+home folder (\file{config.rs}, \code{sign\_in\_method}). Medorama reads them when it starts, so
+restart it after a change. Every setting is also listed in \cref{chap:settings-reference}.
+
+\begin{xltabular}{\linewidth}{@{}P{3.4cm}P{3.0cm}L@{}}
+\caption{The sign-in settings of \file{medorama.toml}.}
+\label{tab:sign-in-settings}\\
+\toprule
+\tabhead Setting & \tabhead Default & \tabhead Meaning \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Setting & \tabhead Default & \tabhead Meaning \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{sign\_in} & \code{"password"} & \code{"password"} or \code{"proxy"}. \\
+\code{proxy\_user\_header} & \code{"X-Remote-User"} & The request header in which the proxy
+  sends the user's account name. Proxy mode only. \\
+\code{proxy\_addresses} & \code{["127.0.0.1", "::1"]} & The IP addresses the proxy connects
+  from. The header is believed only on requests from these addresses. Each entry is one
+  address; ranges are not accepted. Proxy mode only. \\
+\code{proxy\_logout\_url} & \code{""} & Where the page's \ui{Sign out} leads: the proxy's own
+  sign-out address. When it is empty, the page shows its signed-out screen. Proxy mode only. \\
+\code{secure\_cookies} & \code{false} & Marks Medorama's cookies \code{Secure}. Set it to
+  \code{true} whenever users reach Medorama over HTTPS, with either method. Medorama warns at
+  start when it listens on another address than this computer's, or signs users in through a
+  proxy, with \code{secure\_cookies = false}. \\
+\code{session\_hours} & \code{12} & In password mode, how long a sign-in lasts. In proxy mode,
+  how long a visit's Privacy Mode choice is kept at most. \\
+\code{session\_idle\_minutes} & \code{60} & In password mode, a session unused this long ends (0:
+  only \code{session\_hours} ends it). In proxy mode, the gap after which a user's next request
+  counts as a new visit in the audit log. \\
+\end{xltabular}
+
+Medorama refuses to start when these settings are inconsistent, so that a half-made change is
+not silently ignored. \Cref{tab:sign-in-errors} lists the messages, which follow the path of the
+settings file.
+
+\begin{xltabular}{\linewidth}{@{}P{5.0cm}L@{}}
+\caption{Start-up errors of the sign-in settings.}
+\label{tab:sign-in-errors}\\
+\toprule
+\tabhead Mistake & \tabhead Message \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Mistake & \tabhead Message \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+A \code{proxy\_\dots} setting without \code{sign\_in = "proxy"} & \code{proxy\_user\_header,
+  proxy\_addresses and proxy\_logout\_url need sign\_in = "proxy"} \\
+An unknown method & \code{sign\_in: "saml" is not a sign-in method (password, proxy)} \\
+A header name with spaces or other invalid characters & \code{proxy\_user\_header: "bad header"
+  is not a header name} \\
+A host name, or a range, instead of an IP address & \code{proxy\_addresses: "proxy.example.org"
+  is not an IP address} \\
+An empty list of addresses & \code{proxy\_addresses: name the address the proxy connects
+  from} \\
+\end{xltabular}
+
+The page asks the server which method is in use through the public request \code{GET
+api/v1/sign-in}, which answers, for example, \code{\{"method": "proxy", "logout\_url":
+"/oauth2/sign\_out"\}} (\cref{chap:http-api}).
+
+\section{Sign-in with Medorama's passwords}
+\label{sec:sign-in-password}
+
+With \code{sign\_in = "password"}, users sign in on Medorama's own form.
+\begin{itemize}
+\item \textbf{Passwords} have at least 10 characters and are stored as Argon2id hashes (the
+  \code{argon2} crate's defaults: 19\,MiB of memory, 2 iterations, 1 lane, and a random salt
+  per password).
+\item \textbf{Throttling.} Each attempt is counted before its password is checked, so attempts
+  sent at once count too. After 5 failed attempts within 60 seconds, an account name is locked
+  for 60 seconds from the address they came from; others, elsewhere, can still sign in under
+  that name, so nobody can lock a known account out. After 30 failed attempts within 60 seconds
+  from one address, whatever the names, that address is refused for 60 seconds. (Behind a
+  reverse proxy, every request comes from the proxy's address: the limits are then the whole
+  site's.) At most 4 passwords are checked at once. Every failure waits one second before the
+  answer. A sign-in with an unknown name takes as long as one with a wrong password, so the
+  timing does not reveal which names exist; a name no account can have (over 64 characters, or
+  with other characters than letters, digits and \code{. \_ - @}) is refused at once. Failures
+  are written to the audit log (\code{login\_failed}, with at most 64 characters of the name).
+\item \textbf{Sessions.} A successful sign-in creates a 256-bit random token, and only its
+  SHA-256 hash is stored. The cookie (\code{medorama\_<port>}) is \code{HttpOnly},
+  \code{SameSite=Strict} and \code{Path=/}, and it is \code{Secure} when
+  \code{secure\_cookies = true}. A session ends after \code{session\_hours}, or when it has not
+  been used for \code{session\_idle\_minutes}. The page's automatic checks for new data do not
+  count as use, so an unattended page signs out.
+\item \textbf{Privacy Mode.} The session keeps its Privacy Mode choice (in its row in the
+  database): a new sign-in starts in the user's default mode.
+\item \textbf{Signing out.} \ui{Sign out} ends the session, and the page loads again, empty, for
+  whoever signs in next. \ui{Sign out everywhere} ends all of
+  the user's sessions on every device, and an administrator can do the same for a user
+  (\ui{Admin} $\rightarrow$ \ui{Users} $\rightarrow$ \ui{Sign out}). A new password or a
+  disabled account also ends the user's sessions.
+\item \textbf{Changing a password.} Users change their own password from the user menu.
+  Administrators reset other users' passwords in \ui{Admin} $\rightarrow$ \ui{Users}, or with
+  \cmd{medorama user set NAME -{}-password}.
+\end{itemize}
+
+\section{Sign-in through the institution's proxy}
+\label{sec:sign-in-proxy}
+
+With \code{sign\_in = "proxy"}, an \emph{authenticating reverse proxy} stands in front of
+Medorama. The proxy signs the user in with the institution's method, then passes each request to
+Medorama with a header that names the user. Proxies that do this include oauth2-proxy, Apache
+httpd with mod\_auth\_openidc, mod\_shib (Shibboleth) or mod\_auth\_gssapi (Kerberos), and nginx
+with \code{auth\_request}. \Cref{tab:sign-in-proxy} shows how Medorama then answers
+(\file{signin.rs}, \code{identify}).
+
+\begin{xltabular}{\linewidth}{@{}P{5.4cm}L@{}}
+\caption{How Medorama answers in proxy mode.}
+\label{tab:sign-in-proxy}\\
+\toprule
+\tabhead Situation & \tabhead Result \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Situation & \tabhead Result \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+The request comes from an address in \code{proxy\_addresses}, and the header names an enabled
+  account & The user is signed in. Names are compared without regard to case:
+  \code{JDoe@Hospital.org} matches the account \code{jdoe@hospital.org}. \\
+The header names no account, a disabled account, or two accounts that differ only in case &
+  HTTP 403 with the reason: ``your institution's sign-in names you \emph{name}, and Medorama has
+  no account of that name: ask an administrator''. The page shows this explanation. \\
+The header is missing or empty & Not signed in (HTTP 401). The page says that the institution's
+  sign-in has not signed the user in. \\
+The request comes from any other address & The header is ignored, and the request is not signed
+  in (HTTP 401). An IPv4 address and IPv6's form of it (\code{::ffff:10.0.0.5}) are the same
+  address. \\
+The header is given more than once & Not signed in (HTTP 401): a copy sent by the client was
+  not removed. \\
+\code{POST api/v1/login} (the password form) & Refused (HTTP 400), because the institution's
+  sign-in names the user. \\
+A password change (\code{POST api/v1/me/password}) & Refused (HTTP 400). The page hides
+  \ui{Change password} and \ui{Sign out everywhere}. \\
+\ui{Sign out} & Medorama ends the visit and forgets its Privacy Mode choice, and the page goes
+  to \code{proxy\_logout\_url}, the proxy's own sign-out. \\
+Privacy Mode & The choice made with the switch lasts the visit (at most \code{session\_hours}),
+  kept in the memory of the Medorama server that was asked; a new visit starts in the user's
+  default mode. With several servers behind the proxy, another server answers in the user's
+  default mode. \\
+\end{xltabular}
+
+\paragraph{The audit log.} Medorama writes one \code{login} entry per visit, with the detail
+\code{proxy}, rather than one per request. A visit starts when the user has not been seen for
+\code{session\_idle\_minutes} (at least one minute). An unknown name produces one
+\code{login\_failed} entry per visit, with the name and the detail \code{proxy: no such account}.
+
+\paragraph{Sessions.} In proxy mode, Medorama keeps no session of its own: the proxy's session is
+the user's session, and its lifetime and idle timeout are set at the proxy or at the identity
+provider. To stop a user's access at once, disable the account in Medorama, which takes effect
+at the user's next request, or end the user's session at the identity provider.
+
+\section{Security requirements for proxy sign-in}
+\label{sec:sign-in-requirements}
+
+In proxy mode, Medorama trusts the proxy to say who the user is. That trust is safe only when
+the following conditions hold.
+\begin{enumerate}
+\item \textbf{Medorama is reachable only through the proxy.} Keep \code{host = "127.0.0.1"} and
+  run the proxy on the same host. If the proxy runs on another host, bind Medorama to an
+  internal address and allow connections to its port only from the proxy, with a host firewall
+  or a network security group. Anyone who can connect to Medorama's port from an address in
+  \code{proxy\_addresses} can name any user.
+\item \textbf{Medorama's host has no untrusted accounts.} With the default
+  \code{proxy\_addresses}, any program on the host can connect to 127.0.0.1 and send the header.
+  Run Medorama on a host whose local accounts are trusted, such as a dedicated server or virtual
+  machine, as the deployment checklist recommends (\cref{sec:security-checklist}).
+\item \textbf{The proxy removes any incoming copy of the header.} A user must not be able to
+  send \code{X-Remote-User} and have the proxy pass it on. Most proxies replace the header they
+  set, and the examples in \cref{sec:sign-in-examples} also remove it explicitly. Check this
+  after setup (step 6 of \cref{sec:sign-in-setup}).
+\item \textbf{TLS terminates at the proxy.} The proxy serves HTTPS. Set
+  \code{secure\_cookies = true} in \file{medorama.toml}.
+\item \textbf{The address list is right.} \code{proxy\_addresses} names the address that the
+  proxy's connections come from, as Medorama sees it. When Medorama listens on an IPv6 socket, an
+  IPv4 proxy may appear as an IPv4-mapped address (\code{::ffff:10.0.0.5}); Medorama compares it
+  with the IPv4 address listed (\code{10.0.0.5}).
+\end{enumerate}
+
+Cross-site request forgery remains blocked in proxy mode: every request that changes something
+must carry the header \code{X-Medorama: 1}, which a page on another site cannot add
+(\cref{sec:security-web}).
+
+\section{Set up proxy sign-in}
+\label{sec:sign-in-setup}
+
+\begin{enumerate}
+\item \textbf{Choose the account names.} Decide which value the proxy will send. It is usually
+  the user's e-mail address, user principal name or eduPersonPrincipalName, such as
+  \code{jdoe@hospital.org}. Medorama's account names may contain letters, digits and the
+  characters \code{.}, \code{\_}, \code{-} and \code{@}, up to 64 characters, so a value such as
+  \code{HOSPITAL\textbackslash jdoe} must be mapped by the proxy to an allowed form.
+\item \textbf{Create the accounts} under those names, including at least one administrator
+  (\cref{sec:sign-in-accounts}).
+\item \textbf{Configure the proxy} to authenticate users, remove any incoming copy of the
+  header, set the header to the user's name, and pass requests to Medorama
+  (\cref{sec:sign-in-examples}).
+\item \textbf{Change \file{medorama.toml}.} For a proxy on the same host, the settings are:
+\begin{lstlisting}[language=TOML]
+host = "127.0.0.1"
+secure_cookies = true
+sign_in = "proxy"
+proxy_user_header = "X-Remote-User"
+proxy_addresses = ["127.0.0.1", "::1"]
+proxy_logout_url = "/oauth2/sign_out"
+\end{lstlisting}
+\item \textbf{Restart Medorama}, and confirm the method with the following command on the
+  host. The answer names the method (\code{"method":"proxy"}) and the sign-out address.
+\begin{lstlisting}[style=shell]
+curl -s http://127.0.0.1:8090/api/v1/sign-in
+\end{lstlisting}
+\item \textbf{Check that the header cannot be forged.} From a computer other than the server,
+  send the header that Medorama reads (here \code{X-Remote-User}) through the proxy without
+  signing in. The proxy must redirect to its sign-in or refuse the request; it must not return a
+  user:
+\begin{lstlisting}[style=shell]
+curl -s -i -H 'X-Remote-User: admin' https://medorama.hospital.org/api/v1/me
+\end{lstlisting}
+  Then try Medorama's port directly from that computer (\code{http://<server>:8090/}): the
+  connection must fail.
+\item \textbf{Sign in through the browser} as a user, and check \ui{Admin} $\rightarrow$
+  \ui{Audit} for the \code{login} entry.
+\end{enumerate}
+
+\section{Example proxy configurations}
+\label{sec:sign-in-examples}
+
+The configurations below are short examples to adapt, not complete deployments. They show the
+parts that matter to Medorama: authenticating the user, setting the header, and passing requests
+to Medorama on 127.0.0.1:8090. Names in angle brackets, host names and file paths are
+placeholders. Register Medorama with the identity provider as the proxy's documentation
+describes, keep secrets out of configuration files where the proxy allows it, and test each
+configuration with step 6 of \cref{sec:sign-in-setup}. The repository's \file{docs/sign-in.md}
+gives the same examples with a few more variants.
+
+\subsection{oauth2-proxy with an OpenID Connect provider}
+\label{sec:sign-in-oauth2-proxy}
+
+oauth2-proxy signs users in with an OpenID Connect provider and passes requests on to Medorama.
+Here nginx terminates TLS in front of it. The issuer URL depends on the provider
+(\cref{tab:sign-in-issuers}).
+
+\begin{xltabular}{\linewidth}{@{}P{4.6cm}L@{}}
+\caption{The issuer URL of common OpenID Connect providers.}
+\label{tab:sign-in-issuers}\\
+\toprule
+\tabhead Provider & \tabhead \code{oidc\_issuer\_url} \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Provider & \tabhead \code{oidc\_issuer\_url} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Microsoft Entra ID (Azure AD) & \code{https://login.microsoftonline.com/<tenant-id>/v2.0} \\
+Okta & \code{https://<your-okta-domain>/oauth2/default} \\
+Google & \code{https://accounts.google.com} \\
+\end{xltabular}
+
+The oauth2-proxy configuration file:
+\begin{lstlisting}[language=TOML]
+# oauth2-proxy.cfg (an example to adapt)
+http_address  = "127.0.0.1:4180"
+reverse_proxy = true                       # behind nginx, which terminates TLS
+upstreams     = ["http://127.0.0.1:8090/"] # Medorama
+
+provider        = "oidc"
+oidc_issuer_url = "https://login.microsoftonline.com/<tenant-id>/v2.0"
+client_id       = "<application (client) ID>"
+redirect_url    = "https://medorama.hospital.org/oauth2/callback"
+scope           = "openid email profile"
+email_domains   = ["hospital.org"]
+# client_secret and cookie_secret: in the environment (OAUTH2_PROXY_CLIENT_SECRET,
+# OAUTH2_PROXY_COOKIE_SECRET), rather than in this file
+
+cookie_secure        = true
+pass_user_headers    = true                # send X-Forwarded-User and X-Forwarded-Email
+prefer_email_to_user = true                # X-Forwarded-User holds the e-mail address
+\end{lstlisting}
+
+The nginx server in front of it removes any copy of the user headers that a client sends:
+\begin{lstlisting}[style=text]
+server {
+    listen 443 ssl;
+    server_name medorama.hospital.org;
+    ssl_certificate     /etc/ssl/certs/medorama.pem;
+    ssl_certificate_key /etc/ssl/private/medorama.key;
+    client_max_body_size 1g;               # Medorama accepts imports up to 1 GiB
+
+    location / {
+        proxy_pass http://127.0.0.1:4180;  # oauth2-proxy
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-User "";   # never a client's own copy
+        proxy_set_header X-Forwarded-Email "";
+    }
+}
+\end{lstlisting}
+
+The matching settings in \file{medorama.toml} are:
+\begin{lstlisting}[language=TOML]
+sign_in = "proxy"
+proxy_user_header = "X-Forwarded-User"
+proxy_addresses = ["127.0.0.1"]
+proxy_logout_url = "/oauth2/sign_out"
+secure_cookies = true
+\end{lstlisting}
+
+The address \code{/oauth2/sign\_out} ends the oauth2-proxy session. To end the session at the
+identity provider too, and to choose another claim than \code{email} for the user's name, see
+oauth2-proxy's documentation.
+
+\paragraph{nginx with auth\_request.} nginx can also ask oauth2-proxy whether each request is
+signed in (\code{auth\_request}) and pass requests to Medorama itself. oauth2-proxy then runs with
+\code{upstreams = ["static://202"]} and \code{set\_xauthrequest = true}, so that it answers
+nginx's checks with the user's address in \code{X-Auth-Request-Email}. In nginx, the location
+that passes requests to Medorama copies that address into \code{X-Remote-User}, which replaces
+any copy the client sent (the \code{/oauth2/} locations are as in oauth2-proxy's documentation):
+\begin{lstlisting}[style=text]
+location / {
+    auth_request /oauth2/auth;
+    error_page 401 =403 /oauth2/sign_in;
+    auth_request_set $user $upstream_http_x_auth_request_email;
+    proxy_set_header X-Remote-User $user;   # replaces any copy the client sent
+    proxy_pass http://127.0.0.1:8090;       # Medorama
+}
+\end{lstlisting}
+Keep the default header in \file{medorama.toml}, with \code{proxy\_addresses = ["127.0.0.1"]}
+and \code{proxy\_logout\_url = "/oauth2/sign\_out"}.
+
+\subsection{Apache httpd with mod\_auth\_openidc}
+\label{sec:sign-in-openidc}
+
+mod\_auth\_openidc adds OpenID Connect sign-in to Apache httpd. It sets the user's name
+(\code{REMOTE\_USER}) from the claim named by \code{OIDCRemoteUserClaim}, and mod\_headers passes
+it to Medorama after removing any copy the client sent:
+\begin{lstlisting}[style=text]
+<VirtualHost *:443>
+    ServerName medorama.hospital.org
+    SSLEngine on
+    SSLCertificateFile    /etc/pki/tls/certs/medorama.pem
+    SSLCertificateKeyFile /etc/pki/tls/private/medorama.key
+
+    OIDCProviderMetadataURL https://<provider>/.well-known/openid-configuration
+    OIDCClientID            <application (client) ID>
+    OIDCClientSecret        <client secret>
+    OIDCRedirectURI         https://medorama.hospital.org/redirect_uri
+    OIDCCryptoPassphrase    <a long random string>
+    OIDCScope               "openid email profile"
+    OIDCRemoteUserClaim     email
+
+    <Location />
+        AuthType openid-connect
+        Require valid-user
+    </Location>
+
+    RequestHeader unset X-Remote-User early
+    RequestHeader set X-Remote-User expr=%{REMOTE_USER}
+    ProxyPass        / http://127.0.0.1:8090/
+    ProxyPassReverse / http://127.0.0.1:8090/
+</VirtualHost>
+\end{lstlisting}
+The \code{expr=} form of \code{RequestHeader} needs Apache httpd 2.4.10 or later. If the
+provider sends no \code{email} claim, name another one, such as \code{preferred\_username}. For
+sign-out, mod\_auth\_openidc accepts a \code{logout} parameter on its redirect URI, for example
+\code{proxy\_logout\_url = "/redirect\_uri?logout=https\%3A\%2F\%2Fmedorama.hospital.org\%2F"}.
+
+\subsection{Shibboleth (SAML), Kerberos, and VPNs}
+\label{sec:sign-in-other-proxies}
+
+\paragraph{Shibboleth.} The Shibboleth Service Provider (mod\_shib) signs users in through a SAML
+identity provider, such as an institution's or a research federation's. The attribute that
+becomes \code{REMOTE\_USER} is chosen in \file{shibboleth2.xml} (for example \code{eppn}). The
+virtual host is the same as for mod\_auth\_openidc, with \code{AuthType shibboleth},
+\code{ShibRequestSetting requireSession 1} and \code{Require shib-session} in its
+\code{<Location />}, and \code{ProxyPass /Shibboleth.sso !} before the other \code{ProxyPass}
+line, so that the Service Provider's own handlers stay in Apache httpd. Keep mod\_shib's default
+of passing attributes as environment variables rather than headers, and set
+\code{proxy\_logout\_url = "/Shibboleth.sso/Logout"}.
+
+\paragraph{Kerberos.} On a network where users' computers hold Kerberos tickets (for example an
+Active Directory domain), mod\_auth\_gssapi signs them in without a password prompt:
+\code{AuthType GSSAPI}, \code{GssapiCredStore keytab:/etc/httpd/medorama.keytab},
+\code{GssapiLocalName On} (so that \code{jdoe@HOSPITAL.ORG} becomes \code{jdoe}) and
+\code{Require valid-user}, with the same \code{RequestHeader} and \code{ProxyPass} lines in a TLS
+virtual host. Without \code{GssapiLocalName}, the name is the full principal, which is also a
+valid Medorama account name. Kerberos has no sign-out, so leave \code{proxy\_logout\_url} empty.
+
+\paragraph{A VPN or an access gateway.} A VPN restricts who can reach Medorama, but most VPNs do
+not tell a web application who the user is. Behind a VPN, either keep
+\code{sign\_in = "password"}, so that users sign in to Medorama inside the VPN, or add one of the
+proxies above. An access gateway or identity-aware proxy that adds a header naming the user works
+like the proxies above, provided that the header holds exactly the account name. Medorama
+compares the whole value, so a value with a prefix (such as a provider's name and a colon) must
+be rewritten by a proxy step first. List the gateway's addresses in \code{proxy\_addresses}.
+
+\section{Accounts, roles and the PHI permission}
+\label{sec:sign-in-accounts}
+
+Accounts live in Medorama with either method. In proxy mode, create each account under the exact
+name the proxy sends; case does not matter.
+\begin{itemize}
+\item \textbf{The first administrator} is created by \cmd{medorama init}. In proxy mode, give it
+  the name the proxy will send, for example
+  \cmd{medorama init -{}-results DIR -{}-admin jdoe@hospital.org}.
+\item \textbf{More accounts} are created in \ui{Admin} $\rightarrow$ \ui{Users}, or on the server
+  with \cmd{medorama user add}. In proxy mode an account needs no password. The following
+  command adds an analyst with the PHI permission who signs in through the institution's
+  sign-in:
+\begin{lstlisting}[style=shell]
+medorama user add jdoe@hospital.org --role analyst --phi --display-name "Jane Doe" --no-password
+\end{lstlisting}
+  With \opt{-{}-no-password}, the account receives a random password that nobody knows, so it can
+  never sign in with a password, even if the catalog is later switched back to password
+  sign-in (an administrator then sets a password with \cmd{medorama user set NAME
+  -{}-password}). With proxy sign-in, \ui{Admin} $\rightarrow$ \ui{Users} hides the password
+  field of a new account and the \ui{Reset password} button, and \code{POST users} may leave the
+  password out. Without \opt{-{}-no-password}, the command asks for a password of at least 10
+  characters.
+\item \textbf{Changes} are made in \ui{Admin} $\rightarrow$ \ui{Users}, or with
+  \cmd{medorama user set NAME} (\opt{-{}-role}, \opt{-{}-phi true|false},
+  \opt{-{}-disabled true|false}, \opt{-{}-display-name}). \cmd{medorama user list} lists the
+  accounts, and \cmd{medorama user remove NAME} deletes one. Each change is written to the audit
+  log.
+\end{itemize}
+
+The roles and the PHI permission are described in \cref{chap:users-privacy}. Medorama does not
+read groups or roles from the identity provider: an administrator assigns them in Medorama.
+
+\section{Adding another sign-in method in code}
+\label{sec:sign-in-code}
+
+Most institutions need no code: a proxy in front of Medorama connects it to any sign-in that the
+proxy supports. If a method must be built into Medorama instead (for example, verifying a signed
+token that a gateway adds to each request), the change is confined to the sign-in code.
+\begin{enumerate}
+\item \textbf{Add a variant to \code{signin::Method}} in \file{medorama/src/signin.rs}, holding
+  the method's settings, and give it a name in \code{Method::name}.
+\item \textbf{Add its arm to \code{signin::identify}.} From the request's headers, its peer
+  address and the database, return \code{Who::User(user, choice)} for a signed-in user (with
+  the session's Privacy Mode choice, \code{None} if none was made: kept by
+  \code{signin::set\_privacy}),
+  \code{Who::Nobody} when the request is not signed in, or \code{Who::NoAccount(name)} when the
+  method names someone without an account. Look the account up with
+  \code{users::get\_by\_login}.
+\item \textbf{If users sign in through Medorama's page} (a form, or a redirect that returns to
+  Medorama), handle it in \code{signin::login}, and in \code{signin::logout} if signing out needs
+  more than forgetting the Privacy Mode choice. If the method needs its own sign-in screen, the
+  page's \code{showLogin} in \file{medorama/web/js/main.js} changes too.
+\item \textbf{Read the method's settings} in \file{config.rs}: add its value to
+  \code{sign\_in\_method} and its keys to \code{Config::load}, so that a mistake stops Medorama at
+  start.
+\item \textbf{Test it.} Add a test to \file{medorama/tests/signin.rs} that signs in, is refused
+  from the wrong place, and checks the audit log, and extend the unit test
+  \code{sign\_in\_settings} of \file{config.rs} with the new settings and their errors.
+\end{enumerate}
+Nothing else changes: every handler receives the signed-in user as \code{server::Auth(User)},
+and roles, the PHI permission, Privacy Mode and the privacy gate apply as before.
+
+\section{The viewers' own sign-in}
+\label{sec:sign-in-viewers}
+
+The viewers can also run alone, without Medorama, on a researcher's workstation or a server
+(\cref{chap:viewers-alone}).
+\begin{itemize}
+\item \textbf{VitalStream} (\cmd{vitalstream-py}, \cmd{vitalstream-rs}, \cmd{vitalstream-cpp})
+  listens on 127.0.0.1 by default (ports 8050, 8060 and 8070). \cmd{vitalstream-rs
+  -{}-set-password}, or the same option of the other two viewers, sets an optional password that
+  the page then asks for. It is stored as a salted scrypt hash, with a random signing key, in
+  \file{\textasciitilde/.config/vitalstream/auth.json}, readable only by its owner, and serves
+  all three viewers; a sign-in lasts 30 days, and signing out ends it on the server too. After
+  wrong passwords from one address, the next one is checked only after 1, 3, 7, 15 \dots{} up to
+  30\,s. Set a password on any computer that other people use.
+\item \textbf{A build without password support.} \cmd{viewers/vitalstream/install.sh
+  -{}-no-password} builds a viewer with no password code at all (for the Rust viewer
+  \cmd{cargo build -{}-no-default-features -{}-features wfdb}, for the C++ viewer the CMake option
+  \code{-DVS\_PASSWORD=OFF}). Such a build refuses to run where a password is required, as under
+  Medorama.
+\item \textbf{A root folder fixed when the viewer is built.} The viewer never opens anything
+  outside its root: \cmd{install.sh -{}-root DIR} fixes it (by default \file{\textasciitilde}, the
+  home folder of whoever runs the viewer). The \code{data\_roots} setting can narrow the root but
+  never widen it, and symbolic links are resolved before the check.
+\item \textbf{The ECG and PACS viewers} are web pages. Opened from disk, they read only the files
+  the user chooses in the browser and need no sign-in. Served with \cmd{muse-py serve} or
+  \cmd{dicom-py serve}, they list and open files under a root (\opt{-{}-root}, inside the root
+  fixed at installation with \code{VIEWER\_ROOT}), listen on 127.0.0.1 (ports 8080 and 8081), and
+  accept the same optional password (\opt{-{}-set-password}; a package installed with
+  \code{VIEWER\_PASSWORD=0} has no password support). For \cmd{muse-py serve} and
+  \cmd{dicom-py serve}, a sign-in lasts 30 days, until the server stops, or until a browser
+  signs out, which ends every sign-in; after a wrong password the next try, from any browser,
+  waits 1\,s, then 2, 4 \dots{} up to 60\,s.
+\item \textbf{Host names.} Every viewer answers only requests that name it by a loopback name,
+  an IP address or its own host, which defeats DNS rebinding; VitalStream's
+  \code{allowed\_hosts} adds the names it is reached by (\cref{sec:viewer-api-checks}).
+\end{itemize}
+To reach a viewer on a server from another computer, use an SSH tunnel, for example
+\cmd{ssh -N -L 8060:127.0.0.1:8060 user@server}.
+
+\textbf{Inside Medorama}, the viewers sit behind Medorama's sign-in. The ECG and PACS pages are
+served by Medorama and read a patient's files through its API, like every other request. The
+VitalStream viewer runs as a separate program on a private port of 127.0.0.1, with a password
+file (\file{<home>/viewer/auth.json}, mode 0600) whose signing key only Medorama knows.
+Medorama's gateway signs every request it passes on, users never see the viewer's sign-in, and
+the viewer's port is of no use to other accounts on the host (\cref{sec:architecture-gateway}).

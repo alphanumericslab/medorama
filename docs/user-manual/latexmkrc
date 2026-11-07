@@ -1,0 +1,6 @@
+# latexmk settings: pdflatex, the auxiliary files in build/, the PDF beside the sources
+$pdf_mode = 1;
+$aux_dir = 'build';
+$out_dir = '.';
+@default_files = ('medorama-user-manual.tex');
+$pdflatex = 'pdflatex -interaction=nonstopmode -halt-on-error -file-line-error %O %S';

@@ -1,0 +1,47 @@
+# The Rust workspace: Medorama, the VitalStream viewer (Rust) and the libraries they share.
+# Each program builds and deploys on its own (`cargo build --release -p medorama`,
+# `-p vitalstream-rs`); see docs/building.md.
+#
+#   libs/signal-core/     values, Python-compatible formatting, text helpers
+#   libs/engine/          the recording engine: readers, the index, the adapter protocol
+#   medorama/             Medorama: the catalog, cohorts, imports, the privacy gate, the web page
+#   viewers/vitalstream/rust/   vitalstream-rs, the Rust waveform viewer
+#
+# WFDB records are read with wfdb-x (crate `wfdbx`, GPL v3), fetched from GitHub at
+# the commit pinned below.
+[workspace]
+resolver = "2"
+members = [
+    "libs/signal-core",
+    "libs/engine",
+    "medorama",
+    "viewers/vitalstream/rust",
+]
+default-members = ["libs/signal-core", "libs/engine", "medorama", "viewers/vitalstream/rust"]
+# licensed add-ons, built from their own workspaces (see docs/adapters.md)
+exclude = ["medorama/fuzz"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.88"
+authors = ["Reza Sameni"]
+license = "PolyForm-Noncommercial-1.0.0"
+repository = "https://github.com/alphanumericslab/medorama"
+
+[workspace.dependencies]
+# wfdb-x: https://github.com/alphanumericslab/wfdb-x (the WFDB library in Rust, C++ and Python)
+wfdbx = { git = "https://github.com/alphanumericslab/wfdb-x", rev = "a707ba9ec1624241793bf41b938b219d76005526" }
+signal-core = { path = "libs/signal-core", version = "0.1.0" }
+# without its default features: Medorama and vitalstream-rs choose them (their `wfdb` feature)
+recording-engine = { path = "libs/engine", version = "0.1.0", default-features = false }
+anyhow = "1"
+clap = { version = "4.5", features = ["derive"] }
+indexmap = "2"
+memmap2 = "0.9"
+rayon = "1.10"
+sha2 = "0.10"
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

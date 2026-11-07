@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="{{ site.lang | default: "en-US" }}">
+  <head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+{% seo %}
+    <link rel="stylesheet" href="{{ "/assets/css/style.css?v=" | append: site.github.build_revision | relative_url }}">
+    {% include head-custom.html %}
+  </head>
+  <body>
+    <div class="wrapper">
+      <header>
+        <h1><a href="{{ "/" | relative_url }}">{{ site.title }}</a></h1>
+        <p>{{ site.description }}</p>
+        <p class="view"><a href="https://github.com/{{ site.repository }}">View the project on GitHub <small>{{ site.repository }}</small></a></p>
+        <p class="view links"><a href="{{ "/docs/install.html" | relative_url }}">Install</a><br>
+          <a href="{{ "/docs/getting-started.html" | relative_url }}">Get started</a><br>
+          <a href="{{ "/docs/user-manual/" | relative_url }}">Read the user's manual</a></p>
+        <p class="view try">Try the viewers in your browser:<br>
+          <a href="{{ "/viewers/ecg/" | relative_url }}">ECG viewer</a> &middot;
+          <a href="{{ "/viewers/pacs/" | relative_url }}">PACS viewer</a><br>
+          <small>Files you open there are read in your browser and never leave your computer.</small></p>
+        <p class="notice"><small>Research software, not a medical device.</small></p>
+      </header>
+      <section>
+
+      {% if site.tabs %}
+      {% comment %}
+        Tabs (_config.yml). A page belongs to the tab whose prefix (`match`, default its url, or
+        one of `also`) is the longest that starts the page's URL; the "/" tab matches every page.
+        The tab it belongs to is marked aria-current: "page" on the tab's own page, "true" on
+        the other pages of its section. A tab with `sub` adds a second row, chosen the same way.
+      {% endcomment %}
+      {% assign best = "" %}
+      {% assign current = "" %}
+      {% for tab in site.tabs %}
+        {% assign m = tab.match | default: tab.url %}
+        {% assign prefix = page.url | slice: 0, m.size %}
+        {% if prefix == m and m.size > best.size %}{% assign best = m %}{% assign current = tab.title %}{% endif %}
+        {% for m in tab.also %}
+          {% assign prefix = page.url | slice: 0, m.size %}
+          {% if prefix == m and m.size > best.size %}{% assign best = m %}{% assign current = tab.title %}{% endif %}
+        {% endfor %}
+      {% endfor %}
+      <nav class="tabs" aria-label="Sections">
+        {% for tab in site.tabs %}
+          <a href="{{ tab.url | relative_url }}"{% if tab.title == current %} class="active" aria-current="{% if page.url == tab.url %}page{% else %}true{% endif %}"{% endif %}>{{ tab.title }}</a>
+        {% endfor %}
+      </nav>
+      {% for tab in site.tabs %}
+        {% if tab.title == current and tab.sub %}
+          {% assign best = "" %}
+          {% assign sub_current = "" %}
+          {% for s in tab.sub %}
+            {% assign m = s.match | default: s.url %}
+            {% assign prefix = page.url | slice: 0, m.size %}
+            {% if prefix == m and m.size > best.size %}{% assign best = m %}{% assign sub_current = s.title %}{% endif %}
+          {% endfor %}
+      <nav class="tabs subtabs" aria-label="{{ tab.title }}">
+        {% for s in tab.sub %}
+          <a href="{{ s.url | relative_url }}"{% if s.title == sub_current %} class="active" aria-current="{% if page.url == s.url %}page{% else %}true{% endif %}"{% endif %}>{{ s.title }}</a>
+        {% endfor %}
+      </nav>
+        {% endif %}
+      {% endfor %}
+      {% endif %}
+
+      {{ content }}
+
+      </section>
+      <footer>
+        <p>Medorama is developed by <a href="https://github.com/alphanumericslab">alphanumericslab</a>.
+          Every patient shown on this site is synthetic.</p>
+        <p><small>Hosted on GitHub Pages &mdash; Theme by <a href="https://github.com/orderedlist">orderedlist</a></small></p>
+      </footer>
+    </div>
+    <script>
+      // Links to files that are not published on the site (sources, settings, scripts) lead to
+      // them on GitHub; links to pages and published files stay here.
+      (function () {
+        var base = {{ site.baseurl | jsonify }};
+        var published = {};
+        {% for p in site.pages %}published[{{ p.url | jsonify }}] = 1;{% endfor %}
+        {% for f in site.static_files %}published[{{ f.path | jsonify }}] = 1;{% endfor %}
+        var repo = 'https://github.com/{{ site.repository }}';
+        var links = document.querySelectorAll('section a[href]');
+        for (var i = 0; i < links.length; i++) {
+          var a = links[i];
+          var href = a.getAttribute('href');
+          if (/^([a-z]+:|#|\/\/)/i.test(href)) continue;
+          // a malformed link (a stray %) is left as it is, and the others are still rewritten
+          var u, path;
+          try {
+            u = new URL(href, location.href);
+            path = decodeURIComponent(u.pathname.slice(base.length));
+          } catch (e) { continue; }
+          if (u.origin !== location.origin || u.pathname.indexOf(base + '/') !== 0) continue;
+          var dir = path.endsWith('/') ? path : path + '/';
+          if (published[path] || published[dir]) continue;
+          var html = path.replace(/\.md$/, '.html');
+          if (html !== path && published[html]) { a.href = base + html + u.hash; continue; }
+          var last = path.split('/').pop();
+          var file = /\.[A-Za-z0-9]+$/.test(last);
+          a.href = repo + (file ? '/blob/main' : '/tree/main') + path.replace(/\/$/, '') + u.hash;
+        }
+      })();
+      // Tables written with an empty header row (`| | |`: pictures side by side, or a list of
+      // properties) show no header row.
+      (function () {
+        var heads = document.querySelectorAll('section table > thead');
+        for (var i = 0; i < heads.length; i++) {
+          if (!heads[i].textContent.trim()) heads[i].style.display = 'none';
+        }
+      })();
+    </script>
+  </body>
+</html>

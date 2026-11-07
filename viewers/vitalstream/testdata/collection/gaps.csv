@@ -1,0 +1,3 @@
+scope,reason,end_before_utc,start_after_utc,end_before_unix,start_after_unix,gap_s,gap_uncertainty_s,measured_by,exact,records_before,records_after,notes
+all,signal_loss,2024-03-01T10:00:04+00:00,2024-03-01T10:00:05.500+00:00,1709287204.0,1709287205.5,1.5,0,time stamps,True,ecg/ecg_250_0001;pressure/pressure_125_0001,ecg/ecg_250_0002;pressure/pressure_125_0002,
+all,signal_loss,,,,,0.5,0,sample count,True,ecg/ecg_250_0002;pressure/pressure_125_0002,ecg/ecg_250_0003;pressure/pressure_125_0003,the next stretch has no start time of its own

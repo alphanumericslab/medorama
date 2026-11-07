@@ -1,0 +1,14 @@
+[package]
+name = "signal-core"
+version = "0.1.0"
+description = "Values, Python-compatible number formatting and text helpers shared by Medorama's readers, recording engine and viewers"
+readme = "README.md"
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+indexmap.workspace = true

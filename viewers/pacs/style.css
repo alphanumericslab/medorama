@@ -1,0 +1,93 @@
+/* The PACS viewer: images on black (as on a reading screen), the chrome in Medorama's
+   look, light or dark. */
+
+:root {
+  --bg: #f6f7f9; --panel: #fff; --line: #e3e7ec; --text: #17202a; --muted: #64707d; --accent: #2563eb; --err: #a84f00; --sel: #e8f0fe;
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --bg: #0f1318; --panel: #161b22; --line: #2a313b; --text: #e6eaef; --muted: #8b96a3; --accent: #6ea3ff; --err: #f5a524; --sel: #1d2a3d;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--text); font: 13px/1.4 Inter, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; display: flex; flex-direction: column; }
+button, select { font: inherit; color: inherit; }
+.hidden { display: none !important; }
+
+header { display: flex; align-items: center; gap: 14px; padding: 9px 16px; background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.title { flex: 1 1 120px; display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+#name { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button:disabled, select:disabled { opacity: .4; cursor: default; }
+header button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+body.measuring #canvas { cursor: crosshair; }
+.brand { font-weight: 700; letter-spacing: .02em; }
+.tools { display: flex; align-items: center; gap: 10px; }
+.tools label { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+select { background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 4px 6px; }
+button { background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; cursor: pointer; }
+button:hover { border-color: var(--muted); }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.seg { display: flex; }
+.seg button { border-radius: 0; margin-left: -1px; min-width: 32px; }
+.seg button:first-child { border-radius: 7px 0 0 7px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 7px 7px 0; }
+.right { display: flex; gap: 8px; margin-left: auto; }
+body.embedded #open, body.embedded #openDir, body.embedded #theme { display: none; }
+
+.msg { max-width: 560px; margin: 12vh auto; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.msg b { color: var(--text); }
+.msg.err { color: var(--err); }
+body.drag { outline: 2px dashed var(--accent); outline-offset: -8px; }
+
+main { flex: 1; min-height: 0; display: grid; grid-template-columns: 220px 1fr; }
+#series { overflow: auto; border-right: 1px solid var(--line); background: var(--panel); padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+#series .s { display: grid; grid-template-columns: 64px 1fr; gap: 10px; align-items: center; text-align: left; border: 1px solid transparent; background: none; padding: 6px; border-radius: 8px; }
+#series .s:hover { background: var(--bg); }
+#series .s.on { background: var(--sel); border-color: var(--accent); }
+#series canvas { background: #000; border-radius: 4px; width: 64px; height: 64px; }
+#series b { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#series small { color: var(--muted); font-size: 11.5px; }
+#series .study { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: 8px 6px 2px; }
+.page { position: absolute; inset: 0; background: var(--bg); overflow: auto; }
+.page iframe { width: 100%; height: 100%; border: 0; background: #fff; }
+.report { max-width: 760px; margin: 0 auto; padding: 22px 26px 40px; }
+.report h2 { margin: 0 0 14px; font-size: 17px; }
+.report table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.report td, .report th { padding: 5px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.report tr.sec th { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; padding-top: 14px; }
+.report .d0 { padding-left: 8px; } .report .d1 { padding-left: 22px; } .report .d2 { padding-left: 36px; } .report .d3 { padding-left: 50px; }
+.report .d4 { padding-left: 64px; } .report .d5 { padding-left: 78px; } .report .d6 { padding-left: 92px; }
+.report td.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.report small { color: var(--muted); }
+.elsewhere { max-width: 520px; margin: 14vh auto; text-align: center; color: var(--muted); line-height: 1.6; }
+.elsewhere b { color: var(--text); font-size: 15px; }
+
+.viewport { position: relative; background: #000; min-width: 0; }
+#canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: default; touch-action: none; }
+.corner { position: absolute; color: #e8edf2; font-size: 12px; line-height: 1.45; text-shadow: 0 1px 2px #000; pointer-events: none; }
+.corner b { font-weight: 600; }
+.tl { top: 10px; left: 12px; } .tr { top: 10px; right: 12px; text-align: right; }
+.bl { bottom: 34px; left: 12px; } .br { bottom: 34px; right: 12px; text-align: right; }
+#slider { position: absolute; left: 12px; right: 12px; bottom: 8px; accent-color: var(--accent); }
+@media (max-width: 640px) { main { grid-template-columns: 1fr; grid-template-rows: 96px 1fr; } #series { flex-direction: row; border-right: 0; border-bottom: 1px solid var(--line); } }
+
+/* a host's context (host.js: Medorama's patient and file) in place of the file's name */
+.host { display: flex; align-items: center; gap: 10px; min-width: 0; overflow: hidden; white-space: nowrap; }
+.host[hidden] { display: none; }
+.hostwho { font-weight: 600; color: var(--text); flex: 0 1 auto; min-width: 12em; overflow: hidden; text-overflow: ellipsis; }   /* whose: cut last */
+.hostwhat { color: var(--muted); min-width: 0; flex: 0 1000 auto; overflow: hidden; text-overflow: ellipsis; padding-left: 10px; border-left: 1px solid var(--line); }
+.hostpos, .hostnav { flex: none; }
+.hostpos { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+.hostnav { padding: 2px 8px; font-size: 12px; }
+.hostnav:disabled { opacity: .4; cursor: default; }
+body.hosted .title > .brand, body.hosted #name { display: none; }
+
+/* full screen: below the system's strip at the top of the screen (app.js sets the class) */
+body.fullscreen header { padding-top: max(env(safe-area-inset-top, 0px), 32px); }
+
+/* "Server folders…": a link that looks like the buttons (shown when served by muse-py or dicom-py serve) */
+a.button { display: inline-flex; align-items: center; text-decoration: none; color: inherit; font: inherit;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; }
+a.button:hover { border-color: var(--muted); }
+body.embedded #server { display: none; }

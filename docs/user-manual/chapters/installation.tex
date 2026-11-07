@@ -1,0 +1,712 @@
+\chapter{Installation}
+\label{chap:installation}
+
+This chapter explains how to build and install Medorama from source, on Linux, macOS and
+Windows, with or without administrator rights or internet access. It is written for whoever
+installs Medorama: a researcher on a workstation, or an administrator on a server. The quickest
+route is one of the installers (\cref{sec:installation-installers}); the rest of the chapter
+builds each program by hand. Once Medorama is built, \cref{chap:quickstart} sets up a catalog
+with the demo, and \cref{chap:administration} sets one up for real data. Installing the viewers
+on their own, without Medorama, is described in \cref{chap:viewers-alone}. Copy-and-paste
+commands for each operating system, for Medorama and for each viewer on its own, are also on
+the website, at \url{https://medorama.org/docs/install.html} (\file{docs/install.md}).
+
+\section{What there is to build}
+\label{sec:installation-programs}
+
+\Cref{tab:installation-programs} lists the programs of the repository.
+
+\begin{table}[htbp]
+\caption{The programs, and what each is built from.}
+\label{tab:installation-programs}
+\begin{tabularx}{\linewidth}{@{}P{2.6cm}P{1.4cm}P{4.2cm}L@{}}
+\toprule
+{\tabhead Program} & {\tabhead Language} & {\tabhead Built from} & {\tabhead Result} \\
+\midrule
+\cmd{medorama} & Rust & The workspace (\cmd{cargo build -p medorama}) & One binary (about 18\,MB)
+  with the database engine, the web page and the ECG and PACS viewers \\
+\cmd{vitalstream-rs} & Rust & The workspace (\opt{-p vitalstream-rs}) & One binary with the web
+  page \\
+\cmd{vitalstream-cpp} & C++20 & \file{viewers/vitalstream/cpp} (CMake) & One binary with the web
+  page \\
+\cmd{vitalstream-py} & Python & \file{viewers/vitalstream/python/vitalstream} & A Python
+  package \\
+\cmd{muse-py}, \cmd{dicom-py} & Python & \file{viewers/ecg/python/muse},
+  \file{viewers/pacs/python/dicom} & The database tools: Python packages \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+WFDB records are read with wfdb-x in each language: Cargo, CMake and pip fetch it from GitHub at
+one pinned commit (\code{a707ba9}), like any other dependency. Every program can also be built
+without WFDB support, and then contains no wfdb-x code (\cref{sec:installation-no-wfdb}). The
+ECG and PACS viewers are static pages: there is nothing to build. Add-ons (adapters) are built in their own repositories
+(\cref{chap:addons}).
+
+Every Rust program is a member of one Cargo workspace (\file{Cargo.toml} at the root of the
+repository), sharing one \file{Cargo.lock} and one \file{target/} folder. Each builds and
+deploys on its own.
+
+\section{Prerequisites}
+\label{sec:installation-prerequisites}
+
+\Cref{tab:installation-prerequisites} lists what each system needs. Only the compiler may need
+an administrator; Rust, CMake, Ninja, the Python packages and every program built here install
+in the user's account (\cref{sec:installation-no-admin}).
+
+\begin{table}[htbp]
+\caption{Prerequisites, per system.}
+\label{tab:installation-prerequisites}
+\begin{tabularx}{\linewidth}{@{}P{2.4cm}LP{3.0cm}L@{}}
+\toprule
+& {\tabhead Linux} & {\tabhead macOS} & {\tabhead Windows 10/11} \\
+\midrule
+Git, Python 3.9+ & \cmd{sudo apt install git python3 python3-venv} (Debian, Ubuntu) or
+  \cmd{sudo dnf install git python3} (Fedora, RHEL) & \cmd{xcode-select --install} (the
+  Command Line Tools: Git, Python, compilers) & \cmd{winget install Git.Git} and
+  \cmd{winget install Python.Python.3.12} \\
+A C compiler, for Rust (SQLite is compiled in) & \cmd{sudo apt install build-essential} or
+  \cmd{sudo dnf install gcc} & The Command Line Tools & The Microsoft C++ Build Tools (below) \\
+A C++20 compiler, for the C++ viewer & GCC 12+ or Clang 15+ (\cmd{sudo apt install g++},
+  Debian 12 and Ubuntu 22.04 or later) & Apple Clang 15+ (the Command Line Tools) & Visual
+  Studio 2022 (the Build Tools) \\
+Rust 1.88+ & rustup (\url{https://rustup.rs}), in the user's account; the installers install
+  it when missing & The same & The same \\
+CMake 3.24+, Ninja (C++) & \cmd{pip install "cmake>=3.24" ninja}; the installers do it, into
+  \file{.venv} & The same & The same \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+On Windows, the Microsoft C++ Build Tools are installed with:
+\begin{lstlisting}[language=PowerShell]
+winget install Microsoft.VisualStudio.2022.BuildTools `
+  --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+\end{lstlisting}
+Their workload \emph{Desktop development with C++} is what both Rust and C++ need.
+
+\section{The installers}
+\label{sec:installation-installers}
+
+Three installers build what is needed into the clone. They need no administrator rights,
+except, on some systems, for the compiler (\cref{sec:installation-prerequisites}). Each has a
+shell script for Linux and macOS and a PowerShell script for Windows
+(\cref{tab:installation-installers}).
+
+\begin{table}[htbp]
+\caption{The installers.}
+\label{tab:installation-installers}
+\begin{tabularx}{\linewidth}{@{}P{5.2cm}L@{}}
+\toprule
+{\tabhead Installer} & {\tabhead Builds} \\
+\midrule
+\file{tools/install-medorama.sh} (Windows: \file{tools\textbackslash install-medorama.ps1}) &
+  Medorama, \emph{one} VitalStream viewer (the C++ viewer by default) and the database tools,
+  into \file{.venv/}; the viewer is the one Medorama runs. The installer for using Medorama. \\
+\file{viewers/vitalstream/install.sh} (Windows: \file{viewers\textbackslash vitalstream\textbackslash install.ps1})
+  & VitalStream alone, without Medorama, into \file{\textasciitilde/.local/bin} (Windows:
+  \file{\%LOCALAPPDATA\%\textbackslash vitalstream\textbackslash bin}), with a root folder it
+  never leaves (by default the home folder): \cref{chap:viewers-alone}. \\
+\file{tools/install.sh} (Windows: \file{tools\textbackslash install.ps1}) & Everything, for
+  development: the Python packages, the Rust workspace, the C++ viewer and its tests, and the
+  repository's git hooks. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Run them from the root of a clone. On Linux or macOS:
+\begin{lstlisting}[style=shell]
+git clone https://github.com/alphanumericslab/medorama.git && cd medorama
+tools/install-medorama.sh
+source .venv/bin/activate       # in every new terminal
+medorama --version
+\end{lstlisting}
+On Windows, in PowerShell:
+\begin{lstlisting}[language=PowerShell]
+git clone https://github.com/alphanumericslab/medorama.git; cd medorama
+powershell -ExecutionPolicy Bypass -File tools\install-medorama.ps1
+.venv\Scripts\Activate.ps1
+medorama --version
+\end{lstlisting}
+
+The programs go into \file{.venv/bin} (Windows: \file{.venv\textbackslash Scripts}), which is
+not on the \code{PATH} by itself: activate the environment in each new terminal, or call
+\file{.venv/bin/medorama} by its path.
+
+\subsection{The options}
+\label{sec:installation-options}
+
+\Cref{tab:installation-options} lists the options of the three installers. The PowerShell
+scripts take the same options, written as \opt{-Viewer}, \opt{-NoTools}, \opt{-Demo} and so on.
+
+\begin{xltabular}{\linewidth}{@{}P{3.4cm}P{2.6cm}L@{}}
+\caption{The installers' options.}
+\label{tab:installation-options}\\
+\toprule
+{\tabhead Option} & {\tabhead Installers} & {\tabhead Effect} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Option} & {\tabhead Installers} & {\tabhead Effect} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\opt{--viewer cpp|rs|py|none} (\opt{-Viewer}) & \file{install-medorama} & The viewer Medorama runs:
+  \code{cpp} (the default) needs a C++20 compiler; \code{rs} needs only Rust; \code{py} the
+  Python viewer and its packages; \code{none}, Medorama alone. The choice is recorded in
+  \file{.venv/bin/medorama.viewer} (\cref{chap:viewers-in-medorama}). \\
+\opt{--no-tools} (\opt{-NoTools}) & \file{install-medorama} & Leave out the database tools
+  (\cmd{muse-py}, \cmd{dicom-py}). \\
+\opt{--viewer cpp|rs|py} (\opt{-Viewer}) & VitalStream's \file{install} & The viewer to build (default
+  \code{cpp}). \\
+\opt{--prefix DIR} (\opt{-Prefix}) & VitalStream's \file{install} & Where the viewer goes:
+  \file{DIR/bin} (default \file{\textasciitilde/.local}; Windows
+  \file{\%LOCALAPPDATA\%\textbackslash vitalstream}). The Python viewer's environment goes in
+  \file{DIR/share/vitalstream/venv} (Windows \file{DIR\textbackslash venv}). \\
+\opt{--root DIR} (\opt{-Root}) & VitalStream's \file{install} & The viewer's root, fixed in the
+  program: it never opens anything outside it. Default \code{\textasciitilde}, the home folder
+  of whoever runs it; \code{/} for the whole file system. Medorama's installer gives its viewer
+  the whole file system: Medorama's own rules decide what each user opens. \\
+\opt{--no-password} (\opt{-NoPassword}) & VitalStream's \file{install} & Build the viewer
+  without password support: no password can be set, and it refuses to run where one is
+  required (under Medorama). Default: password support, a password being optional. \\
+\opt{--py}, \opt{--rs}, \opt{--cpp} (\opt{-Py}, \opt{-Rs}, \opt{-Cpp}) & \file{install} &
+  Only these parts. The Python packages are always installed: \opt{--py} alone installs only
+  them, \opt{--rs} adds the Rust workspace, \opt{--cpp} the C++ viewer, \opt{--rs --cpp} both.
+  Without any of the three: all three. \\
+\opt{--no-rustup} (\opt{-NoRustup}) & \file{install-medorama.sh} and \file{.ps1},
+  \file{install.sh} and \file{.ps1}, VitalStream's \file{install.sh} & Fail rather than install
+  Rust when \cmd{cargo} is missing. VitalStream's \file{install.ps1} has no \opt{-NoRustup}: it
+  never installs Rust, and \opt{-Viewer rs} fails when \cmd{cargo} is missing. \\
+\opt{--demo} (\opt{-Demo}) & \file{install-medorama}, \file{install} & Also make the demo:
+  invented patients that \cmd{medorama init} loads into a cohort \code{DEMO}
+  (\cref{chap:quickstart}). Off by default. \\
+\opt{--no-wfdb} (\opt{-NoWfdb}) & \file{install-medorama}, VitalStream's \file{install} & Build
+  without WFDB support, with no wfdb-x code: a WFDB recording is refused, every other format is
+  read (\cref{sec:installation-no-wfdb}). \file{install-medorama} builds both Medorama and its
+  viewer this way, and refuses \opt{--demo} with it (the demo's recordings are WFDB records). \\
+\opt{--help} & The shell scripts & Print the script's description and options. \\
+\end{xltabular}
+
+All three use the compilers named in \code{CC} and \code{CXX} when they are set (after
+\cmd{module load gcc}, or in a conda environment), so that no administrator rights are needed
+when such a compiler is available (\cref{sec:installation-no-admin}). On macOS, when Xcode is
+installed but its license was never accepted, they build with the Command Line Tools instead.
+
+\subsection{What the Medorama installer does}
+\label{sec:installation-what}
+
+\file{tools/install-medorama.sh} takes these steps, in order:
+\begin{enumerate}
+\item It makes the Python environment \file{.venv} (with Python 3.9 or later) if it is not
+  there.
+\item It installs Rust in the user's account (\file{\textasciitilde/.rustup},
+  \file{\textasciitilde/.cargo}) if \cmd{cargo} is missing, unless \opt{--no-rustup} is given.
+\item It builds Medorama (\cmd{cargo build --release --locked -p medorama}) and links it into
+  \file{.venv/bin}.
+\item It builds the chosen viewer, with the whole file system as its root and with password
+  support, and links it into \file{.venv/bin}. With \opt{--no-wfdb}, Medorama and the viewer are
+  built without WFDB support (\cref{sec:installation-no-wfdb}). The C++ viewer is built in
+  \file{viewers/vitalstream/cpp/build/viewer}, after CMake and Ninja are installed into
+  \file{.venv} (a build folder configured with another compiler is removed and made again); the
+  Rust viewer is built in \file{target/release}; the Python viewer is installed as an editable
+  package in \file{.venv}.
+\item It installs the database tools \cmd{muse-py} and \cmd{dicom-py} into \file{.venv}, unless
+  \opt{--no-tools} is given.
+\item With \opt{--demo}, it makes the demo (\cref{sec:installation-demo}). Without it, it removes
+  \file{.venv/bin/medorama.demo}, so that catalogs created afterwards start empty.
+\item It records the viewer chosen in \file{.venv/bin/medorama.viewer}.
+\item In a git clone, it enables the repository's git hooks, which run the privacy check
+  (\file{tools/git-hooks/check-files}) before each commit and merge; it warns if the clone
+  already uses other hooks.
+\end{enumerate}
+Cargo builds into the clone's \file{target/}, whatever \code{CARGO\_TARGET\_DIR} or a
+\code{build.target-dir} says, and the installer stops with an error if a program it installs is
+missing at the end.
+It ends by printing the commands it installed and the next steps:
+\cmd{source .venv/bin/activate}, \cmd{medorama init --results DIR} and \cmd{medorama serve}.
+
+\subsection{The demo}
+\label{sec:installation-demo}
+
+The \emph{demo} is a set of six invented patients with their encounters, laboratory results,
+vital signs, medications, notes, ICU recordings, a 24-hour Holter, an overnight sleep study (an
+EDF+ file), ECGs and imaging (\cref{chap:quickstart}). With \opt{--demo}, the Medorama and
+development installers also take these steps:
+\begin{enumerate}
+\item They install NumPy and wfdb-x into \file{.venv} if they are not there: the demo's WFDB
+  records are written with wfdb-x, at the commit that the Python viewer uses.
+\item They write the demo's files into \file{.venv/share/medorama/demo} (Windows
+  \file{.venv\textbackslash share\textbackslash medorama\textbackslash demo}; about 60\,MB),
+  with \file{tools/make-demo-data.py}.
+\item They name that folder in \file{.venv/bin/medorama.demo} (Windows
+  \file{.venv\textbackslash Scripts\textbackslash medorama.demo}), next to the programs.
+\end{enumerate}
+\cmd{medorama init} then loads the demo by itself (\cref{chap:quickstart}). Running the
+installer again without \opt{--demo} removes \file{medorama.demo}: catalogs created after that
+start empty, and a catalog that holds the demo already keeps it. The demo needs WFDB support:
+its ICU and Holter recordings are WFDB records, so \opt{--demo} and \opt{--no-wfdb} are refused
+together.
+
+\begin{note}
+The demo is for trying, demonstrating and teaching Medorama. Leave it out of a server meant for
+real patients (\cref{chap:deployment}).
+\end{note}
+
+\section{Building by hand}
+\label{sec:installation-by-hand}
+
+\subsection{The Rust workspace}
+\label{sec:installation-rust}
+
+\paragraph{Rust,} in the user's account (open a new shell afterwards):
+\begin{lstlisting}[style=shell]
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+rustc --version                          # 1.88 or later
+\end{lstlisting}
+On Windows: \cmd{winget install Rustlang.Rustup}. Rust 1.88 is the oldest version that builds
+the workspace with the versions of its \file{Cargo.lock} (\code{rust-version} in
+\file{Cargo.toml}; CI checks it, and \cmd{make msrv} does locally). Development and CI use the
+current stable Rust; the released programs are built with a pinned version.
+
+\paragraph{Build,} from the root of the clone:
+\begin{lstlisting}[style=shell]
+cargo build --release --locked                  # medorama, vitalstream-rs -> target/release/
+cargo build --release --locked -p medorama      # one program
+cargo install --path medorama --locked          # optional: into ~/.cargo/bin (on the PATH)
+cargo install --path viewers/vitalstream/rust --locked
+\end{lstlisting}
+
+\paragraph{For an older Linux server.} A binary built on a recent distribution needs a C library
+at least as recent. A fully static build runs on any Linux of the same architecture:
+\begin{lstlisting}[style=shell]
+rustup target add x86_64-unknown-linux-musl
+sudo apt install musl-tools                     # Fedora: sudo dnf install musl-gcc
+cargo build --release --locked --target x86_64-unknown-linux-musl -p medorama
+# -> target/x86_64-unknown-linux-musl/release/medorama
+\end{lstlisting}
+
+\paragraph{Database encryption} (SQLCipher, with OpenSSL built from source; needs Perl and
+\cmd{make}):
+\begin{lstlisting}[style=shell]
+cargo build --release --locked -p medorama --features encryption
+\end{lstlisting}
+The key and the file that holds it are described in \cref{chap:deployment}.
+
+\paragraph{macOS.} If the build stops with \code{linking with cc failed: exit status: 69} or
+``You have not agreed to the Xcode license agreements'', Xcode is installed but its license was
+never accepted: run \cmd{sudo xcodebuild -license accept}, or build with the Command Line Tools:
+\begin{lstlisting}[style=shell]
+DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo build --release --locked
+\end{lstlisting}
+
+\paragraph{Windows} builds in an ordinary PowerShell window once the Build Tools are installed;
+the programs are \file{target\textbackslash release\textbackslash *.exe}.
+
+\subsection{The C++ viewer}
+\label{sec:installation-cpp}
+
+From \file{viewers/vitalstream/cpp}, with a C++20 compiler, CMake 3.24+ and Ninja:
+\begin{lstlisting}[style=shell]
+cmake --preset release && cmake --build --preset release  # -> build/release/bin/vitalstream-cpp
+ctest --preset release                                    # the tests
+cmake --install build/release --prefix ~/.local           # optional: ~/.local/bin/vitalstream-cpp
+\end{lstlisting}
+
+\begin{table}[htbp]
+\caption{The C++ viewer's presets and options.}
+\label{tab:installation-cpp}
+\begin{tabularx}{\linewidth}{@{}P{3.6cm}P{2.6cm}L@{}}
+\toprule
+{\tabhead Preset} & {\tabhead Folder} & {\tabhead Builds} \\
+\midrule
+\code{release} & \file{build/release} & The viewer and its tests \\
+\code{debug} & \file{build/debug} & The same, unoptimized, with debug information \\
+\code{viewer} & \file{build/viewer} & The viewer only (what the installers use) \\
+\code{nowfdb} & \file{build/nowfdb} & The viewer and its tests without WFDB support
+  (\code{VS\_WFDB=OFF}; \cref{sec:installation-no-wfdb}) \\
+\midrule
+{\tabhead Option (\code{-D\dots})} & {\tabhead Default} & {\tabhead Effect} \\
+\midrule
+\code{VS\_BUILD\_VIEWER} & \code{ON} & The viewer (off: only the libraries \code{vs\_core} and
+  \code{vs\_engine}, for adapters written in C++) \\
+\code{VS\_BUILD\_TESTS} & \code{ON} & The unit tests (GoogleTest) \\
+\code{VS\_DEPS\_DIR} & \file{cpp/deps} & Pre-downloaded dependency archives
+  (\cref{sec:installation-offline}) \\
+\code{VS\_ROOT} & (unset) & The viewer's root (\cref{sec:installation-viewer-options}) \\
+\code{VS\_PASSWORD} & \code{ON} & Password support \\
+\code{VS\_WFDB} & \code{ON} & WFDB support (off: wfdb-x neither downloaded nor built in;
+  \cref{sec:installation-no-wfdb}) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The first configuration downloads five pinned archives (wfdb-x, CLI11, toml++, cpp-httplib;
+GoogleTest for the tests; four with \code{VS\_WFDB=OFF}), each checked against its SHA-256
+(\file{viewers/vitalstream/cpp/cmake/deps.cmake}). Without Ninja:
+\begin{lstlisting}[style=shell]
+cmake -S . -B build/make -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
+cmake --build build/make
+\end{lstlisting}
+and on Windows \cmd{cmake -S . -B build/vs -G "Visual Studio 17 2022"} then
+\cmd{cmake --build build/vs --config Release}.
+
+\paragraph{Linux.} \cmd{g++ --version} must say 12 or later. On older systems, install a newer
+GCC (\cmd{sudo apt install g++-12}; RHEL 8: \cmd{sudo dnf install gcc-toolset-12}) and select it
+with \cmd{export CC=gcc-12 CXX=g++-12} (RHEL 8: \cmd{scl enable gcc-toolset-12 bash}), or use
+Clang 15+ (\cmd{export CC=clang-15 CXX=clang++-15}). Without administrator rights, follow
+\cref{sec:installation-no-admin}. To run a program built against a newer C++ runtime on other
+machines, link the runtime in:
+\code{-DCMAKE\_EXE\_LINKER\_FLAGS="-static-libstdc++ -static-libgcc"}.
+
+\paragraph{macOS.} Apple Clang 15+ comes with the Command Line Tools
+(\cmd{xcode-select --install}, once, with an administrator's password). With GCC from Homebrew
+(\code{CC=gcc-14 CXX=g++-14}), add \code{-DVS\_BUILD\_TESTS=OFF}: GoogleTest does not compile
+with GCC against the macOS 26 SDK. If a standard header such as \code{cstddef} is not found, the
+Command Line Tools are damaged: reinstall them with
+\cmd{sudo rm -rf /Library/Developer/CommandLineTools \&\& xcode-select --install} (meanwhile, the
+build detects this case and uses the SDK's headers).
+
+\paragraph{Windows.} In a \emph{Developer PowerShell for VS 2022} (Start menu), which sets up the
+compiler:
+\begin{lstlisting}[language=PowerShell]
+cd viewers\vitalstream\cpp
+cmake --preset release; cmake --build --preset release  # -> build\release\bin\vitalstream-cpp.exe
+\end{lstlisting}
+In an ordinary PowerShell window, \cmd{cmake --preset release} stops with ``No
+CMAKE\_CXX\_COMPILER could be found''; \cmd{tools\textbackslash install.ps1 -Cpp} sets the
+compiler up itself. Visual Studio can also open the \file{cpp} folder directly (it reads
+\file{CMakePresets.json}).
+
+\subsection{The Python packages}
+\label{sec:installation-python}
+
+\begin{lstlisting}[style=shell]
+python3 -m venv .venv
+.venv/bin/pip install './viewers/vitalstream/python/vitalstream[wfdb]' # vitalstream-py
+.venv/bin/pip install ./viewers/ecg/python/muse ./viewers/pacs/python/dicom   # muse-py, dicom-py
+\end{lstlisting}
+The \code{[wfdb]} extra installs wfdb-x from GitHub (the archive of the pinned commit; no
+\cmd{git} needed); without it, \cmd{vitalstream-py} has no WFDB support
+(\cref{sec:installation-no-wfdb}), and the installers always add it, except with
+\opt{--no-wfdb}. \cmd{muse-py} and \cmd{dicom-py} also serve the ECG and PACS viewers
+(\cmd{serve}: \cref{chap:viewers-alone}). For development, install them editable
+(\cmd{pip install -e \dots{} --config-settings editable\_mode=compat}) with their
+\code{[test]} extras (\code{[test,wfdb]} for \cmd{vitalstream-py}), as \file{tools/install.sh}
+does.
+
+Each package carries the license: building it copies the repository's \file{LICENSE} (with its
+Required Notice) and \file{COMMERCIAL.md} beside its \file{pyproject.toml}, and they are
+installed with the package (in its \file{.dist-info/licenses/}). A package builds from a clone,
+or from its source distribution: \cmd{python -m build viewers/vitalstream/python/vitalstream}
+(and \file{viewers/ecg/python/muse}, \file{viewers/pacs/python/dicom}) writes an sdist that
+carries the viewer's page and the license, and a wheel built from that sdist alone. Building
+needs setuptools 77 or later, which pip fetches into the isolated build environment.
+
+\subsection{A viewer's build options}
+\label{sec:installation-viewer-options}
+
+A viewer installed on its own has two options fixed when it is built: its root, and whether it
+supports a password (WFDB support is a third, for every program: \cref{sec:installation-no-wfdb}).
+The VitalStream installer passes them (\opt{--root}, \opt{--no-password});
+a build by hand sets them as \cref{tab:installation-viewer-options} shows. A root may be written
+with \code{\textasciitilde} (the home folder of whoever runs the viewer); unset, the root is the
+whole file system.
+
+\begin{table}[htbp]
+\caption{A viewer's root and password support, set when it is built.}
+\label{tab:installation-viewer-options}
+\begin{tabularx}{\linewidth}{@{}P{2.8cm}LP{3.4cm}@{}}
+\toprule
+{\tabhead Viewer} & {\tabhead Root} & {\tabhead Without password support} \\
+\midrule
+\cmd{vitalstream-rs} & \code{VITALSTREAM\_ROOT=DIR} \cmd{cargo build --release -p vitalstream-rs
+  --target-dir target/standalone} &
+  \opt{--no-default-features --features wfdb} (the Cargo feature \code{password} left out) \\
+\cmd{vitalstream-cpp} & \code{cmake --preset viewer -B build/standalone -DVS\_ROOT=DIR} &
+  \code{-DVS\_PASSWORD=OFF} \\
+\cmd{vitalstream-py} & \code{VITALSTREAM\_ROOT=DIR} \cmd{pip install}
+  \file{'./viewers/vitalstream/python/vitalstream[wfdb]'} & \code{VITALSTREAM\_PASSWORD=0} \\
+\cmd{muse-py serve}, \cmd{dicom-py serve} (the ECG and PACS viewers served) &
+  \code{VIEWER\_ROOT=DIR} \cmd{pip install} \file{./viewers/ecg/python/muse} (or
+  \file{\dots/pacs/python/dicom}) & \code{VIEWER\_PASSWORD=0} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+At run time, the settings (\code{data\_roots}, \opt{--root}) narrow the root further, never
+widen it. The standalone installer builds in folders of its own (\file{target/standalone},
+\file{viewers/vitalstream/cpp/build/standalone}), so that Medorama's viewer
+(\file{target/release}, \file{build/viewer}) keeps its own options.
+
+\section{Without WFDB}
+\label{sec:installation-no-wfdb}
+
+WFDB support is the only part of the programs that uses wfdb-x. Each program can be built
+without it, and such a build contains no wfdb-x code. It reads every other format as usual: EDF,
+EDF+, BDF and BDF+ files, the formats of installed add-ons (such as STP, GE MUSE and DICOM), CLIF
+tables, and the databases Medorama imports or connects to. A WFDB recording (a \file{.hea}
+file, a multi-segment record, a folder of records or a WFDB collection) is still recognised, and
+refused with one message, never skipped in silence:
+\begin{lstlisting}[style=text]
+this build has no WFDB support (built without the `wfdb` feature)
+\end{lstlisting}
+The C++ viewer ends the message with ``(built with VS\_WFDB=OFF)'', and the Python viewer with
+``(wfdb-x is not installed: pip install 'vitalstream\_py[wfdb]')''. Medorama does not add such a
+recording: an import lists it among the files it skipped, with this reason. A viewer lists it
+when browsing, and refuses to open or scan it (HTTP 422, with the message). At start-up, every
+program built this way says so. \Cref{tab:installation-no-wfdb} shows how each program is built
+without WFDB support.
+
+\begin{table}[htbp]
+\caption{Building without WFDB support.}
+\label{tab:installation-no-wfdb}
+\begin{tabularx}{\linewidth}{@{}P{2.8cm}LP{3.0cm}@{}}
+\toprule
+{\tabhead Program} & {\tabhead Without WFDB support} & {\tabhead The default} \\
+\midrule
+\cmd{medorama} & \cmd{cargo build --release --locked -p medorama --no-default-features} (add
+  \opt{--features encryption} for database encryption) & The Cargo feature \code{wfdb}, on \\
+\cmd{vitalstream-rs} & \cmd{cargo build --release --locked -p vitalstream-rs
+  --no-default-features --features password} & The Cargo features \code{password} and
+  \code{wfdb}, on \\
+\code{recording-engine} (for adapters written in Rust) & \code{default-features = false} in the
+  adapter's \file{Cargo.toml} & The Cargo feature \code{wfdb}, on \\
+\cmd{vitalstream-cpp} & From \file{viewers/vitalstream/cpp}: \cmd{cmake --preset nowfdb \&\&
+  cmake --build --preset nowfdb} (into \file{build/nowfdb}), or \code{-DVS\_WFDB=OFF} with any
+  preset & \code{VS\_WFDB=ON} \\
+\cmd{vitalstream-py} & \cmd{pip install ./viewers/vitalstream/python/vitalstream}, without the
+  \code{[wfdb]} extra, in an environment that does not hold wfdb-x (\cmd{pip uninstall wfdb-x}
+  removes it) & The installers install the \code{[wfdb]} extra \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The installers do the same with one option, \opt{--no-wfdb} (Windows: \opt{-NoWfdb}):
+\file{tools/install-medorama.sh --no-wfdb} builds both Medorama and its viewer this way, and
+\file{viewers/vitalstream/install.sh --no-wfdb} one viewer alone. Medorama and its viewer are
+built separately, so a deployment without wfdb-x builds both without WFDB support. The demo
+needs WFDB support, because its recordings are WFDB records written with wfdb-x.
+
+To check a build, \cmd{cargo tree --locked -p medorama --no-default-features | grep wfdbx}
+prints nothing (likewise for \cmd{vitalstream-rs}), a C++ build in \file{build/nowfdb} has no
+\file{\_deps/wfdbx-src} folder, and \cmd{make test-nowfdb} runs the tests of these builds (the
+Python tests with wfdb-x made unimportable). The tests on WFDB records are skipped there, and a
+test of each program checks the refusal.
+
+Two parts read WFDB headers without wfdb-x, so they work in either build: the ECG viewer, which
+shows a WFDB record attached to an item with its own reader in the page, and Privacy Mode, which
+de-identifies the text of a WFDB header. In the C++ libraries, \file{core/wfdb\_c.hpp} (WFDB
+headers, records and annotations, for adapters written in C++) exists only with
+\code{VS\_WFDB=ON}.
+
+\section{Without administrator rights}
+\label{sec:installation-no-admin}
+
+Only the compiler may need an administrator. Rust, CMake, Ninja, the Python packages and every
+program built here install in the user's account.
+
+\paragraph{Linux (a shared server, a cluster).} \cmd{g++ --version} 12 or later is enough.
+Otherwise, use the first of the ways in \cref{tab:installation-gcc} that the machine offers.
+
+\begin{table}[htbp]
+\caption{A C++20 compiler without administrator rights, on Linux.}
+\label{tab:installation-gcc}
+\begin{tabularx}{\linewidth}{@{}P{3.2cm}LL@{}}
+\toprule
+{\tabhead Way} & {\tabhead Check} & {\tabhead If available} \\
+\midrule
+A compiler module & \cmd{module avail 2>\&1 | grep -i gcc} lists GCC 12 or later &
+  \cmd{module load <that name>}, then \cmd{export CC=gcc CXX=g++} \\
+The gcc-toolset (RHEL, Rocky, Alma 8 and 9) & \cmd{ls /opt/rh} lists \code{gcc-toolset-12} or later &
+  \cmd{scl enable gcc-toolset-13 bash} \\
+GCC 13 in the home folder (anywhere) & & \cmd{tools/install-gcc.sh}, then
+  \cmd{source \textasciitilde/miniforge3/bin/activate vs-build} in every new shell \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\file{tools/install-gcc.sh} installs Miniforge (conda-forge) into
+\file{\textasciitilde/miniforge3}, with an environment \code{vs-build} that holds GCC 13, CMake,
+Ninja and Python 3.12 (about 1\,GB). The installers use the compiler in \code{CC} and \code{CXX}
+when they are set. These hold for the current shell only: repeat the \cmd{module load},
+\cmd{scl} or \cmd{source} line in every new shell (or add it to \file{\textasciitilde/.bashrc}).
+CMake remembers the compiler a build folder was first configured with: after switching
+compilers, delete the build folder (the installers do it).
+
+\paragraph{CMake and Ninja} in the user's account:
+\cmd{python3 -m pip install --user "cmake>=3.24" ninja}, or the official archives
+(\url{https://github.com/Kitware/CMake/releases},
+\url{https://github.com/ninja-build/ninja/releases}) unpacked into
+\file{\textasciitilde/.local}.
+
+\paragraph{Windows.} For Rust, the self-contained GNU toolchain needs no Visual Studio:
+\cmd{rustup-init.exe --default-host x86\_64-pc-windows-gnu} (SQLite then needs GCC from MSYS2).
+For C++, MSYS2 (\url{https://www.msys2.org}) unpacked into the user's folder provides GCC,
+CMake and Ninja:
+\begin{lstlisting}[language=PowerShell]
+$base = "https://github.com/msys2/msys2-installer/releases/download/nightly-x86_64"
+Invoke-WebRequest "$base/msys2-base-x86_64-latest.sfx.exe" -OutFile msys2.exe
+.\msys2.exe -y -o"$env:USERPROFILE"; Remove-Item msys2.exe
+$bash = "$env:USERPROFILE\msys64\usr\bin\bash.exe"
+& $bash -lc "pacman -Syu --noconfirm"
+$pkgs = "git mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja"
+& $bash -lc "pacman -S --noconfirm --needed $pkgs"
+\end{lstlisting}
+then, in the UCRT64 shell:
+\begin{lstlisting}[style=shell]
+cmake --preset release -DCMAKE_EXE_LINKER_FLAGS=-static && cmake --build --preset release
+\end{lstlisting}
+(\code{-static}: the program needs no MSYS2 DLLs). The continuous integration builds the C++
+route (MSYS2); the GNU Rust toolchain is not tested there.
+
+\paragraph{macOS.} The Command Line Tools need an administrator once.
+
+\section{Without internet access}
+\label{sec:installation-offline}
+
+\paragraph{Copy the programs.} Build on a machine with the same operating system and
+architecture (on Linux, preferably the static musl build of \cref{sec:installation-rust}) and
+copy the single files. Nothing else is needed to run them.
+
+\paragraph{Build on the offline machine.} On a machine with internet access, from the root of
+the clone:
+\begin{lstlisting}[style=shell]
+mkdir -p .cargo && cargo vendor --locked vendor > .cargo/config.toml  # every Rust dependency
+tools/fetch-cpp-deps.sh             # the C++ dependencies, into viewers/vitalstream/cpp/deps/
+pip download -d ../wheels './viewers/vitalstream/python/vitalstream[wfdb]' "setuptools>=77" wheel
+\end{lstlisting}
+The last line is needed only for the Python viewer. \cmd{cargo vendor} takes wfdb-x too, and
+\file{tools/fetch-cpp-deps.sh} its C++ archive. Copy the whole clone, and \file{../wheels}, to
+the offline machine, which needs Rust and a compiler (rustup's offline installers:
+\url{https://forge.rust-lang.org/infra/other-installation-methods.html}). Then build as usual:
+\cmd{cargo build --release --locked --offline}, \cmd{cmake --preset release}. pip takes wfdb-x
+from the archive that \cmd{pip download} saved (named after the commit), then the viewer:
+\begin{lstlisting}[style=shell]
+WFDBX=a707ba9ec1624241793bf41b938b219d76005526     # the pinned commit of wfdb-x
+pip install --no-index --find-links ../wheels fastapi uvicorn numpy \
+  "wfdb-x @ file://$PWD/../wheels/$WFDBX.tar.gz#subdirectory=python"
+pip install --no-index --find-links ../wheels --no-deps ./viewers/vitalstream/python/vitalstream
+\end{lstlisting}
+Git ignores \file{vendor/}, \file{.cargo/} and \file{viewers/vitalstream/cpp/deps/}.
+
+\paragraph{The demo, offline.} The installers' \opt{--demo} needs NumPy and wfdb-x in
+\file{.venv}; \cmd{pip download} above saved both in \file{../wheels}. Install them from there,
+then make and load the demo by hand (\cref{chap:quickstart}):
+\begin{lstlisting}[style=shell]
+WFDBX=a707ba9ec1624241793bf41b938b219d76005526
+.venv/bin/pip install --no-index --find-links ../wheels numpy \
+  "wfdb-x @ file://$PWD/../wheels/$WFDBX.tar.gz#subdirectory=python"
+.venv/bin/python tools/make-demo-data.py ~/medorama-demo
+medorama demo add ~/medorama-demo
+\end{lstlisting}
+
+\section{Windows}
+\label{sec:installation-windows}
+
+Everything above runs on Windows 10 and 11. In short:
+\begin{enumerate}
+\item Install Git, Python and the Microsoft C++ Build Tools (\cref{sec:installation-prerequisites}).
+\item In PowerShell, from the root of the clone, run
+  \cmd{powershell -ExecutionPolicy Bypass -File tools\textbackslash install-medorama.ps1}. Add
+  \opt{-Viewer rs} to build the Rust viewer, which needs nothing beyond Rust, and \opt{-Demo} for
+  the demo.
+\item Activate the environment in each new window:
+  \cmd{.venv\textbackslash Scripts\textbackslash Activate.ps1}.
+\end{enumerate}
+The programs are copied into \file{.venv\textbackslash Scripts}. The C++ viewer is built with
+MSVC; built by hand, it needs a Developer PowerShell (\cref{sec:installation-cpp}). The
+VitalStream installer for Windows, \file{viewers\textbackslash vitalstream\textbackslash install.ps1},
+builds the C++ viewer from a Developer PowerShell for VS. As on Linux and macOS, it builds in
+folders of its own (\file{viewers\textbackslash vitalstream\textbackslash cpp\textbackslash build\textbackslash standalone},
+\file{target\textbackslash standalone}) and copies the viewer into
+\file{\%LOCALAPPDATA\%\textbackslash vitalstream\textbackslash bin}. It has no \opt{-NoRustup}: it never
+installs Rust, and \opt{-Viewer rs} fails when \cmd{cargo} is missing.
+
+When PowerShell says ``running scripts is disabled on this system'', start the installers as
+shown (\cmd{powershell -ExecutionPolicy Bypass -File \dots}); for \file{Activate.ps1}, allow
+local scripts once with \cmd{Set-ExecutionPolicy -Scope CurrentUser RemoteSigned}.
+
+\section{Checking the build}
+\label{sec:installation-check}
+
+\begin{lstlisting}[style=shell]
+cargo test --release --locked             # every Rust test of the workspace (a few minutes)
+(cd viewers/vitalstream/cpp && ctest --preset release)
+.venv/bin/python -m pytest -q viewers/vitalstream/python/vitalstream/tests
+make parity                               # the three viewers agree (index and answers)
+make test-nowfdb                          # the builds without WFDB support
+make help                                 # every check
+\end{lstlisting}
+
+\section{Updating and uninstalling}
+\label{sec:installation-update}
+
+\paragraph{Update.} \cmd{git pull}, then the installer again with the same options (or
+\cmd{cargo build --release --locked} and \cmd{cmake --build --preset release}). Without
+\opt{--demo}, catalogs created afterwards start empty; a catalog that holds the demo keeps it.
+Restart the programs. Medorama updates its database when it starts, and an older version
+refuses a database a newer one has updated: back the catalog up first
+(\cref{chap:administration}).
+
+\paragraph{Uninstall.} Delete the clone (the programs, \file{.venv/} and the builds are inside
+it), or the installed copies (\cmd{cargo uninstall medorama},
+\file{\textasciitilde/.local/bin/vitalstream-*}). A standalone viewer's index folder is
+\file{\textasciitilde/.cache/vitalstream}, its settings and password are in
+\file{\textasciitilde/.config/vitalstream/}; Medorama's home and results folders are where
+\cmd{medorama init} put them. Recordings are never touched.
+
+\section{When the build fails}
+\label{sec:installation-troubleshooting}
+
+\begin{xltabular}{\linewidth}{@{}P{5.4cm}L@{}}
+\caption{Build messages, their causes and fixes.}
+\label{tab:installation-troubleshooting}\\
+\toprule
+{\tabhead Message} & {\tabhead Cause and fix} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Message} & {\tabhead Cause and fix} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{command not found: medorama} & The program is in \file{.venv/bin}:
+  \cmd{source .venv/bin/activate}, or call \file{.venv/bin/medorama}, or
+  \cmd{cargo install --path medorama --locked}. \\
+\code{linker 'cc' not found} (Linux) & No C toolchain: \code{build-essential} or \code{gcc}
+  (\cref{sec:installation-prerequisites}), or \cref{sec:installation-no-admin}. \\
+\code{linker 'link.exe' not found}, \code{No CMAKE\_CXX\_COMPILER could be found} (Windows) &
+  The Build Tools are missing or lack \emph{Desktop development with C++}; for C++, use a
+  Developer PowerShell. \\
+\code{exit status: 69}, \code{You have not agreed to the Xcode license agreements} (macOS) &
+  \cmd{sudo xcodebuild -license accept}, or
+  \cmd{export DEVELOPER\_DIR=/Library/Developer/CommandLineTools}. \\
+\code{feature 'edition2024' is required}, \code{requires rustc 1.88} & Rust is too old:
+  \cmd{rustup update} (a distribution's packaged Rust is often old). \\
+\code{cargo: command not found} after installing Rust & Open a new shell, or
+  \cmd{. \textasciitilde/.cargo/env}. \\
+\code{failed to get \dots{} from crates.io} & No internet access: vendor the dependencies
+  (\cref{sec:installation-offline}). \\
+\code{The C++ compiler is too old} & GCC 12+ or Clang 15+ is needed
+  (\cref{sec:installation-cpp}, \cref{sec:installation-no-admin}); then delete the build
+  folder. \\
+\code{CXX is \dots, but this build folder was configured with \dots} & CMake keeps the first
+  compiler: \cmd{rm -rf build/release} and configure again. \\
+\code{The current CMakeCache.txt directory \dots{} is different} & The clone moved after a
+  build: delete \file{build/} and configure again. \\
+\code{CMake 3.24 or higher is required}, no \code{Ninja} &
+  \cmd{pip install --user "cmake>=3.24" ninja}. \\
+\code{Failed to download}, \code{HASH mismatch} while configuring & No internet access or a
+  proxy: \file{tools/fetch-cpp-deps.sh} on another machine (\cref{sec:installation-offline}). \\
+\code{version 'GLIBC\_2.xx' not found}, \code{'GLIBCXX\_3.4.xx' not found} for a copied program &
+  Built on a newer Linux: the static musl build (Rust), or the static C++ runtime (C++). \\
+``running scripts is disabled on this system'' (Windows) & Start the installers as shown
+  (\cmd{powershell -ExecutionPolicy Bypass -File \dots}); for \file{Activate.ps1}:
+  \cmd{Set-ExecutionPolicy -Scope CurrentUser RemoteSigned}. \\
+\end{xltabular}
+
+Problems that appear after the build, when running a catalog, are covered in
+\cref{chap:troubleshooting}.

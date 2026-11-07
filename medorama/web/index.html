@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Medorama</title>
+<link rel="stylesheet" href="static/style.css">
+<script type="module" src="static/js/main.js"></script>
+</head>
+<body>
+<div id="login" class="login hidden">
+  <form id="login-form" class="card">
+    <h1 class="wordmark" aria-label="Medorama"><span class="w-med">Med</span><span class="w-orama">orama</span></h1>
+    <p id="login-error" class="err hidden"></p>
+    <label>User name <input id="login-user" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="the account's name, e.g. admin" required></label>
+    <label>Password <input id="login-pass" type="password" autocomplete="current-password" required></label>
+    <button class="primary">Sign in</button>
+  </form>
+  <!-- users sign in through the institution's sign-in, in front of Medorama (sign_in = "proxy") -->
+  <div id="login-proxy" class="card hidden">
+    <h1 class="wordmark" aria-label="Medorama"><span class="w-med">Med</span><span class="w-orama">orama</span></h1>
+    <p id="login-proxy-msg">You sign in to Medorama through your institution's sign-in.</p>
+    <a class="btn primary" href="./">Sign in</a>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <header class="top">
+    <div class="brand wordmark" aria-label="Medorama"><span class="w-med">Med</span><span class="w-orama">orama</span></div>
+    <div class="hist"><button id="hist-back" title="Back" aria-label="Back">‹</button><button id="hist-fwd" title="Forward" aria-label="Forward">›</button></div>
+    <nav id="nav" aria-label="Cohorts, patients and viewers">
+      <a data-nav="cohorts" href="#/cohorts">Cohorts</a>
+      <a data-nav="patients" href="#/patients">Patient Catalog</a>
+      <a data-nav="databases" href="#/databases">Databases</a>
+      <span class="navsep" aria-hidden="true"></span>
+      <a data-nav="ecg" href="#/ecg" id="nav-ecg" class="dim" title="Opens what a patient's page sends here">ECG</a>
+      <a data-nav="pacs" href="#/pacs" id="nav-pacs" class="dim" title="Opens what a patient's page sends here">PACS</a>
+      <a data-nav="viewer" href="#/viewer" id="nav-viewer">VitalStream</a>
+    </nav>
+    <nav id="nav-ops" class="ops" aria-label="Work">
+      <a data-nav="history" href="#/history">History</a>
+      <a data-nav="actions" href="#/actions" class="run-only">Actions</a>
+      <a data-nav="jobs" href="#/jobs">Jobs<span id="jobs-badge" class="count hidden"></span></a>
+      <a data-nav="review" href="#/review" class="admin-only">Review<span id="review-badge" class="count alert hidden"></span></a>
+      <a data-nav="import" href="#/import" class="admin-only">Import<span id="import-pill" class="navprog hidden" aria-live="polite"><span class="bar" aria-hidden="true"><i></i></span><span class="lbl"></span></span></a>
+      <a data-nav="admin" href="#/admin" class="admin-only">Admin</a>
+    </nav>
+    <div class="right">
+      <button id="btn-privacy" class="privacy hidden" aria-pressed="false"><span class="sh">◍</span><span class="dl">Privacy Mode</span></button>
+      <button id="btn-theme" class="icon" title="Light or dark" aria-label="Light or dark">◐</button>
+      <div class="usermenu">
+        <button id="btn-user" class="avatar" title="Account"></button>
+        <div id="user-pop" class="pop hidden">
+          <div id="who"></div>
+          <button id="btn-password" class="menu">Change password</button>
+          <button id="btn-logout" class="menu">Sign out</button>
+          <button id="btn-logout-all" class="menu" title="Ends your sessions on every computer and browser">Sign out everywhere</button>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Patient Catalog: every patient -->
+    <section id="view-patients" class="view">
+      <div class="sline">
+        <span id="pl-crumb" class="crumb now">Patient Catalog</span>
+        <label class="sbox wide"><span class="glass" aria-hidden="true">⌕</span><input id="pl-q" aria-label="Search patients" placeholder="Search: name, MRN, patient ID, date of birth, encounter…" autocomplete="off"><kbd>/</kbd></label>
+      </div>
+      <div class="pad">
+        <div class="ftools">
+          <span class="filterby" id="pl-fhead">Filter by</span>
+          <span id="pl-has" class="chips"></span>
+          <button class="link" id="pl-clear" hidden>Remove filters</button>
+          <span class="spacer"></span>
+          <span id="pl-count" class="muted"></span>
+          <button class="btn" id="pl-addto-open" title="Add the patients this search finds to a cohort">Add to cohort…</button>
+          <span class="seg"><a href="#/patients" class="on">Patients</a><a href="#/encounters">Encounters</a></span>
+        </div>
+        <div id="pl-addto" class="card panel hidden"></div>
+        <div id="pl-sum" class="fsum"></div>
+        <table id="pl-table" class="list"></table>
+        <div class="pager"><span id="pl-page" class="muted"></span><span><button id="pl-prev">‹ Previous</button> <button id="pl-next">Next ›</button></span></div>
+      </div>
+    </section>
+
+    <!-- Encounters: the table for actions and removals -->
+    <section id="view-encounters" class="view hidden">
+      <div class="sline">
+        <a class="crumb" href="#/patients">Patient Catalog</a><span class="sep">›</span><span class="crumb now">Encounters</span>
+        <form id="enc-search" class="sbox wide"><span class="glass" aria-hidden="true">⌕</span><input id="enc-q" aria-label="Search encounters" placeholder="Search" autocomplete="off"><button type="button" id="enc-help" class="icon" title="Search syntax">?</button></form>
+        <input id="enc-unit" aria-label="Unit" placeholder="Unit" size="8">
+        <label class="inline">From <input id="enc-from" type="date"></label>
+        <label class="inline">To <input id="enc-to" type="date"></label>
+        <select id="enc-status" aria-label="Status">
+          <option value="">Any status</option><option value="ready">Indexed</option><option value="new">Not indexed</option>
+          <option value="queued">Queued</option><option value="indexing">Indexing</option><option value="stale">Changed</option>
+          <option value="failed">Failed</option><option value="missing">Missing</option><option value="none">No recordings</option>
+        </select>
+      </div>
+      <div class="pad">
+        <div class="ftools">
+          <span id="enc-count" class="muted"></span>
+          <span class="spacer"></span>
+          <span id="enc-selected" class="muted"></span>
+          <button id="enc-run" class="run-only" disabled>Run actions on selected…</button>
+          <button id="enc-remove" class="admin-only danger" disabled>Remove selected</button>
+          <button id="enc-remove-matching" class="admin-only danger" title="Remove every encounter this search finds">Remove matching…</button>
+          <button id="enc-prev" title="Previous page">‹</button><button id="enc-next" title="Next page">›</button>
+          <span class="seg"><a href="#/patients">Patients</a><a href="#/encounters" class="on">Encounters</a></span>
+        </div>
+        <pre id="enc-help-text" class="report hidden"></pre>
+        <div class="table-wrap"><table id="enc-table" class="grid"></table></div>
+      </div>
+    </section>
+
+    <!-- One patient -->
+    <section id="view-patient" class="view hidden">
+      <div class="sline">
+        <a class="crumb" href="#/patients">Patient Catalog</a><span class="sep">›</span>
+        <label class="sbox wide"><span id="pp-chip" class="chip"></span><input id="pp-find" aria-label="Search another patient" placeholder="Search another patient: name, MRN, ID, date of birth…" autocomplete="off"><kbd>/</kbd></label>
+        <div id="pp-suggest" class="suggest hidden"></div>
+      </div>
+      <div id="pp-bar" class="pbar"></div>
+      <div class="cols">
+        <section id="pp-info" class="col info"></section>
+        <section class="col journey">
+          <div class="jtools"><span id="pp-encs" class="chips"></span><span class="spacer"></span><button id="pp-zout" class="small" title="Zoom out">−</button><button id="pp-zin" class="small" title="Zoom in">+</button></div>
+          <div id="pp-journey" class="jbody"></div>
+          <div id="pp-tip" class="tip hidden"></div>
+        </section>
+        <section class="col rcol">
+          <div class="rtools">
+            <label class="sbox"><span class="glass" aria-hidden="true">⌕</span><input id="pp-q" aria-label="Search this patient" placeholder="Search everything about this patient: notes, results, codes…" autocomplete="off"><button id="pp-qx" class="icon hidden" title="Clear">✕</button></label>
+            <span class="seg" id="pp-mode"><button data-mode="timeline" class="on">Timeline</button><button data-mode="category">By category</button><button data-mode="trends">Trends</button></span>
+          </div>
+          <div class="rsplit">
+            <div id="pp-list" class="rlist"></div>
+            <div id="pp-detail" class="rdetail"></div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <!-- Recordings -->
+    <section id="view-recordings" class="view hidden">
+      <div class="subtabs"><a href="#/import">Databases</a><a href="#/recordings" class="on">Recordings</a></div>
+      <div class="sline">
+        <span class="crumb now">Recordings</span>
+        <form id="rec-search" class="sbox wide"><span class="glass" aria-hidden="true">⌕</span><input id="rec-q" aria-label="Search recordings" placeholder="Search: words, or field:value (file:, path:, unit:, source:, status:, …)" autocomplete="off"></form>
+        <label class="inline"><input id="rec-unlinked" type="checkbox"> Not linked to an encounter</label>
+        <span class="spacer"></span>
+        <button id="chk-run" class="btn admin-only" title="Whether every recording's file is still there, unchanged">Re-check the files</button>
+      </div>
+      <div class="pad">
+        <div class="ftools">
+          <span id="rec-count" class="muted"></span>
+          <span class="spacer"></span>
+          <button id="rec-remove-matching" class="admin-only danger" title="Remove every recording this search finds">Remove matching…</button>
+          <button id="rec-prev" title="Previous page">‹</button><button id="rec-next" title="Next page">›</button>
+        </div>
+        <div class="table-wrap"><table id="rec-table" class="grid"></table></div>
+      </div>
+    </section>
+
+    <!-- Databases: every imported database, as a table -->
+    <section id="view-databases" class="view hidden">
+      <div class="sline">
+        <span id="db-crumb"></span>
+        <label id="db-q" class="sbox wide hidden"><span class="glass" aria-hidden="true">⌕</span><input aria-label="Search this database's rows" placeholder="Search this database's rows" autocomplete="off"></label>
+      </div>
+      <div class="pad">
+        <div id="db-list"></div>
+        <div id="db-one" class="hidden"></div>
+      </div>
+    </section>
+
+    <!-- Cohorts: find patients by criteria, keep them -->
+    <section id="view-cohorts" class="view hidden">
+      <div class="sline"><span id="co-crumb"></span></div>
+      <div class="cohorts">
+        <aside id="co-list"></aside>
+        <div class="comain">
+          <div id="co-builder">
+            <div id="co-bhead"></div>
+            <h3>Include patients who meet <b>any</b> group (and <b>all</b> of a group's conditions)</h3>
+            <div id="co-criteria"></div>
+            <h3 class="exch">Exclude those who <b>ever</b> had</h3>
+            <div id="co-exclude"></div>
+            <datalist id="co-units"><option value="ms"><option value="s"><option value="µV"><option value="mV"><option value="bpm"><option value="°"><option value="mmol/L"><option value="mg/dL"></datalist>
+            <div class="ftools"><span class="muted small">Expressions: <code>AND</code>, <code>OR</code>, <code>NOT</code>, brackets; <code>age &gt; 18</code>, <code>female</code>, <code>has icu</code>, <code>dx I21</code>, <code>QT &gt; 400ms</code>, <code>latest ecg_index.QTc &gt;= 470</code>, <code>ecg_index.interpretation contains "fibrillation"</code></span><span class="spacer"></span><span id="co-count" class="muted"></span></div>
+            <div id="co-save" class="ftools savebar"></div>
+            <div id="co-results"></div>
+          </div>
+          <div id="co-one" class="hidden">
+            <div id="co-head"></div>
+            <h3 class="coh">Members</h3>
+            <div id="co-addbox" class="coadd hidden">
+              <label class="sbox"><span class="glass" aria-hidden="true">⌕</span><input id="co-find" autocomplete="off" aria-label="Add patients by search"></label>
+              <div id="co-found"></div>
+            </div>
+            <div id="co-members"></div>
+            <details id="co-hist" class="cohist"><summary>History</summary><div id="co-hist-body"></div></details>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Viewer: the one viewer instance, kept while switching screens -->
+    <section id="view-viewer" class="view hidden">
+      <p id="viewer-msg" class="pad muted hidden"></p>
+      <iframe id="viewer-frame" class="viewer-frame hidden" title="VitalStream"></iframe>
+    </section>
+
+    <!-- The ECG, echo and imaging viewers (viewers/): each kept while switching screens -->
+    <section id="view-apps" class="view hidden">
+      <p id="app-msg" class="pad muted hidden">Open an ECG, an echo or an image from a patient's page.</p>
+      <iframe id="app-ecg" class="viewer-frame hidden" title="ECG viewer"></iframe>
+      <iframe id="app-pacs" class="viewer-frame hidden" title="PACS viewer"></iframe>
+    </section>
+
+    <!-- Actions -->
+    <section id="view-actions" class="view hidden">
+      <div class="pad narrow">
+        <h2>Actions</h2>
+        <p class="muted">Tick the actions to run. Actions an action requires (e.g. Index) are added when needed.
+          Work already done on an unchanged recording is not repeated unless you ask for it.</p>
+        <table id="act-table" class="grid"></table>
+        <p id="act-problems" class="err hidden"></p>
+        <h3>Run on</h3>
+        <label class="radio"><input type="radio" name="act-scope" value="selected" checked> <span id="act-sel-label">The selected encounters</span></label>
+        <label class="radio"><input type="radio" name="act-scope" value="search"> The encounters matching the current search</label>
+        <label class="radio"><input type="radio" name="act-scope" value="cohort"> The members of a cohort: <select id="act-cohort" aria-label="Cohort"></select></label>
+        <label class="radio"><input type="radio" name="act-scope" value="all"> Every recording in the catalog</label>
+        <label class="radio"><input type="checkbox" id="act-force"> Run again where already done</label>
+        <div class="ftools"><button id="act-run" class="primary">Run</button><span id="act-report" class="muted"></span></div>
+      </div>
+    </section>
+
+    <!-- Jobs -->
+    <section id="view-jobs" class="view hidden">
+      <div class="pad">
+        <div class="ftools">
+          <select id="job-state" aria-label="State">
+            <option value="">Unfinished first</option><option value="running">Running</option><option value="queued">Queued</option>
+            <option value="failed">Failed</option><option value="done">Done</option><option value="cancelled">Cancelled</option>
+          </select>
+          <span id="job-counts" class="muted"></span>
+          <span class="spacer"></span>
+          <button id="job-cancel-all" class="admin-only danger">Cancel all unfinished</button>
+        </div>
+        <div class="table-wrap"><table id="job-table" class="grid"></table></div>
+      </div>
+    </section>
+
+    <!-- History -->
+    <section id="view-history" class="view hidden">
+      <div class="pad">
+        <div class="ftools">
+          <span class="muted">Encounters you have opened, most recent first. Only you see this list.</span>
+          <span class="spacer"></span>
+          <button id="hist-clear" class="danger">Clear history</button>
+        </div>
+        <div class="table-wrap"><table id="hist-table" class="grid"></table></div>
+      </div>
+    </section>
+
+    <!-- Sources (admins): databases and recordings -->
+    <section id="view-sources" class="view hidden">
+      <div class="subtabs"><a href="#/import" class="on">Databases</a><a href="#/recordings">Recordings</a></div>
+      <div class="pad">
+        <div class="cards">
+          <div class="card wide">
+            <h2>Add a database</h2>
+            <p class="muted">Every patient's data comes from a database: a table imported into the catalog, or a database Medorama reads where it is. A row names its patient (patient ID, MRN or encounter); a file (an ECG, a recording, an image) always comes with its patient, never on its own.</p>
+            <div class="pick" role="radiogroup" aria-label="Kind of database">
+              <label><input type="radio" name="db-kind" value="import" checked><b>Import tables</b>
+                <span>CSV, Parquet or spreadsheet files, copied into the catalog: results, ECG lists, notes, links to files. Fastest to search. Known exports (GE MUSE, CLIF …) are converted.</span></label>
+              <label><input type="radio" name="db-kind" value="file"><b>Connect a database file</b>
+                <span>An OMOP database in a SQLite file on this server, read where it is, never copied or changed. For a research extract too large to copy.</span></label>
+              <label><input type="radio" name="db-kind" value="server"><b>Connect a database server</b>
+                <span>An OMOP database, or any layout through SQL views, on a PostgreSQL server managed elsewhere. Always current; its availability and its access rules are its own.</span></label>
+            </div>
+
+            <div id="db-import" class="dbpanel">
+              <div class="formgrid">
+                <label>Kind of data <select id="tb-cat" aria-label="Kind of data"></select></label>
+                <label>Format <select id="tb-format" aria-label="Format"></select></label>
+              </div>
+              <p id="tb-format-about" class="muted small"></p>
+              <label id="tb-drop" class="dropzone">
+                <input id="tb-files" type="file" class="sr-only" aria-label="Files to import" accept=".csv,.xlsx,.xls,.ods,.parquet,text/csv" multiple>
+                <b>Drop files here, or <span class="like-link">choose files</span></b>
+                <span class="muted small">CSV, Parquet or spreadsheets, up to 1 GB here; several files with the same columns can make one database. Larger tables: <code>medorama import-table FILE…</code> on the server.</span>
+              </label>
+              <details class="clifbox"><summary>A CLIF folder on the server</summary>
+                <p class="muted small">CLIF, the Common Longitudinal ICU data Format: its tables (CSV or Parquet) are recognised and imported in order, each a database (<code>clif_vitals</code> …). The folder must be inside <code>data_roots</code>; on the command line: <code>medorama import-clif FOLDER</code>.</p>
+                <div class="ftools wrap"><input id="clif-dir" placeholder="/data/clif" aria-label="The CLIF folder"><button id="clif-preview" type="button">Preview</button><button id="clif-import" type="button" class="primary">Import the folder</button></div>
+                <pre id="clif-report" class="report hidden"></pre>
+              </details>
+              <div id="tb-together" class="ftools wrap hidden">
+                <label class="radio"><input type="radio" name="tb-mode" value="each" checked> Each file a database of its own</label>
+                <label class="radio"><input type="radio" name="tb-mode" value="one"> One database from these files (the same columns)</label>
+                <input id="tb-dbname" placeholder="The database's name" aria-label="The database's name" class="hidden">
+              </div>
+              <div id="tb-list"></div>
+              <div id="tb-running" class="running hidden" aria-live="polite"></div>
+              <div class="ftools"><button id="tb-preview" title="Reads every row and counts what it would add, without keeping anything">Preview all</button><button id="tb-import" class="primary">Import all</button>
+                <span class="muted small">Imports run on the server: you may leave this page; the Import tab shows their progress.</span></div>
+            </div>
+
+            <form id="db-connect" class="dbpanel hidden">
+              <div class="formgrid">
+                <label>Name <input id="cn-name" required placeholder="omop" aria-describedby="cn-name-hint"><small id="cn-name-hint" class="muted">Criteria write it: <code>omop.lactate</code></small></label>
+                <label>Layout <select id="cn-kind" aria-label="Layout"><option value="omop">OMOP CDM 5.3 or 5.4</option><option value="sql">Any layout, through SQL views</option></select></label>
+                <label id="cn-path-l">File on this server <input id="cn-path" placeholder="/data/omop/omop.sqlite"></label>
+                <label id="cn-url-l" class="hidden">Server <input id="cn-url" placeholder="postgres://reader@db.example.org/omop?sslmode=require"><small class="muted">No password in it.</small></label>
+                <label id="cn-pass-l" class="hidden">Password <input id="cn-pass" type="password" autocomplete="new-password"><small class="muted">Kept in a file only the catalog reads; never shown again.</small></label>
+                <label id="cn-schema-l" class="hidden">Schema <input id="cn-schema" placeholder="cdm"></label>
+                <label id="cn-vschema-l" class="hidden">Vocabulary schema <input id="cn-vschema" placeholder="vocab (when apart)"></label>
+                <label>Its patients are named by <select id="cn-ident" aria-label="Identifier"><option value="mrn">MRN</option><option value="patient_id">patient ID</option><option value="none">nothing the catalog knows</option></select></label>
+                <label>MRN authority <input id="cn-auth" placeholder="(when the catalog has several)"></label>
+                <label>Time zone of its times <input id="cn-tz" placeholder="(the catalog's)"></label>
+              </div>
+              <details id="cn-views" class="hidden"><summary>SQL views (any layout)</summary>
+                <p class="muted small">Each a query with the canonical columns (docs/design/sources.md): persons, visits, entries; and a version query.</p>
+                <div class="formgrid"><label>persons <textarea id="cn-v-persons" rows="4"></textarea></label><label>visits <textarea id="cn-v-visits" rows="4"></textarea></label>
+                  <label>entries <textarea id="cn-v-entries" rows="4"></textarea></label><label>version <textarea id="cn-v-version" rows="4"></textarea></label></div>
+              </details>
+              <div class="ftools"><button class="primary">Connect</button><span id="cn-result" class="muted"></span></div>
+            </form>
+          </div>
+          <div class="card wide">
+            <h2>Connected databases</h2>
+            <p class="muted">Read where they are, never written. Their persons are linked to the catalog's patients as searches find them; <b>Link all</b> links them at once.</p>
+            <div class="table-wrap short"><table id="cn-table" class="grid"></table></div>
+          </div>
+          <div class="card wide">
+            <h2>Import formats</h2>
+            <p class="muted">Known exports, recognised by their columns and converted as they are imported. A site adds its own as TOML files in <code>formats_dirs</code> (docs/administration.md, "Import formats").</p>
+            <div class="table-wrap short"><table id="fmt-table" class="grid"></table></div>
+            <p id="fmt-problems" class="err hidden"></p>
+          </div>
+          <div class="card wide">
+            <h2>Sources</h2>
+            <p class="muted">Everything imported carries a source. Removing a source takes what it added out of every patient's page;
+              what another source also holds stays. Files are never touched.</p>
+            <div class="table-wrap short"><table id="src-table" class="grid"></table></div>
+            <p id="src-waiting" class="muted"></p>
+          </div>
+          <div class="card wide">
+            <h2>Imports</h2>
+            <div class="table-wrap short"><table id="imports-table" class="grid"></table></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Review (admins): what needs a person's decision -->
+    <section id="view-review" class="view hidden">
+      <div class="pad">
+        <div class="cards">
+          <div class="card wide">
+            <h2>Held-back rows</h2>
+            <p class="muted">Rows in conflict with the catalog. Apply one with the fix it calls for, or dismiss it.
+              Removing its import removes it too.</p>
+            <div class="table-wrap short"><table id="rv-held" class="grid"></table></div>
+          </div>
+          <div class="card wide phi-only">
+            <h2>Possible duplicate patients</h2>
+            <p class="muted">Same name and date of birth, names swapped, day and month of birth swapped, or same last name,
+              first initial and date of birth. Merge them (no undo), or mark them as different people (not suggested again).</p>
+            <div class="table-wrap short"><table id="rv-dups" class="grid"></table></div>
+          </div>
+          <div class="card wide phi-only">
+            <h2>Recordings whose files disagree</h2>
+            <p class="muted">Automatic links where the recording's own file names another patient than the databases.
+              Keep the link (confirmed, linked manually from then on), or unlink (never linked to that encounter again).</p>
+            <div class="table-wrap short"><table id="rv-files" class="grid"></table></div>
+          </div>
+          <div class="card wide">
+            <h2>Items waiting</h2>
+            <p class="muted">Items whose patient or encounter no database names yet, by the keys they came with.
+              They are matched as soon as a database names them.</p>
+            <div class="table-wrap short"><table id="rv-waiting" class="grid"></table></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Admin -->
+    <section id="view-admin" class="view hidden">
+      <div class="pad">
+        <div class="cards">
+          <div class="card">
+            <h2>Users</h2>
+            <div class="table-wrap"><table id="usr-table" class="grid"></table></div>
+            <form id="usr-add" class="ftools wrap">
+              <input id="usr-name" placeholder="User name" aria-label="User name" required>
+              <input id="usr-display" placeholder="Full name" aria-label="Full name">
+              <select id="usr-role" aria-label="Role"><option value="viewer">viewer</option><option value="analyst">analyst</option><option value="admin">admin</option></select>
+              <label class="inline" title="Sees identifiers (names, MRNs, dates of birth, real dates): may leave Privacy Mode"><input id="usr-phi" type="checkbox"> PHI permission (may leave Privacy Mode)</label>
+              <input id="usr-pass" type="password" placeholder="Password (10+ characters)" aria-label="Password" autocomplete="new-password" required>
+              <button class="primary">Add user</button>
+            </form>
+            <p class="muted">viewer: search and look; analyst: + run actions; admin: + add and remove entries, users.
+              PHI: may see and search MRNs, names, dates of birth, encounter numbers and the text of notes.</p>
+          </div>
+          <div class="card">
+            <h2>Settings</h2>
+            <dl id="cfg-list" class="kv"></dl>
+          </div>
+          <div class="card">
+            <h2>Add-ons</h2>
+            <p class="muted">Adapters: programs that read recording formats Medorama does not read itself (licensed formats). They are installed on the server, by an administrator: <code>medorama addons install PROGRAM</code>; never through this page.</p>
+            <table id="addon-table" class="grid"></table>
+          </div>
+          <div class="card">
+            <h2>Dates and times</h2>
+            <p class="muted">How every page writes dates and times, for everyone, in the catalog's time zone (<span id="disp-zone"></span>, set in its <code>medorama.toml</code>). Exports and the API keep ISO 8601 (2024-01-31 14:05), which every program reads.</p>
+            <form id="disp-form">
+              <div class="ftools wrap">
+                <label class="inline">Dates <select id="disp-date" aria-label="Date order"></select></label>
+                <label class="inline">Clock <select id="disp-clock" aria-label="Clock"></select></label>
+              </div>
+              <p class="muted small">Now: <b id="disp-now"></b> · <span id="disp-long"></span></p>
+              <div class="ftools"><button class="primary">Save</button></div>
+            </form>
+          </div>
+          <div class="card">
+            <h2>Privacy Mode</h2>
+            <p class="muted">What Privacy Mode withholds, for every user, on every page, in every file and in exports. It is always on for users without the PHI permission, and on by default for everyone but admins (the header's <b>Privacy Mode</b> switch). The server replaces what is withheld by placeholders (<code>[Patient Name]</code>, <code>[MRN]</code> …) and patients by their pseudonyms. Pictures, PDFs, DICOM pixels and videos are sent as they are: their tabs are marked with a red triangle.</p>
+            <form id="deid-form">
+              <div id="deid-fields" class="checks"></div>
+              <p class="muted small">Dates move back by the offset below, and each patient's by a number of days of their own on top (from 0 to the days set here; 0: the same offset for everyone). A patient's own days are drawn once and kept, so every user and session sees the same dates for them; the time between any two of a patient's events is kept. The offset is counted on the calendar from 2000-01-01. Changing either changes the dates shown for every patient.</p>
+              <div class="ftools wrap privacy-offset">
+                <label class="inline">years <input id="deid-years" type="number" min="0" step="1"></label>
+                <label class="inline">months <input id="deid-months" type="number" min="0" step="1"></label>
+                <label class="inline">days <input id="deid-days" type="number" min="0" step="1"></label>
+                <label class="inline">hours <input id="deid-hours" type="number" min="0" step="1"></label>
+                <label class="inline">each patient's own days, up to <input id="deid-spread" type="number" min="30" max="3650" step="1"></label>
+                <span id="deid-sum" class="muted small"></span>
+              </div>
+              <div class="ftools"><button class="primary">Save</button><button type="button" class="btn" id="deid-hipaa">Defaults</button></div>
+            </form>
+          </div>
+          <div class="card wide">
+            <h2>Audit log</h2>
+            <div class="table-wrap short"><table id="audit-table" class="grid"></table></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <aside id="drawer" class="drawer hidden">
+    <div class="drawer-head">
+      <h2 id="drawer-title"></h2>
+      <button id="drawer-close" class="icon" title="Close">✕</button>
+    </div>
+    <div id="drawer-body"></div>
+  </aside>
+  <div id="toast" class="toast hidden"></div>
+</div>
+</body>
+</html>

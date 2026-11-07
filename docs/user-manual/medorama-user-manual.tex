@@ -1,0 +1,129 @@
+% Medorama: User's manual.
+% Built with pdflatex (latexmk, or Overleaf: see README.md). The source is ASCII: special
+% characters are written as LaTeX commands. Every change to Medorama is reflected here, in the
+% same change as the code and the Markdown documents.
+%
+% Chapters and their labels (refer to them with \cref{chap:...}):
+%   Part I    introduction (chap:introduction), installation (chap:installation),
+%             quickstart (chap:quickstart)
+%   Part II   page (chap:page), patients (chap:patients), cohorts (chap:cohorts),
+%             databases-tab (chap:databases-tab), viewers-in-medorama (chap:viewers-in-medorama),
+%             actions (chap:actions)
+%   Part III  importing (chap:importing), connecting (chap:connecting), clif (chap:clif),
+%             recordings (chap:recordings), ecg-imaging (chap:ecg-imaging)
+%   Part IV   viewers-alone (chap:viewers-alone), vitalstream (chap:vitalstream),
+%             ecg-viewer (chap:ecg-viewer), pacs-viewer (chap:pacs-viewer)
+%   Part V    administration (chap:administration), users-privacy (chap:users-privacy),
+%             sign-in (chap:sign-in), deployment (chap:deployment), addons (chap:addons),
+%             readers (chap:readers), troubleshooting (chap:troubleshooting)
+%   Part VI   architecture (chap:architecture), protecting (chap:protecting),
+%             security (chap:security): for an institution's IT security review
+%   Part VII  cli (chap:cli), http-api (chap:http-api), viewer-api (chap:viewer-api),
+%             settings-reference (chap:settings-reference), formats-reference (chap:formats-reference)
+%   Appendices  app-glossary (chap:glossary), app-licences (chap:licences)
+% A section's label is sec:<chapter>-<topic>, a table's tab:<chapter>-<topic>, a figure's
+% fig:<chapter>-<topic>: each chapter's labels start with its own name, so that none repeat.
+\documentclass[11pt,a4paper,oneside,openany]{book}
+\input{preamble}
+
+\begin{document}
+
+% ---- Title page --------------------------------------------------------------------------
+\begin{titlepage}
+  \thispagestyle{empty}
+  \vspace*{0.18\textheight}
+  {\sffamily\color{accent}\large\bfseries USER'S MANUAL\par}
+  \vspace{0.6em}
+  {\color{accent}\rule{\linewidth}{1.2pt}\par}
+  \vspace{1.0em}
+  {\sffamily\bfseries\color{titlecolor}\fontsize{40}{44}\selectfont Medorama\par}
+  \vspace{0.8em}
+  {\sffamily\Large\color{titlecolor}A unified patient-journey research platform linking EHR
+    data, physiological waveforms, imaging and laboratory results across databases\par}
+  \vspace{2.2em}
+  {\sffamily\large\color{mutedtext}Version \mdversion\quad\textbar\quad \mddate\par}
+  \vfill
+  {\sffamily\large\color{titlecolor}Reza Sameni\par}
+  \vspace{0.3em}
+  {\sffamily\small\color{mutedtext}\url{https://medorama.org}\par}
+  {\sffamily\small\color{mutedtext}\url{https://github.com/alphanumericslab/medorama}\par}
+  \vspace{1.2em}
+  {\small\color{mutedtext}
+  Medorama is research software, not a medical device: it is not cleared for diagnosis or
+  treatment and must not be used to make clinical decisions. Every patient, value, signal and
+  image in this manual is synthetic. Licenses: \cref{chap:licences}.\par}
+\end{titlepage}
+
+\frontmatter
+\tableofcontents
+\listoffigures
+
+\mainmatter
+
+% ---- Part I ------------------------------------------------------------------------------
+\part{Getting started}
+\label{part:start}
+\input{chapters/introduction}
+\input{chapters/installation}
+\input{chapters/quickstart}
+
+% ---- Part II -----------------------------------------------------------------------------
+\part{Using Medorama}
+\label{part:using}
+\input{chapters/page}
+\input{chapters/patients}
+\input{chapters/cohorts}
+\input{chapters/databases-tab}
+\input{chapters/viewers-in-medorama}
+\input{chapters/actions}
+
+% ---- Part III ----------------------------------------------------------------------------
+\part{Bringing data in}
+\label{part:data}
+\input{chapters/importing}
+\input{chapters/connecting}
+\input{chapters/clif}
+\input{chapters/recordings}
+\input{chapters/ecg-imaging}
+
+% ---- Part IV -----------------------------------------------------------------------------
+\part{The viewers on their own}
+\label{part:viewers}
+\input{chapters/viewers-alone}
+\input{chapters/vitalstream}
+\input{chapters/ecg-viewer}
+\input{chapters/pacs-viewer}
+
+% ---- Part V ------------------------------------------------------------------------------
+\part{Administration}
+\label{part:admin}
+\input{chapters/administration}
+\input{chapters/users-privacy}
+\input{chapters/sign-in}
+\input{chapters/deployment}
+\input{chapters/addons}
+\input{chapters/readers}
+\input{chapters/troubleshooting}
+
+% ---- Part VI -----------------------------------------------------------------------------
+\part{Architecture and security}
+\label{part:design}
+\input{chapters/architecture}
+\input{chapters/protecting}
+\input{chapters/security}
+
+% ---- Part VII ----------------------------------------------------------------------------
+\part{Reference}
+\label{part:reference}
+\input{chapters/cli}
+\input{chapters/http-api}
+\input{chapters/viewer-api}
+\input{chapters/settings-reference}
+\input{chapters/formats-reference}
+
+% ---- Appendices --------------------------------------------------------------------------
+\appendix
+\input{chapters/app-glossary}
+\input{chapters/app-licences}
+
+\end{document}

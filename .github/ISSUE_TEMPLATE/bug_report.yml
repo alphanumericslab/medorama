@@ -1,0 +1,62 @@
+name: Bug report
+description: Something does not build, install or work as the documentation says.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never attach patient data**: no real recordings, tables, screenshots of real data, or
+        identifiers, even partial. Reproduce the problem with the synthetic data of
+        `tools/make-demo-data.py` or the files in `viewers/vitalstream/testdata/`.
+        A security problem (a way to see identifiers in Privacy Mode, to read files outside the
+        data folders, to bypass sign-in) is reported privately: see SECURITY.md.
+  - type: dropdown
+    id: part
+    attributes:
+      label: Which part
+      options:
+        - Medorama (the server or its page)
+        - VitalStream viewer (Python)
+        - VitalStream viewer (Rust)
+        - VitalStream viewer (C++)
+        - ECG viewer
+        - PACS viewer
+        - Installers or building
+        - Libraries (wfdb, engine)
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce
+      description: The commands you ran, from a clone; with synthetic data only.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output or error message
+      description: Remove anything that names a patient or a recording file before pasting.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: "`medorama --version`, or `git rev-parse --short HEAD`"
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: e.g. Ubuntu 24.04 x86-64, macOS 15 arm64, Windows 11; and the compiler or Rust version when it is a build problem
+    validations:
+      required: true

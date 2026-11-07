@@ -1,0 +1,9 @@
+rec_ecg 2 500 1000 08:00:00 02/01/2024
+rec_ecg.dat 16 200/mV 16 0 0 0 0 I
+rec_ecg.dat 16 200/mV 16 0 0 0 0 II
+# Patient: Test^Person
+# MRN: SYN0001
+# DOB: 1931-05-17
+# Age: 92
+# Acquired: 2024-01-02 08:00
+# Confirmed by: Dr. Test

@@ -1,0 +1,125 @@
+---
+---
+
+@import "{{ site.theme }}";
+
+// The site's own styles, over the jekyll-theme-minimal theme (light). The pages' screenshots
+// use the programs' dark theme, except the ECG viewer, shown in both.
+
+$accent: #12324a;
+$line: #e5e5e5;
+$muted: #555;
+
+// The tabs above every page, and the second row on a section's pages (_layouts/default.html).
+nav.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 12px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid $line;
+}
+
+nav.tabs a {
+  padding: 4px 10px;
+  border: 1px solid $line;
+  border-radius: 4px;
+  color: $muted;
+  font-size: 14px;
+  line-height: 20px;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+nav.tabs a:hover,
+nav.tabs a:focus-visible {
+  border-color: $accent;
+  color: $accent;
+}
+
+nav.tabs a:focus-visible {
+  outline: 2px solid $accent;
+  outline-offset: 1px;
+}
+
+nav.tabs a.active {
+  background: $accent;
+  border-color: $accent;
+  color: #fff;
+  font-weight: bold;
+}
+
+// The second row: lighter, so that it reads as part of the section above it.
+nav.subtabs {
+  gap: 4px 14px;
+  margin-top: -2px;
+  padding-bottom: 6px;
+}
+
+nav.subtabs a {
+  padding: 2px 0;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  font-size: 13px;
+}
+
+nav.subtabs a:hover,
+nav.subtabs a:focus-visible {
+  border-bottom-color: $accent;
+}
+
+nav.subtabs a.active {
+  background: none;
+  border-bottom-color: $accent;
+  color: $accent;
+}
+
+// Room between the tabs and the page's first heading.
+nav.tabs + h1,
+nav.tabs + h2,
+nav.tabs + p {
+  margin-top: 24px;
+}
+
+// The sidebar.
+header p.try {
+  color: $muted;
+  font-size: 14px;
+}
+
+header p.notice {
+  color: $muted;
+}
+
+// Wide tables scroll instead of overflowing.
+table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+img {
+  max-width: 100%;
+  height: auto;
+}
+
+// More room for the content on large screens (the theme's section is 500px).
+@media print, screen and (min-width: 961px) {
+  .wrapper { width: 1100px; }
+  section { width: 760px; }
+}
+
+// Narrow screens: the sidebar becomes a short header above the tabs (the tabs lead to what its
+// other links lead to), without the room the theme keeps at its right for buttons this site
+// does not have; on phones the tabs are slightly smaller, so that they take fewer rows.
+@media screen and (max-width: 960px) {
+  header { padding-right: 0; }
+  header p.links, header p.try, header p.notice { display: none; }
+}
+
+@media screen and (max-width: 480px) {
+  nav.tabs { gap: 5px; }
+  nav.tabs a { padding: 3px 8px; font-size: 13px; }
+  nav.subtabs { gap: 4px 14px; }
+  nav.subtabs a { padding: 2px 0; }
+}

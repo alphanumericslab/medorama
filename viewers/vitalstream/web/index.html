@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>VitalStream</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2311161d'/%3E%3Cpath d='M3 18h7l2-6 4 12 3-9 2 3h8' fill='none' stroke='%233ddc97' stroke-width='2.4' stroke-linejoin='round' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M3 18h7l2-6 4 12 3-9 2 3h8"/></svg>
+      <span>VitalStream</span>
+    </div>
+    <div id="host" class="host" hidden></div>
+    <button id="btn-open" class="btn primary" title="Open one record: a WFDB record, an EDF, EDF+ or BDF file, or a file an add-on reads (O)">Open record…</button>
+    <button id="btn-open-many" class="btn" title="Open every record in a folder and its subfolders, as one session (Shift+O)">Open multiple records…</button>
+    <div id="source" class="source muted">No recording open</div>
+    <div class="goto-wrap">
+      <button id="btn-goto" class="btn" title="Go to a date and time (G)" disabled>Go to…</button>
+      <div id="goto" class="goto" role="dialog" aria-label="Go to a date and time" hidden>
+        <div class="cal-head">
+          <button type="button" id="cal-prev" class="btn icon" title="Previous month">‹</button>
+          <span id="cal-title"></span>
+          <button type="button" id="cal-next" class="btn icon" title="Next month">›</button>
+        </div>
+        <div id="cal-grid" class="cal-grid"></div>
+        <div class="goto-row">
+          <label>Time <input id="goto-time" type="time" step="0.001"></label>
+          <span id="goto-tz" class="muted"></span>
+        </div>
+        <div class="goto-row">
+          <label>Show
+            <select id="goto-span">
+              <option value="keep">the current span</option>
+              <option value="10">10 s</option>
+              <option value="60">1 min</option>
+              <option value="600">10 min</option>
+              <option value="3600">1 h</option>
+            </select>
+          </label>
+          <span class="muted">around it</span>
+        </div>
+        <div class="goto-row">
+          <button type="button" id="goto-start" class="btn">Start</button>
+          <button type="button" id="goto-end" class="btn">End</button>
+          <span class="spacer"></span>
+          <button type="button" id="goto-go" class="btn primary">Go</button>
+        </div>
+        <div id="goto-msg" class="goto-msg muted"></div>
+      </div>
+    </div>
+    <div class="spacer"></div>
+    <div id="busy" class="busy" hidden><span></span></div>
+    <label class="field" title="Display time zone">
+      <span>Time zone</span>
+      <select id="tz"></select>
+    </label>
+    <div class="seg" role="group" aria-label="Lane height">
+      <button data-density="compact" title="Compact lanes">S</button>
+      <button data-density="normal" title="Normal lanes">M</button>
+      <button data-density="tall" title="Tall lanes">L</button>
+    </div>
+    <button id="btn-theme" class="btn icon" title="Light / dark">◐</button>
+    <button id="btn-help" class="btn icon" title="Keyboard and mouse (?)">?</button>
+  </header>
+
+  <section class="overview-wrap">
+    <canvas id="overview"></canvas>
+  </section>
+
+  <main class="main">
+    <section class="viewer">
+      <div class="axis-wrap"><canvas id="axis"></canvas></div>
+      <div id="lanes-scroll" class="lanes-scroll">
+        <canvas id="lanes"></canvas>
+        <div id="empty" class="empty">
+          <div>
+            <h1>Open a recording</h1>
+            <p><b>Open record…</b>: one WFDB record (its <code>.hea</code> file; a multi-segment
+              record whole), an EDF, EDF+ or BDF file, or a file in a format an installed add-on
+              reads.</p>
+            <p><b>Open multiple records…</b>: a folder, every WFDB record in it and in its
+              subfolders on one time line (one session), or a WFDB collection.</p>
+            <div class="empty-actions">
+              <button class="btn primary" id="btn-open-2">Open record…</button>
+              <button class="btn" id="btn-open-many-2">Open multiple records…</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="tooltip" class="tooltip" hidden></div>
+    </section>
+
+    <aside class="sidebar">
+      <section>
+        <h2>At cursor</h2>
+        <div id="cursor-time" class="cursor-time muted">—</div>
+        <table id="vitals-now" class="vitals-now"></table>
+      </section>
+      <section class="showall-wrap">
+        <label class="showall" title="Every waveform and every trend; untick to return to the default selection">
+          <input type="checkbox" id="show-all" disabled> Show all waveforms and trends
+        </label>
+      </section>
+      <section>
+        <h2>Waveforms</h2>
+        <div id="channel-list" class="checklist"></div>
+      </section>
+      <section>
+        <h2>Trends</h2>
+        <input id="trend-filter" class="filter" placeholder="Filter vital signs…" autocomplete="off">
+        <div id="trend-list" class="checklist"></div>
+      </section>
+      <section>
+        <h2>Recording</h2>
+        <div id="info" class="info muted"></div>
+      </section>
+    </aside>
+  </main>
+
+  <footer class="statusbar">
+    <span id="status-view"></span>
+    <span class="spacer"></span>
+    <span id="status-msg" class="muted"></span>
+  </footer>
+
+  <dialog id="dlg-open" class="dialog">
+    <form method="dialog" class="dialog-head">
+      <h2 id="dlg-open-title">Open record</h2>
+      <button class="btn icon" value="cancel" title="Close">✕</button>
+    </form>
+    <div class="pathbar">
+      <button id="nav-up" class="btn icon" title="Up one folder (Alt+↑)">↑</button>
+      <div class="pathbox">
+        <input id="path-input" type="text" spellcheck="false" autocomplete="off"
+               placeholder="Type or paste a path — Tab completes, Enter goes there">
+        <ul id="suggest" class="suggest" hidden></ul>
+      </div>
+      <button id="path-go" class="btn">Go</button>
+    </div>
+    <div id="places" class="places"></div>
+    <div class="crumbs" id="crumbs"></div>
+    <div class="listbar">
+      <input id="list-filter" class="filter" placeholder="Filter this folder…" autocomplete="off">
+      <label class="muted"><input type="checkbox" id="show-hidden"> hidden</label>
+      <button id="open-here" class="btn primary" hidden title="Every record in this folder and its subfolders, as one session">Open the records in this folder</button>
+    </div>
+    <div id="browse-msg" class="browse-msg" hidden></div>
+    <div id="scan-summary" class="scan-summary" hidden>
+      <div class="msg"></div>
+      <div class="row">
+        <button id="scan-open" class="btn primary">Open as one session</button>
+        <button id="scan-back" class="btn">Back</button>
+      </div>
+    </div>
+    <ul id="browser" class="browser"></ul>
+    <div id="recent" class="recent"></div>
+    <div id="open-progress" class="open-progress" hidden>
+      <div class="bar"><span></span></div>
+      <div class="row">
+        <div class="msg muted"></div>
+        <button id="open-cancel" class="btn">Cancel</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="dlg-help" class="dialog small">
+    <form method="dialog" class="dialog-head">
+      <h2>Navigation</h2>
+      <button class="btn icon" value="cancel" title="Close">✕</button>
+    </form>
+    <table class="keys">
+      <tr><td>Wheel / pinch</td><td>Zoom at the pointer</td></tr>
+      <tr><td>Drag</td><td>Pan</td></tr>
+      <tr><td>Shift + drag</td><td>Zoom to the selected time span</td></tr>
+      <tr><td>Horizontal scroll</td><td>Pan</td></tr>
+      <tr><td>Double-click</td><td>Show everything</td></tr>
+      <tr><td>Overview strip</td><td>Click or drag to move the view</td></tr>
+      <tr><td>← → / PgUp PgDn</td><td>Pan 10 % / one screen</td></tr>
+      <tr><td>+ −</td><td>Zoom in / out</td></tr>
+      <tr><td>Home</td><td>Show everything</td></tr>
+      <tr><td>1 · 2 · 3</td><td>View 10 s · 1 min · 10 min at the cursor</td></tr>
+      <tr><td>G</td><td>Go to a date and time (calendar; days with waveforms are marked)</td></tr>
+      <tr><td>O · Shift+O</td><td>Open a record · open multiple records (a folder, as one session)</td></tr>
+      <tr><td>Open dialog: Tab · Enter · Alt+↑</td><td>Complete the path · go there · go up one folder</td></tr>
+    </table>
+    <p class="muted">At most 64 waveform lanes are shown at once; tick and untick them under
+      <i>Waveforms</i>. A signal recorded twice at the same time has a second lane (<i>II (2)</i>).
+      Wheel over the lane labels scrolls the lanes. Values are in the units stated in the
+      file; <i>adu</i> means the file states no calibration. Shaded grey: break in the data.
+      Amber: time not stated in the file (placed next to its neighbours). With the qc_verbose
+      setting, a dashed blue outline marks data stored out of order that the reader put back in
+      order (not a break).</p>
+  </dialog>
+
+  <script src="static/js/host.js"></script>
+  <script type="module" src="static/js/app.js"></script>
+</body>
+</html>

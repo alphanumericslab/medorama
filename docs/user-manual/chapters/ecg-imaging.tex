@@ -1,0 +1,280 @@
+% Part III: ECGs and imaging as data. Sources: docs/importing.md "Files"; docs/administration.md
+% "Files and recordings", "Import formats"; viewers/ecg/python/muse/README.md;
+% viewers/pacs/python/dicom/README.md; docs/edf.md; docs/security.md 7.3 (the file rules) and
+% docs/protecting-patient-data.md#dicom (the DICOM element rules). Checked against
+% medorama/src/tables.rs (files of rows), patient/files.rs (kinds, viewers, hints), gate.rs
+% (FileKind), viewers/ecg/python/muse/muse_reader_py/cli.py, viewers/pacs/python/dicom.
+\chapter{ECGs and imaging as data}
+\label{chap:ecg-imaging}
+
+This chapter explains how ECGs, images and documents come into Medorama, and how they are
+opened and protected. It is written for data managers who build the tables that name these
+files.
+
+Resting ECGs, echocardiograms, angiograms, CT and MR series, X-rays, reports and documents come
+into Medorama as the files of a table's rows (\cref{chap:importing}). Each row names its
+patient, its time and its file, and becomes an item of the ECG, Echo, Cath lab or Imaging column
+of the Patient Journey. Its file opens in the ECG viewer (\cref{chap:ecg-viewer}) or the PACS
+viewer (\cref{chap:pacs-viewer}). Such tables are written by the systems that hold the files, or
+made from the files themselves with \cmd{muse-py index} and \cmd{dicom-py index}. Waveform
+recordings (ICU monitoring, Holters, EEGs and sleep studies) are the subject of
+\cref{chap:recordings}.
+
+\section{Files as attachments}
+\label{sec:ecg-imaging-files}
+
+A row's file is the \emph{attachment} of the row's item when the row's category (or the table's)
+is not a recording category (\code{icu}, \code{holter}, \code{eeg} or \code{sleep}). Its kind is
+recognized from its extension, and a file without one is recognized as DICOM by the \code{DICM}
+marker after its 128-byte preamble (\cref{tab:ecg-imaging-viewers}). The file must lie inside
+\code{data\_roots}. It is read where it is, never copied, and shown only to users who may see the
+patient.
+
+\begin{table}[htbp]
+\caption{Which viewer opens an attachment, by the item's category and the file's kind.}
+\label{tab:ecg-imaging-viewers}
+\begin{tabularx}{\linewidth}{@{}P{2.6cm}LP{2.6cm}@{}}
+\toprule
+{\tabhead Category} & {\tabhead Files} & {\tabhead Opened in} \\
+\midrule
+ECG & A WFDB header (\file{.hea}) with its signal files, GE MUSE XML (\file{.xml}), a DICOM ECG
+  (\file{.dcm}, \file{.dicom} or no extension), an EDF or BDF file (\file{.edf}, \file{.bdf}), a
+  JSON ECG (\file{.json}), a picture (\file{.png}, \file{.jpg}, \file{.jpeg}, \file{.gif},
+  \file{.webp}, \file{.svg}), a PDF & The ECG viewer \\
+Echo, Cath lab, Imaging & DICOM files, a folder (a DICOM series, or pictures that make one
+  loop), videos (\file{.mp4}, \file{.webm}, \file{.mov}, \file{.m4v}), pictures, PDF & The PACS
+  viewer \\
+Any other & A picture, a PDF, a video, a text file (\file{.txt}) & The page itself \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The item's name is the row's \code{name}, or else the file's name without its extension. Its
+measurements are the row's measurement columns (\code{QTc (ms)}, \code{LVEF (\%)}): numbers that
+cohorts search, in their units. The row's text columns (\code{interpretation}, \code{report},
+\code{findings} \dots) are the item's text.
+
+\section{ECGs}
+\label{sec:ecg-imaging-ecg}
+
+\screenshot{ecg.png}{A synthetic resting 12-lead ECG in the ECG viewer (light theme), opened from its item.}{fig:ecg-imaging-ecg}
+
+The ECG viewer opens the following formats (\cref{chap:ecg-viewer} describes how it reads each):
+\begin{itemize}
+\item \textbf{WFDB}: a record's header, with the signal files it names, which the item's file
+  brings with it;
+\item \textbf{GE MUSE XML}: a resting ECG as the MUSE system stores it, with its rhythm waveform,
+  measurements and statements;
+\item \textbf{DICOM ECGs}: 12-lead and Holter waveforms;
+\item \textbf{EDF, EDF+, BDF and BDF+}: the first 10 seconds of the ECG signals
+  (\cref{sec:ecg-viewer-edf}); long recordings belong to a recording category and open in
+  VitalStream instead;
+\item \textbf{JSON}: the ECG viewer's own form (\code{name}, \code{fs}, \code{leads}, each with
+  its \code{name}, \code{units} and \code{samples}, and \code{meta}), as \cmd{muse-py json} writes
+  it;
+\item \textbf{pictures and PDF}: an ECG printed or scanned, shown as it is, with its scale taken
+  from the row's columns (\cref{sec:ecg-imaging-hints}).
+\end{itemize}
+
+A table of ECGs names, in each row, the patient, the time, the file and, when there are any, the
+measurements and statements. The following commands import such a table:
+\begin{lstlisting}[language=CSV]
+patient_id,encounter_id,time,QT (ms),QTc (ms),interpretation,file
+P900001,E9100002,2024-01-02 08:00,410,452,Sinus tachycardia,ecg/ecg_P900001_20240102.hea
+\end{lstlisting}
+\begin{lstlisting}[style=shell]
+medorama import-table ecg_index.csv              # the category from the file name: ecg
+medorama import-table ecgs.csv --category ecg    # else name it
+\end{lstlisting}
+An export of GE MUSE's ECG metadata (one row per ECG, the XML elements as columns) is recognized
+and converted by the import format \code{ge-muse} (\code{ge-muse-patient-id} when its patients
+are named by a research ID: \cref{chap:importing}).
+
+\subsection{Building an ECG database: muse-py index}
+\label{sec:ecg-imaging-muse}
+
+A folder of GE MUSE XML files becomes an ECG database with \cmd{muse-py index}, the MUSE reader of
+the ECG viewer, which needs no other package. The following commands install it, index a folder
+and import the result:
+\begin{lstlisting}[style=shell]
+pip install -e viewers/ecg/python/muse
+muse-py index /data/muse -o /data/muse/ecg.csv     # one row per MUSE file
+medorama import-table /data/muse/ecg.csv           # each row an ECG of its patient
+\end{lstlisting}
+It reads every \file{.xml} file below the folder (hidden files left out), and writes one row per
+ECG with the columns of \cref{tab:ecg-imaging-muse}; the files it cannot read are listed on
+standard error. File paths are relative to the CSV, which the import reads from the CSV's folder.
+
+\begin{table}[htbp]
+\caption{The columns \cmd{muse-py index} writes.}
+\label{tab:ecg-imaging-muse}
+\begin{tabularx}{\linewidth}{@{}P{4.4cm}L@{}}
+\toprule
+{\tabhead Column} & {\tabhead Holds} \\
+\midrule
+\code{mrn} & The MUSE \code{PatientDemographics/PatientID}, in a column named \code{mrn}:
+  Medorama links each row to its patient by it, as an MRN\phimark \\
+\code{time} & The acquisition date and time, as the cart's clock wrote them \\
+\code{category}, \code{name} & \code{ecg}, \code{12-lead ECG} \\
+\code{value}, \code{unit} & The ventricular rate, \code{bpm} \\
+\code{Vent. rate (bpm)}, \code{Atrial rate (bpm)}, \code{PR (ms)}, \code{QRS (ms)},
+  \code{QT (ms)}, \code{QTc (ms)}, \code{QTcF (ms)}, \code{P axis (\textdegree)},
+  \code{R axis (\textdegree)}, \code{T axis (\textdegree)}, \code{QRS count (beats)} & The
+  measurements (\code{RestingECGMeasurements}) \\
+\code{interpretation} & The computer's statements (Marquette 12SL) \\
+\code{confirmed} & The physician's statements: confirmed, else edited \\
+\code{file} & The MUSE file, relative to the CSV \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\cmd{muse-py wfdb ECG.xml OUT\_DIR} converts one MUSE file into a WFDB record (format 16, 1\,$\mu$V
+per unit), its details, measurements and statements in its header's comments; \cmd{dicom-py wfdb
+ECG.dcm OUT\_DIR} does the same for a DICOM ECG (12-lead or Holter). Neither writes the patient's
+identity into the record.
+
+\section{Imaging}
+\label{sec:ecg-imaging-imaging}
+
+\screenshot{echo.png}{A synthetic echocardiogram loop in the PACS viewer, opened from its item.}{fig:ecg-imaging-echo}
+
+The PACS viewer opens DICOM studies of every modality (echocardiography and other ultrasound,
+angiography and fluoroscopy, IVUS and OCT, CT, MR, nuclear medicine, X-rays), DICOM structured
+reports and encapsulated PDFs, videos, pictures and PDF documents (\cref{chap:pacs-viewer}). A
+row's file may be:
+\begin{itemize}
+\item \textbf{a DICOM file}: a multi-frame loop or run, a single image, a structured report, an
+  encapsulated PDF;
+\item \textbf{a folder}: a DICOM series (its files, with or without an extension), or a folder of
+  pictures, which the viewer plays as one loop at the row's frame rate;
+\item \textbf{a video, a picture or a PDF}.
+\end{itemize}
+A folder's files are its own, not its subfolders'; only the files of the item's folder, or of the
+file and its WFDB signal files, can be read through the item.
+
+\subsection{Building an imaging database: dicom-py index}
+\label{sec:ecg-imaging-dicom}
+
+A folder of DICOM files becomes an imaging database with \cmd{dicom-py index}, which uses pydicom
+and numpy. The following commands install it, index a folder and import the result:
+\begin{lstlisting}[style=shell]
+pip install -e viewers/pacs/python/dicom
+dicom-py index /data/echo -o /data/echo/imaging.csv   # one row per loop, run, series, report
+medorama import-table /data/echo/imaging.csv          # the rows reach their patients
+\end{lstlisting}
+It reads every DICOM file under the folder, headers only, never the pixels, and writes one row per
+object a viewer shows (\cref{tab:ecg-imaging-dicom}). The objects it cannot link are listed on
+standard error.
+
+\begin{table}[htbp]
+\caption{The rows \cmd{dicom-py index} writes.}
+\label{tab:ecg-imaging-dicom}
+\begin{tabularx}{\linewidth}{@{}P{4.4cm}L@{}}
+\toprule
+{\tabhead Object} & {\tabhead Row} \\
+\midrule
+An ultrasound loop, an angiography run, any multi-frame file & One per file, with its frames and
+  frame rate \\
+A series of single-frame images (CT, MR, NM) & One per series, linking the series' folder: only
+  when that folder holds one patient's files (else it is listed as not linked, and no row is
+  written) \\
+A single image (an X-ray) & One per file \\
+A structured report (echo, cath \dots) & One per file; each measurement a column
+  \code{Name (unit)}, such as \code{Left Ventricular Ejection Fraction (\%)} (a repeated
+  measurement keeps its first value, or its mean when one is given); its text in
+  \code{interpretation} \\
+An encapsulated PDF & One per file \\
+A DICOM ECG (12-lead, Holter) & One per file; its measurements as the ECG viewer names them
+  (\code{QT (ms)}, \code{QRS (ms)}, \code{Vent. rate (bpm)} \dots), its statements in
+  \code{interpretation} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The columns are \code{mrn} (the patient ID\phimark), \code{time} (the device's clock),
+\code{category} and \code{name}, then \code{modality}, \code{description}, \code{study\_uid},
+\code{series\_uid}, \code{images}, \code{frames} and \code{fps}; the measurement columns follow,
+then \code{interpretation} and \code{file} (relative to the CSV). The category is \code{echo} for
+ultrasound, \code{cath} for angiography, fluoroscopy, IVUS and OCT, \code{ecg} or \code{holter}
+for ECG waveforms, and \code{img} for everything else; a report or a PDF takes its category from
+the words of its title (echo, cath, ECG).
+
+Columns of different databases are never merged: an echo database's \code{LVEF (\%)} and a cath
+database's are distinct, and a cohort's criterion names which one (\cref{chap:cohorts}).
+
+\section{Hints for the viewers}
+\label{sec:ecg-imaging-hints}
+
+A picture or a video does not say its scale, and a folder of pictures does not say its frame
+rate. Columns of the item's row say them: the first of its columns whose name (without its unit)
+and unit are in \cref{tab:ecg-imaging-hints}, and whose value is a positive number, gives the
+hint. Names are compared ignoring case, spaces and punctuation.
+
+\begin{table}[htbp]
+\caption{The columns that give the viewers a scale and a frame rate.}
+\label{tab:ecg-imaging-hints}
+\begin{tabularx}{\linewidth}{@{}P{2.0cm}LP{4.4cm}@{}}
+\toprule
+{\tabhead Hint} & {\tabhead Column names} & {\tabhead Units} \\
+\midrule
+Scale (mm per pixel) & \code{pixel spacing}, \code{pixel size}, \code{spacing},
+  \code{mm per pixel}, \code{mm/pixel}, \code{resolution} & \code{mm}, \code{mm/px},
+  \code{mm/pixel} or none; \code{cm}, \code{cm/px}, \code{cm/pixel} (times 10); \code{um},
+  \code{\textmu m} (divided by 1000) \\
+Frame rate & \code{fps}, \code{frame rate}, \code{frames per second} & \code{fps}, \code{Hz},
+  \code{/s}, \code{1/s} or none \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+For example, \code{pixel spacing (mm)} and \code{frame rate (fps)}, or the \code{fps} column
+\cmd{dicom-py index} writes.
+
+\section{In Privacy Mode}
+\label{sec:ecg-imaging-privacy}
+
+\begin{phibox}
+Files are protected health information: their headers, their names, and the text burned into
+their pixels. In Privacy Mode, which always applies to users without the PHI permission, every
+file leaves through the privacy gate. The gate de-identifies what it can, passes images with a
+warning, and refuses the rest. The rules are given in full in \cref{sec:protecting-files}, and
+the DICOM rules element by element in \cref{sec:protecting-dicom}.
+\end{phibox}
+
+\Cref{tab:ecg-imaging-gate} summarizes what the gate does with the files of ECG and imaging
+items.
+
+\begin{table}[htbp]
+\caption{What the privacy gate does with each kind of attachment (summary).}
+\label{tab:ecg-imaging-gate}
+\begin{tabularx}{\linewidth}{@{}P{3.4cm}L@{}}
+\toprule
+{\tabhead Kind} & {\tabhead In Privacy Mode} \\
+\midrule
+WFDB header (\file{.hea}) & Identifying comments removed; dates moved back; ages capped; the
+  record's and signal files' names replaced by tokens. \\
+WFDB samples (\file{.dat}) & Sent as they are: they hold only numbers. \\
+GE MUSE XML & Demographics removed except age and sex; the order removed; staff names replaced;
+  every date moved back. Any other XML file is refused. \\
+DICOM & The header rewritten following DICOM PS3.15 Annex E (the Basic Application Level
+  Confidentiality Profile, retaining longitudinal temporal information with modified dates); the
+  pixel data copied byte for byte; marked as possibly identifying. Deflated and big-endian files
+  are refused. \\
+EDF, EDF+, BDF, BDF+ & The header de-identified and the texts of annotations removed; the
+  samples sent as they are (\cref{sec:protecting-edf}). \\
+Pictures, videos, PDF & Sent as they are, marked as possibly identifying: the page shows an amber
+  warning triangle on the viewer's tab. \\
+Anything else & Refused: JSON ECGs, text files, and signal files with an extension other than
+  \file{.dat}. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+What the pixels show is not changed: ultrasound images, secondary captures and scanned documents
+may carry burned-in names. File names never leave the server. In Privacy Mode an attachment's
+files are named by tokens (\code{mo-f0000.hea}, \code{mo-f0001.dat}), and a real file name is not
+accepted.
+
+The databases that \cmd{muse-py index} and \cmd{dicom-py index} write hold the patients' IDs, the
+key that links each row to its patient. Keep them as PHI, with the catalog's databases, and never
+in a repository. They never hold names or dates of birth.

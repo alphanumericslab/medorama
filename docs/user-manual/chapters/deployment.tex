@@ -1,0 +1,374 @@
+% Deployment: the shapes of a deployment (one machine, a server reached by SSH, a team behind a
+% reverse proxy with HTTPS, several servers, a shared Linux cluster), running as a service,
+% backups, updating, uninstalling, the database (engine, tables, encryption, copy-database), and
+% the deployment checklist.
+% Sources: docs/administration.md ("Deployment", "Run as a service", "Backup, update,
+% uninstall", "The database"), docs/security.md (8, 9, 16), docs/sign-in.md, docs/building.md ("Update and
+% uninstall"); medorama/src/db.rs, config.rs, main.rs (serve's warning).
+\chapter{Deployment}
+\label{chap:deployment}
+
+This chapter is for administrators who put Medorama on a server. Medorama is one program,
+\cmd{medorama serve}, that serves the page, the API and the viewers, and runs the background
+work. It listens on \code{127.0.0.1:8090} by default, so that nothing reaches it from another
+machine until the deployment decides how. The chapter describes the shapes a deployment takes,
+HTTPS and the institution's sign-in, running the server as a service, backups, updates, the
+database, and the checklist to go through before real data come in. Building and installing the
+programs is described in \cref{chap:installation}, creating the catalog and its settings in
+\cref{chap:administration}, and the architecture of a deployment in
+\cref{sec:architecture-topologies}.
+
+\section{Shapes of a deployment}
+\label{sec:deployment-shapes}
+
+\begin{xltabular}{\linewidth}{@{}P{3.3cm}L@{}}
+\caption{Deployments, from one person's computer to several servers.}
+\label{tab:deployment-shapes}\\
+\toprule
+\tabhead Shape & \tabhead How \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Shape & \tabhead How \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+One machine & Run \cmd{medorama serve}, then open \url{http://127.0.0.1:8090}. \\
+A server, used from one's computer & Leave \code{host = "127.0.0.1"}, run the server as a
+  service (\cref{sec:deployment-service}), and connect with
+  \cmd{ssh -N -L 8090:127.0.0.1:8090 user@server}. The viewer is reached through the same
+  address (\file{/viewer/}), so one tunnel is enough. \\
+Shared by a team & Put it behind a reverse proxy with HTTPS (nginx, Caddy, IIS; the proxy may
+  serve it under a path prefix), set \code{secure\_cookies = true}, leave
+  \code{host = "127.0.0.1"} so that only the proxy reaches it, and give each person an account
+  of their own (\cref{sec:deployment-proxy}). \\
+Behind the institution's sign-in & An authenticating proxy signs users in with the
+  institution's single sign-on and multi-factor authentication, and names them to Medorama in a
+  header (\code{sign\_in = "proxy"}; \cref{chap:sign-in}). \\
+Several servers & With the catalog in PostgreSQL, run as many servers as needed behind the
+  proxy, each with the same settings, and keep the results and index folders on shared storage
+  (\cref{chap:administration}). Any server answers any request, and jobs are taken one at a
+  time from the shared queue. \\
+A shared Linux cluster & Run Medorama without administrator rights, with the data on a shared
+  file system and people reaching it from their own computers
+  (\cref{sec:deployment-cluster}). \\
+\end{xltabular}
+
+\paragraph{Who can reach the database.} Anyone who can read the home folder can read the
+database, and the commands run as an administrator with the PHI permission. Run the server under a
+dedicated operating-system account, and let people use the web page. On PostgreSQL, give
+Medorama's account rights on its own database only.
+
+\section{Behind a reverse proxy, with HTTPS}
+\label{sec:deployment-proxy}
+
+Medorama does not terminate TLS itself: a reverse proxy in front of it does, or users reach it
+through an SSH tunnel. To put Medorama behind a reverse proxy:
+\begin{enumerate}
+\item Keep \code{host = "127.0.0.1"} in \file{medorama.toml}, so that only the proxy reaches the
+  server. On any other address without \code{secure\_cookies = true}, \cmd{serve} prints a
+  warning that the page is reachable from other machines without HTTPS.
+\item Set \code{secure\_cookies = true}, so that the sign-in and Privacy Mode cookies are
+  marked \code{Secure}.
+\item Let the proxy pass request bodies of up to 1\,GiB, the largest import that the server
+  accepts.
+\item Where policy requires single sign-on or multi-factor authentication, use an
+  authenticating proxy that signs users in and names them to Medorama
+  (\code{sign\_in = "proxy"}). The settings, the security requirements and example
+  configurations for oauth2-proxy, Apache httpd (mod\_auth\_openidc, Shibboleth, Kerberos) and
+  nginx are in \cref{chap:sign-in}.
+\end{enumerate}
+The following nginx server block passes requests to Medorama, which then signs users in with its
+own passwords (the certificate's files and the name are the site's own):
+\begin{lstlisting}[style=text]
+server {
+    listen 443 ssl;
+    server_name medorama.example.org;
+    ssl_certificate     /etc/ssl/medorama.example.org.crt;
+    ssl_certificate_key /etc/ssl/medorama.example.org.key;
+    client_max_body_size 1g;
+    location / {
+        proxy_pass http://127.0.0.1:8090;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+\end{lstlisting}
+The server's answers carry their own security headers (a strict Content Security Policy,
+\code{X-Frame-Options}, \code{X-Content-Type-Options: nosniff}, \code{Referrer-Policy:
+no-referrer}, \code{Cache-Control: no-store} on the API), so the proxy need not add them
+(\cref{sec:security-web}).
+
+\section{On a shared Linux cluster}
+\label{sec:deployment-cluster}
+
+On a shared Linux cluster, Medorama runs without administrator rights, the data lie on a shared
+file system, and people reach the catalog from their own computers. The paths below are those of
+an example ECG collection; replace them with your own.
+\begin{enumerate}
+\item \textbf{Choose where it runs.} Use a machine where a long-running program is allowed and
+  that sees the data: a service node or a virtual machine, not a login node and not a batch job.
+\item \textbf{Build} in your account. The Rust viewer needs no C++20 compiler:
+\begin{lstlisting}[style=shell]
+git clone https://github.com/alphanumericslab/medorama.git ~/medorama && cd ~/medorama
+module load gcc 2>/dev/null || true     # any C compiler, for SQLite (or tools/install-gcc.sh)
+tools/install-medorama.sh --viewer rs
+umask 077                               # what you make next is yours alone
+\end{lstlisting}
+\item \textbf{Choose the catalog's database.} SQLite needs a local disk, because its locking is
+  unreliable on NFS, Lustre or GPFS. For many users or millions of rows, use PostgreSQL: the
+  institution's server, or one in your account. The following commands create one from
+  conda-forge:
+\begin{lstlisting}[style=shell]
+conda create -y -p ~/pg -c conda-forge postgresql=16 && export PATH=~/pg/bin:$PATH
+initdb -D ~/pgdata -A scram-sha-256 -U medorama -W          # asks for a password
+pg_ctl -D ~/pgdata -o "-k /tmp -c listen_addresses=127.0.0.1 -p 15432" -l ~/pgdata/log start
+createdb -h 127.0.0.1 -p 15432 -U medorama medorama
+echo 'the password' > ~/.medorama-db-password && chmod 600 ~/.medorama-db-password
+\end{lstlisting}
+\item \textbf{Set up the catalog.} The following commands create it:
+\begin{lstlisting}[style=shell]
+H=~/medorama-home
+.venv/bin/medorama init --home $H --results ~/medorama-results --timezone America/New_York \
+  --database-url postgres://medorama@127.0.0.1:15432/medorama   # or leave it out: SQLite in $H
+\end{lstlisting}
+  Then, in the \file{medorama.toml} of that home folder, set \code{port = 18090} (a port no one else uses),
+  \code{data\_roots = ["/data/ecg/muse"]}, and
+  \code{database\_password\_file = "/home/you/.medorama-db-password"}.
+\item \textbf{Import the data}, first as a trial that stores nothing. On a laptop, 500\,000 rows
+  take under a minute on SQLite and about a minute and a quarter on PostgreSQL:
+\begin{lstlisting}[style=shell]
+M=/data/ecg/muse/xml_metadata
+.venv/bin/medorama --home $H import-table $M/*.csv --name muse_ecg --source muse --dry-run
+.venv/bin/medorama --home $H import-table $M/*.csv --name muse_ecg --source muse
+\end{lstlisting}
+\item \textbf{Run it} so that it outlives your session, in \cmd{tmux} or as a user service
+  (\cref{sec:deployment-service}):
+\begin{lstlisting}[style=shell]
+tmux new -s medorama
+.venv/bin/medorama --home $H serve
+\end{lstlisting}
+\item \textbf{Reach it} from your computer through SSH, passing through the login node with
+  \opt{-J}:
+\begin{lstlisting}[style=shell]
+ssh -N -J you@login.cluster.example.edu -L 8090:127.0.0.1:18090 you@service-node
+\end{lstlisting}
+  Then open \url{http://127.0.0.1:8090}.
+\item \textbf{Add the people.} Create accounts in \ui{Admin} $\rightarrow$ \ui{Users}, and give
+  the PHI permission only to those who may see identifiers. Everyone logged in to that machine
+  can reach its loopback port, and so its sign-in page: use strong passwords, keep the home
+  folder readable by you alone, prefer a dedicated account, and put HTTPS in front for a
+  team.
+\end{enumerate}
+
+\section{Running as a service}
+\label{sec:deployment-service}
+
+\cmd{medorama serve} stops cleanly on a service manager's stop (\code{SIGTERM}): its plug-ins are
+stopped (TERM to each one's process group, KILL 5 seconds later), the jobs it was running go back
+to the queue, and the viewer it started stops with it. Add \opt{-{}-home DIR}
+before \cmd{serve} when the catalog is not the default one.
+
+\subsection{Linux: systemd, as your user}
+\label{sec:deployment-systemd}
+
+\begin{lstlisting}[style=shell]
+mkdir -p ~/.config/systemd/user
+cat > ~/.config/systemd/user/medorama.service <<'EOF'
+[Unit]
+Description=Medorama
+
+[Service]
+ExecStart=%h/.cargo/bin/medorama serve
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF
+systemctl --user daemon-reload
+systemctl --user enable --now medorama
+loginctl enable-linger "$USER"    # keep it running when you are logged out (may need an admin)
+journalctl --user -u medorama     # its log
+\end{lstlisting}
+\code{ExecStart} names the program where it was installed: \file{\%h/.cargo/bin/medorama} after
+\cmd{cargo install}, or the clone's \file{.venv/bin/medorama} after
+\cmd{tools/install-medorama.sh}. Without systemd: \cmd{tmux new -d -s medorama 'medorama serve'}.
+A database key (\cref{sec:deployment-encryption}) can be given to the service in its
+environment (\code{Environment=} or \code{EnvironmentFile=} in the unit), outside the home
+folder.
+
+\subsection{macOS: launchd, as your user}
+\label{sec:deployment-launchd}
+
+\begin{lstlisting}[style=shell]
+cat > ~/Library/LaunchAgents/org.medorama.server.plist <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>org.medorama.server</string>
+  <key>ProgramArguments</key>
+  <array><string>$HOME/.cargo/bin/medorama</string><string>serve</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardErrorPath</key><string>$HOME/Library/Logs/medorama.log</string>
+</dict></plist>
+EOF
+launchctl load ~/Library/LaunchAgents/org.medorama.server.plist
+\end{lstlisting}
+
+\subsection{Windows: started at log-on}
+\label{sec:deployment-windows}
+
+Without administrator rights, a command in the Startup folder starts the server at each log-on:
+\begin{lstlisting}[language=PowerShell]
+$exe = (Get-Command medorama).Source
+$startup = [Environment]::GetFolderPath('Startup')
+Set-Content "$startup\medorama.cmd" "@start `"Medorama`" /min `"$exe`" serve"
+& "$startup\medorama.cmd"               # start it now
+\end{lstlisting}
+
+\section{Backups}
+\label{sec:deployment-backups}
+
+Back up the \textbf{home folder}, which holds the settings, the database, the plug-ins and the
+formats. Indexes can always be rebuilt, but the results of actions may not be. A backup holds identifiers, the pseudonym
+mapping and the audit log: encrypt it, restrict who may restore it, and test restoring it.
+\begin{itemize}
+\item \textbf{SQLite, while the server runs:} use SQLite's own backup, shown below. An
+  encrypted database is copied while the server is stopped instead.
+\item \textbf{SQLite, while the server is stopped:} a plain copy of \file{medorama.sqlite} is
+  enough.
+\item \textbf{PostgreSQL:} use \cmd{pg\_dump}, shown below, or the server's point-in-time
+  recovery, and encrypt the dumps.
+\end{itemize}
+\begin{lstlisting}[style=shell]
+sqlite3 medorama.sqlite ".backup /backup/medorama-$(date +%F).sqlite"   # SQLite, running
+pg_dump -Fc medorama > medorama-$(date +%F).dump                         # PostgreSQL
+\end{lstlisting}
+A catalog rebuilt from scratch, rather than restored, draws new pseudonyms and new date offsets
+(\cref{chap:users-privacy}): earlier exports in Privacy Mode then no longer match it.
+
+\section{Updating}
+\label{sec:deployment-update}
+
+To update Medorama, run \cmd{git pull}, build again with the installer and the same options (or
+with \cmd{cargo build -{}-release -{}-locked} and \cmd{cmake -{}-build -{}-preset release};
+\cref{chap:installation}), and restart the server. A newer version brings its database changes
+and applies them at its first start; an older version refuses to open a database that a newer one
+has updated (\code{the database has schema version N, newer than this program knows}), so back
+up first. An installer run again without \opt{-{}-demo} makes catalogs created afterwards start
+empty; a catalog that holds the demo keeps it.
+
+\section{Uninstalling}
+\label{sec:deployment-uninstall}
+
+To uninstall Medorama, stop the service and delete the program (\cmd{cargo uninstall medorama},
+or the clone, which holds the programs, \file{.venv/} and the builds). Delete the home and
+results folders if they are no longer needed. A viewer installed alone keeps its index folder in
+\file{\textasciitilde/.cache/vitalstream} and its settings and password in
+\file{\textasciitilde/.config/vitalstream/}. The recordings are never touched.
+
+\section{The database}
+\label{sec:deployment-database}
+
+\paragraph{Engine.} The catalog is a SQLite database, in write-ahead-log mode (one writer at a
+time, readers never blocked) with foreign keys on, or a PostgreSQL database (version 14 or
+later). The code is the same for both: it writes SQL once, translated for PostgreSQL, and every
+test runs on both. The schema is applied when the
+database is created and updated when a newer program opens it; a program older than its database
+refuses to open it. IDs are never reused; times are stored as Unix seconds (UTC).
+
+\begin{xltabular}{\linewidth}{@{}P{3.0cm}L@{}}
+\caption{The tables of the catalog's database. PHI marks the tables that hold identifiers.}
+\label{tab:deployment-tables}\\
+\toprule
+\tabhead Group & \tabhead Tables \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Group & \tabhead Tables \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+People and stays & \code{patients}, \code{encounters} (with their pseudonyms),
+  \code{pseudonym\_aliases}, \code{patient\_identifiers} (PHI), \code{patient\_mrns} (PHI),
+  \code{encounter\_identifiers} (PHI), \code{bed\_stays} \\
+Data & \code{recordings}, \code{recording\_identifiers} (PHI), \code{recording\_links},
+  \code{recording\_series} (derived: a Holter's heart rate), \code{ehr\_items}, \code{item\_text}
+  (the search index: SQLite FTS5 with trigrams; on PostgreSQL a \code{pg\_trgm} index) \\
+Imports & \code{imports} (batches), \code{provenance} and \code{ehr\_provenance} (which batch and
+  source added what), \code{field\_values} (PHI: each batch's values), \code{mappings} \\
+Databases & \code{import\_columns}, \code{import\_rows} (PHI: the rows as imported, with what each
+  became), \code{dbcol\_<import>} (each database's numeric columns, indexed on demand; none for
+  a database of more than 500 columns) \\
+Cohorts & \code{cohorts}, \code{cohort\_members}, \code{cohort\_removed}, \code{cohort\_shares} \\
+Connected databases & \code{connections} (the URL without a password, the settings),
+  \code{source\_persons} (PHI: each person's key, linked to a patient) \\
+Decisions & \code{held\_rows} (PHI), \code{patient\_merges}, \code{patient\_pairs},
+  \code{link\_decisions}, \code{generated\_ids} (PHI), \code{import\_links} (the encounters
+  imported rows gave recordings), \code{id\_takeovers} (generated IDs an import replaced) \\
+Work & \code{runs}, \code{jobs} (a job done is a result) \\
+Access & \code{users}, \code{sessions}, \code{history}, \code{audit}, \code{audit\_seals},
+  \code{settings} (Privacy Mode's settings, the catalog's secret) \\
+\end{xltabular}
+
+\paragraph{Protecting the file.} On Unix, the database and its \file{-wal} and \file{-shm} files
+are readable by their owner only (0600), and the home folder too (0700). Keep the home folder on
+a local disk, owned by the catalog's account.
+
+\paragraph{Several users at once.} One server process serves all its users; its workers and the
+commands share the database safely. On PostgreSQL several servers share one catalog: sessions,
+cohorts, pseudonyms and the job queue are in the database, and schema updates, taking a job,
+automatic indexing, imports and every change to patients and encounters are done by one server
+at a time (advisory locks), so that one MRN never names two patients.
+
+\subsection{Encryption at rest}
+\label{sec:deployment-encryption}
+
+\begin{itemize}
+\item \textbf{SQLite, encrypted:} a build with \opt{-{}-features encryption}
+  (\cmd{cargo build -{}-release -{}-locked -p medorama -{}-features encryption};
+  \cref{chap:installation}) encrypts the database with SQLCipher (AES-256). The key comes from the
+  environment variable \code{MEDORAMA\_KEY}, else from the file that the setting \code{key\_file}
+  names, and must be set \textbf{before} \cmd{init}: a database created without a key stays
+  unencrypted, and losing the key loses the database. Keep the key outside the home folder. A
+  build without encryption refuses to start when a key is configured.
+\item \textbf{Otherwise}, and for the recordings, the indexes and the results in any case, use disk
+  encryption (FileVault, BitLocker, LUKS).
+\item \textbf{PostgreSQL:} encryption is the server's (an encrypted disk or cloud volume; Amazon
+  RDS and Azure encrypt storage with their key services); \code{key\_file} is refused.
+\end{itemize}
+
+\subsection{Moving a SQLite catalog to PostgreSQL}
+\label{sec:deployment-copy}
+
+\cmd{medorama copy-database} copies every table and row of a SQLite catalog into an empty
+PostgreSQL database, in one transaction (each table read a range of rows at a time), builds each
+database's table of numbers (\code{dbcol\_<import>}) again in PostgreSQL, and prints the lines to
+add to \file{medorama.toml}:
+\begin{lstlisting}[style=shell]
+medorama copy-database --to "postgres://medorama@db.example.org/medorama?sslmode=require" \
+    --password-file /etc/medorama/db-password
+\end{lstlisting}
+The SQLite file is left as it was: keep it as a backup, then delete it securely. Both catalogs
+must be at the same schema version (open the SQLite one with the same version of
+\cmd{medorama} first). The copy is audited (\code{copy\_database}).
+
+\section{The deployment checklist}
+\label{sec:deployment-checklist}
+
+Before real data come in, go through the deployment checklist of the security review
+(\cref{sec:security-checklist}). In short, it asks for a dedicated host and account with
+full-disk encryption; the home folder on a local disk; database or disk encryption;
+\code{host = "127.0.0.1"} behind a TLS proxy with \code{secure\_cookies = true}, or SSH tunnels,
+and never port 8090 exposed; proxy sign-in where single sign-on or multi-factor authentication is
+required (\cref{sec:sign-in-requirements}); \code{data\_roots} limited to the data and mounted
+read-only where possible; the PHI permission only for those who need it; Privacy Mode's settings
+reviewed and the offset kept confidential; reviewed plug-ins and add-ons only; encrypted, tested
+backups; \code{audit\_export} on write-once storage, with \cmd{medorama audit -{}-verify} run
+regularly; a service (\cref{sec:deployment-service}); on PostgreSQL, a dedicated database and
+account with TLS; connected databases read through read-only accounts with time and row limits;
+and no demo on a server meant for real patients.

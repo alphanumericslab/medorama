@@ -1,0 +1,17 @@
+source,time,name,label,value,unit,validity
+monitor,1709287200,HR,HR,72,bpm,0
+monitor,1709287200,SpO2,SpO2,97,%,0
+monitor,1709287201,HR,HR,73,bpm,0
+monitor,1709287202,HR,HR,74,bpm,0
+monitor,1709287202,SpO2,SpO2,95,%,0
+monitor,1709287203,HR,HR,72,bpm,0
+monitor,1709287204,HR,HR,73,bpm,0
+monitor,1709287204,SpO2,SpO2,97,%,0
+monitor,1709287205,HR,HR,74,bpm,0
+monitor,1709287206,HR,HR,72,bpm,0
+monitor,1709287206,SpO2,SpO2,95,%,0
+monitor,1709287207,HR,HR,73,bpm,0
+monitor,1709287208,HR,HR,74,bpm,0
+monitor,1709287208,SpO2,SpO2,97,%,0
+monitor,1709287203,HR,HR,999,bpm,1
+import,1709287204,HR,HR,75,bpm,0

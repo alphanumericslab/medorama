@@ -1,0 +1,2 @@
+patient_id;encounter_id;time;note_type;author;note_text
+P1;E1;2024-01-02 15:40;Progress note;Dr. Test;"Improving, ""stable""; plan: discharge"

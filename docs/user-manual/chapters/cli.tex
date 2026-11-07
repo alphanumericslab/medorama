@@ -1,0 +1,1278 @@
+% The command line: every medorama command and subcommand, the viewers' programs (vitalstream-rs,
+% -cpp, -py; muse-py and dicom-py with their serve), and the repository's tools. The options are
+% those of the code: medorama/src/main.rs (clap), viewers/vitalstream/rust/src/main.rs,
+% cpp/vitalstream/src/main.cpp, python/vitalstream/vitalstream_py/__main__.py,
+% viewers/ecg/python/muse/muse_reader_py/cli.py and page_server.py,
+% viewers/pacs/python/dicom/dicom_index_py/cli.py, and each script of tools/.
+\chapter{The command line}
+\label{chap:cli}
+
+This chapter is the reference of every program that Medorama and its viewers install: the
+command \cmd{medorama}, which creates, fills and runs a catalog; the three VitalStream viewers,
+\cmd{vitalstream-rs}, \cmd{vitalstream-cpp} and \cmd{vitalstream-py}; the database tools
+\cmd{muse-py} and \cmd{dicom-py}, whose \cmd{serve} runs the ECG and the PACS viewer; and the
+scripts of the repository's folder \file{tools/}. Each command is one entry: its syntax, what it
+does, each option with its default, and an example. The tasks that the commands serve are
+described in their own chapters: setting up and looking after a catalog in
+\cref{chap:administration}, users and privacy in \cref{chap:users-privacy}, importing in
+\cref{chap:importing}, recordings in \cref{chap:recordings}, add-ons in \cref{chap:addons}; the
+settings files in \cref{chap:settings-reference}.
+
+\section{Running the commands}
+\label{sec:cli-running}
+
+\cmd{medorama} is one program with subcommands: \cmd{medorama init}, \cmd{medorama serve},
+\cmd{medorama import-table}, and so on. A subcommand that has its own subcommands is written in
+two words (\cmd{medorama imports list}, \cmd{medorama user add}). Options are long options
+(\opt{-{}-results DIR}); an option that takes a value is given it as the next argument or after
+an equals sign (\opt{-{}-port 8090} or \opt{-{}-port=8090}); options and positional arguments may
+come in any order after the subcommand.
+
+\begin{params}
+\item[-h, --help] Prints the usage of the program, or of a subcommand
+  (\cmd{medorama import-table -{}-help}), and exits. \cmd{medorama help} \textit{COMMAND} does the
+  same.
+\item[-V, --version] Prints the version (\code{medorama 0.1.0}) and exits.
+\item[--home DIR] The catalog's home folder, which holds \file{medorama.toml}, the SQLite
+  database, the folders \file{actions/} and \file{formats/}. It is accepted by every subcommand,
+  before or after it (\cmd{medorama -{}-home DIR serve}, \cmd{medorama serve -{}-home DIR}).
+\end{params}
+
+\paragraph{Which catalog a command uses.} A command uses the first of these that applies:
+\begin{enumerate}
+\item \opt{-{}-home DIR};
+\item the environment variable \code{MEDORAMA\_HOME}, when it is set and not empty;
+\item the catalog that \cmd{init} created last, or the one that \cmd{medorama -{}-home DIR use}
+  chose, when that folder still holds a \file{medorama.toml}: its folder is remembered in
+  \file{\textasciitilde/.config/medorama/home} (Windows: \code{\%APPDATA\%\textbackslash
+  medorama\textbackslash home});
+\item \file{\textasciitilde/.local/share/medorama} (Windows: \code{\%LOCALAPPDATA\%\textbackslash
+  medorama}).
+\end{enumerate}
+A command other than \cmd{init} needs a catalog there. Without one, it stops with the message
+\code{no catalog in DIR} and names the two ways out: create a catalog with \cmd{medorama init},
+or name one with \opt{-{}-home}. \cmd{serve} prints the folder it uses.
+
+\paragraph{Rights.} The commands act directly on the database, as the operating-system user who
+can read the home folder, with the rights of an administrator and the PHI permission. This is
+safe because whoever can run them under the catalog's account could read the database file
+anyway. The audit log records them as \code{local:}\textit{USER}, where \textit{USER} is the
+environment variable \code{USER} (Windows: \code{USERNAME}). The web page and the HTTP API, on
+the other hand, act as signed-in catalog users (\cref{chap:users-privacy}). Of the commands that
+list data, only \cmd{list -{}-phi} shows identifiers.
+
+\paragraph{Output.} Results are printed on the standard output as text, one line per item; the
+listing commands also take \opt{-{}-json}, which prints the same data as indented JSON, for
+scripts. Messages go to the standard error. While an import runs in a terminal, a line on the
+standard error shows its progress (rows read, the percentage done, rows per second, the time
+left); it is not shown when the standard error is not a terminal.
+
+\section{Exit status and messages}
+\label{sec:cli-status}
+
+\cmd{medorama} exits with status 0 on success, and 1 on an error, after printing one message on
+the standard error that begins with \code{medorama:} (for example
+\code{medorama: no user jdoe}). An error in the arguments (an unknown option, a missing required
+argument, a value of the wrong type) is reported by the argument parser with the usage of the
+subcommand, and the status is 2. \opt{-h} and \opt{-V} exit with status 0.
+
+The VitalStream viewers exit with status 1 on an error (\code{vitalstream-rs: ...},
+\code{vitalstream-cpp: ...}, \code{vitalstream-py: ...}) and 0 otherwise; an error in their
+arguments gives status 2 (\cmd{vitalstream-rs}, \cmd{vitalstream-py}) or the nonzero status of
+the C++ argument parser (\cmd{vitalstream-cpp}). \cmd{muse-py} and \cmd{dicom-py} exit with
+status 0 on success, 1 on an error, and 2 on an error in the arguments.
+
+\section{Environment variables}
+\label{sec:cli-environment}
+
+\begin{xltabular}{\linewidth}{@{}P{5.2cm}L@{}}
+\caption{The environment variables that \cmd{medorama} reads.}
+\label{tab:cli-environment}\\
+\toprule
+{\tabhead Variable} & {\tabhead Meaning} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Variable} & {\tabhead Meaning} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{MEDORAMA\_HOME} & The catalog's home folder, when \opt{-{}-home} is not given
+  (\cref{sec:cli-running}). \\
+\code{MEDORAMA\_DATABASE\_URL} & A PostgreSQL database, without its password; overrides the
+  setting \code{database\_url}. \\
+\code{MEDORAMA\_DATABASE\_PASSWORD} & The PostgreSQL password; overrides
+  \code{database\_password\_file} (and \opt{-{}-password-file} of \cmd{copy-database}). \\
+\code{MEDORAMA\_KEY} & The database key, for a build with encryption; overrides
+  \code{key\_file}. A key given to a build without encryption is an error. \\
+\code{MEDORAMA\_SOURCE\_PASSWORD\_}\textit{NAME} & The password of the connected database
+  \textit{NAME}, when no password file is given: \textit{NAME} in capitals, every character
+  other than a letter or a digit written \code{\_} (the connection \code{omop-cdm}:
+  \code{MEDORAMA\_SOURCE\_PASSWORD\_OMOP\_CDM}). \\
+\code{MEDORAMA\_DEBUG\_SQL} & Set (to any value): print each statement that PostgreSQL refuses,
+  never its values. \\
+\code{USER}, \code{USERNAME} & The operating-system user named in the audit log
+  (\code{local:}\textit{USER}). \\
+\code{HOSTNAME}, \code{COMPUTERNAME} & The machine's name in the names of the workers that run
+  jobs (else \code{localhost}). \\
+\end{xltabular}
+
+An action's program does not inherit the variables whose names begin with \code{MEDORAMA\_} or
+\code{PGPASS}, nor any whose name contains \code{PASSWORD}, \code{SECRET}, \code{TOKEN},
+\code{PASSPHRASE} or \code{CREDENTIAL}, ends with \code{\_KEY}, or is \code{DATABASE\_URL}; it is
+given \code{MEDORAMA\_JOB}, the path of its job's description.
+
+\section{The commands of Medorama}
+\label{sec:cli-medorama}
+
+\Cref{tab:cli-commands} lists the subcommands of \cmd{medorama}; the entries that follow are
+in the same order.
+
+\begin{xltabular}{\linewidth}{@{}P{5.0cm}L@{}}
+\caption{The subcommands of \cmd{medorama}.}
+\label{tab:cli-commands}\\
+\toprule
+{\tabhead Command} & {\tabhead Does} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Command} & {\tabhead Does} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\multicolumn{2}{@{}l}{\textit{The catalog}} \\
+\cmd{init} & Create a catalog: settings, database and the first admin \\
+\cmd{use} & Make the catalog of \opt{-{}-home} the default of later commands \\
+\cmd{serve} & Run the web interface, the HTTP API and the background workers \\
+\cmd{copy-database} & Copy a SQLite catalog into an empty PostgreSQL database \\
+\midrule
+\multicolumn{2}{@{}l}{\textit{Bringing data in}} \\
+\cmd{import-table} & Import a database: CSV, Parquet or spreadsheet files \\
+\cmd{import-clif} & Import a CLIF folder, each table a database \\
+\cmd{formats} & List the import formats; check a format file \\
+\cmd{imports list}, \cmd{imports remove} & The imports (batches); remove one with what it added \\
+\cmd{sources list}, \cmd{sources remove} & The sources; remove everything one contributed \\
+\cmd{demo add}, \cmd{demo remove} & Load the demo; remove it \\
+\cmd{connections add}, \cmd{list}, \cmd{check}, \cmd{sync}, \cmd{remove} & Connected databases \\
+\midrule
+\multicolumn{2}{@{}l}{\textit{Encounters and recordings}} \\
+\cmd{list} & List encounters \\
+\cmd{recordings} & List recordings \\
+\cmd{remove} & Remove recordings from the catalog (the files are untouched) \\
+\cmd{remove-encounters} & Remove encounters with their bed stays and items \\
+\cmd{check} & Re-check the recordings: missing, changed, index folders gone \\
+\midrule
+\multicolumn{2}{@{}l}{\textit{Actions and jobs}} \\
+\cmd{actions} & List the installed actions \\
+\cmd{run} & Queue actions on recordings \\
+\cmd{work} & Run the queued jobs here until none is left \\
+\cmd{jobs} & List jobs \\
+\cmd{cancel} & Cancel queued or running jobs \\
+\midrule
+\multicolumn{2}{@{}l}{\textit{Add-ons, users, audit}} \\
+\cmd{addons list}, \cmd{install}, \cmd{remove} & The adapters of recording formats \\
+\cmd{user add}, \cmd{list}, \cmd{set}, \cmd{remove} & The catalog's users \\
+\cmd{audit} & Show the audit log; verify or seal it \\
+\end{xltabular}
+
+\subsection{The catalog}
+\label{sec:cli-catalog}
+
+\apientry{medorama init}{Create a catalog}
+\begin{lstlisting}[style=signature]
+medorama init --results DIR [--index-dir DIR] [--admin NAME] [--timezone TZ] [--port N]
+              [--password-stdin] [--database-url URL [--database-password-file FILE]]
+              [--no-demo]
+\end{lstlisting}
+Creates a catalog in the home folder (\cref{sec:cli-running}): the folder itself, readable by
+its owner only, with \file{medorama.toml} (commented) and a folder \file{actions/}; the results
+folder and the index folder; the database, in SQLite (\file{medorama.sqlite} in the home folder)
+or in PostgreSQL; and the first user, an admin with the PHI permission. It asks twice for that
+user's password (at least 10 characters; three attempts). The database is made first and the
+settings file last, so that a failed \cmd{init} leaves no half-made catalog. \cmd{init} then
+remembers the home folder, so that later commands use this catalog without \opt{-{}-home}, and,
+when the installer made the demo (\cmd{tools/install-medorama.sh -{}-demo}), loads it as the
+first admin's.
+
+It refuses a home folder that holds a \file{medorama.toml} already, a SQLite file left there by
+an earlier catalog, a PostgreSQL database that has users already, an unknown time zone, and a
+database URL that is not a PostgreSQL URL or that holds a password. A SQLite database that cannot
+be created (on a network file system, whose locking SQLite cannot rely on) is removed again, with
+advice to choose a home folder on a local disk.
+\begin{params}
+\item[--results DIR] The results folder: action results and, by default, the indexes. Required;
+  never a folder that holds recordings. A relative path is made absolute.
+\item[--index-dir DIR] The index folder. Default: \file{DIR/index} of \opt{-{}-results}. A
+  viewer whose \code{cache\_dir} is this folder opens the recordings the catalog indexed without
+  indexing them again.
+\item[--admin NAME] The first administrator's user name. Default: \code{admin}. With proxy
+  sign-in, give the name that the proxy will send, such as \code{jdoe@hospital.org}
+  (\cref{sec:sign-in-accounts}).
+\item[--timezone TZ] The time zone of times written without an offset, and of the times shown
+  (an IANA name). Default: \code{America/New\_York}.
+\item[--port N] The port of the web interface and the API. Default: 8090.
+\item[--password-stdin] Read the admin's password from the first line of the standard input
+  instead of asking for it (scripts).
+\item[--database-url URL] An empty PostgreSQL database instead of SQLite
+  (\code{postgres://user@host/db?sslmode=require}), without its password.
+\item[--database-password-file FILE] The file that holds that database's password; only with
+  \opt{-{}-database-url}.
+\item[--no-demo] Leave out the demo that the installer made; \cmd{medorama demo add} loads it
+  later. Without the installer's \opt{-{}-demo} there is nothing to leave out.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama init --results /data/medorama-results
+medorama init --home ~/medorama --results /data/medorama-results --timezone Europe/Paris
+medorama init --results /data/medorama-results \
+    --database-url "postgres://medorama@db.example.org/medorama" \
+    --database-password-file /etc/medorama/db-password
+\end{lstlisting}
+
+\apientry{medorama use}{Make a catalog the default}
+\begin{lstlisting}[style=signature]
+medorama --home DIR use
+\end{lstlisting}
+Remembers the catalog of \opt{-{}-home} (which must hold a \file{medorama.toml}) as the one that
+later commands use without \opt{-{}-home}, in \file{\textasciitilde/.config/medorama/home}
+(Windows: \code{\%APPDATA\%\textbackslash medorama\textbackslash home}). It has no options.
+\begin{lstlisting}[style=shell]
+medorama --home ~/medorama-test use
+\end{lstlisting}
+
+\apientry{medorama serve}{Run the web interface and the workers}
+\begin{lstlisting}[style=signature]
+medorama serve [--host HOST] [--port N] [--no-workers]
+\end{lstlisting}
+Serves the web page and the HTTP API (\cref{chap:http-api}), and runs the background work: the
+workers that run queued jobs (the setting \code{workers}), the automatic indexing of new and
+changed recordings (\code{auto\_index}), the re-check of every recording every
+\code{check\_interval\_s} seconds, and the sealing of the audit log every minute. It prints the
+address to open, the catalog, the database, the waveform viewer it will start (on first use, in
+the \ui{VitalStream} tab) or link to, the results and index folders, and the number of workers. On an
+address other than \code{127.0.0.1}, \code{localhost} or \code{::1} without
+\code{secure\_cookies = true}, it warns that the page is reachable from other machines without
+HTTPS (\cref{chap:deployment}). It stops on \key{Ctrl}+\key{C} or on \code{SIGTERM} (a service
+manager's stop): the jobs it was running go back to the queue, and the viewer it started is
+stopped. An action that could not be loaded is reported, and the server runs without it.
+\begin{params}
+\item[--host HOST] The address to listen on. Default: the setting \code{host}
+  (\code{127.0.0.1}).
+\item[--port N] The port. Default: the setting \code{port} (8090).
+\item[--no-workers] Run no jobs (and so no automatic indexing): another process runs
+  \cmd{medorama work}.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama serve
+medorama serve --port 8095 --no-workers
+\end{lstlisting}
+
+\apientry{medorama copy-database}{Copy a SQLite catalog into PostgreSQL}
+\begin{lstlisting}[style=signature]
+medorama copy-database --to URL [--password-file FILE] [--ca-file FILE]
+\end{lstlisting}
+Copies the catalog, every table and every row, from its SQLite database into an empty
+PostgreSQL database (\cref{chap:deployment}), and records the copy in the new database's audit
+log. It prints the number of rows of each table, then the lines to add to \file{medorama.toml}
+(\code{database\_url}, and \code{database\_password\_file} when one was given) for the catalog
+to use it. The SQLite file is left as it was: keep it as a backup, then delete it securely. A
+catalog that is in PostgreSQL already is refused.
+\begin{params}
+\item[--to URL] The PostgreSQL database (\code{postgres://user@host/db?sslmode=require}),
+  without its password. Required.
+\item[--password-file FILE] The file that holds its password. Default: the environment variable
+  \code{MEDORAMA\_DATABASE\_PASSWORD}.
+\item[--ca-file FILE] Certificate authorities (PEM) trusted for the server's certificate,
+  besides the system's.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama copy-database --to "postgres://medorama@db.example.org/medorama" \
+    --password-file /etc/medorama/db-password
+\end{lstlisting}
+
+\subsection{Bringing data in}
+\label{sec:cli-data}
+
+\apientry{medorama import-table}{Import a database}
+\begin{lstlisting}[style=signature]
+medorama import-table FILE... [--format FORMAT] [--mapping FILE] [--category CAT]
+                      [--name NAME] [--source SOURCE] [--dry-run]
+\end{lstlisting}
+Imports a database: one or more CSV files, Parquet files or spreadsheets (\file{.xlsx},
+\file{.xls}, \file{.ods}; the first sheet), each read row by row, as one batch. The rows may hold
+patients, encounters, bed stays, measurements, notes and links to files, in any combination
+(\cref{chap:importing}). Columns are recognized by their names, or mapped with
+\opt{-{}-mapping}; a known export is recognized by its columns and converted. Relative file paths
+in the table are read from the folder of the first file. Several files must have the same
+columns and make one database, which then needs a name (\opt{-{}-name}). It prints what was
+added: rows, patients, encounters, items (with those already there and those waiting for their
+encounter), recordings, attached files and rows held back, and the columns kept as the
+database's own.
+\begin{params}
+\item[FILE...] The files of the table. At least one.
+\item[--format FORMAT] A known export to convert: \code{auto} (the default: recognized by its
+  columns), \code{none}, or the key of a format as \cmd{medorama formats} lists it: built in
+  \code{ge-muse} (GE MUSE ECG metadata, the patient by MRN) and \code{ge-muse-patient-id} (by a
+  patient ID), or one described in a file of \code{formats\_dirs}. Not case-sensitive.
+\item[--mapping FILE] A column mapping, in JSON or TOML: catalog field = header, in TOML at the
+  top level or under \code{[columns]} (\cref{chap:importing}). With a mapping, the names are not
+  guessed: a header is read as a catalog field only if the mapping names it for that field, or if
+  it is that field's own name (ignoring case) and the mapping names no other header for that
+  field.
+\item[--category CAT] The category of the table's items when it has no category column
+  (\code{lab}, \code{ecg}, \code{note}, \dots; for recordings \code{icu}, \code{holter},
+  \code{eeg} or \code{sleep}). Default: none.
+\item[--name NAME] The batch's name. Default: the file's name; required with several files.
+\item[--source SOURCE] The source label. Default: the batch's name. A \code{source} column of
+  the table overrides it row by row.
+\item[--dry-run] Check and count only; store nothing.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama import-table demo/databases/patients.csv --dry-run
+medorama import-table demo/databases/labs.csv --source DEMO
+medorama import-table labs-2023.csv labs-2024.csv --name labs --category lab
+\end{lstlisting}
+
+\apientry{medorama import-clif}{Import a CLIF folder}
+\begin{lstlisting}[style=signature]
+medorama import-clif DIR [--source SOURCE] [--dry-run]
+\end{lstlisting}
+Imports a folder of the Common Longitudinal ICU data Format (its tables as CSV or Parquet
+files): each table a database (\code{clif\_patient}, \code{clif\_vitals}, \dots), in order
+(patients, hospitalizations, ADT, then the rest); a table in several files is one database
+(\cref{chap:clif}). A file that is not a CLIF table Medorama reads is named and skipped. For each
+table it prints the rows read and what was added, with up to five warnings. Unlike the page and
+the API, the command does not check the folder against \code{data\_roots}.
+\begin{params}
+\item[DIR] The CLIF folder.
+\item[--source SOURCE] The source label. Default: \code{clif}.
+\item[--dry-run] Check and count only; store nothing.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama import-clif /data/clif-synthetic --dry-run
+\end{lstlisting}
+
+\apientry{medorama formats}{List the import formats}
+\begin{lstlisting}[style=signature]
+medorama formats [--check FILE]
+\end{lstlisting}
+Lists the import formats, one per line: its key, its category, its label and where it comes from
+(\code{built in}, or the TOML file in \code{formats\_dirs} that describes it). A format file that
+cannot be read is reported on the standard error (\code{not read: ...}).
+\begin{params}
+\item[--check FILE] Instead, check a format file before installing it: print its key, its label
+  and its columns, or the error.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama formats
+medorama formats --check my-export.toml
+\end{lstlisting}
+
+\apientry{medorama imports list}{List the imports}
+\begin{lstlisting}[style=signature]
+medorama imports list [--json]
+\end{lstlisting}
+Lists the imports (batches), newest first: number, kind, state, time, name, source, and the
+recordings, encounters and EHR items it holds.
+\begin{params}
+\item[--json] Print JSON.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama imports list
+\end{lstlisting}
+
+\apientry{medorama imports remove}{Remove an import}
+\begin{lstlisting}[style=signature]
+medorama imports remove ID [--purge-results] [--dry-run]
+\end{lstlisting}
+Removes one import and everything it added: recordings, patients, encounters, bed stays and EHR
+items, and its values. What another import also added stays, and is counted as kept. Files on
+disk are never touched.
+\begin{params}
+\item[ID] The import's number, as \cmd{imports list} shows it.
+\item[--purge-results] Also delete the catalog's results and indexes of the recordings removed
+  (only inside \code{results\_dir} and \code{index\_dir}).
+\item[--dry-run] Only say what would be removed.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama imports remove 12 --dry-run
+\end{lstlisting}
+
+\apientry{medorama sources list}{List the sources}
+\begin{lstlisting}[style=signature]
+medorama sources list [--json]
+\end{lstlisting}
+Lists the source labels and what each contributes: recordings, patients, encounters, EHR items,
+and the number of imports.
+\begin{params}
+\item[--json] Print JSON.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama sources list
+\end{lstlisting}
+
+\apientry{medorama sources remove}{Remove a source}
+\begin{lstlisting}[style=signature]
+medorama sources remove SOURCE [--purge-results] [--dry-run]
+\end{lstlisting}
+Removes everything that the source contributed, in every import, as \cmd{imports remove} does
+for one import.
+\begin{params}
+\item[SOURCE] The source label, as \cmd{sources list} shows it.
+\item[--purge-results] Also delete the catalog's results and indexes of the recordings removed.
+\item[--dry-run] Only say what would be removed.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama sources remove "ICU pilot" --dry-run
+\end{lstlisting}
+
+\apientry{medorama demo add}{Load the demo}
+\begin{lstlisting}[style=signature]
+medorama demo add [DIR]
+\end{lstlisting}
+Loads the demo, invented patients for trying Medorama: its tables as the source \code{DEMO}, its
+OMOP database as the connection \code{demo\_omop}, and the cohort \code{DEMO} that holds its
+patients (\cref{chap:administration}). It prints what it loaded.
+\begin{params}
+\item[DIR] A folder made by \cmd{tools/make-demo-data.py} (\cref{sec:cli-tools}). Default: the
+  one the installer made with \opt{-{}-demo}, named in the file \file{medorama.demo} next to the
+  programs; without either, it is an error.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama demo add
+medorama demo add /data/demo
+\end{lstlisting}
+
+\apientry{medorama demo remove}{Remove the demo}
+\begin{lstlisting}[style=signature]
+medorama demo remove [--dry-run]
+\end{lstlisting}
+Removes the demo and everything it added, as deleting the cohort \code{DEMO} in the page does:
+its patients, encounters, bed stays, items and recordings (with the catalog's indexes and results
+of them), the connection \code{demo\_omop} and the cohort. The demo's files stay.
+\begin{params}
+\item[--dry-run] Only say what would be removed.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama demo remove --dry-run
+\end{lstlisting}
+
+\apientry{medorama connections add}{Connect a database}
+\begin{lstlisting}[style=signature]
+medorama connections add NAME --kind omop|sql --url URL [--password-file FILE] [--ca-file FILE]
+    [--schema S] [--vocabulary-schema S] [--timezone TZ] [--identifier mrn|patient_id|none]
+    [--mrn-authority A] [--timeout-s N] [--max-rows N] [--views FILE]
+\end{lstlisting}
+Connects a database that is read where it is, beside the catalog (\cref{chap:connecting}). It is
+checked first: each view must answer. It prints the views and the data's version. Its persons are
+linked to the catalog's patients when a search finds them; \cmd{connections sync} links them all
+at once.
+\begin{params}
+\item[NAME] The connection's name, as criteria write it (\code{omop.lactate}).
+\item[--kind KIND] \code{omop}: an OMOP CDM 5.3 or 5.4 database, through built-in views;
+  \code{sql}: any layout, through the views of \opt{-{}-views}. Required.
+\item[--url URL] \code{postgres://user@host/db?sslmode=require}, without a password, or
+  \code{sqlite:/path/to/file} (a relative SQLite path is made absolute). Required.
+\item[--password-file FILE] The file that holds the password. Default: the environment variable
+  \code{MEDORAMA\_SOURCE\_PASSWORD\_}\textit{NAME} (\cref{sec:cli-environment}).
+\item[--ca-file FILE] Certificate authorities (PEM) trusted for the server's certificate,
+  besides the system's.
+\item[--schema S] The schema of the CDM's tables. Default: none (the database's default).
+\item[--vocabulary-schema S] The schema of OMOP's vocabulary, when it is apart from the CDM's.
+  Default: none.
+\item[--timezone TZ] The time zone of the database's times. Default: the catalog's time zone,
+  written into the connection when it is added, and fixed from then on (changing the catalog's
+  \code{timezone} later does not change it).
+\item[--identifier ID] What OMOP's \code{person\_source\_value} holds: \code{mrn} (the default),
+  \code{patient\_id} or \code{none}; with \code{none}, each person becomes a patient of its own,
+  with the patient ID \code{<connection>:<person key>}.
+\item[--mrn-authority A] The authority that issued its MRNs. Default: none.
+\item[--timeout-s N] Each query's time limit, in seconds (PostgreSQL). Default: 60.
+\item[--max-rows N] The number of rows a criterion may read, and of persons a sync may read.
+  Default: 1000000.
+\item[--views FILE] Kind \code{sql}: a TOML file with the views \code{persons}, \code{visits},
+  \code{entries} and \code{version}, each as SQL.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama connections add omop --kind omop \
+    --url "postgres://reader@omop.example.org/cdm?sslmode=require" \
+    --password-file /etc/medorama/omop-password --schema cdm --vocabulary-schema vocab \
+    --mrn-authority HOSP
+medorama connections add demo2 --kind omop --url sqlite:/data/demo/omop/omop.sqlite
+medorama connections add warehouse --kind sql --url sqlite:/data/wh.sqlite \
+    --views warehouse-views.toml
+\end{lstlisting}
+
+\apientry{medorama connections list}{List the connected databases}
+\begin{lstlisting}[style=signature]
+medorama connections list [--json]
+\end{lstlisting}
+Lists the connected databases: name, kind, URL (without a password), database, and the number of
+persons linked.
+\begin{params}
+\item[--json] Print JSON.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama connections list
+\end{lstlisting}
+
+\apientry{medorama connections check}{Check a connected database}
+\begin{lstlisting}[style=signature]
+medorama connections check NAME
+\end{lstlisting}
+Checks that the connected database answers: the time it took, each view, and its version.
+\begin{lstlisting}[style=shell]
+medorama connections check omop
+\end{lstlisting}
+
+\apientry{medorama connections sync}{Link every person}
+\begin{lstlisting}[style=signature]
+medorama connections sync NAME
+\end{lstlisting}
+Links every person of the connected database to the catalog's patients, by the rules of an
+imported table. It reads every person in one query, within the connection's \code{max\_rows}: a
+database with more persons than \code{max\_rows} fails to sync (raise \code{max\_rows}, or let
+searches link the persons they find). It prints the number of persons, and of those linked; the
+others are held for review, or have no valid identifier.
+\begin{lstlisting}[style=shell]
+medorama connections sync omop
+\end{lstlisting}
+
+\apientry{medorama connections remove}{Disconnect a database}
+\begin{lstlisting}[style=signature]
+medorama connections remove NAME
+\end{lstlisting}
+Disconnects the database: its links and what it added to the catalog are removed. The database
+itself is not touched.
+\begin{lstlisting}[style=shell]
+medorama connections remove omop
+\end{lstlisting}
+
+\subsection{Encounters and recordings}
+\label{sec:cli-encounters}
+
+The options \opt{-{}-q} and \opt{-{}-search} take a search in the syntax of the page's search
+boxes (\cref{chap:patients}): words, \code{field:value} terms (\code{unit:ICU7},
+\code{admit:2023-12}), quotes around values with spaces, every term to match.
+
+\apientry{medorama list}{List encounters}
+\begin{lstlisting}[style=signature]
+medorama list [--q SEARCH] [--unit UNIT] [--status STATUS] [--limit N] [--phi] [--json]
+\end{lstlisting}
+Lists the encounters that match: the total, then one line each with the status of its recordings,
+the encounter and patient IDs, admission and discharge (local time), the units and the number of
+recordings.
+\begin{params}
+\item[--q SEARCH] Search words (encounter ID, patient ID; with \opt{-{}-phi}, also MRN, name,
+  date of birth). Default: every encounter.
+\item[--unit UNIT] Only the encounters in this unit.
+\item[--status STATUS] Only the encounters whose recordings are \code{ready}, \code{new},
+  \code{queued}, \code{indexing}, \code{stale}, \code{failed}, \code{missing}, or which have
+  \code{none}.
+\item[--limit N] At most \textit{N} encounters. Default: 100.
+\item[--phi] Show identifiers (MRN, name, date of birth, encounter number), and let the search
+  match them.
+\item[--json] Print JSON: \code{\{"total": ..., "items": [...]\}}.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama list --unit ICU7 --status ready
+medorama list --q P900001 --json
+\end{lstlisting}
+
+\apientry{medorama recordings}{List recordings}
+\begin{lstlisting}[style=signature]
+medorama recordings [--q SEARCH] [--unlinked] [--limit N] [--json]
+\end{lstlisting}
+Lists the recordings that match: the total, then one line each with its number, status (with the
+percentage done while it is indexed), kind, format, start time and path, and its error if it has
+one.
+\begin{params}
+\item[--q SEARCH] A search (fields \code{file}, \code{path}, \code{kind}, \code{format},
+  \code{unit}, \code{bed}, \code{start}, \code{status}, \code{source}, \code{encounter}). Default:
+  every recording.
+\item[--unlinked] Only the recordings not linked to an encounter.
+\item[--limit N] At most \textit{N} recordings. Default: 100.
+\item[--json] Print JSON: \code{\{"total": ..., "items": [...]\}}.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama recordings --unlinked
+medorama recordings --q "status:failed"
+\end{lstlisting}
+
+\apientry{medorama remove}{Remove recordings from the catalog}
+\begin{lstlisting}[style=signature]
+medorama remove [ID|PATH...] [--search SEARCH] [--purge-results] [--dry-run]
+\end{lstlisting}
+Removes recordings from the catalog: the catalog's entries only. The files are never touched.
+A path that is not in the catalog is an error.
+\begin{params}
+\item[ID or PATH] Recordings by number, or by path.
+\item[--search SEARCH] Also the recordings that match a search.
+\item[--purge-results] Also delete the catalog's results and indexes of them (only inside
+  \code{results\_dir} and \code{index\_dir}).
+\item[--dry-run] Only say how many would be removed.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama remove 41 42 --dry-run
+medorama remove --search "unit:ICU7 start:2023-12" --purge-results
+\end{lstlisting}
+
+\apientry{medorama remove-encounters}{Remove encounters}
+\begin{lstlisting}[style=signature]
+medorama remove-encounters [ENCOUNTER...] [--search SEARCH] [--all] [--dry-run]
+\end{lstlisting}
+Removes encounters with their bed stays and EHR items. Their recordings stay in the catalog,
+unlinked.
+\begin{params}
+\item[ENCOUNTER] Encounters by encounter ID. An unknown ID is an error.
+\item[--search SEARCH] Also the encounters that match a search.
+\item[--all] Every encounter.
+\item[--dry-run] Only say what would be removed.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama remove-encounters E9100002 --dry-run
+\end{lstlisting}
+
+\apientry{medorama check}{Re-check the recordings}
+\begin{lstlisting}[style=signature]
+medorama check
+\end{lstlisting}
+Re-checks every recording, as the server does every \code{check\_interval\_s}: whether its files
+are missing, are back, or changed, and whether its index folder is still there. It prints the
+counts. It has no options.
+\begin{lstlisting}[style=shell]
+medorama check
+\end{lstlisting}
+
+\subsection{Actions and jobs}
+\label{sec:cli-actions}
+
+An action is a program run on recordings: the built-in \code{index} and \code{identify}, and the
+plug-ins of \code{actions\_dirs} (\cref{chap:actions}). \cmd{run} queues jobs; \cmd{serve}'s
+workers, or \cmd{work}, run them.
+
+\apientry{medorama actions}{List the installed actions}
+\begin{lstlisting}[style=signature]
+medorama actions
+\end{lstlisting}
+Lists the actions: name, version, title, the actions each requires, and why one cannot run; then
+the plug-ins that could not be loaded. It has no options.
+\begin{lstlisting}[style=shell]
+medorama actions
+\end{lstlisting}
+
+\apientry{medorama run}{Queue actions}
+\begin{lstlisting}[style=signature]
+medorama run ACTION... (--all | --encounter ID... | --recording ID... | --search SEARCH |
+             --cohort N) [--force] [--param ACTION.KEY=VALUE]... [--priority N]
+\end{lstlisting}
+Queues jobs of the actions on the recordings chosen, and prints the run's number and how many
+jobs were queued, already done, already queued and not applicable. At least one of
+\opt{-{}-all}, \opt{-{}-encounter}, \opt{-{}-recording}, \opt{-{}-search} and \opt{-{}-cohort} is
+needed.
+\begin{params}
+\item[ACTION...] The actions' names (\code{index}, \dots). At least one.
+\item[--all] Every recording.
+\item[--encounter ID] The recordings of an encounter, by encounter ID; repeatable.
+\item[--recording ID] A recording, by number; repeatable.
+\item[--search SEARCH] The recordings of the encounters that match a search.
+\item[--cohort N] The recordings of the encounters of a cohort's members, by the cohort's
+  number as the \ui{Cohorts} tab shows it.
+\item[--force] Run again where an action was done already.
+\item[--param ACTION.KEY=VALUE] A parameter of an action; \textit{VALUE} is read as JSON, else
+  as text. Repeatable.
+\item[--priority N] The jobs' priority: higher runs first. Default: 0.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama run index --all
+medorama run index --encounter E9100002 --force
+medorama run recording-summary --cohort 3 --param recording-summary.max_channels=16 --priority 5
+\end{lstlisting}
+
+\apientry{medorama work}{Run the queue here}
+\begin{lstlisting}[style=signature]
+medorama work [--workers N]
+\end{lstlisting}
+Runs queued jobs in this process until none is left, then prints how many succeeded and failed
+here. Several \cmd{work} processes, on one or several machines, share the queue of a PostgreSQL
+catalog.
+\begin{params}
+\item[--workers N] Jobs at the same time. Default: the setting \code{workers}; at least 1.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama work --workers 4
+\end{lstlisting}
+
+\apientry{medorama jobs}{List jobs}
+\begin{lstlisting}[style=signature]
+medorama jobs [--state STATE] [--limit N] [--json]
+\end{lstlisting}
+Lists jobs, running ones first, then queued ones (higher priority first), then the others, newest
+first: number, state, action, progress, recording and its error.
+\begin{params}
+\item[--state STATE] Only the jobs in this state: \code{queued}, \code{running}, \code{done},
+  \code{failed} or \code{cancelled}.
+\item[--limit N] At most \textit{N} jobs. Default: 50.
+\item[--json] Print JSON.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama jobs --state failed
+\end{lstlisting}
+
+\apientry{medorama cancel}{Cancel jobs}
+\begin{lstlisting}[style=signature]
+medorama cancel (--job N | --run N | --all)
+\end{lstlisting}
+Cancels queued and running jobs, and prints how many. One of the options is needed; \opt{-{}-job}
+and \opt{-{}-run} together cancel that job only if it belongs to that run.
+\begin{params}
+\item[--job N] One job, by number.
+\item[--run N] The unfinished jobs of a run.
+\item[--all] Every unfinished job.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama cancel --run 7
+\end{lstlisting}
+
+\subsection{Add-ons}
+\label{sec:cli-addons}
+
+Add-ons are the adapters that read the recording formats Medorama does not read itself
+(\cref{chap:addons}). They are installed in the adapter folder, the setting \code{adapters\_dir}.
+Installing is done on the server, from the command line only, never through the page; installs
+and removals are written to the audit log. A server that runs already sees the change after a
+restart.
+
+\apientry{medorama addons list}{List the installed adapters}
+\begin{lstlisting}[style=signature]
+medorama addons list [--json]
+\end{lstlisting}
+Lists the adapters of the adapter folder: name, version, implementation, the formats each reads
+(label and file extensions) and its program.
+\begin{params}
+\item[--json] Print JSON.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama addons list
+\end{lstlisting}
+
+\apientry{medorama addons install}{Install an adapter}
+\begin{lstlisting}[style=signature]
+medorama addons install PROGRAM
+\end{lstlisting}
+Copies an adapter's program into the adapter folder (made executable), after checking that it is
+named \code{<name>-adapter} (\code{<name>-adapter.exe} on Windows) and that it describes itself
+in this protocol. An adapter of the same name is replaced.
+\begin{params}
+\item[PROGRAM] The adapter's program.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama addons install example-adapter-0.1.0-linux-x86_64/example-adapter
+\end{lstlisting}
+
+\apientry{medorama addons remove}{Remove an adapter}
+\begin{lstlisting}[style=signature]
+medorama addons remove NAME
+\end{lstlisting}
+Removes an installed adapter, by its name as \cmd{addons list} shows it.
+\begin{lstlisting}[style=shell]
+medorama addons remove example
+\end{lstlisting}
+
+\subsection{Users and the audit log}
+\label{sec:cli-users}
+
+Users, roles and the PHI permission are described in \cref{chap:users-privacy}, and the
+sign-in methods in \cref{chap:sign-in}. A user name has 1 to 64 characters: letters, digits, and
+\code{.}, \code{\_}, \code{-} and \code{@}. A password has at least 10 characters. The command
+asks for it twice (with three attempts), or reads it from the first line of the standard input
+with \opt{-{}-password-stdin}. Every change is written to the audit log.
+
+\apientry{medorama user add}{Add a user}
+\begin{lstlisting}[style=signature]
+medorama user add USERNAME --role viewer|analyst|admin [--phi] [--display-name NAME]
+                  [--password-stdin | --no-password]
+\end{lstlisting}
+Adds a user. Without \opt{-{}-password-stdin} or \opt{-{}-no-password}, the command asks for the
+password.
+\begin{params}
+\item[USERNAME] The user name, for signing in. With proxy sign-in, it is the exact name that the
+  institution's proxy sends, such as \code{jdoe@hospital.org} (case does not matter).
+\item[--role ROLE] \code{viewer}, \code{analyst} or \code{admin}. Required.
+\item[--phi] The PHI permission: the user may see and search identifiers.
+\item[--display-name NAME] The name shown. Default: none.
+\item[--password-stdin] Read the password from the standard input.
+\item[--no-password] Give the account no password of its own: it gets a random password that
+  nobody knows. Use it for accounts that sign in through the institution's sign-in
+  (\code{sign\_in = "proxy"}; \cref{sec:sign-in-accounts}). With password sign-in, such an
+  account cannot sign in until an administrator sets a password. It cannot be combined with
+  \opt{-{}-password-stdin}.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama user add analyst1 --role analyst --display-name "Analyst One"
+medorama user add jdoe@hospital.org --role viewer --no-password   # proxy sign-in
+\end{lstlisting}
+
+\apientry{medorama user list}{List users}
+\begin{lstlisting}[style=signature]
+medorama user list
+\end{lstlisting}
+Lists the users: name, role, \code{PHI} for the PHI permission, \code{disabled}, and the display
+name.
+\begin{lstlisting}[style=shell]
+medorama user list
+\end{lstlisting}
+
+\apientry{medorama user set}{Change a user}
+\begin{lstlisting}[style=signature]
+medorama user set USERNAME [--role ROLE] [--phi true|false] [--disabled true|false]
+                  [--display-name NAME] [--password | --password-stdin]
+\end{lstlisting}
+Changes what the options give, and leaves the rest as it is.
+\begin{params}
+\item[--role ROLE] \code{viewer}, \code{analyst} or \code{admin}.
+\item[--phi BOOL] Give (\code{true}) or take away (\code{false}) the PHI permission.
+\item[--disabled BOOL] Disable (\code{true}) or enable (\code{false}) the account.
+\item[--display-name NAME] The name shown.
+\item[--password] Set a new password, asked for.
+\item[--password-stdin] Set a new password, read from the standard input.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama user set analyst1 --phi true
+medorama user set analyst1 --disabled true
+\end{lstlisting}
+
+\apientry{medorama user remove}{Delete a user}
+\begin{lstlisting}[style=signature]
+medorama user remove USERNAME
+\end{lstlisting}
+Deletes a user.
+\begin{lstlisting}[style=shell]
+medorama user remove analyst1
+\end{lstlisting}
+
+\apientry{medorama audit}{Show, verify or seal the audit log}
+\begin{lstlisting}[style=signature]
+medorama audit [--limit N]
+medorama audit --verify
+medorama audit --seal
+medorama audit --seal --verify
+\end{lstlisting}
+Shows the newest entries of the audit log: time, user, event, target and detail
+(\cref{chap:users-privacy}). With \opt{-{}-verify} or \opt{-{}-seal} it does that instead; with
+both, it seals, then verifies every seal, the new one too.
+\begin{params}
+\item[--limit N] The number of entries shown. Default: 50.
+\item[--verify] Check the seals: whether a sealed entry was changed, deleted or added. It prints
+  the seals, the entries sealed and those not sealed yet; a broken chain is an error (status 1).
+\item[--seal] Seal the entries not sealed yet, now (the server does it every minute), and append
+  them to \code{audit\_export} when it is set.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama audit --limit 20
+medorama audit --verify
+medorama audit --seal --verify
+\end{lstlisting}
+
+\section{The VitalStream viewers}
+\label{sec:cli-vitalstream}
+
+The three VitalStream viewers, in Rust, C++ and Python, have the same options, the same settings
+file (\cref{chap:settings-reference}), the same API (\cref{chap:viewer-api}) and the same password
+file; they differ in their default ports and in a few details
+(\cref{tab:cli-viewer-differences}).
+
+\apientry{vitalstream-rs, vitalstream-cpp, vitalstream-py}{Run a VitalStream viewer}
+\begin{lstlisting}[style=signature]
+vitalstream-rs [--config FILE] [--host HOST] [--port N] [--timezone TZ] [--root DIR]...
+               [--cache-dir DIR] [--adapters-dir DIR] [--qc-verbose] [--no-browser]
+               [--no-auth] [--set-password | --clear-password | --index PATH] [-V]
+\end{lstlisting}
+Starts the viewer's web server and opens its page in a browser, after a second. It prints the
+settings file it read, its address (an IPv6 host in brackets: \code{http://[::1]:8050/}), its
+root, its data roots, the index folder, the time zone, and whether a password protects it; a data root outside the viewer's root is left out with a warning. With
+\opt{-{}-set-password}, \opt{-{}-clear-password} or \opt{-{}-index} it does that and exits,
+without serving. The options override the settings file, which overrides the defaults.
+\begin{params}
+\item[--config FILE] The settings file (TOML). Default: the first that exists of
+  \file{viewers/vitalstream/vitalstream.toml} (only for a viewer run from the build folder of a
+  clone) and \file{\textasciitilde/.config/vitalstream/vitalstream.toml}; a
+  \file{vitalstream.toml} in the working folder is never read unless \opt{-{}-config} names it.
+  The viewer says on start which file it read. Its top-level keys apply to the
+  three viewers, those of its section \code{[rs]}, \code{[cpp]} or \code{[py]} to that viewer
+  only.
+\item[--host HOST] The address to listen on. Default: \code{127.0.0.1} (this machine only).
+\item[--port N] The port. Default: 8060 (\cmd{vitalstream-rs}), 8070 (\cmd{vitalstream-cpp}),
+  8050 (\cmd{vitalstream-py}).
+\item[--timezone TZ] The display time zone, an IANA name. Default: \code{America/New\_York}.
+\item[--root DIR] A folder the viewer may open, inside the viewer's root (fixed when it was
+  built); repeatable, and in place of the setting \code{data\_roots}. Default: the viewer's root.
+\item[--cache-dir DIR] The index folder. Default: \file{sample\_data/outputs/index} of the
+  viewer's folder when it runs from a clone of the repository, else
+  \file{\textasciitilde/.cache/vitalstream}.
+\item[--adapters-dir DIR] The folder of adapters. Default:
+  \file{\textasciitilde/.local/share/medorama/adapters}.
+\item[--qc-verbose] Also mark the irregularities a reader repaired (data blocks put back in
+  order).
+\item[--no-browser] Do not open a browser window (on a server).
+\item[--no-auth] Run without asking for the password, even when one is set.
+\item[--set-password] Set (or change) the password that the page asks for, at least 8
+  characters, asked twice; then exit. The viewer must be restarted for it to take effect. A
+  viewer built without password support refuses (\code{this viewer was built without password
+  support}); it never asks for a password, and ignores one that is set already.
+\item[--clear-password] Remove the password, then exit. A viewer built without password support
+  refuses.
+\item[--index PATH] Index the recording \textit{PATH} (a WFDB record, collection or folder of
+  records, an EDF, EDF+, BDF or BDF+ file, or a file that an installed adapter reads) into the
+  index folder, print
+  \code{indexed PATH -> CACHE/KEY/}, and exit.
+\item[-V, --version] Print the program's name and version (\code{vitalstream-py 0.1.0}), then
+  exit.
+\end{params}
+\begin{lstlisting}[style=shell]
+vitalstream-cpp
+vitalstream-cpp --set-password
+vitalstream-rs --no-browser --port 8061 --root ~/icu
+vitalstream-py --index ~/icu/demo-record
+\end{lstlisting}
+
+A viewer whose settings say \code{require\_password = true} refuses to start without a password
+(Medorama sets it for the viewer it runs). The password is kept in \code{auth\_file}, by default
+\file{\textasciitilde/.config/vitalstream/auth.json}, shared by the three viewers and by
+\cmd{muse-py serve} and \cmd{dicom-py serve}.
+
+\begin{xltabular}{\linewidth}{@{}P{4.2cm}LLL@{}}
+\caption{Where the three VitalStream viewers' command lines differ.}
+\label{tab:cli-viewer-differences}\\
+\toprule
+{\tabhead } & {\tabhead vitalstream-rs} & {\tabhead vitalstream-cpp} & {\tabhead vitalstream-py} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead } & {\tabhead vitalstream-rs} & {\tabhead vitalstream-cpp} & {\tabhead vitalstream-py} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Default port & 8060 & 8070 & 8050 \\
+Section of the settings file & \code{[rs]} & \code{[cpp]} & \code{[py]} \\
+Argument errors & status 2 & the C++ parser's status & status 2 \\
+\end{xltabular}
+
+\section{The ECG and PACS database tools}
+\label{sec:cli-ecg-pacs}
+
+\cmd{muse-py} reads GE MUSE resting ECG XML files; \cmd{dicom-py} reads DICOM files. Each builds
+databases to import into Medorama (\cref{chap:ecg-imaging}) and converts ECGs to WFDB records, and
+each \cmd{serve} runs a viewer from this computer: the ECG viewer (\cmd{muse-py}) and the PACS
+viewer (\cmd{dicom-py}). Both take \opt{-h} and \opt{-{}-version}.
+
+\begin{phibox}
+The databases that \cmd{muse-py index} and \cmd{dicom-py index} write hold the patient's MRN or
+ID\phimark{}, the key that links each row to its patient: keep them as protected health
+information. The JSON and WFDB outputs carry no patient identity.
+\end{phibox}
+
+\apientry{muse-py json}{An ECG as the ECG viewer's JSON}
+\begin{lstlisting}[style=signature]
+muse-py json FILE
+\end{lstlisting}
+Prints the ECG of a MUSE XML file in the ECG viewer's JSON form, on the standard output.
+\begin{lstlisting}[style=shell]
+muse-py json ecg/afib_muse.xml > afib.json
+\end{lstlisting}
+
+\apientry{muse-py wfdb}{An ECG as a WFDB record}
+\begin{lstlisting}[style=signature]
+muse-py wfdb FILE OUT_DIR [--name NAME]
+\end{lstlisting}
+Writes the ECG as a WFDB record in \textit{OUT\_DIR} (created if needed): a signal file in format
+16, 1000 units per millivolt, and a header whose comments carry the details, the measurements and
+the statements. It prints the header's path.
+\begin{params}
+\item[--name NAME] The record's name. Default: the file's name without its extension.
+\end{params}
+\begin{lstlisting}[style=shell]
+muse-py wfdb ecg/afib_muse.xml records/ --name afib
+\end{lstlisting}
+
+\apientry{muse-py index}{A database of a folder of MUSE files}
+\begin{lstlisting}[style=signature]
+muse-py index FOLDER -o FILE
+\end{lstlisting}
+Writes an ECG database to import: one row per MUSE file under \textit{FOLDER} (searched in every
+subfolder), with the MUSE PatientID in a column named \code{mrn} (Medorama reads it as an MRN),
+the time, the category \code{ecg}, the ventricular rate, every measurement as a column, the
+computer's and the confirmed interpretation, and the file's path, relative to the folder of the
+CSV. It prints the number of ECGs, and names the files it could not
+read on the standard error.
+\begin{params}
+\item[-o, --output FILE] The CSV file to write. Required.
+\end{params}
+\begin{lstlisting}[style=shell]
+muse-py index /data/demo/ecg -o /data/demo/ecg-muse.csv
+\end{lstlisting}
+
+\apientry{dicom-py index}{A database of a folder of DICOM files}
+\begin{lstlisting}[style=signature]
+dicom-py index FOLDER -o FILE
+\end{lstlisting}
+Writes a database to import: one row per loop, run, series, report, PDF or ECG under
+\textit{FOLDER}, with the patient ID, the time, the category, the measurements and the file,
+relative to the folder of the CSV. It prints the number of objects, and names those it could not
+link on the standard error.
+\begin{params}
+\item[-o, --output FILE] The CSV file to write. Required.
+\end{params}
+\begin{lstlisting}[style=shell]
+dicom-py index /data/demo/echo -o /data/demo/echo.csv
+\end{lstlisting}
+
+\apientry{dicom-py wfdb}{A DICOM ECG as a WFDB record}
+\begin{lstlisting}[style=signature]
+dicom-py wfdb FILE OUT_DIR [--name NAME]
+\end{lstlisting}
+Writes a DICOM ECG (12-lead or Holter) as a WFDB record in \textit{OUT\_DIR}, and prints its
+header's path.
+\begin{params}
+\item[--name NAME] The record's name. Default: the file's name.
+\end{params}
+\begin{lstlisting}[style=shell]
+dicom-py wfdb ecg/ecg_12lead.dcm records/
+\end{lstlisting}
+
+\apientry{muse-py serve, dicom-py serve}{Serve the ECG or PACS viewer}
+\begin{lstlisting}[style=signature]
+muse-py serve [--root DIR] [--host HOST] [--port N] [--auth-file FILE] [--no-auth]
+              [--no-browser] [--set-password | --clear-password]
+dicom-py serve (the same options)
+\end{lstlisting}
+Serves the viewer's page from this computer, with the files and folders under a root, and opens
+\code{http://HOST:PORT/browse} in a browser after a second (the server's folders). Only what lies
+under the root, every symbolic link resolved, is listed and served, and never a hidden entry (a
+name that begins with \code{.}) (\cref{chap:viewer-api}). It
+prints the address, the root, and whether a password protects it; \key{Ctrl}+\key{C} stops it.
+\begin{params}
+\item[--root DIR] The folder served. Default: the home folder. It must be a folder inside the
+  root the package was installed with (\code{VIEWER\_ROOT}; by default the whole file system): a
+  \opt{-{}-root} that contains that root is narrowed to it, and one outside it is refused (status 1).
+\item[--host HOST] The address to listen on. Default: \code{127.0.0.1}. A request must name the
+  server by a loopback name, an IP address or this host; any other name is refused (no DNS
+  rebinding).
+\item[--port N] The port. Default: 8080 (\cmd{muse-py}), 8081 (\cmd{dicom-py}).
+\item[--auth-file FILE] The password file. Default:
+  \file{\textasciitilde/.config/vitalstream/auth.json}, shared with VitalStream.
+\item[--no-auth] Run without asking for the password.
+\item[--no-browser] Do not open a browser window.
+\item[--set-password] Set (or change) the password that the page asks for, at least 8
+  characters, asked twice; then exit. For \cmd{muse-py serve} and \cmd{dicom-py serve}, a
+  sign-in lasts 30 days, until the server stops, or until a browser signs out, which ends every
+  sign-in; after a wrong password the next try, from any browser, waits 1\,s, then 2, 4 \dots{}
+  up to 60\,s. A package installed with
+  \code{VIEWER\_PASSWORD=0} refuses (status 1); it never asks for a password, and ignores one
+  that is set already.
+\item[--clear-password] Remove the password file, then exit. A package installed with
+  \code{VIEWER\_PASSWORD=0} refuses (status 1).
+\end{params}
+\begin{lstlisting}[style=shell]
+muse-py serve
+dicom-py serve --root /data/demo/echo --no-browser
+ssh -N -L 8081:127.0.0.1:8081 user@server        # then, on your computer, open the address
+\end{lstlisting}
+
+\section{The repository's tools}
+\label{sec:cli-tools}
+
+The folder \file{tools/} of the repository holds the installers, generators and checks; none of
+it is part of a package. They are run from a clone (\cref{chap:installation}).
+
+\apientry{tools/install-medorama.sh}{Install Medorama and one viewer}
+\begin{lstlisting}[style=signature]
+tools/install-medorama.sh [--viewer cpp|rs|py|none] [--demo] [--no-rustup] [--no-tools]
+powershell -ExecutionPolicy Bypass -File tools\install-medorama.ps1 [-Viewer cpp|rs|py|none]
+    [-Demo] [-NoRustup] [-NoTools]
+\end{lstlisting}
+Builds Medorama and one VitalStream viewer, without administrator rights (macOS and Linux; the
+\file{.ps1} on Windows), and installs the database tools \cmd{muse-py} and \cmd{dicom-py}. The
+programs go into \file{.venv/bin} (Windows \file{.venv\textbackslash Scripts}), and the viewer
+chosen is recorded in \file{medorama.viewer} there, so that Medorama starts that viewer. An unknown
+option is an error (status 2).
+\begin{params}
+\item[--viewer VIEWER] \code{cpp} (the default: the C++ viewer), \code{rs}, \code{py}, or
+  \code{none} (Medorama alone).
+\item[--demo] Also make the demo, in \file{.venv/share/medorama/demo}, named in
+  \file{medorama.demo} next to the programs: \cmd{medorama init} then loads it. Off by default.
+\item[--no-rustup] Fail rather than install Rust when \cmd{cargo} is missing.
+\item[--no-tools] Leave out \cmd{muse-py} and \cmd{dicom-py}.
+\item[-h, --help] Print the usage.
+\end{params}
+\begin{lstlisting}[style=shell]
+tools/install-medorama.sh
+tools/install-medorama.sh --viewer rs --demo
+\end{lstlisting}
+
+\apientry{tools/install.sh}{Install everything, for development}
+\begin{lstlisting}[style=signature]
+tools/install.sh [--py] [--rs] [--cpp] [--demo] [--no-rustup]
+powershell -ExecutionPolicy Bypass -File tools\install.ps1 [-Py] [-Rs] [-Cpp] [-Demo] [-NoRustup]
+\end{lstlisting}
+Installs into the clone, for development: \file{.venv} with the Python packages (the Python
+viewer, \cmd{muse-py}, \cmd{dicom-py} and the test tools, editable), the Rust workspace
+(\cmd{medorama}, \cmd{vitalstream-rs}) and the C++ project (\cmd{vitalstream-cpp} and its tests),
+and enables the repository's git hooks. Without \opt{-{}-py}, \opt{-{}-rs} or \opt{-{}-cpp}: all
+of it. When \cmd{cargo} is missing, both installers install Rust with rustup (on Windows,
+\file{rustup-init.exe} is checked against its published SHA-256 first).
+\begin{params}
+\item[--py] The Python packages only.
+\item[--rs] The Python packages and the Rust workspace.
+\item[--cpp] The Python packages and the C++ viewer; \opt{-{}-rs -{}-cpp}: both.
+\item[--demo] Also make the demo, as \cmd{install-medorama.sh -{}-demo} does.
+\item[--no-rustup] Fail rather than install Rust when \cmd{cargo} is missing.
+\item[-h, --help] Print the usage.
+\end{params}
+\begin{lstlisting}[style=shell]
+tools/install.sh --rs
+\end{lstlisting}
+
+\apientry{tools/install-gcc.sh}{A C++20 compiler without administrator rights}
+\begin{lstlisting}[style=signature]
+tools/install-gcc.sh [--prefix DIR]
+\end{lstlisting}
+On Linux, installs GCC 13, CMake, Ninja and Python 3.12 from conda-forge, in a Miniforge
+installation (environment \code{vs-build}), for machines whose compiler is too old for the C++
+viewer. The Miniforge installer is checked against its published SHA-256 before it runs.
+Afterwards, \cmd{source \textasciitilde/miniforge3/bin/activate vs-build} in each shell
+that builds it.
+\begin{params}
+\item[--prefix DIR] The Miniforge folder. Default: \file{\textasciitilde/miniforge3}; a Miniforge
+  or Anaconda installation there is reused.
+\end{params}
+\begin{lstlisting}[style=shell]
+tools/install-gcc.sh
+\end{lstlisting}
+
+\apientry{tools/fetch-cpp-deps.sh}{Download the C++ dependencies}
+\begin{lstlisting}[style=signature]
+tools/fetch-cpp-deps.sh
+powershell -ExecutionPolicy Bypass -File tools\fetch-cpp-deps.ps1
+\end{lstlisting}
+Downloads the C++ dependencies pinned in \file{viewers/vitalstream/cpp/cmake/deps.cmake} into
+\file{viewers/vitalstream/cpp/deps/}, checking each archive's SHA-256, so that a build needs no
+internet access. It has no options.
+\begin{lstlisting}[style=shell]
+tools/fetch-cpp-deps.sh
+\end{lstlisting}
+
+\apientry{tools/gen\_timezones.py}{The C++ viewer's time zones}
+\begin{lstlisting}[style=signature]
+python3 tools/gen_timezones.py
+\end{lstlisting}
+Generates \file{viewers/vitalstream/cpp/vitalstream/src/timezones.cpp}, the IANA time-zone names
+that \cmd{vitalstream-cpp} accepts, from this Python's \code{zoneinfo} database. It has no
+options.
+
+\apientry{tools/make-demo-data.py}{Make the synthetic demo}
+\begin{lstlisting}[style=signature]
+.venv/bin/python tools/make-demo-data.py [OUT] [--examples DIR] [--dicom DIR]
+\end{lstlisting}
+Writes a synthetic data set under \textit{OUT} (default: \file{sample\_data/demo} of the clone):
+ICU recordings as WFDB collections, a 24-hour Holter, an overnight sleep study (an EDF+ file,
+\file{sleep/P900004\_psg\_20240305.edf}, linked by \file{sleep\_index.csv}), 12-lead ECGs, DICOM
+imaging, echo and angiography, the databases that link them to invented patients, and an OMOP
+database to connect. Everything is
+invented. \cmd{medorama demo add OUT} loads it. The same options give the same files, byte for
+byte, on every run. It needs NumPy and wfdb-x.
+\begin{params}
+\item[OUT] The folder to write.
+\item[--examples DIR] Also give local, already de-identified ECG examples to some demo patients;
+  MUSE XML files are de-identified again on the way.
+\item[--dicom DIR] Also give local public DICOM sample studies to the demo patients they fit, in
+  place of the synthetic CT series, de-identified on the way.
+\item[-h, --help] Print the usage.
+\end{params}
+\begin{lstlisting}[style=shell]
+.venv/bin/python tools/make-demo-data.py /data/demo
+\end{lstlisting}
+
+\apientry{tools/make-viewer-examples.py}{The viewers' example files}
+\begin{lstlisting}[style=signature]
+python3 tools/make-viewer-examples.py
+\end{lstlisting}
+Writes the example files of the ECG and PACS viewers (\file{viewers/ecg/examples/},
+\file{viewers/pacs/examples/}) with the demo's generators: a 12-lead WFDB record, a MUSE XML ECG,
+a DICOM ECG, a PDF and a PNG printout; an echo loop, a coronary angiography run and a chest X-ray.
+Every value is invented. It needs NumPy and wfdb-x, and has no options.
+
+\apientry{tools/screenshots.py}{The documentation's screenshots}
+\begin{lstlisting}[style=signature]
+python3 tools/screenshots.py [OUT] [--url URL] [--user NAME] --password-file FILE --demo DIR
+\end{lstlisting}
+Takes the documentation's screenshots with headless Chrome or Chromium (the environment variable
+\code{MEDORAMA\_TEST\_CHROME}, else the usual places), from a running Medorama that holds the
+synthetic demo and nothing else: every picture is published. Before it turns Privacy Mode off,
+the script checks through the API, signed in as an administrator, that the catalog's only
+sources are the demo (\code{DEMO}) and its OMOP database \code{demo\_omop}, and that every
+patient and recording came from them; before the first picture, that every patient is one of
+the demo's invented patients (each MRN starts with \code{SYN}). It also reads the demo folder's
+\file{demo.json}, which \file{make-demo-data.py} writes: it must say that the folder holds
+invented data alone, and every recording of the catalog must lie in that folder. A demo made
+with \opt{-{}-examples} or \opt{-{}-dicom} holds local ECGs and DICOM studies, so the script
+refuses it. If any check fails, it stops without taking a picture. Every request to Chrome has
+a time limit.
+\begin{params}
+\item[OUT] Where the pictures go. Default: \file{docs/images/screens}.
+\item[--url URL] The server. Default: \code{http://127.0.0.1:8090/}.
+\item[--user NAME] The account. Default: \code{admin}.
+\item[--password-file FILE] The file that holds its password. Required.
+\item[--demo DIR] The folder the catalog's demo was made in (\file{make-demo-data.py}).
+  Required.
+\end{params}
+\begin{lstlisting}[style=shell]
+python3 tools/screenshots.py --url http://127.0.0.1:8090/ --password-file pw --demo /path/to/demo
+\end{lstlisting}
+
+\apientry{tools/load-test.py}{Many users at once}
+\begin{lstlisting}[style=signature]
+python3 tools/load-test.py [--url URL] [--user NAME] [--users N] [--seconds S] [--seed N]
+\end{lstlisting}
+Simulates users working at once on a Medorama server, each in a session of its own: catalog
+pages, patients' pages, database rows and cohort searches, without pause. At the end it prints,
+for each kind of request, the count, the median, the 95th percentile, the slowest time and the
+errors. It changes nothing (each sign-in is audited, as any). The password is read from the
+environment variable \code{MEDORAMA\_PASSWORD}, else asked for.
+\begin{params}
+\item[--url URL] The server. Default: \code{http://127.0.0.1:8090}.
+\item[--user NAME] The account every simulated user signs in as. Default: \code{admin}.
+\item[--users N] Users at once. Default: 20.
+\item[--seconds S] How long. Default: 60.
+\item[--seed N] The seed of the random choices. Default: 1.
+\end{params}
+\begin{lstlisting}[style=shell]
+python3 tools/load-test.py --users 20 --seconds 60
+\end{lstlisting}
+
+\apientry{tools/git-hooks/check-files}{Keep patient data out of commits}
+\begin{lstlisting}[style=signature]
+git config core.hooksPath tools/git-hooks
+tools/git-hooks/check-files [--staged | --commits A..B | --tree REV]
+\end{lstlisting}
+The privacy check. It reads the files as git stores them, never the working tree's copies, and
+refuses: anything in a \file{sample\_data/} folder at any depth; recording names of
+bedside-monitor systems in a path or in any content, text or binary; files over 5\,MB (this manual's PDF over 20\,MB); notebooks
+with saved outputs or that cannot be read; and, outside the synthetic test data and examples,
+recordings and signal arrays (WFDB, EDF, \file{.Stp}, NumPy), tables (\file{.csv}, \file{.tsv},
+\file{.xlsx}, Parquet), databases and their journals, SQL files and dumps (except the catalog's
+schema), archives, and DICOM and GE MUSE XML files, recognized by their content. Without an
+option it checks what is staged; \opt{-{}-commits A..B} checks every commit of a range, each
+against its parent; \opt{-{}-tree REV} every file of a revision. Its exit status is 0 when
+nothing is refused, 1 when something is, 2 on a usage or git error.
+
+The hooks \file{pre-commit} and \file{pre-merge-commit} run it on what a commit or a merge would
+store. The first command above enables them once per clone; the installers do it, and warn if
+the clone already uses other hooks. CI runs the same check on every commit of each pull request
+and push, and on every file (\file{.github/workflows/checks.yml}), so bypassing the hooks
+(\opt{-{}-no-verify}) only moves the refusal there.
+
+The \file{Makefile} at the root of the repository wraps these tools and the tests
+(\cmd{make help}).

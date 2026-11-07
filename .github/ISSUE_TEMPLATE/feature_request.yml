@@ -1,0 +1,25 @@
+name: Feature request
+description: Something Medorama or a viewer should do.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        What is already planned, with a design for each item, is in `docs/todo.md`: please check
+        it first, and refer to its item if yours is there. Never attach patient data.
+  - type: textarea
+    id: need
+    attributes:
+      label: What you need, and why
+      description: The task you are trying to do, and what stops you today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How it could work
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy
+      description: Does it show, export or store identifiers? How should Privacy Mode treat it?

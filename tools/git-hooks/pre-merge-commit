@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Medorama pre-merge-commit check: the same as pre-commit, for what a merge brings in
+# (check-files). A fast-forward makes no commit and runs no hook; CI checks every commit.
+exec "$(dirname "$0")/check-files" --staged

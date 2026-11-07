@@ -1,0 +1,836 @@
+% The formats reference: the data model of a recording (viewers/vitalstream/docs/data-model.md),
+% the index format, version 2 (viewers/vitalstream/docs/index-format.md), and the files of a WFDB
+% collection (docs/wfdb-collection.md: index.csv, gaps.csv, vitals.csv, events.csv, markers),
+% and the reading rules of EDF, EDF+, BDF and BDF+ (docs/edf.md, "Reading rules"; checked against
+% libs/engine/src/sources/edf.rs). How records, collections and folders are read is
+% chap:recordings.
+\chapter{Formats reference}
+\label{chap:formats-reference}
+
+This chapter specifies the data that Medorama and the VitalStream viewers share. It is written
+for implementers of readers, adapters and converters, and for anyone who checks them. It covers
+four subjects:
+\begin{itemize}
+\item the \textbf{data model} of a recording, which every reader builds whatever the recording's
+  format;
+\item the \textbf{index}, the files that let the viewers show days of waveforms at once, which
+  Medorama, the three viewers and the adapters write byte for byte alike;
+\item the files of a \textbf{WFDB collection}, the folder of WFDB records with a few CSV files that
+  converters write;
+\item the \textbf{reading rules of EDF}, EDF+, BDF and BDF+, which the three engines implement
+  identically.
+\end{itemize}
+How a single record, a multi-segment record, a collection, a folder of records or an EDF file is
+read and placed on the time axis is described for users in \cref{chap:recordings}; how to add a
+reader for a new format is described in \cref{chap:readers}.
+
+\section{The data model}
+\label{sec:formats-reference-model}
+
+The data model describes, in language-neutral terms, what the viewers make of a recording,
+whatever its format. A reader (the WFDB or EDF reader of the engines, or an adapter,
+\cref{chap:addons}) builds it from the recording, the index stores it
+(\cref{sec:formats-reference-index}), and the viewer API serves it (\cref{chap:viewer-api}).
+
+\subsection{Principles}
+\label{sec:formats-reference-principles}
+
+\begin{itemize}
+\item \textbf{Only what the recording states.} The readers do no resampling, interpolation, gap
+  filling, re-timing or deduplication: every sample drawn is a stored sample.
+\item \textbf{Ambiguity is shown, not resolved.} Where the recording does not settle something (a
+  break's exact length, a start time), the index says so, with \code{exact}, \code{timed} and
+  notes.
+\item \textbf{Times are UTC}, as Unix seconds. The display time zone is a setting of the viewer
+  only.
+\end{itemize}
+
+\subsection{Structure}
+\label{sec:formats-reference-structure}
+
+\begin{xltabular}{\linewidth}{@{}P{2.2cm}L@{}}
+\caption{The terms of a recording's structure.}
+\label{tab:formats-reference-structure}\\
+\toprule
+\tabhead Term & \tabhead Meaning \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Term & \tabhead Meaning \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+channel & one signal as the user sees it (ECG lead II, ART, Pleth, \dots): a label, a unit, a
+  modality \\
+piece & samples of one channel that the recording proves contiguous, at one constant sampling
+  rate \code{fs}: sample $i$ is at $t_0 + i / f_s$. A channel is the pieces it is made of; pieces
+  are drawn apart, never joined \\
+lane & the pieces of a channel never overlap in time. In WFDB records, a piece that would overlap
+  another of its channel (a signal recorded twice at the same time) goes into the first lane of
+  that channel it does not overlap; each further lane is a channel of its own, labelled with its
+  number: \code{II}, \code{II (2)}, \code{II (3)} \\
+timed & false when the recording states no time for a piece: it is placed next to its neighbors
+  and marked \ui{time not stated} \\
+envelope & per piece, the minimum and maximum of every block of 32 samples, and of every 4 blocks
+  above that: what long windows are drawn from \\
+break & a place where contiguity is not proven: its reason, its length when known
+  (\code{gap\_s}), whether that length is \code{exact}, how it was measured, and the channels it
+  concerns \\
+\end{xltabular}
+
+\subsection{Values}
+\label{sec:formats-reference-values}
+
+\begin{itemize}
+\item \textbf{Units:} physical units where the recording states a calibration; \code{adu} where it
+  states none (the value drawn is the stored count).
+\item \textbf{Nothing is assumed} that a recording does not state: a WFDB record whose header
+  gives no sampling frequency is not read (opened alone, it is refused; in a folder of plain
+  records or a WFDB collection it is left out, listed in the index's \code{skipped} with the
+  reason and counted in the notes; a collection of which no record can be read is refused), a
+  signal with a gain of 0 is shown in
+  stored counts (\code{adu}), and a signal whose header gives no units has none. WFDB's old
+  defaults of 250\,Hz, a gain of 200 and millivolts are not used.
+\item \textbf{Missing samples} are NaN, drawn as a gap in the line, never as zero. In WFDB they
+  are the format's invalid value.
+\item \textbf{Zero is a value}, never ``missing''.
+\end{itemize}
+
+\subsection{Vital signs, alarms and markers}
+\label{sec:formats-reference-events}
+
+\begin{itemize}
+\item \textbf{A vital-sign series:} values at their times, by name and unit; one series per name
+  and source, never merged (\cref{sec:formats-reference-vitals}).
+\item \textbf{An alarm:} an interval (start, end) with a text, a kind and a level: 1 advisory,
+  2 warning, 3 crisis. Alarm colors are the only red on the viewers' pages.
+\item \textbf{A marker:} a mark at a sample of a piece (an R wave, a pacing spike), by name.
+\end{itemize}
+
+\subsection{Identifiers}
+\label{sec:formats-reference-identifiers}
+
+The viewers never read, keep or show a patient's identity: the index holds no name, identifier or
+date of birth, and neither do the viewers' answers. A recording's path and file name may still
+identify a patient (bedside-monitor systems name files by unit, bed and time), and every value of
+a recording is patient data: keep the recordings, and the index folders made from them, on
+storage protected like the recordings.
+
+\section{The index}
+\label{sec:formats-reference-index}
+
+The index of a recording holds its structure (its channels, and the pieces each channel is made
+of), the min/max envelopes of every waveform, and its markers, vital-sign series, alarms and
+breaks. This section specifies the index, version 2, so that programs written independently write
+and read the same files and can share one index folder: the viewers \cmd{vitalstream-rs} (with
+the Rust engine), \cmd{vitalstream-cpp} (with the C++ engine) and \cmd{vitalstream-py}, Medorama
+(with the Rust engine), and the adapters. All of them write the same bytes for the same
+recording.
+
+\subsection{The index folder}
+\label{sec:formats-reference-folder}
+
+An index folder holds one subfolder per indexed recording, named by its key
+(\cref{sec:formats-reference-key}):
+\begin{lstlisting}[style=text]
+<index folder>/
+    0f38a5788406244247a4/            one recording
+        meta.json
+        env_min_0.f32  env_max_0.f32  env_min_1.f32 ...
+        mk_piece.i32  mk_sample.i64  mk_code.i16
+        vit_t.f64  vit_v.f64
+    ...
+\end{lstlisting}
+Any other entry of an index folder (temporary folders, the Python viewer's progress files
+\file{<key>.progress.json}) is ignored by readers. Medorama's index folder is its
+\code{index\_dir}, a viewer's its \code{cache\_dir} (\cref{chap:settings-reference}).
+
+\subsection{The key}
+\label{sec:formats-reference-key}
+
+The key identifies a recording \textbf{as it is now}: it changes when the file is changed, moved
+or replaced, so that an outdated index is never used.
+\begin{lstlisting}[style=text]
+key = the first 20 hex digits (lowercase) of SHA-256( JSON text of [version, path, fingerprint] )
+\end{lstlisting}
+
+\begin{xltabular}{\linewidth}{@{}P{3.5cm}L@{}}
+\caption{The elements of the key.}
+\label{tab:formats-reference-key}\\
+\toprule
+\tabhead Element & \tabhead Value \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Element & \tabhead Value \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{version} & the index format's version, \code{2} \\
+\code{path} & the recording's absolute path with every symbolic link resolved (the real path). On
+  Windows, without the \code{\textbackslash\textbackslash?\textbackslash} prefix:
+  \code{C:\textbackslash data\textbackslash x.Stp}, and
+  \code{\textbackslash\textbackslash server\textbackslash share\textbackslash x.Stp} for network
+  shares \\
+\code{fingerprint}, a file & \code{[size, mtime]}: the size in bytes; the modification time in
+  \textbf{integer nanoseconds} since 1970-01-01 UTC (on Windows, from the file's last-write time,
+  which has a resolution of 100\,ns) \\
+\code{fingerprint}, a folder (WFDB) & the list of \code{[name, size, mtime]} of \textbf{every
+  file} below the folder (subfolders included; folders themselves and hidden entries, whose names
+  start with \code{.}, excluded; a symbolic link to a file counted under the link's name, with its
+  target's size and mtime; links to folders and broken links excluded), \code{name} relative to
+  the folder with \code{/} between its components on every system, sorted by \code{name} (then
+  size, mtime). The folder is walked depth first, the entries of each folder in the byte order of
+  their UTF-8 names, down to \code{max\_depth} levels (20 by default), and the walk stops once
+  \textbf{200\,000} files are listed \\
+\code{fingerprint}, a WFDB record (a \file{.hea} file) & the same list for \textbf{the record's
+  files}: its header, the signal files its header names (other than \code{-} and
+  \code{\textasciitilde}), its \file{.mrk} file if there is one, and, for a multi-segment record,
+  the same for each segment and the layout header; \code{name} relative to the header's folder,
+  each file once, sorted by \code{name} \\
+\end{xltabular}
+
+\paragraph{The JSON text} is compact, with no spaces: \code{[2,"/data/x.Stp",[133325312,1700000000123456789]]}.
+Strings are in double quotes, with the escapes \code{\textbackslash"}, \code{\textbackslash\textbackslash},
+\code{\textbackslash n}, \code{\textbackslash r}, \code{\textbackslash t}, \code{\textbackslash b},
+\code{\textbackslash f}, and every other character below U+0020 or above U+007E as
+\code{\textbackslash u} and 4 lowercase hex digits (UTF-16 surrogate pairs above U+FFFF);
+integers are in decimal.
+
+\paragraph{An example} (a made-up file): for \file{/data/rec.Stp}, 1000 bytes, modified at
+1700000000.5\,s, the text is
+\begin{lstlisting}[style=text]
+[2,"/data/rec.Stp",[1000,1700000000500000000]]
+\end{lstlisting}
+and the key, the first 20 hex digits of that text's SHA-256, is \code{f61f534c1e1a4d244d7a}.
+
+\subsection{The files of one index}
+\label{sec:formats-reference-files}
+
+\begin{xltabular}{\linewidth}{@{}P{5.0cm}L@{}}
+\caption{The files of one index.}
+\label{tab:formats-reference-files}\\
+\toprule
+\tabhead File & \tabhead Content \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead File & \tabhead Content \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\file{meta.json} & the recording's structure (\cref{sec:formats-reference-meta}), UTF-8 JSON \\
+\file{env\_min\_<L>.f32}, \file{env\_max\_<L>.f32} & envelope level \code{L} = 0, 1, \dots:
+  the minima and maxima of all pieces, concatenated \\
+\file{mk\_piece.i32}, \file{mk\_sample.i64}, \file{mk\_code.i16} & markers: piece, sample number,
+  index into \code{marker\_names} \\
+\file{vit\_t.f64}, \file{vit\_v.f64} & vital-sign times (Unix seconds, UTC) and values, all series
+  concatenated \\
+\end{xltabular}
+
+\paragraph{Array files} hold raw little-endian values of the type their extension names
+(\code{f32}, \code{f64}, \code{i16}, \code{i32}, \code{i64}), with no header; the number of values
+is the file's size divided by the value's size, and an array with no values is an empty file. The
+marker and vital-sign files always exist; envelope files exist for the levels 0 to $L-1$ only.
+
+\subsection{meta.json}
+\label{sec:formats-reference-meta}
+
+A JSON object, written compact (no spaces) and in ASCII, with the escapes of the key's text.
+Integers are written without a decimal point; other numbers in the shortest form that reads back
+exactly (\code{0.1}, \code{1e-05}, \code{1709287200.0}); NaN and infinities never appear: they are
+written as \code{null}.
+
+\begin{xltabular}{\linewidth}{@{}P{3.0cm}P{2.2cm}L@{}}
+\caption{The keys of \file{meta.json}.}
+\label{tab:formats-reference-meta}\\
+\toprule
+\tabhead Key & \tabhead Type & \tabhead Meaning \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Key & \tabhead Type & \tabhead Meaning \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{index\_version} & integer & \code{2} \\
+\code{key} & string & the key (\cref{sec:formats-reference-key}) \\
+\code{path} & string & the real path used in the key \\
+\code{name} & string & the file or folder name as opened \\
+\code{kind} & string & the recording kind: \code{"wfdb"}, \code{"edf"}, or the kind of the adapter
+  that read it (\code{"stp"}) \\
+\code{format} & string & the format's label: \code{"WFDB record"}, \code{"WFDB multi-segment
+  record"}, \code{"WFDB collection"}, \code{"WFDB records"} (a folder of plain records),
+  \code{"EDF"}, \code{"EDF+"}, \code{"BDF"}, \code{"BDF+"}, or the adapter's
+  (\code{"BedMasterEx .Stp"}) \\
+\code{adapter} & string & the adapter that read the recording, when one did; it reads its samples
+  again on demand \\
+\code{description} & string & a sentence about the recording from its adapter, optional \\
+\code{engine} & string & the version of the program that wrote the index (informative) \\
+\code{indexed\_s} & number & the seconds the indexing took (informative) \\
+\code{time\_resolution\_s} & number or null & the time resolution of the source's time stamps \\
+\code{channels} & list & per channel: \code{id} (its position), \code{label}, \code{unit},
+  \code{modality}, and source-specific fields \\
+\code{pieces} & list & per piece (a stretch of one channel the source proves contiguous):
+  \code{id} (its position), \code{ch} (the channel's id), \code{fs} (Hz), \code{n} (samples),
+  \code{t0} (Unix seconds, UTC, of sample 0), \code{timed} (false when the source states no time;
+  omitted: true), \code{env} (per level, \code{[offset, length]} into that level's envelope
+  arrays), and source-specific fields (a WFDB piece's \code{record} and \code{sig}; an EDF
+  piece's \code{sig} and \code{data\_record}) \\
+\code{vitals} & list & per series: \code{name}, \code{unit}, \code{offset}, \code{n} into
+  \file{vit\_t} and \file{vit\_v} \\
+\code{alarms} & list & \code{t0}, \code{t1}, \code{text}, \code{level}, \code{kind} \\
+\code{gaps} & list & the breaks of the recording: \code{t0}, \code{t1}, \code{reason},
+  \code{gap\_s}, \code{exact}, \code{measured\_by}, \code{notes}, optional \code{channels} \\
+\code{untimed} & list & the intervals without a stated time: \code{t0}, \code{t1} \\
+\code{late\_blocks} & list & optional: data blocks the source stored out of order: \code{t0},
+  \code{t1} (the block's time span; \code{t1} null when unknown), \code{moved} (true: put back in
+  order, so no break; false: left in file order, and the break it causes is in \code{gaps} with a
+  note), \code{reason} (why not moved; empty when moved), \code{late\_by\_s},
+  \code{late\_by\_blocks} (null when not counted), \code{segment}. The viewers mark the moved ones
+  only with their \code{qc\_verbose} setting \\
+\code{marker\_names} & list of strings & the marker names, indexed by \file{mk\_code} \\
+\code{skipped} & object & what could not be shown: an adapter's counts; for WFDB records, the
+  records left out, by name, with the reason \\
+\code{notes} & list of strings & remarks for the user \\
+\code{reader} & object & what the source's reader needs to read samples again (an adapter's
+  state); written and read only by the program that reads the source, and no other may depend on
+  it \\
+other keys & & source-specific; readers ignore the keys they do not know \\
+\end{xltabular}
+
+\paragraph{The order of the keys.} The reader's keys come first, in the order it writes them, then
+\code{kind}, \code{format} and \code{adapter}, then \code{path}, \code{name}, \code{key},
+\code{index\_version}, \code{engine}, \code{indexed\_s}. Programs that share an index folder write
+the same order, so that they write the same bytes.
+
+\subsection{Arrays}
+\label{sec:formats-reference-arrays}
+
+\paragraph{Envelopes.} Level 0 holds, for each piece, the minimum and the maximum of every block of
+\textbf{32} samples, in order; the last block may be shorter. Each further level combines
+\textbf{4} consecutive buckets of the level below, until a piece has a single bucket. Minima and
+maxima ignore NaN (NumPy's \code{fmin} and \code{fmax}); a bucket whose samples are all NaN is
+NaN. Values are in the channel's physical units. Piece $p$'s buckets at level $L$ are
+\code{env\_min\_L[o : o+len]} and \code{env\_max\_L[o : o+len]}, where \code{[o, len]} is
+\code{pieces[p].env[L]}.
+
+\paragraph{Markers} are sorted by (piece, sample); markers with equal values keep the order in
+which the source gave them. A marker's time is \code{t0 + sample / fs} of its piece.
+
+\paragraph{Vital signs.} Series are ordered by their number of values (most first), then by name;
+within a series, values are sorted by time; only finite times and values are stored. Series $s$ is
+\code{vit\_t[offset : offset+n]} and \code{vit\_v[offset : offset+n]}.
+
+\subsection{Writing and sharing}
+\label{sec:formats-reference-writing}
+
+\begin{itemize}
+\item \textbf{Atomic writing:} a writer builds the index in a temporary folder next to the final
+  one, named uniquely for that writer (\file{<key>.<process id>.<n>.tmp}, \code{n} counting the
+  writer's builds), then renames it to \file{<key>}. The temporary folder is removed on every way
+  out (an error, a cancellation, a failure of the program).
+\item \textbf{One writer per key:} within a program, builds of the same key wait for each other.
+\item \textbf{Keeping or replacing:} when the build is complete, the writer checks the folder
+  \file{<key>}. If it holds a complete index (\cref{sec:formats-reference-loading}) written by
+  the same program version (\code{engine}), it is kept and the new build is discarded. Otherwise
+  the old folder, if any, is first renamed aside (\file{<key>.<process id>.<n>.old}), the new one
+  renamed to \file{<key>}, and the old one removed. Readers therefore see a complete index, or
+  none for the moment between the two renames.
+\item \textbf{Shared folders:} several programs (Medorama and the three viewers) may use one index
+  folder at the same time; when two write the same key, the content is identical, and either one
+  is kept.
+\item \textbf{Read only after writing:} an index is never modified after it is written, so that
+  readers may memory-map its arrays.
+\item \textbf{Version check:} a reader uses an index only if \file{meta.json} exists, its
+  \code{index\_version} equals the version it implements, and the index passes the checks of
+  \cref{sec:formats-reference-loading}; otherwise it indexes again.
+\item \textbf{Never next to the recording:} an index folder is never inside a folder of
+  recordings.
+\end{itemize}
+
+\subsection{Loading an index}
+\label{sec:formats-reference-loading}
+
+A reader checks an index before it uses it, so that no query reads outside an array, whoever
+wrote the files. An index that fails any check is treated as not indexed. A writer runs the same
+checks on what it has just built, and refuses to keep an index that fails them (for example times
+or rates that are not finite numbers, which \file{meta.json} would hold as \code{null}).
+\begin{enumerate}
+\item \file{meta.json} is a JSON object whose \code{index\_version} is the reader's version.
+\item Every array file exists (\code{env\_max\_L} for every \code{env\_min\_L} found, the levels
+  counted from 0 until \code{env\_min\_L} is missing), and its size is a whole number of values.
+\item \code{channels}, \code{pieces}, \code{vitals} and \code{marker\_names} are lists when
+  present (missing: empty).
+\item Piece \code{i}: \code{id} is the integer \code{i}; \code{ch} is an integer with
+  $0 \le$ \code{ch} $<$ the number of channels; \code{fs} is a finite number greater than 0;
+  \code{t0} a finite number; \code{n} an integer, 0 or more; \code{env}, when present, a list of
+  at most as many entries as there are envelope levels, entry \code{L} being \code{[o, len]}, two
+  integers of 0 or more with \code{o + len} at most the number of values of the shorter of
+  \code{env\_min\_L} and \code{env\_max\_L}.
+\item \code{mk\_piece}, \code{mk\_sample} and \code{mk\_code} have the same number of values;
+  every \code{mk\_piece} value is a piece id and the values never decrease; every \code{mk\_code}
+  value is an index into \code{marker\_names}.
+\item \code{vit\_t} and \code{vit\_v} have the same number of values, and every series has
+  integers \code{offset} and \code{n}, 0 or more, with \code{offset + n} at most that number.
+\end{enumerate}
+
+\subsection{Limits}
+\label{sec:formats-reference-limits}
+
+\begin{itemize}
+\item \textbf{Pieces.} A recording has at most \textbf{100\,000} pieces. A reader that would create
+  more (an EDF+D file with many short runs, a folder of many records with many signals) refuses
+  the recording with \code{the recording has more than 100000 pieces (stretches of one signal):
+  it is not indexed}. The check is made before each new run (EDF) or record part (WFDB) adds its
+  pieces.
+\item \textbf{Marker names.} \code{mk\_code} is 16-bit, so at most \textbf{32\,768} distinct
+  names are kept. The first 32\,767 names keep codes 0 to 32\,766; the next name found is written
+  as \code{(other markers)} with code 32\,767, and every later new name gets that code too. The
+  WFDB reader then adds the note \code{More than 32767 distinct marker names: the others are shown
+  as "(other markers)".}
+\end{itemize}
+
+\subsection{Files outside the data roots}
+\label{sec:formats-reference-roots}
+
+A program that limits the folders it opens (the viewers' data roots) also limits every file a
+reader opens for a recording, symbolic links resolved: a WFDB record's header, the signal files
+its header names (an absolute name as given, a name starting with \code{\textasciitilde} in the
+home folder, any other next to the header), its \file{.mrk} file, each segment's header and
+signal files, and the CSV files of a folder or collection. A file that does not exist is allowed
+(nothing is read from it); a broken link is not. This is checked before a record is indexed and
+again each time its samples are read:
+\begin{itemize}
+\item one record (a \file{.hea} file opened): refused (\code{403} from the viewer's \code{open});
+\item a record of a folder or collection: left out, in \code{skipped}, with the reason
+  \code{<file> lies outside the data roots: the record <name> is not read};
+\item samples read later from a file that now leads outside: an error.
+\end{itemize}
+The Rust engine does this once a program calls \code{recording\_engine::paths::set\_allowed\_roots}.
+
+\subsection{Versions and conformance}
+\label{sec:formats-reference-versions}
+
+\begin{xltabular}{\linewidth}{@{}P{1.6cm}L@{}}
+\caption{The versions of the index format.}
+\label{tab:formats-reference-versions}\\
+\toprule
+\tabhead Version & \tabhead Changes \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Version & \tabhead Changes \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+1 & the first version \\
+2 & this specification: one WFDB record (a \file{.hea} file) and its key; multi-segment records;
+  folders of plain records read with their subfolders (hidden entries and symbolic links skipped,
+  in the folder's key too); overlapping pieces of a channel in lanes of their own. Later within
+  version 2, with no existing index changed: EDF, EDF+, BDF and BDF+ files (\code{kind}
+  \code{edf}); a folder's key counts the files its symbolic links lead to, and its walk is
+  bounded (the keys of folders without links, of at most 200\,000 files within \code{max\_depth}
+  levels, are unchanged); a WFDB header that states more samples than its signal files hold is
+  read to the end of its data; the limits and the checks on loading \\
+\end{xltabular}
+
+Any change to the files, to \file{meta.json} or to the key makes a new version, and indexes of
+other versions are built again. The script \file{viewers/vitalstream/tests/parity/index\_parity.py}
+indexes recordings with every viewer that is built and checks that each key equals the one
+computed from this specification, by an independent implementation in the script, and that the
+viewers' index files are byte-identical (\file{meta.json} compared without its informative
+\code{engine} and \code{indexed\_s}):
+\begin{lstlisting}[style=shell]
+python tests/parity/index_parity.py                             # the synthetic test recordings
+python tests/parity/index_parity.py --adapters-dir DIR FILE...  # recordings an adapter reads
+\end{lstlisting}
+
+\section{The files of a WFDB collection}
+\label{sec:formats-reference-collection}
+
+A WFDB collection is a folder of WFDB records with a few CSV files beside them that say how the
+records fit together in time and what else the recording held: vital signs, alarms, breaks.
+Converters write collections (the STP add-on's \code{wfdb} export is one), and anyone can write
+one with a few lines of code. \file{index.csv} makes a folder a collection; the other files are
+optional.
+\begin{lstlisting}[style=text]
+recording/                    the collection (one recording)
+    index.csv                 the records, in order (required: it makes the folder a collection)
+    gaps.csv                  breaks between records (optional)
+    vitals.csv                vital-sign values (optional)
+    events.csv                alarms and other events with a duration (optional)
+    README.txt                anything for people (ignored by the readers)
+    ecg/                      a folder per modality, each with its RECORDS file
+        RECORDS
+        ecg_250_0001.hea  ecg_250_0001.dat  ecg_250_0001.mrk
+        ...
+    pressure/
+        ...
+\end{lstlisting}
+
+\begin{itemize}
+\item \textbf{Records} are standard WFDB records (any signal format the WFDB library reads); each
+  signal of each record becomes a piece of a channel. Every record's header states its sampling
+  frequency: the readers assume none, so that a collection with a record that does not is not
+  read. A signal with a gain of 0 (uncalibrated) is shown in stored counts, unit \code{adu}; a
+  signal whose header gives no units has none.
+\item \textbf{Records may sit in subfolders}; \file{index.csv} names them by their path relative
+  to the collection, with \code{/} between folders (\code{ecg/ecg\_250\_0001}).
+\item \textbf{CSV files} are UTF-8, comma-separated, with a header row, as Python's \code{csv}
+  module writes them (quotes around the fields that need them). Columns not described here are
+  ignored, so that a writer may add its own.
+\item \textbf{Times} are Unix seconds (UTC), written as decimal numbers.
+\end{itemize}
+
+\subsection{index.csv}
+\label{sec:formats-reference-indexcsv}
+
+One row per record, in the order the records were recorded.
+
+\begin{xltabular}{\linewidth}{@{}P{2.5cm}P{1.6cm}L@{}}
+\caption{The columns of \file{index.csv}.}
+\label{tab:formats-reference-indexcsv}\\
+\toprule
+\tabhead Column & \tabhead Required & \tabhead Meaning \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Column & \tabhead Required & \tabhead Meaning \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{record} & yes & the record's path relative to the collection, without extension; a name
+  that is absolute or has a \code{..} component is not read (\cref{sec:recordings-collection}) \\
+\code{modality} & & the kind of signals (\code{ecg}, \code{pressure}, \code{resp}, \code{spo2},
+  \dots); channels are grouped by it. Default \code{wfdb} \\
+\code{start\_unix} & & the time of the record's first sample. Empty: the record states no time
+  (\cref{chap:recordings}) \\
+\code{stretch} & & a label shared by the records of one stretch of contiguous data; records
+  without a start time that share it are placed together \\
+\end{xltabular}
+
+Other columns (\code{fs}, \code{n\_sig}, \code{signals}, \code{units}, \code{sig\_len},
+\code{duration\_s}, \code{start\_utc}, \code{time\_source}, \code{time\_uncertainty\_s},
+provenance, checksums) are for people and other programs; the readers take the rate, the signals
+and the length from the headers.
+
+\subsection{gaps.csv}
+\label{sec:formats-reference-gaps}
+
+One row per break in the data, or per change that started a new record.
+
+\begin{xltabular}{\linewidth}{@{}P{4.4cm}L@{}}
+\caption{The columns of \file{gaps.csv}.}
+\label{tab:formats-reference-gaps}\\
+\toprule
+\tabhead Column & \tabhead Meaning \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Column & \tabhead Meaning \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{scope} & \code{all} (every channel), or the modality or channels it concerns \\
+\code{reason} & why: \code{signal\_loss}, \code{corrupt\_bytes}, \dots The reasons
+  \code{channel\_absent}, \code{channel\_set\_change}, \code{label\_change} and
+  \code{packet\_count\_change} mark where a record was split while the data stayed contiguous:
+  they are not shown as breaks \\
+\code{end\_before\_unix}, \code{start\_after\_unix} & the end of the data before and the start of
+  the data after, when known \\
+\code{gap\_s} & the length of the break, when known (even if neither end has a stated time) \\
+\code{gap\_uncertainty\_s}, \code{measured\_by}, \code{exact}, \code{notes} & how it was measured:
+  \code{exact} is \code{True} when \code{gap\_s} is exact \\
+\code{records\_before}, \code{records\_after} & the records on each side, separated by \code{;},
+  by name or path \\
+\end{xltabular}
+
+\subsection{vitals.csv}
+\label{sec:formats-reference-vitals}
+
+One row per value.
+
+\begin{xltabular}{\linewidth}{@{}P{3.0cm}L@{}}
+\caption{The columns of \file{vitals.csv}.}
+\label{tab:formats-reference-vitalscsv}\\
+\toprule
+\tabhead Column & \tabhead Meaning \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Column & \tabhead Meaning \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{time} & when the value was measured \\
+\code{label} (else \code{name}) & what was measured: \code{HR}, \code{SpO2}, \code{NBP-S}, \dots \\
+\code{value} & the value (rows whose value is not a number are left out) \\
+\code{unit} & its unit \\
+\code{validity} & empty or \code{0}: valid; anything else: the row is left out \\
+\code{source} & where the value came from, when a recording has several (the monitor's numerics,
+  an import) \\
+\end{xltabular}
+
+\paragraph{Naming.} A label measured by one source is named by its label. When a label has values
+from several sources, the first source in the file keeps the plain label and the others are named
+with their source: \code{HR}, \code{HR [import]}. Series of different sources are never merged.
+
+\subsection{events.csv}
+\label{sec:formats-reference-eventscsv}
+
+Alarms and other events that have a start and, possibly, an end.
+
+\begin{xltabular}{\linewidth}{@{}P{2.6cm}L@{}}
+\caption{The columns of \file{events.csv}.}
+\label{tab:formats-reference-eventscsv}\\
+\toprule
+\tabhead Column & \tabhead Meaning \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Column & \tabhead Meaning \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{start\_unix} & the start (required) \\
+\code{end\_unix} & the end; empty: an instant \\
+\code{level} & the severity: 1 advisory, 2 warning, 3 crisis (shown by color; the readers' alarm
+  colors are the only red on their pages) \\
+\code{text} & what is shown \\
+\code{kind} & the kind of event (\code{alarm}, the system that raised it, \dots); default
+  \code{event} \\
+\end{xltabular}
+
+Events are kept when their start lies within a day of the recording's data (a guard against zero
+dates), sorted by start.
+
+\subsection{Markers}
+\label{sec:formats-reference-markers}
+
+A record may have a \file{.mrk} annotation file (WFDB's MIT format): marks at samples, such as R
+waves or pacing spikes. The annotation's \code{chan} is the signal it belongs to. A marker's name
+is its auxiliary text when it has one (\code{R\_WAVE}), else the WFDB mnemonic of its code
+(\code{N}, \code{V}, \code{+}, \dots). Markers are drawn on their signal and can be listed by name.
+
+\subsection{An example}
+\label{sec:formats-reference-example}
+
+The smallest collection: one ECG record with a start time, and an alarm.
+\begin{lstlisting}[style=text]
+index.csv
+  record,modality,start_unix
+  ecg/rec_0001,ecg,1709287200.0
+events.csv
+  start_unix,end_unix,level,text,kind
+  1709287201,1709287203,2,HR HIGH 151 > 150,alarm
+ecg/RECORDS
+  rec_0001
+ecg/rec_0001.hea, ecg/rec_0001.dat
+\end{lstlisting}
+\file{viewers/vitalstream/testdata/generate.py} writes a complete one (three stretches, a break of
+stated length, a record without a start time, vital signs from two sources, alarms and markers)
+with the Python standard library only; the three viewers and Medorama read it to the same index,
+byte for byte.
+
+\section{EDF, EDF+, BDF and BDF+: the reading rules}
+\label{sec:formats-reference-edf}
+
+The Rust engine (\file{libs/engine/src/sources/edf.rs}), the C++ engine
+(\file{viewers/vitalstream/cpp/engine/src/sources\_edf.cpp}) and the Python viewer
+(\file{viewers/vitalstream/python/vitalstream/vitalstream\_py/sources/edf.py}) implement the rules
+of this section. Three implementations that read the same file must write byte-identical indexes
+(\cref{sec:formats-reference-versions}). A 300\,MB EDF+ file of 28\,800 data records is indexed in
+about 0.5 to 1 second by each of them. What users see is described in \cref{sec:recordings-edf}
+and \cref{sec:vitalstream-edf}; the specifications of the formats are published at
+\url{https://www.edfplus.info/specs/}.
+
+\subsection{The header}
+\label{sec:formats-reference-edf-header}
+
+\begin{itemize}
+\item The fixed part has 256 bytes. It is followed by 256 bytes per signal, in which each field
+  is written for every signal in turn: labels, transducers, physical dimensions, physical minima,
+  physical maxima, digital minima, digital maxima, prefilters, samples per data record, and the
+  reserved field.
+\item A field is its bytes read as Latin-1, with surrounding whitespace removed (as Python's
+  \code{str.strip()} removes it).
+\item The version field is \code{0} for EDF. For BDF, it is the byte \code{0xFF} followed by
+  \code{BIOSEMI}. Anything else is refused (\code{not an EDF or BDF file}).
+\item The fixed part's reserved field, once stripped, starts with \code{EDF+C}, \code{EDF+D},
+  \code{BDF+C} or \code{BDF+D} for EDF+ and BDF+.
+\item The number of header bytes must be $256 \times (\text{number of signals} + 1)$, with at
+  least one signal.
+\item Integer fields (the number of header bytes, the number of data records, the number of
+  signals, and the samples per data record) consist of an optional sign and ASCII digits only.
+\item Other numbers are ASCII decimal numbers: an optional sign, digits, a decimal point and an
+  exponent, with surrounding whitespace and underscores between digits as Python's
+  \code{float()} accepts them (signal-core's \code{parse\_float}). They must be finite.
+\item A signal labelled \code{EDF Annotations} or \code{BDF Annotations} is an \emph{annotation
+  signal}; every other signal is an \emph{ordinary signal}.
+\item Signals with zero samples per data record are left out.
+\item The duration of a data record must be positive when the file has an ordinary signal, and each
+  ordinary signal's rate (its samples per data record divided by the duration) must be a finite
+  number: a duration of \code{1e-320}\,s is refused (\code{signal \dots{} has no finite sampling
+  rate}).
+\item A file whose runs would make more than 100\,000 pieces (an EDF+D file of many short,
+  separate data records) is refused with a message that says so
+  (\cref{sec:formats-reference-limits}).
+\item A \file{.edf} or \file{.bdf} file whose header cannot be read is still labelled \code{EDF}
+  when browsing; it is refused when it is opened.
+\end{itemize}
+
+\subsection{The start time}
+\label{sec:formats-reference-edf-start}
+
+\begin{itemize}
+\item The date (\code{dd.mm.yy}) and the time (\code{hh.mm.ss}) are 8-byte fields. Positions 0--1,
+  3--4 and 6--7 are ASCII digits; positions 2 and 5 are any character that is not an ASCII digit.
+  A non-ASCII separator makes the field invalid.
+\item Two-digit years 85 to 99 are 1985 to 1999, and 00 to 84 are 2000 to 2084.
+\item In EDF+ and BDF+, when the recording field starts with \code{Startdate } and its second
+  word is 11 bytes long and ends in four ASCII digits, those four digits are the year. Only the
+  year is used: the day and the month always come from the header's date, and the second word's
+  dashes and month are not checked. The header's year positions are then ignored; any two
+  characters are accepted there, typically \code{yy}, which EDF+ writes after 2084.
+\item The month must be 1 to 12, the day 1 to 31 (not checked against the month: 31.02 becomes
+  March 2), the hour 0 to 23, and the minute and second 0 to 59.
+\item The start, in Unix seconds, is that date and time taken as UTC.
+\item An invalid date or time means that the file states no start. Times then count from 0, and
+  every piece is marked untimed (\code{timed: false}).
+\end{itemize}
+
+\subsection{Data records and physical values}
+\label{sec:formats-reference-edf-records}
+
+\begin{itemize}
+\item The size of a data record is the sum of the samples per data record of all signals, times
+  2 bytes (EDF) or 3 bytes (BDF).
+\item Samples are little-endian two's-complement integers.
+\item The number of records read is the number of whole records in the file after the header.
+  When the header states a non-negative count smaller than that, only that many are read, and the
+  records beyond it are left out without a note.
+\item Bytes after the file's last whole record are left out, with a note.
+\item A digital value $d$ becomes the physical value
+  $p_{\min} + (d - d_{\min}) \times \bigl((p_{\max} - p_{\min}) / (d_{\max} - d_{\min})\bigr)$
+  when $d_{\max} \neq d_{\min}$, and $d$ itself when $d_{\max} = d_{\min}$.
+\item The value is computed in IEEE double precision, in exactly this order, without fused
+  multiply-add. The envelopes store it as a 32-bit float.
+\end{itemize}
+
+\subsection{Annotations, onsets and runs}
+\label{sec:formats-reference-edf-annotations}
+
+\paragraph{Time-stamped annotation lists (TALs).}
+\begin{itemize}
+\item An annotation signal's bytes in a data record are TALs, each ended by a zero byte. Runs of
+  zero bytes are padding.
+\item A TAL is \code{onset[\textbackslash x15duration]\textbackslash x14text\textbackslash
+  x14text\textbackslash x14\dots}.
+\item The onset and the duration are numbers, read as above. A TAL whose onset is not valid UTF-8
+  or not a number is skipped. A duration that is not a number counts as none, and the TAL is
+  kept.
+\item Each text is decoded as UTF-8, with invalid bytes replaced, and its runs of whitespace are
+  collapsed to single spaces (as Python's \code{' '.join(text.split())} does).
+\end{itemize}
+
+\paragraph{Record onsets and runs.}
+\begin{itemize}
+\item In EDF+ and BDF+, a record's onset is the onset of the first TAL of the first annotation
+  signal (its \emph{time-keeping annotation}), even when that signal has 0 samples per data
+  record.
+\item Otherwise, or when a record has no such TAL, a record starts where the record before it
+  ends; the first one starts at 0.
+\item A record whose onset differs by more than $10^{-6}$\,s from the end of the record before it
+  starts a new \textbf{run}.
+\item Each run makes one piece per ordinary signal, in signal order, with
+  $t_0 = \text{start} + \text{onset of the run's first record}$.
+\end{itemize}
+
+\paragraph{Annotations.}
+\begin{itemize}
+\item Every non-empty text of every TAL is an event, with $t_0 = \text{start} + \text{onset}$,
+  and $t_1 = t_0 + \text{duration}$ when the duration is positive, else $t_1 = t_0$. Its
+  \code{level} is null and its \code{kind} is \code{annotation}.
+\item The annotation signals of plain EDF and BDF files also give events; they only do not keep
+  time.
+\item Events are listed in the order of the file, then sorted by $t_0$ with a stable sort.
+\end{itemize}
+
+\subsection{The index of an EDF file}
+\label{sec:formats-reference-edf-index}
+
+The index follows \cref{sec:formats-reference-index}, with the following values.
+\begin{itemize}
+\item \code{kind} is \code{edf}; \code{format} is \code{EDF}, \code{EDF+}, \code{BDF} or
+  \code{BDF+}.
+\item \textbf{Channels.} There is one channel per ordinary signal, in signal order, created
+  before any record is read. Each has a \code{label} (repeated labels get \code{ (2)},
+  \code{ (3)} \dots), a \code{unit} (the physical dimension) and the \code{modality}
+  \code{edf}.
+\item \textbf{Pieces.} Besides the common keys (\code{id}, \code{ch}, \code{fs}, \code{n},
+  \code{t0}, \code{timed}, \code{env}), each piece has \code{sig} (the signal's position in the
+  header, annotation signals included) and \code{data\_record} (the run's first record), in that
+  order.
+\item \textbf{Gaps.} Between consecutive runs, when the next run starts after the previous one
+  ends, there is a gap with \code{t0} (the end of the previous run), \code{t1}, \code{reason}
+  \code{not recorded}, \code{gap\_s}, \code{exact} true, \code{measured\_by} null and
+  \code{notes} empty.
+\item \textbf{Alarms} are the events above.
+\item \code{vitals} and \code{marker\_names} are empty, \code{skipped} is \code{\{\}}, and
+  \code{reader} is \code{\{\}}.
+\item \textbf{Notes}, in this order:
+  \begin{enumerate}
+  \item \code{The file's start time is taken as UTC.}, or \code{The file states no valid start
+    time: times are counted from its start, and marked "time not stated".};
+  \item then, when the header states more records than the file holds, \code{The header states N
+    data records; the file holds M.}; otherwise, when bytes follow the last whole record,
+    \code{The file ends inside a data record: its last N bytes are left out.}
+  \end{enumerate}
+\item A file with no ordinary signal, or with no whole data record, is refused.
+\item \textbf{The key} is a file's key, from its size and modification time
+  (\cref{sec:formats-reference-key}).
+\end{itemize}
+
+The header's patient and recording identification fields are never written into the index.
+Only the year of an EDF+ recording field's \code{Startdate} is read, to date the recording.
+
+\subsection{Test files}
+\label{sec:formats-reference-edf-tests}
+
+\file{viewers/vitalstream/testdata/edf/} holds synthetic files written by
+\file{viewers/vitalstream/testdata/generate.py} (\cref{tab:formats-reference-edf-tests}). They are
+checked by \file{libs/engine/tests/edf.rs}, by Medorama's \code{identify} and de-identification
+tests, by the index parity test across the three viewers, and, for the ECG viewer, by
+\file{viewers/ecg/tests/edf.test.js}.
+
+\begin{xltabular}{\linewidth}{@{}P{3.0cm}L@{}}
+\caption{The synthetic EDF test files.}
+\label{tab:formats-reference-edf-tests}\\
+\toprule
+\tabhead File & \tabhead Tests \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead File & \tabhead Tests \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\file{psg\_plus.edf} & EDF+C: three signals at 250, 25 and 1\,Hz; a first record 0.25\,s after
+  the header's time; annotations with and without a duration; an invented identity in the
+  patient field, which must appear in no index file. \\
+\file{gappy\_plus.edf} & EDF+D: records of 0.5\,s in three runs, with breaks. \\
+\file{plain.edf} & EDF of 1999 (a two-digit year); the number of records unknown (\code{-1}); a
+  record cut short at the end. \\
+\file{eeg\_plus.bdf} & BDF+C: 24-bit samples; a signal whose digital range is zero. \\
+\end{xltabular}

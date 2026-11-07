@@ -1,0 +1,544 @@
+% The viewers on their own: what each of the three viewers is for, installing and deploying them
+% without Medorama, their security model (the root, the settings that narrow it, symbolic links,
+% hidden entries, the shared password), the ports, the themes, the website and its examples.
+% Sources: viewers/README.md, docs/building.md ("The build options of a viewer alone"), checked
+% against viewers/vitalstream/rust/src/{main,settings,server,auth,auth_none}.rs and
+% viewers/ecg/python/muse/muse_reader_py/page_server.py (the same file as dicom-py's).
+\chapter{The viewers on their own}
+\label{chap:viewers-alone}
+
+Medorama shows a patient's recordings, ECGs and images in three viewers: VitalStream, the ECG
+viewer and the PACS viewer. Each is a program of its own, in its own folder of the repository
+(\file{viewers/vitalstream}, \file{viewers/ecg}, \file{viewers/pacs}), with its own design, and
+each is useful without Medorama, because it opens the files given to it. Medorama serves them and
+opens them as tabs of a patient's page, at an address that names what to show
+(\cref{chap:viewers-in-medorama}).
+
+This part of the manual describes the viewers alone, for researchers who use them on their own
+computers and administrators who deploy them. This chapter describes what they have in common:
+what each is for, how to install and deploy it on one computer or on a server, how it decides
+which files it may open, and what Medorama adds when it runs them. The three chapters that follow
+describe each viewer in full: VitalStream (\cref{chap:vitalstream}), the ECG viewer
+(\cref{chap:ecg-viewer}) and the PACS viewer (\cref{chap:pacs-viewer}).
+
+% ==========================================================================================
+\section{The three viewers}
+\label{sec:viewers-alone-three}
+
+\begin{xltabular}{\linewidth}{@{}P{2.1cm}LLP{3.3cm}@{}}
+\caption{The three viewers: what they show, what they open, and how they run alone.}
+\label{tab:viewers-alone-three}\\
+\toprule
+{\tabhead Viewer} & {\tabhead Shows} & {\tabhead Opens} & {\tabhead Alone} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Viewer} & {\tabhead Shows} & {\tabhead Opens} & {\tabhead Alone} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+VitalStream & Waveforms: ICU monitoring (every channel, the vital signs, the alarms), Holter
+  ECGs, EEGs and sleep studies of hours, days or weeks, on one time axis, from weeks down to
+  single samples & WFDB records (single- and multi-segment), folders of records as one session,
+  WFDB collections; EDF, EDF+, BDF and BDF+ files; other formats (such as \file{.Stp} files)
+  through an installed adapter & A server: \cmd{vitalstream-cpp}, \cmd{vitalstream-rs} or
+  \cmd{vitalstream-py} \\
+The ECG viewer & 12-lead ECGs on standard paper (25\,mm/s, 10\,mm/mV, a 1\,mm and 5\,mm grid):
+  3~$\times$~4 with a rhythm strip, 6~$\times$~2 with a rhythm strip, 12~$\times$~1; calipers &
+  WFDB records (single- and multi-segment), GE MUSE XML, DICOM ECGs, EDF and BDF files, the
+  viewer's JSON form, PNG, JPEG, PDF; a folder of ECGs, one at a time & A page:
+  \file{viewers/ecg/index.html} from disk, on the website, or served by \cmd{muse-py serve} \\
+The PACS viewer & Cardiology and other DICOM studies: echo and angiography loops at their frame
+  rate, stacks of slices (CT, MR, NM, X-ray) with window and level, structured reports, PDF
+  documents; calipers in cm or mm & DICOM (native, RLE, JPEG baseline, extended and lossless),
+  MP4, WebM, MOV, PNG, JPEG, PDF; a folder of studies & A page: \file{viewers/pacs/index.html}
+  from disk, on the website, or served by \cmd{dicom-py serve} \\
+\end{xltabular}
+
+\paragraph{VitalStream} is a web server and its page. It reads the recordings where they lie, on
+the computer it runs on, indexes each recording once, and sends the page only the samples that
+the view needs. Long, high-frequency recordings are its strength: a day of ICU data, a week of
+Holter ECG or a night's sleep study opens at once and stays fluid while zooming. It adds nothing
+that is not in the recording. Samples are never resampled, interpolated or stitched, and where
+the recording is ambiguous (the length of a break, a record without a start time) the page says
+so. It comes in
+three implementations, in Python, Rust and C++, that serve the same page, answer the same
+requests and write the same index (\cref{chap:vitalstream}).
+
+\paragraph{The ECG and PACS viewers} are static pages: HTML, CSS and plain scripts, with no
+dependencies and no build step. They work from disk (\code{file://}) and from any web server.
+Everything is read and drawn in the browser, so the files a user picks are read on the user's own
+computer and sent nowhere. Their Python packages, \cmd{muse-py} and \cmd{dicom-py}, add a
+small server, \cmd{serve}, that serves the page together with the folders of the computer it
+runs on, so that the ECGs or studies of a server are read without copying them
+(\cref{chap:ecg-viewer,chap:pacs-viewer}).
+
+% ==========================================================================================
+\section{Trying them}
+\label{sec:viewers-alone-try}
+
+The ECG and PACS viewers run on Medorama's website, in the browser. Each has a page of synthetic
+examples (every value and every image is invented, and no file describes a real person), where
+each file has a link that opens it in the live viewer.
+
+\begin{table}[htbp]
+\centering
+\caption{The live viewers and their examples.}
+\label{tab:viewers-alone-try}
+\begin{tabularx}{\linewidth}{@{}P{2.1cm}P{5.6cm}L@{}}
+\toprule
+\tabhead Viewer & \tabhead Live & \tabhead Examples \\
+\midrule
+ECG & \url{https://medorama.org/viewers/ecg/} & \file{viewers/ecg/examples/}:
+  a WFDB record, a GE MUSE XML file, a DICOM ECG, a PDF and a PNG printout
+  (\cref{chap:ecg-viewer}) \\
+PACS & \url{https://medorama.org/viewers/pacs/} &
+  \file{viewers/pacs/examples/}: an echo loop, a coronary angiography run, a chest X-ray
+  (\cref{chap:pacs-viewer}) \\
+VitalStream & None: it is a server, to install (\cref{sec:viewers-alone-install}) &
+  \file{viewers/vitalstream/testdata/}: a WFDB collection, plain records, a folder of records
+  to open as one session, and EDF files (\cref{chap:vitalstream}) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The website's tabs \ui{Viewers}, \ui{VitalStream}, \ui{ECG} and \ui{PACS} lead to the viewers'
+documents; the examples pages are at \url{https://medorama.org/viewers/ecg/examples/}
+and \url{https://medorama.org/viewers/pacs/examples/}. The ECG and PACS
+examples are written by \file{tools/make-viewer-examples.py}, VitalStream's by
+\file{viewers/vitalstream/testdata/generate.py}. From a clone of the repository, open
+\file{viewers/ecg/index.html} or \file{viewers/pacs/index.html} in a browser, then
+\ui{Open multiple records\dots} and choose the folder \file{examples/}.
+
+% ==========================================================================================
+\section{Installing a viewer alone}
+\label{sec:viewers-alone-install}
+
+\Cref{tab:viewers-alone-install} sums up how each viewer is installed. The website gives the
+commands for Linux, macOS and Windows, one after the other, at \url{https://medorama.org/docs/install.html}.
+
+\begin{table}[htbp]
+\centering
+\caption{Installing each viewer without Medorama.}
+\label{tab:viewers-alone-install}
+\begin{tabularx}{\linewidth}{@{}P{2.4cm}L@{}}
+\toprule
+\tabhead Viewer & \tabhead Install \\
+\midrule
+VitalStream & \cmd{viewers/vitalstream/install.sh} (Windows: \file{install.ps1}) builds one
+  viewer, with a root it never leaves (by default the home folder) and optional password
+  support, into \file{\textasciitilde/.local/bin} (Windows:
+  \code{\%LOCALAPPDATA\%\textbackslash vitalstream\textbackslash bin}) (\cref{chap:vitalstream}) \\
+The ECG viewer & Nothing: open the page. To serve it from a computer:
+  \cmd{pip install ./viewers/ecg/python/muse}, then \cmd{muse-py serve} \\
+The PACS viewer & Nothing: open the page. To serve it from a computer:
+  \cmd{pip install ./viewers/pacs/python/dicom}, then \cmd{dicom-py serve} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+From a clone of the repository:
+
+\begin{lstlisting}[style=shell]
+git clone https://github.com/alphanumericslab/medorama.git && cd medorama
+viewers/vitalstream/install.sh                    # VitalStream (C++), into ~/.local/bin
+viewers/vitalstream/install.sh --root /data/icu   # one that opens nothing outside /data/icu
+python3 -m venv .venv
+.venv/bin/pip install ./viewers/ecg/python/muse ./viewers/pacs/python/dicom   # muse-py, dicom-py
+\end{lstlisting}
+
+The prerequisites of each build (a C++20 compiler, Rust, CMake, Python) and the builds on
+machines without administrator rights or without internet access are described in
+\cref{chap:installation}.
+
+\subsection{The build options of a viewer alone}
+\label{sec:viewers-alone-build-options}
+
+A viewer installed on its own has two options fixed when it is built: its \emph{root}, the
+folder it never opens anything outside of, and whether it supports a password. The installers
+pass them; a build by hand sets them as in \cref{tab:viewers-alone-build-options}. For the root,
+\code{\textasciitilde} stands for the home folder of whoever runs the viewer, and \code{/} for the
+whole file system; without the option, the root is the whole file system.
+
+\begin{xltabular}{\linewidth}{@{}P{2.9cm}LP{3.6cm}@{}}
+\caption{The build options of a viewer alone.}
+\label{tab:viewers-alone-build-options}\\
+\toprule
+{\tabhead Program} & {\tabhead Root} & {\tabhead Without password support} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Program} & {\tabhead Root} & {\tabhead Without password support} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\cmd{vitalstream-rs} & \code{VITALSTREAM\_ROOT=DIR cargo build -{}-release -p vitalstream-rs
+  -{}-target-dir target/standalone} & \opt{-{}-no-default-features -{}-features wfdb} (the Cargo
+  feature \code{password} left out) \\
+\cmd{vitalstream-cpp} & \code{cmake -{}-preset viewer -B build/standalone -DVS\_ROOT=DIR} &
+  \code{-DVS\_PASSWORD=OFF} \\
+\cmd{vitalstream-py} & \code{VITALSTREAM\_ROOT=DIR pip install
+  './viewers/vitalstream/python/vitalstream[wfdb]'} & \code{VITALSTREAM\_PASSWORD=0} \\
+\cmd{muse-py serve}, \cmd{dicom-py serve} & \code{VIEWER\_ROOT=DIR pip install
+  ./viewers/ecg/python/muse} (or \file{./viewers/pacs/python/dicom}) & \code{VIEWER\_PASSWORD=0} \\
+\end{xltabular}
+
+The standalone installer builds in folders of its own (\file{target/standalone},
+\file{viewers/vitalstream/cpp/build/standalone}), so that the viewer Medorama runs, built in
+\file{target/release} or \file{build/viewer}, keeps its own options. Medorama's installer,
+\cmd{tools/install-medorama.sh}, builds its viewer with the whole file system as its root and
+with password support, since Medorama applies its own rules to what each user opens
+(\cref{chap:viewers-in-medorama}). WFDB support is a third build option, for every program
+(\cref{sec:installation-no-wfdb}).
+
+% ==========================================================================================
+\section{Deploying}
+\label{sec:viewers-alone-deploy}
+
+\subsection{On one computer}
+
+Each viewer serves its page to the same computer, and opens the browser at its address:
+
+\begin{lstlisting}[style=shell]
+vitalstream-cpp            # http://127.0.0.1:8070 (vitalstream-rs: 8060, vitalstream-py: 8050)
+muse-py serve              # http://127.0.0.1:8080/browse: the ECG viewer and the folders under ~
+dicom-py serve             # http://127.0.0.1:8081/browse: the PACS viewer and the folders under ~
+\end{lstlisting}
+
+The ECG and PACS viewers need no server at all on one computer: their pages, opened from disk or
+from the website, read the files picked in the browser. \cmd{serve} is for files that lie on
+another computer.
+
+\subsection{On a server, through an SSH tunnel}
+\label{sec:viewers-alone-server}
+
+On a server where the data are, nothing needs to be copied anywhere. Every viewer listens on
+127.0.0.1 by default (that machine only); from another computer, an SSH tunnel carries its port:
+\begin{enumerate}
+\item Install the viewer on the server, with a root that holds the data
+  (\cref{sec:viewers-alone-build-options}), and set a password once
+  (\cref{sec:viewers-alone-password}).
+\item Start it without a browser, in \cmd{tmux} or as a service (\cref{chap:vitalstream}):
+  \cmd{vitalstream-cpp -{}-no-browser}, \cmd{muse-py serve -{}-root /data/ecg -{}-no-browser},
+  \cmd{dicom-py serve -{}-root /data/echo -{}-no-browser}.
+\item On your own computer, open a tunnel to its port, and open the address:
+\end{enumerate}
+
+\begin{lstlisting}[style=shell]
+ssh -N -L 8070:127.0.0.1:8070 user@server     # VitalStream (C++): http://127.0.0.1:8070
+ssh -N -L 8080:127.0.0.1:8080 user@server     # muse-py serve: http://127.0.0.1:8080/
+ssh -N -L 8081:127.0.0.1:8081 user@server     # dicom-py serve: http://127.0.0.1:8081/
+\end{lstlisting}
+
+Without a password, anyone who can connect to the port can read the files under the viewer's
+root: on a machine that others can log in to, set one. The pages use relative addresses, so
+VitalStream also works behind a portal or a reverse proxy that serves it under a path prefix.
+Each viewer answers only requests that name it by a loopback name, an IP address or its own
+host, which defeats DNS rebinding: a VitalStream viewer reached by another name (\code{host =
+"0.0.0.0"}, or a proxy that passes its public name on) lists that name in \code{allowed\_hosts},
+and behind an HTTPS proxy sets \code{secure\_cookie = true} (\cref{sec:viewer-api-checks}).
+
+\subsection{The ports}
+\label{sec:viewers-alone-ports}
+
+\begin{table}[htbp]
+\centering
+\caption{The default ports of the viewers and of Medorama.}
+\label{tab:viewers-alone-ports}
+\begin{tabularx}{\linewidth}{@{}LP{6.4cm}@{}}
+\toprule
+\tabhead Program & \tabhead Port (default) \\
+\midrule
+\cmd{vitalstream-py}, \cmd{vitalstream-rs}, \cmd{vitalstream-cpp} & 8050, 8060, 8070 \\
+\cmd{muse-py serve} (ECG), \cmd{dicom-py serve} (PACS) & 8080, 8081 \\
+Medorama (\cmd{medorama serve}) & 8090; it starts its own VitalStream viewer, on a free port \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\opt{-{}-host} and \opt{-{}-port} change them (VitalStream: also the settings \code{host} and
+\code{port}). Several viewers, and the three VitalStream viewers, can run side by side.
+
+% ==========================================================================================
+\section{The security model}
+\label{sec:viewers-alone-security}
+
+A viewer alone has no users, no database, no sign-in beyond an optional password, and no
+de-identification: those belong to Medorama (\cref{sec:viewers-alone-medorama}). What protects
+the files is the viewer's root, the folders its settings allow within it, and the password.
+
+\subsection{The root}
+\label{sec:viewers-alone-root}
+
+\paragraph{Fixed when the viewer is built or installed.} The \emph{root} of a viewer is the folder
+it never lists or opens anything outside of. It is set when the viewer is built (VitalStream:
+\opt{-{}-root DIR} of \cmd{install.sh}, \code{VITALSTREAM\_ROOT}, \code{VS\_ROOT}) or when the
+package is installed (\cmd{muse-py}, \cmd{dicom-py}: \code{VIEWER\_ROOT}), and cannot be widened
+afterwards. \code{\textasciitilde} is the home folder of whoever runs the viewer. The standalone
+VitalStream installer's default is \code{\textasciitilde}; a build without the option, such as a
+developer's \cmd{cargo build}, \cmd{cmake -{}-preset release} or \cmd{pip install}, has the whole
+file system as its root, and so has a \cmd{muse-py} or \cmd{dicom-py} installed without
+\code{VIEWER\_ROOT}.
+
+\paragraph{Narrowed by the settings, never widened.} At run time, the folders the viewer may
+open are narrowed further:
+\begin{itemize}
+\item VitalStream: the setting \code{data\_roots}, or its option \opt{-{}-root DIR} (repeatable),
+  names the folders it may open; by default, its root. A folder that contains the root is
+  narrowed to the root; one outside it is left out, with a warning when the viewer starts
+  (\code{DIR is outside this viewer's root (ROOT): left out}). When none is left, the viewer does
+  not start (\code{no data root inside this viewer's root, ROOT (set when it was built)}).
+\item \cmd{muse-py serve} and \cmd{dicom-py serve}: \opt{-{}-root DIR} names the one folder
+  served; by default, the home folder. A folder that contains the package's root is narrowed to
+  it; a folder outside it, or that is not a folder, is refused, and \cmd{serve} does not start
+  (\code{DIR is not a folder inside this viewer's root, ROOT (set when it was installed)}). With
+  a \code{VIEWER\_ROOT} that does not contain the home folder, \opt{-{}-root} must therefore be
+  given.
+\end{itemize}
+The install's root and the viewer's \opt{-{}-root} are two different things: the first is fixed
+in the program, the second narrows it each time the viewer starts.
+
+\paragraph{Paths are checked after their symbolic links are resolved.} A path is allowed when the
+file or folder it leads to, every symbolic link resolved, lies inside an allowed folder. So a
+symbolic link inside the root that leads outside it is refused (VitalStream answers
+\code{403}, \code{path outside the configured data roots}; \cmd{serve} answers \code{403}), and
+it is not listed either: the file browsers show only what can be opened. VitalStream's file
+browser does not offer the folder above an allowed folder (its \ui{$\uparrow$} button is
+disabled there).
+
+\paragraph{Hidden entries.} Names that start with \code{.} are hidden:
+\begin{itemize}
+\item VitalStream's file browser lists them only when \ui{hidden} is ticked; a folder opened as
+  one session leaves out the hidden entries and the symbolic links at every level; its index key
+  leaves out the hidden entries, and counts a symbolic link to a file under the link's name, with
+  its target's size and time;
+\item \cmd{muse-py serve} and \cmd{dicom-py serve} never list or serve a hidden entry, nor
+  anything inside a hidden folder;
+\item the ECG and PACS pages pass over the hidden files and folders of a folder they are given.
+\end{itemize}
+
+\paragraph{The pages alone.} The ECG and PACS pages opened from disk or from the website read
+nothing but what the user picks or drops, in the browser. They have no root: they are no server.
+Opened with \code{\#src=URL} on a web server, they fetch that address with the page's own
+credentials.
+
+\subsection{The optional password}
+\label{sec:viewers-alone-password}
+
+All the viewers alone share one optional password, in one file:
+\file{\textasciitilde/.config/vitalstream/auth.json} (VitalStream's setting \code{auth\_file},
+\opt{-{}-auth-file FILE} of \cmd{serve}). It holds a salted scrypt hash of the password and a
+random signing key, and is readable by its owner only. One password thus protects VitalStream,
+\cmd{muse-py serve} and \cmd{dicom-py serve}.
+
+\begin{lstlisting}[style=shell]
+vitalstream-cpp --set-password   # or vitalstream-rs, -py, muse-py serve, dicom-py serve
+vitalstream-cpp --clear-password   # remove it (for every viewer: the file is shared)
+\end{lstlisting}
+
+\begin{itemize}
+\item \opt{-{}-set-password} asks for the password twice (at least 8 characters), writes the
+  file, and exits: \code{Password set (FILE). Restart the viewer for it to take effect.} A viewer
+  reads the file when it starts. A new password also makes a new signing key, which ends the
+  earlier sign-ins.
+\item With a password, the page asks for it (\ui{Password}, \ui{Sign in}); a wrong one is
+  answered after a delay, with \code{Wrong password.} Each viewer, on each port, has a sign-in
+  of its own (the same password).
+\item In VitalStream, a sign-in lasts 30 days, and signing out ends it on the server too (a copy
+  of the cookie no longer works). After wrong passwords from one address, the next one is
+  checked only after 1, 3, 7, 15 \dots{} up to 30\,s; the C++ viewer answers an earlier try
+  \code{429} (\cref{sec:viewer-api-signin}).
+\item For \cmd{muse-py serve} and \cmd{dicom-py serve}, a sign-in lasts 30 days, until the server
+  stops, or until a browser signs out, which ends every sign-in; after a wrong password the next
+  try, from any browser, waits 1\,s, then 2, 4 \dots{} up to 60\,s.
+\item \opt{-{}-no-auth} runs a viewer without asking for the password, even when one is set.
+\item When it starts, a viewer says whether a password protects it; without one, it says that
+  anyone who can connect to its port can read the files under its root.
+\end{itemize}
+
+\paragraph{Builds without password support.} A viewer built without password support
+(\opt{-{}-no-password} of \cmd{install.sh}, \cref{tab:viewers-alone-build-options}) never asks for
+a password, even when the shared file holds one, and \opt{-{}-set-password} and
+\opt{-{}-clear-password} fail (\code{this viewer was built without password support}, or, for
+\cmd{serve}, \code{this viewer was installed without password support}). Such a VitalStream viewer refuses to start where a
+password is required (the setting \code{require\_password}, which Medorama sets for the viewer it
+runs): it cannot be used as Medorama's viewer.
+
+\subsection{What Medorama adds}
+\label{sec:viewers-alone-medorama}
+
+\begin{xltabular}{\linewidth}{@{}P{2.4cm}LL@{}}
+\caption{A viewer alone, and inside Medorama.}
+\label{tab:viewers-alone-medorama}\\
+\toprule
+{} & {\tabhead Alone} & {\tabhead Inside Medorama} \\
+\midrule
+\endfirsthead
+\toprule
+{} & {\tabhead Alone} & {\tabhead Inside Medorama} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Install & VitalStream: \cmd{viewers/vitalstream/install.sh} (one viewer, a root it never
+  leaves, by default the home folder, and an optional password). ECG and PACS: nothing (open the
+  page), or \cmd{pip install} their Python package for \cmd{serve} &
+  \cmd{tools/install-medorama.sh} builds Medorama and one VitalStream viewer (the whole file
+  system as its root, with password support); the ECG and PACS pages come with Medorama \\
+What it opens & The files and folders its user picks (VitalStream: under its root and its
+  \code{data\_roots}; \cmd{muse-py serve}, \cmd{dicom-py serve}: under their \opt{-{}-root}) & What
+  Medorama lets each user read, for a patient, from its catalog and connected databases \\
+Who may use it & Whoever can reach its port; with a password set, only those who know it &
+  Medorama's users, after Medorama's sign-in, with roles and permissions per user \\
+Patient identity & Never shown by a viewer, whatever the file holds & The same; Medorama also
+  de-identifies the files on its server (Privacy Mode, the default for every user but
+  administrators) \\
+\end{xltabular}
+
+Patients, databases, users, roles, sign-in, audit and de-identification belong to Medorama only:
+a viewer alone has none of them, beyond its optional password. How Medorama runs the viewers is
+described in \cref{chap:viewers-in-medorama}, its users and Privacy Mode in
+\cref{chap:users-privacy}.
+
+\subsection{Patient data}
+\label{sec:viewers-alone-privacy}
+
+\begin{phibox}
+The viewers show no patient identity. They read identifying fields of a file (a DICOM header's
+name, a WFDB comment) only to group what belongs together, never to display them. The ECG and
+PACS pages send nothing anywhere. VitalStream's server reads the recordings where they lie and
+sends the page their samples, never a name, an identifier or a date of birth. A file's path and
+its values may still identify a patient (bedside-monitor systems name files by unit, bed and
+time): keep recordings, and the indexes made from them, on protected storage. In a clone, the
+folder \file{sample\_data/} is the place for them; git ignores it.
+\end{phibox}
+
+% ==========================================================================================
+\section{Opening records}
+\label{sec:viewers-alone-opening}
+
+The three viewers have the same two buttons, \ui{Open record\dots} and
+\ui{Open multiple records\dots}:
+
+\begin{xltabular}{\linewidth}{@{}P{2.3cm}LLL@{}}
+\caption{The two buttons of the three viewers, and the limits on a folder.}
+\label{tab:viewers-alone-opening}\\
+\toprule
+{} & {\tabhead VitalStream} & {\tabhead ECG} & {\tabhead PACS} \\
+\midrule
+\endfirsthead
+\toprule
+{} & {\tabhead VitalStream} & {\tabhead ECG} & {\tabhead PACS} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\ui{Open record\dots} & One WFDB record (its \file{.hea}; a multi-segment record whole, a
+  segment alone), an EDF or BDF file, or a file an adapter reads & One ECG: a WFDB record (its
+  \file{.hea} with its signal files), MUSE XML, DICOM, EDF, JSON, PNG, JPEG or PDF & One record:
+  a study's or series' DICOM files, a video, a picture or a PDF \\
+\ui{Open multiple records\dots} & A folder: every WFDB record in it and in its subfolders on one
+  time axis (one session), or a WFDB collection; a summary first, then \ui{Open as one session}.
+  EDF files are opened one at a time & A folder: every ECG in it and in its subfolders, EDF files
+  included, stepped through one at a time (\ui{\textless}~\ui{\textgreater},
+  \key{$\leftarrow$}~\key{$\rightarrow$}) & A folder: every study in it and in its subfolders,
+  listed by series \\
+Limits & 5000 header files, 20 folder levels, 10\,s to count them (settings) & 5000 ECGs & 5000
+  files and 4\,GB \\
+\end{xltabular}
+
+VitalStream opens the files of the computer it runs on, through its own file browser. The ECG
+and PACS pages open the files of the computer the browser runs on. When they are served by
+\cmd{muse-py serve} or \cmd{dicom-py serve}, they also open those of the serving computer, whose
+folders the button \ui{Server folders\dots} lists. The limits keep a folder opened by mistake
+from overwhelming a viewer. When a limit is reached, the viewer says which one, and what to open
+instead.
+
+\paragraph{A WFDB header that leaves values out.} The ECG viewer applies WFDB's own defaults: a
+sampling frequency of 250\,Hz, a gain of 200\,adu/mV (also for a gain of 0), the unit mV, and the
+baseline at the ADC zero. VitalStream reads only what a header states: a record without a
+sampling frequency is left out, and a signal without a gain is shown in \code{adu}.
+
+% ==========================================================================================
+\section{Light and dark}
+\label{sec:viewers-alone-themes}
+
+Every viewer has a light and a dark theme, switched with a button at the top right. In
+VitalStream it is the half-filled circle; in the ECG and PACS viewers, it is a crescent moon in
+the light theme and a sun in the dark one. The choice is remembered in the browser. Until a
+choice is made, VitalStream and the ECG viewer follow the system's setting, and the PACS viewer
+is dark. A host sets any of the three viewers' theme with \code{theme=light} or
+\code{theme=dark} in the address (\cref{sec:viewers-alone-addresses}); the theme is then applied,
+but not remembered as the viewer's own choice. Medorama passes its page's theme to every viewer
+tab, when the tab opens and whenever the theme changes. The screenshots of this manual show the
+dark theme, except the ECG viewer, which is shown in both (\cref{fig:ecg-viewer-main,fig:ecg-viewer-dark}).
+
+% ==========================================================================================
+\section{Addresses}
+\label{sec:viewers-alone-addresses}
+
+A viewer is told what to show by its address's fragment (the part after \code{\#}), so that
+another program can open it at a file. Changing the fragment shows another file without
+reloading the page.
+
+\begin{xltabular}{\linewidth}{@{}P{1.9cm}P{4.0cm}L@{}}
+\caption{The fragments of the viewers' addresses.}
+\label{tab:viewers-alone-addresses}\\
+\toprule
+{\tabhead Viewer} & {\tabhead Fragment} & {\tabhead Means} \\
+\midrule
+\endfirsthead
+\toprule
+{\tabhead Viewer} & {\tabhead Fragment} & {\tabhead Means} \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+ECG & \code{src=URL} & The file: a WFDB header (its signal files, and a multi-segment record's
+  segments, are read beside it: \code{URL}'s folder followed by their names), a MUSE XML or
+  DICOM ECG, an EDF or BDF file, a JSON ECG, a picture or a PDF \\
+PACS & \code{src=URL} & One file \\
+PACS & \code{list=URL} & A folder: \code{URL} answers \code{\{"files": ["IM0001.dcm", \dots]\}},
+  and each file is read at \code{URL} followed by its name \\
+PACS & \code{mm=\dots}, \code{fps=\dots} & The millimeters per pixel of pictures and videos; the
+  frame rate of pictures (played as one loop) \\
+ECG & \code{shift=\dots}, \code{cap90=1} & For a host that de-identifies in the page: the
+  report's dates and the record's start moved back by that many seconds, ages above 89 years
+  shown as 90+ (Medorama
+  de-identifies on its server instead) \\
+ECG, PACS & \code{name=\dots} & The name to show \\
+All three & \code{theme=light} or \code{dark} & The colors, as the host's (VitalStream: applied
+  without being saved as the viewer's own choice) \\
+All three & \code{who=\dots}, \code{what=\dots}, \code{pos=\dots}, \code{nav=back,prev,next} &
+  A host's context: whose file it is and what it is, shown in place of the file's name, with the
+  buttons \ui{\textless{} Patient} and \ui{\textless}~\ui{\textgreater} that the viewer only reports
+  to the page that hosts it (a message to the parent page, of the same origin); without them the
+  file's name shows \\
+ECG & \code{compact=1} & The paper alone, fitted to the frame (shown inside another page) \\
+VitalStream & \code{path=\dots\&t0=\dots\&t1=\dots}, and the host's context above;
+  \code{browse=FOLDER} & A recording on the server, at a time span (Unix seconds); the file
+  browser, open at a folder \\
+\end{xltabular}
+
+The files are fetched with the page's own credentials (the same origin), so that a viewer served
+by Medorama reads exactly what Medorama lets that user read. The requests VitalStream's page
+makes to its server, and Medorama's addresses of the viewers, are described in
+\cref{chap:viewer-api}.
+
+% ==========================================================================================
+\section{Tests}
+\label{sec:viewers-alone-tests}
+
+\begin{lstlisting}[style=shell]
+make test-viewers      # the ECG and PACS pages' readers and drawing (Node's built-in test runner)
+pytest viewers/ecg/python/muse/tests viewers/pacs/python/dicom/tests    # muse-py, dicom-py, serve
+make test-python       # the same, with VitalStream's Python tests
+\end{lstlisting}
+
+\cmd{make test-viewers}, at the root of the repository, needs Node.js and no packages. It tests
+the readers of the ECG viewer (its registry; WFDB single- and multi-segment, EDF, DICOM ECG and
+JSON) and its paper drawing,
+the DICOM reader of the PACS viewer (whose \file{dicom.js} the ECG viewer keeps a copy of, for
+DICOM ECGs) and the MUSE reader. VitalStream has its own suites (\cref{chap:vitalstream}).
