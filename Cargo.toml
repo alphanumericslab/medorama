@@ -39,7 +39,7 @@ clap = { version = "4.5", features = ["derive"] }
 indexmap = "2"
 memmap2 = "0.9"
 rayon = "1.10"
-sha2 = "0.10"
+sha2 = "0.11"
 tempfile = "3"
 
 [profile.release]
