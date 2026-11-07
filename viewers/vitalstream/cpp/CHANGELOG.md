@@ -101,6 +101,9 @@
   folder's drive, and refused, for example, recordings on `D:`.
 - A folder's scan stops when `max_scan_s` is reached, not only once it is passed: a limit of
   0 s refuses every folder on Windows too, whose clock ticks every 15 ms.
+- Builds with warnings as errors on MSVC (`WIN32_LEAN_AND_MEAN` was defined twice) and on
+  GCC 12 (its false `-Wrestrict` warning, GCC bug 105329, is turned off there), and with
+  Clang on libstdc++ (an include the tests lacked).
 
 ## 0.1.0
 

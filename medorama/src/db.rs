@@ -466,7 +466,9 @@ pub fn copy_to_postgres(from: &Db, to: &Db) -> anyhow::Result<Copied> {
         order.push((t, cols));
     }
     let tx = dst.transaction()?;
+    // the rows the schema itself puts in a new catalog: the source's own take their place
     tx.execute("DELETE FROM data_version", [])?;
+    tx.execute("DELETE FROM id_counters", [])?;
     let mut out = vec![];
     for (t, cols) in &order {
         let list = cols.join(", ");

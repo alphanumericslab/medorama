@@ -10,6 +10,11 @@ function(vs_warnings target)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
       # GCC's note that the ARM calling convention for some structs changed in GCC 10.1: informational
       target_compile_options(${target} PRIVATE -Wno-psabi)
+      if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13)
+        # GCC 12 warns, wrongly, of overlapping copies in std::string's operator+ when optimizing
+        # (GCC bug 105329, fixed in GCC 13)
+        target_compile_options(${target} PRIVATE -Wno-restrict)
+      endif()
     endif()
   endif()
   if(VS_WARNINGS_AS_ERRORS)

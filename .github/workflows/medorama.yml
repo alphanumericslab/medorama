@@ -56,7 +56,10 @@ jobs:
       - name: The workspace's Cargo.lock
         run: cp Cargo.lock medorama/fuzz/Cargo.lock
       - name: Build every target
-        run: cd medorama/fuzz && cargo fuzz build
+        # for the runner's own target: cargo-fuzz otherwise builds for the target it was itself
+        # built for, and the prebuilt one is a musl program (the sanitizers need glibc)
+        run: |
+          cd medorama/fuzz && cargo fuzz build --target "$(rustc -vV | sed -n 's/^host: //p')"
 
   fuzz-targets:
     # the targets, listed once (medorama/fuzz/Cargo.toml)
@@ -96,7 +99,7 @@ jobs:
           cp Cargo.lock medorama/fuzz/Cargo.lock
           cd medorama/fuzz
           mkdir -p corpus/${{ matrix.target }}
-          cargo fuzz run ${{ matrix.target }} corpus/${{ matrix.target }} seeds/${{ matrix.target }} -- -max_total_time=300 -rss_limit_mb=4096
+          cargo fuzz run --target "$(rustc -vV | sed -n 's/^host: //p')" ${{ matrix.target }} corpus/${{ matrix.target }} seeds/${{ matrix.target }} -- -max_total_time=300 -rss_limit_mb=4096
       - if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -155,8 +158,15 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0: for the plug-in test
         with:
           python-version: "3.12"
-      - uses: browser-actions/setup-chrome@c785b87e244131f27c9f19c1a33e2ead956ab7ce # v1.7.3: the browser tests run, never skipped here
+      # the runner's own Chrome, whose sandbox is set up: a downloaded one cannot start its sandbox
+      # where Ubuntu restricts unprivileged user namespaces.  The browser tests run, never skipped here
+      - name: Chrome
         id: chrome
+        run: |
+          path=$(command -v google-chrome || command -v google-chrome-stable || true)
+          test -n "$path" || { echo "::error::no Chrome on this runner"; exit 1; }
+          "$path" --version
+          echo "chrome-path=$path" >> "$GITHUB_OUTPUT"
       - name: A viewer for the gateway's contract test
         run: cargo build --release --locked -p vitalstream-rs
       - name: Coverage, at least 76% of the lines

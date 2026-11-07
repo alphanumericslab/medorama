@@ -1017,7 +1017,9 @@ fn a_catalog_with_databases_is_copied_to_postgres() {
     let copied = medorama::db::copy_to_postgres(&from, &to).unwrap();
     assert!(copied.iter().all(|(t, _)| !t.starts_with("dbcol_")));
     let (a, b) = (from.get().unwrap(), to.get().unwrap());
-    for t in ["patients", "encounters", "ehr_items", "import_rows", "provenance", "id_takeovers", "imports"] {
+    for t in
+        ["patients", "encounters", "ehr_items", "import_rows", "provenance", "id_takeovers", "imports", "id_counters"]
+    {
         let n = |c: &medorama::sql::Connection| -> i64 {
             c.query_row(&format!("SELECT COUNT(*) FROM {t}"), [], |r| r.get(0)).unwrap()
         };

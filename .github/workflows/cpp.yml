@@ -181,7 +181,7 @@ jobs:
       - name: Build (the program with the C++ runtime linked in)
         run: |
           source ~/miniforge3/bin/activate vs-build
-          $CXX --version
+          "${CXX:?the environment sets CXX}" --version
           cd viewers/vitalstream/cpp && cmake --preset release -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc"
           cmake --build --preset release
       - name: Tests (ctest)

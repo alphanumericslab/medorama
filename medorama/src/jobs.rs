@@ -494,7 +494,12 @@ pub fn cancel(c: &Connection, user: &User, job: Option<i64>, run: Option<i64>) -
     if !user.can_run() {
         anyhow::bail!("cancelling jobs needs the analyst or admin role");
     }
-    let own = if user.is_admin() { "1 = 1" } else { "run IN (SELECT id FROM runs WHERE user_id = ?3)" };
+    // ?3 is used either way: PostgreSQL cannot give a type to a parameter the query leaves out
+    let own = if user.is_admin() {
+        "CAST(?3 AS INTEGER) IS NOT NULL"
+    } else {
+        "run IN (SELECT id FROM runs WHERE user_id = ?3)"
+    };
     let n = c.execute(
         &format!(
             "UPDATE jobs SET state = 'cancelled', finished_at = ?4, error = 'cancelled'

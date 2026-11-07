@@ -6,6 +6,7 @@
 // tests/parity/viewer_parity.py.
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>

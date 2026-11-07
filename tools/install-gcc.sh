@@ -62,6 +62,11 @@ else
   echo "==> Creating the environment $ENV_NAME: GCC 13, CMake, Ninja, Python 3.12"
   "$PREFIX/bin/conda" create -y -n "$ENV_NAME" -c conda-forge "gxx=13" cmake ninja "python=3.12"
 fi
+# CC and CXX, set by every activation of the environment: conda-forge's gxx package puts gcc and
+# g++ in it, and CMake would otherwise take the system's c++ first
+ENV_DIR=$("$PREFIX/bin/conda" env list | awk -v n="$ENV_NAME" '$1 == n {print $NF}')
+[ -n "$ENV_DIR" ] || ENV_DIR="$PREFIX/envs/$ENV_NAME"
+"$PREFIX/bin/conda" env config vars set -n "$ENV_NAME" CC="$ENV_DIR/bin/gcc" CXX="$ENV_DIR/bin/g++" > /dev/null
 
 set +u   # conda's activation scripts read unset variables
 # shellcheck disable=SC1091

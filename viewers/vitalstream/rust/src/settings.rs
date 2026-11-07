@@ -292,7 +292,11 @@ mod tests {
         #[cfg(unix)]
         assert!(!s.allowed(&root.join("link").to_string_lossy()));
         assert!(!s.allowed(&root.join("..").join("outside").to_string_lossy()));
+        #[cfg(unix)]
         assert_eq!(absolute("/a/b/../c/./d"), "/a/c/d");
+        // on Windows, a path from the root of the current drive
+        #[cfg(windows)]
+        assert!(absolute("/a/b/../c/./d").ends_with(r":\a\c\d"));
     }
 
     #[test]

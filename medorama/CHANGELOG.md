@@ -183,6 +183,9 @@
   table made on Windows imports anywhere; `muse-py serve` and `dicom-py serve`, installed
   without a root, serve a `--root` on any drive on Windows; their wheels build from the sdists
   wherever these are unpacked.
+- PostgreSQL: an administrator's **Cancel** of jobs works (the query left a parameter out,
+  which PostgreSQL refuses), and `medorama copy-database` copies a catalog into a new
+  PostgreSQL catalog (it collided with the counter row the new catalog starts with).
 
 ## 0.1.0
 
