@@ -1,14 +1,13 @@
-# The website of Medorama (https://medorama.org/): the README of each folder
-# is its page, built with Jekyll by .github/workflows/pages.yml (Settings > Pages > Source:
-# GitHub Actions). The ECG and PACS viewers run live on it (viewers/ecg/, viewers/pacs/): they
+# The website of Medorama (https://medorama.org/): the README of each folder is its page.
+# (Settings > Pages: deploy from the main branch, folder / (root); custom domain medorama.org.
+# GitHub sets the site's address, url and baseurl, from those settings.) The ECG and PACS
+# viewers run live on it (viewers/ecg/, viewers/pacs/): they
 # are pages that read the files a visitor picks in the browser, which never leave the computer.
 
 title: Medorama
 description: >-
   A unified patient-journey research platform linking EHR data, physiological waveforms,
   imaging and laboratory results across databases.
-url: https://medorama.org
-baseurl: ""
 repository: alphanumericslab/medorama
 theme: jekyll-theme-minimal
 

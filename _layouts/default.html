@@ -80,7 +80,9 @@
       // Links to files that are not published on the site (sources, settings, scripts) lead to
       // them on GitHub; links to pages and published files stay here.
       (function () {
-        var base = {{ site.baseurl | jsonify }};
+        // the site's path: "/medorama" under another domain, "" at a domain's root (GitHub Pages
+        // sets baseurl; it may be unset, or "/")
+        var base = ({{ site.baseurl | default: "" | jsonify }} || '').replace(/\/+$/, '');
         var published = {};
         {% for p in site.pages %}published[{{ p.url | jsonify }}] = 1;{% endfor %}
         {% for f in site.static_files %}published[{{ f.path | jsonify }}] = 1;{% endfor %}

@@ -10,17 +10,21 @@ const vm = require('node:vm');
 
 const layout = fs.readFileSync(path.join(__dirname, '..', '..', '_layouts', 'default.html'), 'utf8');
 // the first function of the page's script, with the site's values in place of Liquid's
-const script = layout.match(/<script>\s*([\s\S]*?\}\)\(\);)/)[1]
-  .replace('{{ site.baseurl | jsonify }}', '"/medorama"')
-  .replace(/\{% for p in site\.pages %\}.*?\{% endfor %\}/, 'published["/docs/index.html"] = 1;')
-  .replace(/\{% for f in site\.static_files %\}.*?\{% endfor %\}/, '')
-  .replace('{{ site.repository }}', 'alphanumericslab/medorama');
+// `baseurl`: the site's path as GitHub Pages sets it (JSON), "/medorama" under another domain
+function script(baseurl) {
+  return layout.match(/<script>\s*([\s\S]*?\}\)\(\);)/)[1]
+    .replace('{{ site.baseurl | default: "" | jsonify }}', baseurl)
+    .replace(/\{% for p in site\.pages %\}.*?\{% endfor %\}/, 'published["/docs/index.html"] = 1;')
+    .replace(/\{% for f in site\.static_files %\}.*?\{% endfor %\}/, '')
+    .replace('{{ site.repository }}', 'alphanumericslab/medorama');
+}
 
-function run(hrefs) {
+// the links of a page at /docs/index.html of a site at `base` (its baseurl `baseurl`)
+function run(hrefs, baseurl = '"/medorama"', base = '/medorama') {
   const links = hrefs.map((href) => ({ href, getAttribute: () => href }));
-  vm.runInNewContext(script, {
+  vm.runInNewContext(script(baseurl), {
     URL,
-    location: { href: 'https://example.org/medorama/docs/index.html', origin: 'https://example.org' },
+    location: { href: `https://example.org${base}/docs/index.html`, origin: 'https://example.org' },
     document: { querySelectorAll: () => links },
   });
   return links.map((a) => a.href);
@@ -38,4 +42,13 @@ test('a malformed link is left as it is, and the links after it are still rewrit
     'bad%E0%A4%A.md',
     'https://github.com/alphanumericslab/medorama/blob/main/Cargo.toml',
   ]);
+});
+
+test('at the root of a domain, whether baseurl is empty, "/" or unset', () => {
+  for (const baseurl of ['""', '"/"', 'null']) {
+    assert.deepStrictEqual(run(['index.html', '../Cargo.toml'], baseurl, ''), [
+      'index.html',
+      'https://github.com/alphanumericslab/medorama/blob/main/Cargo.toml',
+    ], baseurl);
+  }
 });
