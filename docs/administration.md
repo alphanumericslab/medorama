@@ -1091,7 +1091,7 @@ has `data_roots`, the demo's folder must be inside one of them. Without the Pyth
 `.venv`, add NumPy and wfdb-x first:
 
 ```bash
-.venv/bin/pip install numpy "wfdb-x @ https://github.com/alphanumericslab/wfdb-x/archive/a707ba9ec1624241793bf41b938b219d76005526.tar.gz#subdirectory=python"
+.venv/bin/pip install numpy "wfdb-x @ https://github.com/alphanumericslab/wfdb-x/archive/4a91916f5282fba44ca3056802fbc7def298af08.tar.gz#subdirectory=python"
 ```
 
 `tools/make-demo-data.py` can also give the demo patients local examples of real files, which are

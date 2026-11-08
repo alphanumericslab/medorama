@@ -1,8 +1,7 @@
 # Third-party software and licenses
 
 What Medorama and its viewers use from others, per part, with each license. This is an
-inventory for the maintainers' licensing decisions, not legal advice. **Open points** are
-marked ⚠️.
+inventory for the maintainers' licensing decisions, not legal advice.
 
 The project's own code is licensed under the PolyForm Noncommercial License 1.0.0
 ([LICENSE](LICENSE)); commercial use needs a commercial license ([COMMERCIAL.md](COMMERCIAL.md)).
@@ -13,7 +12,7 @@ Nothing from other parties is vendored in this repository.
 WFDB records, headers and annotation files are read with
 [wfdb-x](https://github.com/alphanumericslab/wfdb-x), a reimplementation of PhysioNet's WFDB
 Software Package 10.7.0 with identical behaviour in Rust, C++ and Python. Each implementation
-takes it from GitHub at one pinned commit (`a707ba9`): the crate `wfdbx` (Cargo,
+takes it from GitHub at one pinned commit (`4a91916`): the crate `wfdbx` (Cargo,
 [`Cargo.toml`](Cargo.toml)), the C++ library `wfdbx` (CMake,
 [`cpp/cmake/deps.cmake`](viewers/vitalstream/cpp/cmake/deps.cmake), checked by SHA-256) and the
 Python package `wfdb-x` (pip, `vitalstream_py`'s `pyproject.toml`). A build without the `wfdb`
@@ -22,32 +21,32 @@ feature (Cargo's `--no-default-features`, CMake's `VS_WFDB=OFF`, `vitalstream_py
 
 | Part | License | Used by |
 |---|---|---|
-| wfdb-x (the library and its command-line tools; Rust, C++, Python) | GNU GPL v3 or later | `recording-engine`, so Medorama and `vitalstream-rs`; `vitalstream-cpp`; `vitalstream_py` (the tools are not used) |
+| wfdb-x library (Rust, C++, Python), version 1.2.1 | GNU LGPL v2.1 or later | `recording-engine`, so Medorama and `vitalstream-rs`; `vitalstream-cpp`; `vitalstream_py` |
+| wfdb-x command-line tools (each language's `apps`, the `wfdbx` command) | GNU GPL v3 or later | not used: CMake and Cargo build the library only; pip installs the Python package's `wfdbx` command, which no Medorama program runs |
 
-wfdb-x's own copies of the original C sources (its `third_party/`, not used in any build) keep
-their LGPL / GPL v2 licenses.
+wfdb-x's library is under the GNU Lesser General Public License, version 2.1 or (at your option)
+any later version (wfdb-x's [`LICENSE`](https://github.com/alphanumericslab/wfdb-x/blob/4a91916f5282fba44ca3056802fbc7def298af08/LICENSE)),
+as the original WFDB C library is under the GNU Library General Public License, version 2 or
+later. Its command-line tools, translations of the original tools, stay under the GNU GPL,
+version 3 or later (its `LICENSE-GPL`). The crate's and the Python package's metadata name both
+licenses (`LGPL-2.1-or-later AND GPL-3.0-or-later`), because each package holds the library and
+the tools; Medorama uses the library only (CMake builds it with `WFDBX_BUILD_TOOLS=OFF`, and
+Cargo builds no binary of a dependency). wfdb-x's own copies of the original C sources (its
+`third_party/`, not used in any build) keep their LGPL / GPL v2 licenses.
 
-⚠️ **Open point: distributing programs that contain wfdb-x.** wfdb-x is linked statically into
-the Rust programs (`medorama`, `vitalstream-rs`) and into `vitalstream-cpp`, and `vitalstream_py`
-imports it. The repository itself contains no wfdb-x code: the build fetches it. Building
-Medorama from source and running it, as the repository is set up to do, combines the two only on
-the machine that builds it, which the GPL permits. **Distributing** a built program (a binary
-release, an installer, a container image) is different: the GPL v3 requires the whole program
-to be offered under the GPL v3, without further restrictions, and the PolyForm Noncommercial
-License restricts commercial use, so the two licenses cannot both be met for such a program as
-things stand. wfdb-x is a translation of the WFDB library, which its authors (George B. Moody,
-Benjamin Moody and contributors) license under the GNU LGPL v2 or later; wfdb-x's own
-contributions are by Medorama's author. A resolution is therefore available to the maintainers:
-license wfdb-x under the GNU LGPL (version 2.1 or later, or version 3 or later), which permits
-linking it into programs under other licenses, provided its source and its license come with them
-and users may replace it. Until that is settled, binary releases should not be published; the
-release workflow (`.github/workflows/release.yml`) puts this file and wfdb-x's license (as
-`LICENSE-wfdb-x`) into every archive it builds.
+**Distributing programs that contain wfdb-x.** wfdb-x is linked statically into the Rust
+programs (`medorama`, `vitalstream-rs`) and into `vitalstream-cpp`, and `vitalstream_py` imports
+it. The LGPL permits this in programs under other licenses, Medorama's included, on its terms:
+the programs carry wfdb-x's license and say that they use it, and users may change wfdb-x and
+rebuild the program with their version, from Medorama's source and wfdb-x's source at the pinned
+commit (both public). The release workflow (`.github/workflows/release.yml`) puts this file and
+wfdb-x's library license (as `LICENSE-wfdb-x`) into every archive it builds. Medorama's own code
+stays under the PolyForm Noncommercial License 1.0.0.
 
 ## Rust (the workspace: `medorama`, `vitalstream-rs`, `libs/`)
 
 Fetched by Cargo at the versions in [`Cargo.lock`](Cargo.lock): from crates.io, every crate
-under a permissive license that permits its use in Medorama; and wfdb-x (GPL v3) from GitHub (above). `cargo deny check`
+under a permissive license that permits its use in Medorama; and wfdb-x (LGPL v2.1 or later) from GitHub (above). `cargo deny check`
 ([`deny.toml`](deny.toml), `make audit`) enforces that every crate's license is one of these:
 
 | License | Crates |
@@ -72,7 +71,7 @@ under a permissive license that permits its use in Medorama; and wfdb-x (GPL v3)
 | 0BSD OR MIT OR Apache-2.0 | 1 (`adler2`) |
 | Apache-2.0 OR BSL-1.0 | 1 (`ryu`) |
 | CC0-1.0 | 1 (`tiny-keccak`, through `ahash`) |
-| GPL-3.0-or-later | 1 (`wfdbx`, wfdb-x: above) |
+| LGPL-2.1-or-later AND GPL-3.0-or-later | 1 (`wfdbx`, wfdb-x: its library is used, under the LGPL; above) |
 
 Direct dependencies:
 - **`medorama`:** `axum`, `tokio`, `hyper-util` (the gateway), `rusqlite` (SQLite compiled in),
@@ -106,7 +105,7 @@ at fixed versions, each checked against the SHA-256 in
 
 | Library | Version | License | Used for | In |
 |---|---|---|---|---|
-| wfdb-x (C++ library) | commit `a707ba9` | GPL-3.0-or-later | reading WFDB records, headers and annotation files | `vitalstream-cpp` (static; see ⚠️ above) |
+| wfdb-x (C++ library) | 1.2.1, commit `4a91916` | LGPL-2.1-or-later | reading WFDB records, headers and annotation files | `vitalstream-cpp` (static; above) |
 | CLI11 | 2.4.2 | BSD-3-Clause | the command line | `vitalstream-cpp` |
 | toml++ | 3.4.0 | MIT | the settings file | `vitalstream-cpp` |
 | cpp-httplib | 0.65.0 | MIT | the HTTP server | `vitalstream-cpp` |
@@ -129,7 +128,7 @@ vendored.
 | fastapi | ≥ 0.100 | MIT | `vitalstream_py` |
 | uvicorn | ≥ 0.20 | BSD-3-Clause | `vitalstream_py` |
 | numpy | ≥ 1.22 | BSD-3-Clause | `vitalstream_py`, `dicom_index_py` |
-| wfdb-x | commit `a707ba9` | GPL-3.0-or-later | `vitalstream_py` (reading WFDB records) |
+| wfdb-x | 1.2.1, commit `4a91916` | LGPL-2.1-or-later (the library; the package's tools, GPL-3.0-or-later, are not used) | `vitalstream_py` (reading WFDB records) |
 | tomli | ≥ 1.1 | MIT | `vitalstream_py` on Python < 3.11 |
 | tzdata | any | Apache-2.0 | `vitalstream_py` on Windows (the IANA time zones, which Windows does not have) |
 | pydicom | ≥ 2.4 | MIT | `dicom_index_py` (`viewers/pacs/python/dicom`: DICOM headers, structured reports, waveforms) |

@@ -3,15 +3,11 @@
 # from the C++ project), and attach them to a draft GitHub release with their SHA-256 sums
 # (SHA256SUMS) and a signed build provenance (an attestation).  Every archive carries LICENSE,
 # COMMERCIAL.md, THIRD_PARTY_LICENSES.md and the license of the WFDB library it contains (wfdb-x's
-# LICENSE, the GPL v3, from the pinned checkout); the Rust archives also carry
+# LICENSE, the LGPL v2.1, from the pinned checkout); the Rust archives also carry
 # THIRD_PARTY_CRATES.txt, the licences of the crates compiled in (cargo about, tools/about.toml).
 # The Linux "musl" archives are fully static: they run on any Linux, including older servers whose
 # C library is older than the build machine's.  Licensed add-ons (adapters) are released from
 # their own repositories.
-#
-# Binary releases are off until the repository variable RELEASES_ENABLED is "true" (Settings >
-# Secrets and variables > Actions > Variables): the programs contain wfdb-x (GPL v3), and how they
-# may be distributed is not settled yet (THIRD_PARTY_LICENSES.md).  Until then a tag runs nothing.
 #
 # The archives are reproducible: a pinned Rust (RELEASE_RUST), the build paths remapped, and the
 # entries in a fixed order with the tagged commit's time (tools/release-archive.py).
@@ -33,7 +29,6 @@ env:
 jobs:
   checks:
     # the tests and the dependencies' checks of the tagged commit, before anything is packaged
-    if: vars.RELEASES_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:

@@ -587,9 +587,9 @@ is never lost: it is kept in order and written before the next entry or by the n
 - **CI** runs formatting, lints (`clippy`) and every test on Linux, macOS and Windows, the same
   tests on PostgreSQL 14 and 17, a browser test of the page (headless Chrome), the encrypted
   build and the installers ([.github/README.md](../.github/README.md)), and the privacy check
-  below on every commit of a change. Binary releases are built only when the repository
-  variable `RELEASES_ENABLED` is set, and carry the license texts of every crate compiled in
-  (`THIRD_PARTY_CRATES.txt`).
+  below on every commit of a change. Binary releases are built from a version tag, and carry
+  the license texts of every crate compiled in (`THIRD_PARTY_CRATES.txt`) and wfdb-x's
+  (`LICENSE-wfdb-x`).
 - **Dependencies are checked** by `cargo deny` ([`deny.toml`](../deny.toml), for the whole Rust
   workspace; `make audit`), on every change and every week: any RustSec advisory (vulnerable,
   unmaintained or yanked crates), any license not on the allowed list, or any crate from

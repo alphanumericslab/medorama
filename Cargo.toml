@@ -7,8 +7,8 @@
 #   medorama/             Medorama: the catalog, cohorts, imports, the privacy gate, the web page
 #   viewers/vitalstream/rust/   vitalstream-rs, the Rust waveform viewer
 #
-# WFDB records are read with wfdb-x (crate `wfdbx`, GPL v3), fetched from GitHub at
-# the commit pinned below.
+# WFDB records are read with wfdb-x (crate `wfdbx`, its library under the LGPL v2.1 or later),
+# fetched from GitHub at the commit pinned below.
 [workspace]
 resolver = "2"
 members = [
@@ -30,7 +30,7 @@ repository = "https://github.com/alphanumericslab/medorama"
 
 [workspace.dependencies]
 # wfdb-x: https://github.com/alphanumericslab/wfdb-x (the WFDB library in Rust, C++ and Python)
-wfdbx = { git = "https://github.com/alphanumericslab/wfdb-x", rev = "a707ba9ec1624241793bf41b938b219d76005526" }
+wfdbx = { git = "https://github.com/alphanumericslab/wfdb-x", rev = "4a91916f5282fba44ca3056802fbc7def298af08" }
 signal-core = { path = "libs/signal-core", version = "0.1.0" }
 # without its default features: Medorama and vitalstream-rs choose them (their `wfdb` feature)
 recording-engine = { path = "libs/engine", version = "0.1.0", default-features = false }

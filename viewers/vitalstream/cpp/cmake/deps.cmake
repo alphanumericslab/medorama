@@ -18,15 +18,15 @@ function(vs_dependency name file url sha256)
                        ${ARGN})
 endfunction()
 
-# wfdb-x, commit a707ba9 (GNU GPL v3 or later): WFDB headers, records and
+# wfdb-x 1.2.1, commit 4a91916 (its library: GNU LGPL v2.1 or later): WFDB headers, records and
 # annotation files (https://github.com/alphanumericslab/wfdb-x; its C++ part, the library only).
 # Not fetched at all with VS_WFDB=OFF.
 if(VS_WFDB)
   set(WFDBX_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
   set(WFDBX_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-  vs_dependency(wfdbx wfdb-x-a707ba9ec1624241793bf41b938b219d76005526.tar.gz
-    https://github.com/alphanumericslab/wfdb-x/archive/a707ba9ec1624241793bf41b938b219d76005526.tar.gz
-    7602fa78e3e3b2cf2c10871d8d641cfe01e8e14e517ddbda79bbbd29a178b181
+  vs_dependency(wfdbx wfdb-x-4a91916f5282fba44ca3056802fbc7def298af08.tar.gz
+    https://github.com/alphanumericslab/wfdb-x/archive/4a91916f5282fba44ca3056802fbc7def298af08.tar.gz
+    1221990620cd1758b020a2cfe89754d7aa0db4c43a5c70503c6a2521c77749df
     SOURCE_SUBDIR cpp)
   FetchContent_MakeAvailable(wfdbx)
 endif()

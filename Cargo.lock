@@ -2545,8 +2545,8 @@ dependencies = [
 
 [[package]]
 name = "wfdbx"
-version = "1.0.0"
-source = "git+https://github.com/alphanumericslab/wfdb-x?rev=a707ba9ec1624241793bf41b938b219d76005526#a707ba9ec1624241793bf41b938b219d76005526"
+version = "1.2.1"
+source = "git+https://github.com/alphanumericslab/wfdb-x?rev=4a91916f5282fba44ca3056802fbc7def298af08#4a91916f5282fba44ca3056802fbc7def298af08"
 
 [[package]]
 name = "whoami"

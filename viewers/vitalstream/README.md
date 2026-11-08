@@ -580,6 +580,6 @@ VitalStream is written by Reza Sameni. To cite it, see [CITATION.cff](../../CITA
 VitalStream is licensed, like the rest of the repository, under the PolyForm Noncommercial
 License 1.0.0 ([LICENSE](../../LICENSE)): free for noncommercial use, with commercial licenses by
 agreement ([COMMERCIAL.md](../../COMMERCIAL.md)). The three viewers read WFDB records with
-[wfdb-x](https://github.com/alphanumericslab/wfdb-x), a separate project under the GNU GPL v3 or
-later. Every dependency and its license is listed in
+[wfdb-x](https://github.com/alphanumericslab/wfdb-x), a separate project whose library is under
+the GNU LGPL v2.1 or later. Every dependency and its license is listed in
 [THIRD_PARTY_LICENSES.md](../../THIRD_PARTY_LICENSES.md).

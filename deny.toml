@@ -16,10 +16,13 @@ allow = [
     "CC0-1.0",  # public domain (tiny-keccak, through parquet)
 ]
 confidence-threshold = 0.9
-# wfdb-x (crate wfdbx): a separate project under the GPL v3 or later (THIRD_PARTY_LICENSES.md).
+# wfdb-x (crate wfdbx): a separate project, its library under the LGPL v2.1 or later; the crate
+# also holds its command-line tools, under the GPL v3 or later, so its metadata names both
+# ("LGPL-2.1-or-later AND GPL-3.0-or-later"). Medorama links the library only (Cargo builds no
+# binary of a dependency): THIRD_PARTY_LICENSES.md.
 # Medorama's own crates: the PolyForm Noncommercial License 1.0.0 (LICENSE).
 exceptions = [
-    { allow = ["GPL-3.0-or-later"], crate = "wfdbx" },
+    { allow = ["LGPL-2.1-or-later", "GPL-3.0-or-later"], crate = "wfdbx" },
     { allow = ["PolyForm-Noncommercial-1.0.0"], crate = "medorama" },
     { allow = ["PolyForm-Noncommercial-1.0.0"], crate = "recording-engine" },
     { allow = ["PolyForm-Noncommercial-1.0.0"], crate = "signal-core" },

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- wfdb-x 1.2.1 (commit `4a91916`, was `a707ba9`; `cmake/deps.cmake`, with its new SHA-256), its
+  library under the GNU LGPL v2.1 or later.
 - **A build without WFDB support**: the CMake option `VS_WFDB` (`ON` by default) and the preset
   `nowfdb` (`build/nowfdb`; `install.sh --no-wfdb`). With `OFF`, wfdb-x is neither downloaded
   nor built in (no `core/wfdb_c.cpp`), and `engine/src/sources_wfdb_none.cpp` takes the place of

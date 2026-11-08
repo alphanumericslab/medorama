@@ -275,10 +275,7 @@ in `Cargo.toml`), the Python packages (`pyproject.toml` of `viewers/vitalstream/
 and `date-released`, the tag's date). Move the changelogs' "Unreleased" entries under the
 version.
 
-The tag starts `.github/workflows/release.yml` only when the repository variable
-`RELEASES_ENABLED` is `true`. Binary releases are off until then, because the programs contain
-wfdb-x, under the GPL v3, and how they may be distributed is not settled yet
-([THIRD_PARTY_LICENSES.md](../THIRD_PARTY_LICENSES.md)). The workflow:
+The tag starts `.github/workflows/release.yml`, which:
 
 1. Runs the workspace's tests and `cargo deny` on the tagged commit; nothing is built if they
    fail.

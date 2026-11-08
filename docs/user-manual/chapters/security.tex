@@ -820,12 +820,11 @@ output says so.
   Windows, the same tests on PostgreSQL 14 and 17, a browser test of the page (headless Chrome),
   the encrypted build and the installers. Every workflow reads the repository only, its actions
   are pinned by commit, and every job has a time limit.
-\item \textbf{Releases} are built by \file{.github/workflows/release.yml} on a version tag, only
-  when the repository variable \code{RELEASES\_ENABLED} is \code{true}: binary releases wait until
-  the distribution of wfdb-x inside them is settled (\cref{sec:licences-gpl}). The workflow runs
-  the tests and \cmd{cargo deny} first, builds with a pinned Rust, packs reproducible archives
-  with \file{THIRD\_PARTY\_CRATES.txt} (the licenses of every crate compiled in, written by
-  \cmd{cargo about}), and attaches them to a draft release with \file{SHA256SUMS} and a signed
+\item \textbf{Releases} are built by \file{.github/workflows/release.yml} on a version tag. The
+  workflow runs the tests and \cmd{cargo deny} first, builds with a pinned Rust, packs
+  reproducible archives with \file{THIRD\_PARTY\_CRATES.txt} (the licenses of every crate
+  compiled in, written by \cmd{cargo about}) and wfdb-x's license (\cref{sec:licences-wfdbx}),
+  and attaches them to a draft release with \file{SHA256SUMS} and a signed
   build provenance.
 \item \textbf{Dependencies are checked} by \cmd{cargo deny} (\file{deny.toml}, for the whole Rust
   workspace; \cmd{make audit}) on every change and every week. Any RustSec advisory (vulnerable,

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The `[wfdb]` extra installs wfdb-x 1.2.1 (commit `4a91916`, was `a707ba9`), its library under
+  the GNU LGPL v2.1 or later.
 - **WFDB support is the extra `[wfdb]`**: wfdb-x is no longer a required dependency. The
   installers and CI install `vitalstream_py[wfdb]` (`[test,wfdb]` for development); a plain
   `pip install` has no WFDB support. Without wfdb-x, `sources/wfdb_none.py` takes the place of

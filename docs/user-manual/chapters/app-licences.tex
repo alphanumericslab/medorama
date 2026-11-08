@@ -35,29 +35,31 @@ the repository are licensed under the \textbf{PolyForm Noncommercial License 1.0
 \end{itemize}
 
 \section{Programs built with wfdb-x}
-\label{sec:licences-gpl}
+\label{sec:licences-wfdbx}
 
 Medorama's programs read WFDB records with wfdb-x
 (\url{https://github.com/alphanumericslab/wfdb-x}), a reimplementation of PhysioNet's WFDB
-Software Package 10.7.0 with identical behavior in Rust, C++ and Python, a separate project licensed under the GNU
-General Public License, version 3 or (at your option) any later version. wfdb-x is not part of
-the repository: each implementation takes it from GitHub at one pinned commit (\code{a707ba9}).
-A build without the \code{wfdb} feature (Cargo's \opt{-{}-no-default-features},
-CMake's \code{VS\_WFDB=OFF}, \code{vitalstream\_py} without its \code{[wfdb]} extra) contains no
-wfdb-x code (\cref{sec:installation-no-wfdb}).
+Software Package 10.7.0 with identical behavior in Rust, C++ and Python, a separate project.
+Its library is licensed under the GNU Lesser General Public License, version 2.1 or (at your
+option) any later version, as the original WFDB C library is under the GNU Library General
+Public License, version 2 or later. Its command-line tools, translations of the original tools,
+stay under the GNU General Public License, version 3 or later; Medorama uses none of them. wfdb-x
+is not part of the repository: each implementation takes it from GitHub at one pinned commit
+(\code{4a91916}, version 1.2.1). A build without the \code{wfdb} feature (Cargo's
+\opt{-{}-no-default-features}, CMake's \code{VS\_WFDB=OFF}, \code{vitalstream\_py} without its
+\code{[wfdb]} extra) contains no wfdb-x code (\cref{sec:installation-no-wfdb}).
 \begin{itemize}
-\item wfdb-x is linked statically into the Rust programs (\cmd{medorama}, \cmd{vitalstream-rs},
-  through the crate \code{recording-engine}) and into \cmd{vitalstream-cpp}, and
-  \code{vitalstream\_py} imports it.
-\item Building Medorama from source and running it, as the repository is set up to do, combines
-  the two only on the machine that builds it.
-\item \textbf{Distributing} a built program (a binary release, an installer, a container image) is
-  an open point that the maintainers are settling (\file{THIRD\_PARTY\_LICENSES.md}): the GPL v3
-  asks for the whole program under the GPL v3, while Medorama's license restricts commercial use.
-  Until it is settled, binary releases are off: the release workflow runs only when the
-  repository variable \code{RELEASES\_ENABLED} is \code{true}. The archives it builds carry
+\item wfdb-x's library is linked statically into the Rust programs (\cmd{medorama},
+  \cmd{vitalstream-rs}, through the crate \code{recording-engine}) and into
+  \cmd{vitalstream-cpp}, and \code{vitalstream\_py} imports it. CMake builds the library only
+  (\code{WFDBX\_BUILD\_TOOLS=OFF}), and Cargo builds no program of a dependency.
+\item The LGPL permits this in programs under other licenses, Medorama's included, on its terms:
+  the programs carry wfdb-x's license, and users may change wfdb-x and rebuild the programs with
+  their version, from Medorama's source and wfdb-x's source at the pinned commit, both public.
+\item The release archives (\file{.github/workflows/release.yml}, built on a version tag) carry
   \file{LICENSE}, \file{COMMERCIAL.md}, \file{THIRD\_PARTY\_LICENSES.md} and wfdb-x's license (as
-  \file{LICENSE-wfdb-x}).
+  \file{LICENSE-wfdb-x}). Medorama's own code stays under its own license
+  (\cref{sec:licences-licence}).
 \end{itemize}
 wfdb-x's own copies of the original C sources (its \file{third\_party/}, used in no build) keep
 their LGPL and GPL v2 licenses. The programs that do not contain wfdb-x (the ECG and PACS pages,
@@ -117,7 +119,8 @@ MIT AND BSD-3-Clause & 1 & \code{matchit} \\
 0BSD OR MIT OR Apache-2.0 & 1 & \code{adler2} \\
 Apache-2.0 OR BSL-1.0 & 1 & \code{ryu} \\
 CC0-1.0 & 1 & \code{tiny-keccak}, through \code{ahash} \\
-GPL-3.0-or-later & 1 & \code{wfdbx}, wfdb-x (\cref{sec:licences-gpl}) \\
+LGPL-2.1-or-later AND GPL-3.0-or-later & 1 & \code{wfdbx}, wfdb-x: its library, under the
+  LGPL (\cref{sec:licences-wfdbx}) \\
 \end{xltabular}
 
 The direct dependencies are the following.
@@ -182,7 +185,7 @@ recorded in \file{cpp/cmake/deps.cmake}.
 \endhead
 \bottomrule
 \endfoot
-wfdb-x (C++) & Commit \code{a707ba9} & GPL-3.0-or-later & Reading WFDB records, headers and
+wfdb-x (C++) & 1.2.1, commit \code{4a91916} & LGPL-2.1-or-later & Reading WFDB records, headers and
   annotation files (linked statically) \\
 CLI11 & 2.4.2 & BSD-3-Clause & The command line \\
 toml++ & 3.4.0 & MIT & The settings file \\
@@ -219,8 +222,8 @@ pinned commit. Nothing is vendored.
 FastAPI & 0.100 or later & MIT & \code{vitalstream\_py} \\
 Uvicorn & 0.20 or later & BSD-3-Clause & \code{vitalstream\_py} \\
 NumPy & 1.22 or later & BSD-3-Clause & \code{vitalstream\_py}, \code{dicom\_index\_py} \\
-wfdb-x & commit \code{a707ba9} & GPL-3.0-or-later & \code{vitalstream\_py} (reading WFDB
-  records) \\
+wfdb-x & 1.2.1, commit \code{4a91916} & LGPL-2.1-or-later (the library) &
+  \code{vitalstream\_py} (reading WFDB records) \\
 tomli & 1.1 or later & MIT & \code{vitalstream\_py} on Python before 3.11 \\
 tzdata & any & Apache-2.0 & \code{vitalstream\_py} on Windows (the IANA time zones) \\
 pydicom & 2.4 or later & MIT & \code{dicom\_index\_py} (DICOM headers, structured reports,

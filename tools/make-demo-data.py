@@ -193,7 +193,7 @@ def wfdbx():
         import wfdbx as w
     except ImportError:
         sys.exit('wfdb-x is needed for the WFDB records: run this with .venv/bin/python, after\n'
-                 '  .venv/bin/pip install "wfdb-x @ https://github.com/alphanumericslab/wfdb-x/archive/a707ba9ec1624241793bf41b938b219d76005526.tar.gz#subdirectory=python"\n'
+                 '  .venv/bin/pip install "wfdb-x @ https://github.com/alphanumericslab/wfdb-x/archive/4a91916f5282fba44ca3056802fbc7def298af08.tar.gz#subdirectory=python"\n'
                  '(the Python viewer brings it too; docs/administration.md)')
     return w
 

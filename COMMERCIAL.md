@@ -43,7 +43,8 @@ Medorama's programs include third-party components, each under its own license, 
 [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). A commercial license for Medorama covers
 Medorama's own code; the terms of those components continue to apply to them. In particular,
 WFDB records are read with [wfdb-x](https://github.com/alphanumericslab/wfdb-x), a separate
-project under the GNU General Public License, version 3 or later. Commercial licensees may use a
+project whose library is under the GNU Lesser General Public License, version 2.1 or later, which
+permits its use in programs under other licenses on its terms. Commercial licensees may use a
 build without WFDB support, which has no copyleft dependency, or one with it, whose wfdb-x
 component stays under its own license ([docs/building.md](docs/building.md#without-wfdb)).
 

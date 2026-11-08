@@ -33,7 +33,7 @@ who install Medorama and for contributors. For a first installation with the def
 | `muse-py`, `dicom-py` | Python | [`viewers/ecg/python/muse`](../viewers/ecg/python/muse), [`viewers/pacs/python/dicom`](../viewers/pacs/python/dicom) | The viewers' Python tools, which build databases to import and serve the ECG and PACS viewers on their own. |
 
 WFDB records are read with [wfdb-x](https://github.com/alphanumericslab/wfdb-x) in each
-language. Cargo, CMake and pip fetch it from GitHub at one pinned commit (`a707ba9`), like any
+language. Cargo, CMake and pip fetch it from GitHub at one pinned commit (`4a91916`), like any
 other dependency. EDF, EDF+, BDF and BDF+ files are read by code in this repository and need no
 further dependency. Every program can also be built without WFDB support, and then contains no
 wfdb-x code ([Without WFDB](#without-wfdb)).
@@ -361,7 +361,7 @@ commit), and then the viewer:
 
 ```bash
 pip install --no-index --find-links ../wheels fastapi uvicorn numpy \
-    "wfdb-x @ file://$PWD/../wheels/a707ba9ec1624241793bf41b938b219d76005526.tar.gz#subdirectory=python"
+    "wfdb-x @ file://$PWD/../wheels/4a91916f5282fba44ca3056802fbc7def298af08.tar.gz#subdirectory=python"
 pip install --no-index --find-links ../wheels --no-deps ./viewers/vitalstream/python/vitalstream
 ```
 
@@ -374,7 +374,7 @@ and load the demo by hand
 
 ```bash
 .venv/bin/pip install --no-index --find-links ../wheels numpy \
-    "wfdb-x @ file://$PWD/../wheels/a707ba9ec1624241793bf41b938b219d76005526.tar.gz#subdirectory=python"
+    "wfdb-x @ file://$PWD/../wheels/4a91916f5282fba44ca3056802fbc7def298af08.tar.gz#subdirectory=python"
 .venv/bin/python tools/make-demo-data.py ~/medorama-demo
 medorama demo add ~/medorama-demo
 ```

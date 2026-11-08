@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **wfdb-x 1.2.1** (commit `4a91916`, was `a707ba9`, version 1.0.0): its library is now under
+  the GNU LGPL v2.1 or later (its command-line tools, which Medorama does not use, stay under the
+  GPL v3 or later), so the binary releases are no longer held back: `release.yml` runs on every
+  version tag, without the repository variable `RELEASES_ENABLED`. `deny.toml` and
+  `tools/about.toml` accept the crate's `LGPL-2.1-or-later AND GPL-3.0-or-later`;
+  `THIRD_PARTY_LICENSES.md` and the manual's licenses appendix say so.
 - **A build without WFDB support**: the Cargo feature `wfdb` (on by default; the engine's), so
   that `cargo build -p medorama --no-default-features` (or `tools/install-medorama.sh --no-wfdb`,
   which also builds its viewer so) contains no wfdb-x code. Such a build reads every other format,

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- wfdb-x 1.2.1 (commit `4a91916`, was `a707ba9`, version 1.0.0), its library under the GNU LGPL
+  v2.1 or later.
 - **WFDB support is a Cargo feature, `wfdb`** (on by default), the only part of the engine that
   uses wfdb-x, now an optional dependency. Without it (`--no-default-features`), the engine
   contains no wfdb-x code: `sources/wfdb_none.rs` takes the place of `wfdb_folder.rs`, with the

@@ -38,7 +38,7 @@ the website, at \url{https://medorama.org/docs/install.html} (\file{docs/install
 \end{table}
 
 WFDB records are read with wfdb-x in each language: Cargo, CMake and pip fetch it from GitHub at
-one pinned commit (\code{a707ba9}), like any other dependency. Every program can also be built
+one pinned commit (\code{4a91916}), like any other dependency. Every program can also be built
 without WFDB support, and then contains no wfdb-x code (\cref{sec:installation-no-wfdb}). The
 ECG and PACS viewers are static pages: there is nothing to build. Add-ons (adapters) are built in their own repositories
 (\cref{chap:addons}).
@@ -584,7 +584,7 @@ the offline machine, which needs Rust and a compiler (rustup's offline installer
 \cmd{cargo build --release --locked --offline}, \cmd{cmake --preset release}. pip takes wfdb-x
 from the archive that \cmd{pip download} saved (named after the commit), then the viewer:
 \begin{lstlisting}[style=shell]
-WFDBX=a707ba9ec1624241793bf41b938b219d76005526     # the pinned commit of wfdb-x
+WFDBX=4a91916f5282fba44ca3056802fbc7def298af08     # the pinned commit of wfdb-x
 pip install --no-index --find-links ../wheels fastapi uvicorn numpy \
   "wfdb-x @ file://$PWD/../wheels/$WFDBX.tar.gz#subdirectory=python"
 pip install --no-index --find-links ../wheels --no-deps ./viewers/vitalstream/python/vitalstream
@@ -595,7 +595,7 @@ Git ignores \file{vendor/}, \file{.cargo/} and \file{viewers/vitalstream/cpp/dep
 \file{.venv}; \cmd{pip download} above saved both in \file{../wheels}. Install them from there,
 then make and load the demo by hand (\cref{chap:quickstart}):
 \begin{lstlisting}[style=shell]
-WFDBX=a707ba9ec1624241793bf41b938b219d76005526
+WFDBX=4a91916f5282fba44ca3056802fbc7def298af08
 .venv/bin/pip install --no-index --find-links ../wheels numpy \
   "wfdb-x @ file://$PWD/../wheels/$WFDBX.tar.gz#subdirectory=python"
 .venv/bin/python tools/make-demo-data.py ~/medorama-demo

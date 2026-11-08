@@ -26,7 +26,7 @@ dependencies = [
 # support"), every other format reads as usual.
 wfdb = [
     # wfdb-x (WFDB records): the GitHub archive of a pinned commit
-    "wfdb-x @ https://github.com/alphanumericslab/wfdb-x/archive/a707ba9ec1624241793bf41b938b219d76005526.tar.gz#subdirectory=python",
+    "wfdb-x @ https://github.com/alphanumericslab/wfdb-x/archive/4a91916f5282fba44ca3056802fbc7def298af08.tar.gz#subdirectory=python",
 ]
 test = ["pytest", "httpx"]
 
