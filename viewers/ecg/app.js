@@ -1,6 +1,9 @@
 // The ECG viewer's page: open a record (Open record…, a drop, or #src=URL when another program
 // opens it), or a folder of them (Open multiple records…: every ECG in it and its subfolders,
-// stepped through one at a time), show it, and the controls.  What a file is, and which reader
+// stepped through one at a time), show it, and the controls.  A WFDB record is opened by its
+// header: the page then asks for the signal files it names (a page reads only the files chosen),
+// and for a signal file chosen alone, asks for its header.  Opened from an address (#src), it
+// fetches them itself, next to the header.  What a file is, and which reader
 // reads it, the registry says (readers.js): records are drawn on paper (paper.js); pictures and
 // PDF ECGs are shown as they are.  A classic script: the page works from file:// too.
 
@@ -65,8 +68,10 @@
   const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   // ---------------------------------------------------------------- opening
-  /** Show a file: its name, its bytes, and how to get the files next to it (WFDB). */
-  async function open(name, bytes, type, sibling) {
+  /** Show a file: its name, its bytes, and how to get the files next to it (WFDB).  ask(file):
+   * when a file it needs is missing (an error with `missing`), ask for it; else the error is
+   * shown. */
+  async function open(name, bytes, type, sibling, ask) {
     if (st.url) { URL.revokeObjectURL(st.url); st.url = null; }
     st.rec = null;
     st.marks = [];
@@ -89,7 +94,8 @@
         show(await reader.read(name, bytes, sibling));
       }
     } catch (e) {
-      message(esc(e.message || String(e)), true);
+      if (e.missing && ask) ask(e.missing);
+      else message(esc(e.message || String(e)), true);
     }
   }
 
@@ -111,20 +117,57 @@
     }
   }
 
-  async function openFiles(list, keepFolder = false) {
+  // the files chosen for the record being opened, by name: each choice of the second chooser
+  // (#more) adds to them
+  let chosen = {};
+
+  /** Ask for a file the record needs (a WFDB header's signal file, or a segment's header), by
+   * the name its header gives it: the second chooser.  `tried`: the files of the last choice,
+   * none of them the one asked for. */
+  function askFor(file, tried) {
+    const base = file.split('/').pop();
+    const signal = !/\.hea$/i.test(base);
+    const what = signal ? `This record's samples are in <b>${esc(base)}</b>` : `This record's segment <b>${esc(base)}</b> is missing`;
+    const not = tried && tried.length ? `<br>${esc(tried.join(', '))} ${tried.length > 1 ? 'are' : 'is'} not the file its header names.` : '';
+    ask(`${what}: choose it (or all the record's files at once).${not}`, `Choose ${base}…`,
+      signal ? Readers.companions() : '.hea');
+  }
+
+  /** A message with a button that opens the second chooser, for files of these extensions. */
+  function ask(html, label, accept) {
+    message(`${html}<br><button class="primary ask">${esc(label)}</button>`);
+    $('#more').accept = accept;
+    $('#stage .ask').addEventListener('click', () => $('#more').click());
+  }
+
+  async function openFiles(list, keepFolder = false, more = false) {
     const files = [...list];
     if (!files.length) return;
     if (!keepFolder) folder(null);
+    if (!more) chosen = {};
+    for (const f of files) chosen[f.name] = f;
+    const all = keepFolder ? files : Object.values(chosen);
     // the file the others are read with (a WFDB header: its signal files), else one the page
     // reads (a folder's ECG: the first)
     const known = (f) => Readers.byName(f.name);
-    const main = keepFolder ? files[0] : files.find((f) => known(f)?.companions) || files.find(known) || files[0];
-    const byName = Object.fromEntries(files.map((f) => [f.name, f]));
+    const main = keepFolder ? files[0] : all.find((f) => known(f)?.companions) || all.find(known) || all[0];
+    // a signal file without its header (WFDB .dat, .mat): the header is the record
+    if (!keepFolder && !known(main) && Readers.companionOf(main.name)) {
+      const stem = main.name.replace(/\.[^.]+$/, '');
+      $('#name').textContent = main.name;
+      ask(`<b>${esc(main.name)}</b> is a WFDB signal file: choose its header (<b>${esc(stem)}.hea</b>, or the .hea file that names it).`,
+        'Choose the header…', '.hea');
+      return;
+    }
+    const byName = keepFolder ? Object.fromEntries(files.map((f) => [f.name, f])) : chosen;
     await open(main.name, await main.arrayBuffer(), main.type, async (f) => {
       const file = byName[f] || byName[f.split('/').pop()];
-      if (!file) throw new Error(`The file ${f} is missing: choose it together with ${main.name}.`);
+      if (!file) {
+        if (keepFolder) throw new Error(`The file ${f} is missing from the folder of ${main.name}.`);
+        throw Object.assign(new Error(`The file ${f} is missing.`), { missing: f });
+      }
       return file.arrayBuffer();
-    });
+    }, keepFolder ? null : (f) => askFor(f, more ? files.map((x) => x.name).filter((n) => n !== f.split('/').pop()) : null));
   }
 
   // ---------------------------------------------------------------- drawing
@@ -341,6 +384,11 @@
   }
   $('#open').addEventListener('click', () => $('#file').click());
   $('#file').addEventListener('change', (e) => openFiles(e.target.files));
+  $('#more').addEventListener('change', (e) => {
+    const files = [...e.target.files];
+    e.target.value = '';                 // the same file may be chosen again
+    openFiles(files, false, true);
+  });
   $('#open-many').addEventListener('click', () => $('#dir').click());
   $('#dir').addEventListener('change', (e) => openFolder(e.target.files));
   document.addEventListener('dragover', (e) => { e.preventDefault(); document.body.classList.add('drag'); });
@@ -361,5 +409,5 @@
   });
 
   if (embedded) openUrl(params.get('src'), params.get('name'));
-  else message(`<b>Open record…</b> (or drop it here): one ECG: ${esc(reads('or'))}.<br><b>Open multiple records…</b>: a folder, every ECG in it and in its subfolders, one at a time (‹ ›, ← →).`);
+  else message(`<b>Open record…</b> (or drop it here): one ECG: ${esc(reads('or'))}.<br>A WFDB record: choose its header (.hea); the page then asks for its signal files.<br><b>Open multiple records…</b>: a folder, every ECG in it and in its subfolders, one at a time (‹ ›, ← →).`);
 })();

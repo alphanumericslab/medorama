@@ -562,10 +562,14 @@ Any other & A picture, a PDF, a video, a text file & The entry's detail, on the 
 \end{table}
 
 \paragraph{In Privacy Mode,} the privacy gate sends only the files it can de-identify or mark:
-WFDB headers and \file{.dat} signal files, GE MUSE XML, DICOM, EDF and BDF files, pictures,
-videos and PDF. It refuses the rest: JSON ECGs, text files, and signal files with an extension
-other than \file{.dat} (\code{file\_kind} in \file{medorama/src/gate.rs};
-\cref{sec:protecting-files}, \cref{sec:ecg-imaging-privacy}).
+WFDB headers and their \file{.dat} and \file{.mat} signal files, GE MUSE XML, DICOM, EDF and BDF
+files, pictures, videos and PDF. It refuses the rest: JSON ECGs, text files, and signal files
+with an extension other than \file{.dat} or \file{.mat} (\code{file\_kind} in
+\file{medorama/src/gate.rs}; \cref{sec:protecting-files}, \cref{sec:ecg-imaging-privacy}).
+
+\paragraph{A WFDB record is its header.} A row whose file is a signal file (\file{.dat},
+\file{.mat}) is skipped, with a warning that names the header to give in its place
+(\cref{sec:wfdb-mat}).
 
 \paragraph{Hints for the viewers.} Columns of the same row tell the viewers what a picture or a
 video does not say: its scale (\code{pixel spacing (mm)}, \code{mm per pixel},

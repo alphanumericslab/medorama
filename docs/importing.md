@@ -484,9 +484,12 @@ applies it (merging the patients, adding the MRN, moving the encounter) or dismi
   message "this build has no WFDB support (built without the `wfdb` feature)". A WFDB record
   attached to an ECG item still opens in the ECG viewer, which reads it in the page.
 - **Privacy Mode:** the privacy gate sends only files it can de-identify or mark: WFDB headers and
-  `.dat` signal files, GE MUSE XML, DICOM, EDF and BDF files, pictures, videos and PDF. It
-  refuses the rest: JSON ECGs, text files, and signal files with an extension other than `.dat`
-  (`file_kind` in [medorama/src/gate.rs](../medorama/src/gate.rs)).
+  their `.dat` and `.mat` signal files, GE MUSE XML, DICOM, EDF and BDF files, pictures, videos
+  and PDF. It refuses the rest: JSON ECGs, text files, and signal files with an extension other
+  than `.dat` or `.mat` (`file_kind` in [medorama/src/gate.rs](../medorama/src/gate.rs)).
+- **A WFDB record is its header:** a row whose file is a signal file (`.dat`, `.mat`) is skipped,
+  with a warning that names the header to give in its place
+  ([wfdb-collection.md](wfdb-collection.md#one-record)).
 - **Hints for the viewers:** columns of the same row can give a picture's or a video's scale and
   a folder of pictures' frame rate. The first positive number of each kind counts:
 

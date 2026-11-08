@@ -43,7 +43,7 @@ and follows the system's setting until one is chosen (\cref{sec:ecg-viewer-theme
 \endhead
 \bottomrule
 \endfoot
-WFDB record: the \file{.hea} header with its signal file(s), chosen together & Drawn on paper,
+WFDB record: the \file{.hea} header, then its signal files (\file{.dat} or \file{.mat}) & Drawn on paper,
   in the signal formats 8, 16, 24, 32, 61, 80, 160 and 212. The first 10\,s are read, and the
   header's comments (\code{\# QT: 410 ms}, \code{\# Dx: \dots}) are the report. A skewed signal
   (\code{16:3}) is read that many frames later, as the WFDB library reads it. Where the header
@@ -72,10 +72,11 @@ Each format has its own reader, and every reader produces the same \emph{record}
 \subsection{WFDB records}
 \label{sec:ecg-viewer-wfdb}
 
-A WFDB record is its header (\file{.hea}) and the signal files the header names, which must be
-chosen with it (\code{Choose the header together with its signal file FILE.} otherwise). The
-viewer reads the first 10 seconds of every signal, in the formats 8, 16, 24, 32, 61, 80, 160 and
-212, converts them to millivolts with each signal's gain, baseline and units (\code{mV},
+A WFDB record is its header (\file{.hea}) and the signal files the header names, which the page
+asks for once the header is chosen (\cref{sec:ecg-viewer-open-wfdb}). A signal file may be a
+MATLAB file (\file{.mat}) that matches its header (\cref{sec:wfdb-mat}). The viewer reads the
+first 10 seconds of every signal (no more samples than the header states), in the formats 8, 16,
+24, 32, 61, 80, 160 and 212, converts them to millivolts with each signal's gain, baseline and units (\code{mV},
 \code{uV} or \code{V}), and keeps a signal with several samples per frame at its own rate. The
 header's start time is shown as UTC.
 
@@ -294,11 +295,23 @@ Drop & The files dropped on the page, as with \ui{Open record\dots}. \\
 \end{table}
 
 \paragraph{Open record\dots} opens the browser's file chooser, which offers the files whose
-extensions the viewer's readers claim: \file{.hea} and \file{.dat}, \file{.xml}, \file{.dcm} and
+extensions the viewer's readers claim: \file{.hea}, \file{.xml}, \file{.dcm} and
 \file{.dicom}, \file{.edf} and \file{.bdf}, \file{.json}, the pictures (\file{.png},
-\file{.jpg}, \file{.jpeg}, \file{.gif}, \file{.webp}) and \file{.pdf}. Several files may be
-chosen at once. Of the files chosen, the header is the ECG shown and the others are its signal
-files; without a header, the first file is shown.
+\file{.jpg}, \file{.jpeg}, \file{.gif}, \file{.webp}) and \file{.pdf}. A WFDB record's signal
+files (\file{.dat}, \file{.mat}) are not among them: they are chosen once its header is
+(\cref{sec:ecg-viewer-open-wfdb}).
+
+\paragraph{A WFDB record}\label{sec:ecg-viewer-open-wfdb} is opened in two steps, because a page reads
+only the files chosen in it, not the folder they lie in. Once its header is chosen, the page
+names the file it needs (\emph{This record's samples are in 100.dat: choose it}), with a button
+that opens a second chooser of signal files. The file chosen must be the one the header names:
+another is refused, and asked for again. A multi-segment record asks in turn for its segments'
+headers and their signal files; all of a record's files can also be chosen at once. A signal file
+chosen alone, or dropped, asks for its header (\emph{100.dat is a WFDB signal file: choose its
+header}), and is read once the header is chosen. Dropping a header with its signal files, opening
+a folder, and a record opened from an address (\code{\#src=}, as Medorama's ECG pages do) need no
+second step. A MATLAB signal file (\file{.mat}) is read when it matches its header
+(\cref{sec:wfdb-mat}).
 
 \paragraph{Open multiple records\dots} opens the browser's folder chooser. The folder's ECGs are
 its files, at every level, whose extension a reader claims (as above, except the signal files
@@ -686,7 +699,7 @@ invented, and no file describes a real person. They are written by
 \file{tools/make-viewer-examples.py} with the demo's generators. On the website, the examples page
 (\url{https://medorama.org/viewers/ecg/examples/}) has a link that opens
 each file in the live viewer; from a clone, open \file{viewers/ecg/index.html} and choose a file
-with \ui{Open record\dots} (a WFDB record: its \file{.hea} and \file{.dat} together), or the whole
+with \ui{Open record\dots} (a WFDB record: its \file{.hea}, then its \file{.dat}), or the whole
 folder with \ui{Open multiple records\dots}.
 
 \begin{table}[htbp]

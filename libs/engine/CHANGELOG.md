@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **MATLAB signal files**: a WFDB record whose signal file is a MATLAB file (`.mat`: the
+  PhysioNet Challenge files, `wfdb2mat`'s) was already read by wfdb-x from the header's byte
+  offset; now a `.mat` file is first checked against its header (`check_mat_files`, when a record
+  is opened): a MAT file of level 4 or uncompressed level 5 whose first matrix holds the elements
+  of the header's format, one row per signal, one column per sample, from the header's offset.
+  One of another layout (compressed, of doubles, transposed, of another offset or length), which
+  would be read as noise, is refused with the reason (`A0001.mat does not match its header
+  A0001.hea: …`). `wfdb_folder::mat_deidentified` gives a MAT file's first matrix with its texts
+  blanked, for Medorama's Privacy Mode. Tests: `tests/wfdb_mat.rs`.
+- **A signal file opened alone** (`.dat`, `.mat`) is refused with the header to open in its
+  place: `wfdb_folder::signal_file_note` (`100.dat is a WFDB signal file: open its header,
+  100.hea`), and `sources::not_a_recording`, the message of `build` for any file it does not read.
 - wfdb-x 1.2.1 (commit `4a91916`, was `a707ba9`, version 1.0.0), its library under the GNU LGPL
   v2.1 or later.
 - **WFDB support is a Cargo feature, `wfdb`** (on by default), the only part of the engine that

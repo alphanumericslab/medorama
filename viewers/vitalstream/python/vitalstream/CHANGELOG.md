@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- WFDB records with MATLAB signal files (`.mat`) are read once checked against their header, and
+  refused with the reason otherwise; a signal file (`.dat`, `.mat`) typed as the path to open or
+  browse is refused with the header to open in its place (`wfdb_files.check_mat_files` and
+  `signal_file_note`, with the Rust engine's checks and messages). Tests: `tests/test_wfdb_mat.py`.
 - The `[wfdb]` extra installs wfdb-x 1.2.1 (commit `4a91916`, was `a707ba9`), its library under
   the GNU LGPL v2.1 or later.
 - **WFDB support is the extra `[wfdb]`**: wfdb-x is no longer a required dependency. The

@@ -105,8 +105,10 @@ rather than held, so that guessing never occupies the server's threads. Indexes 
   root; the password scheme, with scrypt's test vectors; the synthetic recordings of
   [`testdata/`](../testdata), indexed and queried; WFDB records (one record, a multi-segment
   record, a folder of records read as one session, the limits on a folder, the key of a record,
-  cancelling), with the checks and expected values of the Rust engine's `tests/wfdb.rs`; and the
-  adapter protocol, with the mock adapter of the engine's tests;
+  cancelling), with the checks and expected values of the Rust engine's `tests/wfdb.rs`; MATLAB
+  signal files (`Wfdb.MatSignalFiles`: read as the `.dat` file, refused when transposed, a signal
+  file answered with its header), with the messages of `tests/wfdb_mat.rs`; and the adapter
+  protocol, with the mock adapter of the engine's tests;
 - [`test_edf.cpp`](vitalstream/tests/test_edf.cpp): EDF, EDF+ and BDF files, with the checks of
   the Rust engine's `tests/edf.rs`, the header dates and the annotation lists;
 - [`test_limits.cpp`](vitalstream/tests/test_limits.cpp): the engine's limits and checks, as the

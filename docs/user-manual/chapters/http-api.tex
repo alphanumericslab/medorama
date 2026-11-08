@@ -195,6 +195,9 @@ file's kind (\cref{sec:protecting-files}):
 \begin{itemize}
 \item a WFDB header (\file{.hea}): de-identified, its record and file names replaced by tokens;
 \item a WFDB signal file (\file{.dat}): as it is (it holds only samples);
+\item a WFDB signal file in a MATLAB file (\file{.mat}): its first matrix only, its descriptive
+  text and the matrix's name blanked; one that is not a MAT file WFDB reads is refused
+  (\code{403});
 \item a GE MUSE XML ECG (\file{.xml} with \code{<RestingECG>}): de-identified; any other XML
   file is refused (\code{403});
 \item a DICOM file: its header rewritten (the pseudonym, the dates moved, the UIDs replaced),
@@ -209,7 +212,7 @@ file's kind (\cref{sec:protecting-files}):
   \file{.webp}, \file{.bmp}, \file{.svg}, \file{.mp4}, \file{.m4v}, \file{.webm}, \file{.mov},
   \file{.ogv}, \file{.pdf}): as it is;
 \item anything else, JSON ECGs, text files and signal files with an extension other than
-  \file{.dat} among them: refused (\code{403}).
+  \file{.dat} or \file{.mat} among them: refused (\code{403}).
 \end{itemize}
 A file whose content the gate cannot inspect (a picture, a video, a PDF, DICOM pixels) carries
 the header \code{x-medorama-may-contain-phi: 1}, on which the page shows its warning. In Privacy

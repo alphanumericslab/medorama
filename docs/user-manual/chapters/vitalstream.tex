@@ -429,9 +429,11 @@ Two buttons at the top of the page, repeated in the empty page, open recordings
 \toprule
 \tabhead Button & \tabhead Opens \\
 \midrule
-\ui{Open record\dots} (\key{O}) & One record: a WFDB record (its \file{.hea} file; a multi-segment
-  record whole, or one of its segments alone, by the segment's own header), an EDF, EDF+, BDF or
-  BDF+ file, or a file in a format that an installed adapter reads \\
+\ui{Open record\dots} (\key{O}) & One record: a WFDB record (its \file{.hea} file, which names its
+  \file{.dat} or \file{.mat} signal files; a multi-segment record whole, or one of its segments
+  alone, by the segment's own header), an EDF, EDF+, BDF or BDF+ file, or a file in a format that
+  an installed adapter reads. A signal file typed as the path is refused with the header to open
+  in its place (\cref{sec:recordings-one}) \\
 \ui{Open multiple records\dots} (\key{Shift}+\key{O}) & A folder: every WFDB record in it and in
   its subfolders, on one time axis (one session), or a WFDB collection \\
 \bottomrule

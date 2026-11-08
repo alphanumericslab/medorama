@@ -136,50 +136,6 @@ std::string rust_f64(double x) {
 
 std::string shown(const fs::path& p) { return core::path_utf8(p); }
 
-// The home folder (HOME, else USERPROFILE; on Windows the other way round).
-std::string home_folder() {
-#ifdef _WIN32
-  const char* names[2] = {"USERPROFILE", "HOME"};
-#else
-  const char* names[2] = {"HOME", "USERPROFILE"};
-#endif
-  for (const char* n : names)
-    if (const char* v = std::getenv(n)) return v;
-#ifdef _WIN32
-  return "C:\\";
-#else
-  return "/";
-#endif
-}
-
-bool is_sep(char c) {
-#ifdef _WIN32
-  return c == '/' || c == '\\';
-#else
-  return c == '/';
-#endif
-}
-
-// The file a signal file name of a header designates, as wfdb-x opens it: ~ expanded, an absolute
-// name as given, any other next to the header.  Nothing for a signal without a file.  record: the
-// record's path without .hea.
-std::optional<fs::path> signal_file(const fs::path& record, const std::string& fname) {
-  if (fname.empty() || fname == "-" || fname == "~") return std::nullopt;
-  std::string f = fname;
-  if (f.size() >= 2 && f[0] == '~' && is_sep(f[1])) {
-    std::string h = home_folder();
-    while (!h.empty() && is_sep(h.back())) h.pop_back();
-#ifdef _WIN32
-    f = h + "\\" + f.substr(2);
-#else
-    f = h + "/" + f.substr(2);
-#endif
-  }
-  fs::path p = core::utf8_path(f);
-  if (p.is_absolute()) return p;
-  return record.parent_path() / p;
-}
-
 // Three times the bits a sample of WFDB storage format fmt takes, for the formats of fixed size
 // (nothing for the others: compressed, or unknown).
 std::optional<std::uint64_t> bits3(int fmt) {
@@ -355,11 +311,223 @@ struct Unit {
   std::optional<core::wfdbc::HeaderInfo> master;             // of a multi-segment record
 };
 
+// ------------------------------------------------------------------ MAT signal files
+
+// How a MAT file stores its matrix: element type, byte order, size and where the elements start;
+// bytes: the bytes of the elements a level 5 file states (nothing for level 4).
+enum class MatElem { I8, U8, I16, U16, I32, U32, I64, U64, F32, F64 };
+struct MatLayout {
+  MatElem elem;
+  bool big_endian;
+  std::uint64_t rows, cols, start;
+  std::optional<std::uint64_t> bytes;
+};
+
+std::uint64_t mat_size(MatElem e) {
+  switch (e) {
+    case MatElem::I8: case MatElem::U8: return 1;
+    case MatElem::I16: case MatElem::U16: return 2;
+    case MatElem::I32: case MatElem::U32: case MatElem::F32: return 4;
+    default: return 8;
+  }
+}
+
+const char* mat_text(MatElem e) {
+  switch (e) {
+    case MatElem::I8: return "8-bit integers";
+    case MatElem::U8: return "8-bit unsigned integers";
+    case MatElem::I16: return "16-bit integers";
+    case MatElem::U16: return "16-bit unsigned integers";
+    case MatElem::I32: return "32-bit integers";
+    case MatElem::U32: return "32-bit unsigned integers";
+    case MatElem::I64: return "64-bit integers";
+    case MatElem::U64: return "64-bit unsigned integers";
+    case MatElem::F32: return "single-precision numbers";
+    default: return "double-precision numbers";
+  }
+}
+
+// The elements a WFDB storage format reads from a MAT file, and their byte order (-1: either, for
+// one byte; 0 little-endian; 1 big-endian); nothing for a format no MAT matrix holds.
+std::optional<std::pair<MatElem, int>> mat_elem_of(std::int64_t fmt) {
+  switch (fmt) {
+    case 80: return std::make_pair(MatElem::U8, -1);
+    case 16: return std::make_pair(MatElem::I16, 0);
+    case 61: return std::make_pair(MatElem::I16, 1);
+    case 160: return std::make_pair(MatElem::U16, 0);
+    case 32: return std::make_pair(MatElem::I32, 0);
+    default: return std::nullopt;
+  }
+}
+
+struct NotMat {
+  std::string why;
+};
+
+std::uint32_t mat_word(const std::string& h, std::size_t i, bool be) {
+  if (i + 4 > h.size()) throw NotMat{"it ends inside its first matrix"};
+  auto b = [&](std::size_t k) { return static_cast<std::uint32_t>(static_cast<unsigned char>(h[i + k])); };
+  return be ? (b(0) << 24 | b(1) << 16 | b(2) << 8 | b(3)) : (b(3) << 24 | b(2) << 16 | b(1) << 8 | b(0));
+}
+
+MatLayout mat5_layout(const std::string& h) {
+  if (h.size() < 128 || !(h.compare(126, 2, "IM") == 0 || h.compare(126, 2, "MI") == 0))
+    throw NotMat{"it is not a MAT file (level 4 or 5) that WFDB reads"};
+  bool be = h.compare(126, 2, "MI") == 0;
+  auto b0 = static_cast<unsigned>(static_cast<unsigned char>(h[124])), b1 = static_cast<unsigned>(static_cast<unsigned char>(h[125]));
+  unsigned version = be ? (b0 << 8 | b1) : (b1 << 8 | b0);
+  if (version == 0x0200) throw NotMat{"it is a MATLAB 7.3 (HDF5) file: save it with save(..., '-v6') or '-v4'"};
+  if (version != 0x0100) {
+    char buf[16];
+    std::snprintf(buf, sizeof buf, "%#06x", version);
+    throw NotMat{std::string("it is a MAT file of an unknown version (") + buf + ")"};
+  }
+  // a data element: its type, bytes, where its data start and where the next element does; a
+  // small element packs type and bytes in 4 bytes, with its data in the next 4
+  struct Tag {
+    std::uint32_t type;
+    std::uint64_t bytes;
+    std::size_t data, next;
+  };
+  auto tag = [&](std::size_t i) {
+    std::uint32_t w = mat_word(h, i, be);
+    if (w >> 16) return Tag{w & 0xffff, w >> 16, i + 4, i + 8};
+    std::uint64_t n = mat_word(h, i + 4, be);
+    return Tag{w, n, i + 8, i + 8 + static_cast<std::size_t>((n + 7) / 8 * 8)};
+  };
+  Tag m = tag(128);
+  if (m.type == 15) throw NotMat{"it is compressed (MATLAB saves so by default): save it with save(..., '-v6') or '-v4'"};
+  if (m.type != 14) throw NotMat{"its first variable is not a matrix"};
+  // array flags: the class in the low byte, the complex flag (0x08) in the next
+  Tag fl = tag(m.data);
+  std::uint32_t flags = mat_word(h, fl.data, be), cls = flags & 0xff;
+  if ((flags >> 8) & 0x08) throw NotMat{"it holds a complex matrix"};
+  if (cls == 5) throw NotMat{"it holds a sparse matrix"};
+  if (cls < 6 || cls > 15) throw NotMat{"its first variable is not a numeric matrix"};
+  // dimensions: two 32-bit integers
+  Tag dims = tag(fl.next);
+  if (dims.bytes != 8)
+    throw NotMat{"its first variable has " + std::to_string(dims.bytes / 4) + " dimensions, not 2"};
+  std::uint64_t rows = mat_word(h, dims.data, be), cols = mat_word(h, dims.data + 4, be);
+  Tag name = tag(dims.next);
+  Tag real = tag(name.next);
+  MatElem e;
+  switch (real.type) {
+    case 1: e = MatElem::I8; break;
+    case 2: e = MatElem::U8; break;
+    case 3: e = MatElem::I16; break;
+    case 4: e = MatElem::U16; break;
+    case 5: e = MatElem::I32; break;
+    case 6: e = MatElem::U32; break;
+    case 7: e = MatElem::F32; break;
+    case 9: e = MatElem::F64; break;
+    case 12: e = MatElem::I64; break;
+    case 13: e = MatElem::U64; break;
+    default: throw NotMat{"its elements are of an unknown type (" + std::to_string(real.type) + ")"};
+  }
+  return MatLayout{e, be, rows, cols, real.data, real.bytes};
+}
+
+// The layout of the first matrix of a MAT file (level 4, or level 5 uncompressed), from its first
+// bytes; NotMat saying why it is not one WFDB can read.
+MatLayout mat_layout(const std::string& h) {
+  // level 5: "If any of the first four bytes is zero, it is a level 4 file" (the MAT-file format)
+  if (h.size() >= 4 && h[0] && h[1] && h[2] && h[3]) return mat5_layout(h);
+  if (h.size() < 20) throw NotMat{"it is too short for a MAT file"};
+  // the type MOPT: M the byte order (0 little-endian, 1 big-endian), O 0, P the element, T the kind
+  auto valid = [](std::uint32_t t, std::uint32_t m) {
+    return t < 5000 && t / 1000 == m && (t / 100) % 10 == 0 && (t / 10) % 10 <= 5;
+  };
+  bool be;
+  if (valid(mat_word(h, 0, false), 0)) be = false;
+  else if (valid(mat_word(h, 0, true), 1)) be = true;
+  else throw NotMat{"it is not a MAT file (level 4 or 5) that WFDB reads"};
+  std::uint32_t t = mat_word(h, 0, be);
+  if (t % 10) throw NotMat{t % 10 == 1 ? "it holds text, not a numeric matrix" : "it holds a sparse matrix"};
+  if (mat_word(h, 12, be)) throw NotMat{"it holds a complex matrix"};
+  const MatElem elems[6] = {MatElem::F64, MatElem::F32, MatElem::I32, MatElem::I16, MatElem::U16, MatElem::U8};
+  return MatLayout{elems[(t / 10) % 10], be, mat_word(h, 4, be), mat_word(h, 8, be), 20 + std::uint64_t{mat_word(h, 16, be)},
+                   std::nullopt};
+}
+
+// Why a MAT signal file does not match the header that names it: the matrix must hold the
+// elements of the header's format, one row per signal of the file (one per sample of a frame), one
+// column per frame, starting at the header's byte offset.  signals: the header's signals in this
+// file; nsamp: the record line's samples per signal (0: not stated).
+std::optional<std::string> mat_mismatch(const std::string& head, std::uint64_t size,
+                                        const std::vector<const SignalLine*>& signals, std::uint64_t nsamp) {
+  MatLayout l;
+  try {
+    l = mat_layout(head);
+  } catch (const NotMat& e) {
+    return e.why;
+  }
+  const SignalLine& s = *signals[0];
+  for (const auto* o : signals)
+    if (o->fmt != s.fmt)
+      return "the header gives it two storage formats (" + std::to_string(s.fmt) + " and " + std::to_string(o->fmt) + ")";
+  auto want = mat_elem_of(s.fmt);
+  if (!want)
+    return "the header gives format " + std::to_string(s.fmt) +
+           ", which no MAT matrix holds (8-bit: 80, 16-bit: 16 or 61, 32-bit: 32)";
+  auto endian = [](bool be) { return std::string(be ? "big-endian" : "little-endian"); };
+  auto [elem, order] = *want;
+  if (l.elem != elem || (order >= 0 && (order == 1) != l.big_endian)) {
+    std::string got = mat_size(l.elem) > 1 ? endian(l.big_endian) + " " + mat_text(l.elem) : std::string(mat_text(l.elem));
+    std::string w = order >= 0 ? endian(order == 1) + " " + mat_text(elem) : std::string(mat_text(elem));
+    return "it holds " + got + "; format " + std::to_string(s.fmt) + " reads " + w;
+  }
+  std::uint64_t rows = 0;
+  for (const auto* o : signals) rows += o->spf;
+  if (l.rows != rows) {
+    std::string hint = l.cols == rows ? " (it is transposed: one column per signal)" : "";
+    return "its matrix has " + std::to_string(l.rows) + " rows; the header gives " + std::to_string(rows) +
+           " signals in it, one row each" + hint;
+  }
+  if (l.start != s.offset)
+    return "its samples start at byte " + std::to_string(l.start) + "; the header gives +" + std::to_string(s.offset);
+  if (nsamp > 0 && l.cols != nsamp)
+    return "it holds " + std::to_string(l.cols) + " samples per signal; the header gives " + std::to_string(nsamp);
+  std::uint64_t need = l.rows * l.cols * mat_size(l.elem);
+  if ((l.bytes && *l.bytes != need) || size < l.start + need)
+    return "it is shorter than its " + std::to_string(l.rows) + " × " + std::to_string(l.cols) + " matrix";
+  return std::nullopt;
+}
+
+// Throws for the first MAT signal file (.mat) of a single-segment header that does not match it
+// (mat_mismatch): a MAT file is read as WFDB reads a signal file, its matrix as frames from the
+// header's byte offset, so a file of another layout (compressed, of doubles, transposed) would be
+// read as noise.  Files that cannot be opened, or lie outside the data roots, are not checked here
+// (reading them fails).
+void check_mat_files(const fs::path& hea) {
+  auto [nsamp, signals] = header_record(hea);
+  OrderedMap<std::string, std::vector<const SignalLine*>> files;
+  for (const auto& s : signals)
+    if (lower_extension(core::utf8_path(s.file)) == ".mat") files.entry(s.file).push_back(&s);
+  for (const auto& [file, sigs] : files) {
+    auto p = signal_file(with_extension(hea, ""), file);
+    if (!p || !allowed_file(*p)) continue;
+    std::FILE* fh = core::open_file(core::path_utf8(*p), "rb");
+    if (!fh) continue;
+    std::string head(512, '\0');
+    head.resize(std::fread(head.data(), 1, head.size(), fh));
+    std::fclose(fh);
+    std::error_code ec;
+    auto size = fs::file_size(*p, ec);
+    if (ec) continue;
+    if (auto why = mat_mismatch(head, size, sigs, nsamp))
+      throw std::runtime_error(file + " does not match its header " + core::path_utf8(hea.filename()) + ": " + *why);
+  }
+}
+
 // The record `name` (relative to base), with `row` from index.csv or nothing.
 Unit unit(const fs::path& base, const std::string& name, std::optional<Row> row) {
   check_files(base, name);
   fs::path path = join(base, name);
   auto h = header(path);
+  // a MAT signal file is read as frames from the header's byte offset: one of another layout
+  // would be read as noise
+  check_mat_files(with_ext(path, ".hea"));
   Unit u;
   u.name = name;
   if (row) {

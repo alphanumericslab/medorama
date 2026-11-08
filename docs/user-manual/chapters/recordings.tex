@@ -166,6 +166,71 @@ header), its \file{.mrk} file and, for a multi-segment record, those of its segm
 opens none of them when it leads outside its data roots, symbolic links resolved
 (\cref{sec:formats-reference-roots}).
 
+\paragraph{A record is opened by its header.} A signal file (\file{.dat}, \file{.mat}) is not a
+record of its own: opened or added by itself (a path typed in a viewer's file browser,
+\code{medorama add}, a table's \code{file} column), it is refused with what to open in its place:
+\emph{100.dat is a WFDB signal file: open its header, 100.hea} when the header of the same name
+next to it names it, else \emph{\dots{} open the header (.hea) that names it}. The ECG viewer,
+which reads only the files chosen in it, asks for the header in the same words
+(\cref{sec:ecg-viewer-open-wfdb}).
+
+\subsection{MATLAB signal files}
+\label{sec:wfdb-mat}
+
+A record's signal file may be a MATLAB file (\file{.mat}) paired with a header: the
+PhysioNet/CinC Challenge files (\file{A0001.hea} with \file{A0001.mat}), and those
+\code{wfdb2mat} writes (\file{100m.hea} with \file{100m.mat}). Such a file holds one matrix,
+\code{val}, of one row per signal and one column per sample; MATLAB stores a matrix column by
+column, so its samples are in the frame order of a \file{.dat} file. Its header names it like any
+signal file, with the byte offset of the samples:
+
+\begin{lstlisting}[style=text]
+A0001 12 500 7500
+A0001.mat 16+24 1000/mV 16 0 28 -1716 0 I
+...
+\end{lstlisting}
+
+It is read as WFDB reads any signal file, from that offset, and gives the same samples as the
+\file{.dat} file of the same record. MATLAB files of \emph{level 4} (\code{+24} for a matrix named
+\code{val}) and of \emph{level 5, uncompressed} (\code{+192} as \code{wfdb2mat} writes them;
+\code{+184} as MATLAB's \code{save(..., '-v6')} does) are read.
+
+Because a MAT file of another layout would be read as noise, the readers (Medorama, the three
+VitalStream viewers and the ECG viewer, with the same messages) first check that the file
+matches its header, and refuse the record otherwise (\emph{A0001.mat does not match its header
+A0001.hea: \dots}, listed among a folder's skipped records). \Cref{tab:wfdb-mat} lists the checks.
+
+\begin{table}[htbp]
+\caption{What the first matrix of a MATLAB signal file must be.}
+\label{tab:wfdb-mat}
+\begin{tabularx}{\linewidth}{@{}P{5.2cm}L@{}}
+\toprule
+{\tabhead Check} & {\tabhead Refused, for example} \\
+\midrule
+A MAT file of level 4, or of level 5 not compressed & \emph{it is compressed (MATLAB saves so
+  by default): save it with save(..., '-v6') or '-v4'}; a MATLAB 7.3 (HDF5) file \\
+Real numbers, as a full matrix & A complex, sparse or text matrix \\
+The elements of the header's format, in its byte order & \emph{it holds little-endian
+  double-precision numbers; format 16 reads little-endian 16-bit integers} \\
+One row per signal of the file (one per sample of a frame) & \emph{its matrix has 7500 rows; the
+  header gives 12 signals in it, one row each (it is transposed: one column per signal)} \\
+Its samples at the header's byte offset & \emph{its samples start at byte 24; the header gives
+  +0} \\
+As many columns as the header states samples (when it states them) & \emph{it holds 5000
+  samples per signal; the header gives 7500} \\
+As long as its matrix & \emph{it is shorter than its 12 $\times$ 7500 matrix} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The formats and the elements they read: 16 (16-bit integers, little-endian), 61 (16-bit,
+big-endian), 160 (16-bit unsigned, little-endian), 80 (8-bit unsigned) and 32 (32-bit integers,
+little-endian); a \file{.mat} file of any other format is refused. A MAT file may hold other
+variables after the first matrix: they are not read. A \file{.mat} file a header names is checked
+whatever its name; a \file{.dat} file is read as WFDB reads it, without these checks. In Privacy
+Mode, Medorama sends a MAT signal file's first matrix only, with its descriptive text and the
+matrix's name blanked (\cref{sec:protecting-files}).
+
 \subsection{Multi-segment records}
 \label{sec:recordings-multi}
 

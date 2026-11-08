@@ -8,7 +8,7 @@ use crate::db::{audit, now};
 use crate::sql::{params, Connection, OptionalExtension};
 use crate::users::User;
 use recording_engine::index::cache_key;
-use recording_engine::sources::{kind_of, unreadable};
+use recording_engine::sources::{kind_of, unreadable, wfdb_folder};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
@@ -225,7 +225,8 @@ fn find(path: &Path, recursive: bool, out: &mut Vec<(PathBuf, String)>, skipped:
         return;
     }
     if !path.is_dir() {
-        skipped.push((path.to_string_lossy().to_string(), "not a recording this program reads".into()));
+        let why = wfdb_folder::signal_file_note(path).unwrap_or_else(|| "not a recording this program reads".into());
+        skipped.push((path.to_string_lossy().to_string(), why));
         return;
     }
     let Ok(it) = std::fs::read_dir(path) else {

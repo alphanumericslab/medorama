@@ -49,7 +49,7 @@ tabs:
   - title: Documentation
     url: /docs/
     also: [/libs/, /tools/, /THIRD_PARTY_LICENSES.html, /COMMERCIAL.html, /CLA.html]
-  - { title: Manual,        url: /docs/user-manual/ }
+  - { title: Manual,        url: /docs/user-manual/medorama-user-manual.pdf, match: /docs/user-manual/ }
 
 # Publish the documentation and the two live viewers, not the sources, build outputs, tests and
 # local data. Links from a page to a file that is not published lead to it on GitHub

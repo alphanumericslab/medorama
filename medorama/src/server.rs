@@ -1556,6 +1556,16 @@ fn attachment_response(
             Ok(text_response(crate::gate::wfdb_header(&g, &text, &record, &tokens, (&who, &birth))))
         }
         FileKind::Signal => Ok(cleared(file_response(path, mime, None, 0)?)),
+        FileKind::MatSignal => {
+            let refused = |e: String| forbidden(&format!("not available in Privacy Mode: {e}"));
+            let mut head = Vec::with_capacity(512);
+            let mut f = std::fs::File::open(path).map_err(|_| not_found())?;
+            let size = f.metadata().map_err(|_| not_found())?.len();
+            std::io::Read::read_to_end(&mut std::io::Read::take(&mut f, 512), &mut head).map_err(|_| not_found())?;
+            let (head, from, until) =
+                recording_engine::sources::wfdb_folder::mat_deidentified(&head, size).map_err(refused)?;
+            Ok(cleared(file_part_response(path, mime, Some(head), from, Some(until))?))
+        }
         FileKind::MuseXml => {
             let text = String::from_utf8_lossy(&std::fs::read(path).map_err(|_| not_found())?).to_string();
             if !text.contains("<RestingECG") {
@@ -1664,15 +1674,28 @@ fn file_response(
     head: Option<Vec<u8>>,
     from: u64,
 ) -> Result<Response, ApiError> {
+    file_part_response(path, mime, head, from, None)
+}
+
+/// [`file_response`] of the file's bytes up to `until` (its end when None).
+fn file_part_response(
+    path: &std::path::Path,
+    mime: &'static str,
+    head: Option<Vec<u8>>,
+    from: u64,
+    until: Option<u64>,
+) -> Result<Response, ApiError> {
     {
         use std::io::{Seek, SeekFrom};
         use tokio::io::AsyncReadExt;
         let mut f = std::fs::File::open(path).map_err(|_| not_found())?;
         let size = f.metadata().map_err(|_| not_found())?.len();
-        f.seek(SeekFrom::Start(from.min(size))).map_err(|_| not_found())?;
-        let len = size - from.min(size) + head.as_ref().map_or(0, |h| h.len() as u64);
+        let end = until.map_or(size, |u| u.min(size));
+        f.seek(SeekFrom::Start(from.min(end))).map_err(|_| not_found())?;
+        let len = end - from.min(end) + head.as_ref().map_or(0, |h| h.len() as u64);
         let first = futures_util::stream::iter(head.map(Ok::<_, std::io::Error>));
-        let rest = futures_util::stream::unfold(Some(tokio::fs::File::from_std(f)), |f| async move {
+        let f = tokio::fs::File::from_std(f).take(end - from.min(end));
+        let rest = futures_util::stream::unfold(Some(f), |f| async move {
             let mut f = f?;
             let mut buf = vec![0u8; 256 * 1024];
             match f.read(&mut buf).await {

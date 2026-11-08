@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- WFDB records with MATLAB signal files (`.mat`) are read once checked against their header, and
+  refused with the reason otherwise; a signal file (`.dat`, `.mat`) typed as the path to open or
+  browse is refused with the header to open in its place (the engine's `check_mat_files` and
+  `signal_file_note`; [docs/wfdb-collection.md](../../../docs/wfdb-collection.md#matlab-signal-files)).
 - **A build without WFDB support**: the Cargo feature `wfdb` (default features: `password`,
   `wfdb`), so that `--no-default-features --features password` (or `install.sh --no-wfdb`)
   contains no wfdb-x code. Such a viewer lists WFDB records and folders, refuses to open or scan

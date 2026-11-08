@@ -405,6 +405,83 @@ TEST(Wfdb, CancellingLeavesNothing) {
   fs::remove_all(dir);
 }
 #ifndef _WIN32
+namespace {
+
+// Two signals of eight samples each, frame by frame (as libs/engine/tests/wfdb_mat.rs).
+const std::int16_t MAT_SAMPLES[8][2] = {{0, 800}, {10, 810}, {20, 790}, {-15, 805}, {5, 800}, {30, 820}, {-40, 780}, {0, 800}};
+
+std::string mat_frames() {
+  std::string out;
+  for (const auto& f : MAT_SAMPLES)
+    for (std::int16_t v : f) {
+      out += static_cast<char>(v & 0xff);
+      out += static_cast<char>((v >> 8) & 0xff);
+    }
+  return out;
+}
+
+// A level 4 MAT file (little-endian): its type (MOPT), rows, columns and the name "val", then data.
+std::string mat4(std::uint32_t type, std::uint32_t rows, std::uint32_t cols, const std::string& data) {
+  std::string out;
+  for (std::uint32_t v : {type, rows, cols, 0u, 4u})
+    for (int k = 0; k < 4; ++k) out += static_cast<char>((v >> (8 * k)) & 0xff);
+  return out + std::string("val\0", 4) + data;
+}
+
+void mat_header(const fs::path& dir, const std::string& name, const std::string& file, const std::string& fmt) {
+  int a = 0, b = 0;
+  for (const auto& f : MAT_SAMPLES) a += f[0], b += f[1];
+  std::ofstream(dir / (name + ".hea")) << name << " 2 250 8 11:00:00 01/03/2024\n"
+                                        << file << " " << fmt << " 200/mV 16 0 0 " << static_cast<std::int16_t>(a) << " 0 II\n"
+                                        << file << " " << fmt << " 10/mmHg 16 0 800 " << static_cast<std::int16_t>(b) << " 0 ART\n";
+}
+
+// The index files of a record (all but meta.json, which names its files).
+std::vector<std::pair<std::string, std::string>> index_arrays(const fs::path& hea, const fs::path& cache) {
+  std::string key = build_index(hea, cache, [](double) {});
+  std::vector<std::pair<std::string, std::string>> out;
+  for (const auto& e : fs::directory_iterator(cache / key)) {
+    if (e.path().filename() == "meta.json") continue;
+    std::ifstream f(e.path(), std::ios::binary);
+    out.emplace_back(e.path().filename().string(), std::string(std::istreambuf_iterator<char>(f), {}));
+  }
+  std::sort(out.begin(), out.end());
+  return out;
+}
+
+}  // namespace
+
+// A MAT signal file is read as the .dat file of the same samples; one that does not match its
+// header is refused; a signal file says to open its header (as libs/engine/tests/wfdb_mat.rs).
+TEST(Wfdb, MatSignalFiles) {
+  VS_NEEDS_WFDB();
+  fs::path dir = temp_dir("vs_wfdb_mat");
+  fs::path cache = dir / "cache";
+  std::ofstream(dir / "r.dat", std::ios::binary) << mat_frames();
+  mat_header(dir, "r", "r.dat", "16");
+  std::ofstream(dir / "m4.mat", std::ios::binary) << mat4(30, 2, 8, mat_frames());
+  mat_header(dir, "m4", "m4.mat", "16+24");
+  EXPECT_EQ(index_arrays(dir / "m4.hea", cache), index_arrays(dir / "r.hea", cache));
+  std::ofstream(dir / "tr.mat", std::ios::binary) << mat4(30, 8, 2, mat_frames());
+  mat_header(dir, "tr", "tr.mat", "16+24");
+  std::string e;
+  try {
+    build_index(dir / "tr.hea", cache, [](double) {});
+  } catch (const std::exception& x) {
+    e = x.what();
+  }
+  EXPECT_EQ(e, "tr.mat does not match its header tr.hea: its matrix has 8 rows; the header gives 2 signals in it, one "
+               "row each (it is transposed: one column per signal)");
+  EXPECT_EQ(signal_file_note(dir / "r.dat").value_or(""), "r.dat is a WFDB signal file: open its header, r.hea");
+  EXPECT_EQ(signal_file_note(dir / "tr.mat").value_or(""), "tr.mat is a WFDB signal file: open its header, tr.hea");
+  std::ofstream(dir / "lone.dat", std::ios::binary) << mat_frames();
+  EXPECT_EQ(signal_file_note(dir / "lone.dat").value_or(""),
+            "lone.dat is a WFDB signal file: open the header (.hea) that names it");
+  EXPECT_FALSE(signal_file_note(dir / "r.hea"));
+  EXPECT_FALSE(kind_of(dir / "r.dat"));
+  fs::remove_all(dir);
+}
+
 TEST(Adapters, EndToEnd) {
   if (std::system("python3 --version > /dev/null 2>&1") != 0 || !fs::exists(VS_FAKE_ADAPTER))
     GTEST_SKIP() << "no python3 or no mock adapter";

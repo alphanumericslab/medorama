@@ -14,7 +14,7 @@ from pathlib import Path
 from .. import adapters
 from ..common import json_loads
 from . import edf
-from .wfdb_files import NO_WFDB
+from .wfdb_files import NO_WFDB, signal_file_note
 
 try:
     from . import wfdb_folder
@@ -52,6 +52,12 @@ def kind_of(path):
     return None
 
 
+def not_a_recording(p):
+    """Why `p` is not opened as a recording: for a WFDB signal file (.dat, .mat), to open its
+    header in its place; else that it is not a recording this program reads."""
+    return signal_file_note(p) or f'not a recording this program reads: {p}'
+
+
 def format_label(path):
     """The label of the format a recording at `path` is read as ('WFDB record', 'EDF+', an
     adapter's label), or ''."""
@@ -82,7 +88,7 @@ def build(path, folder, progress, cancelled=lambda: False):
         return meta, arrays
     found = adapters.for_file(p)
     if found is None:
-        raise ValueError(f'not a recording this program reads: {p}')
+        raise ValueError(not_a_recording(p))
     adapter, fmt = found
     adapters.index(adapter, p, folder, progress, cancelled)
     try:

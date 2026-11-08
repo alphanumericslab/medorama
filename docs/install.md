@@ -204,4 +204,4 @@ password; Medorama's installer already puts `dicom-py` into its `.venv`. The
 | [Get started](getting-started.md) | A guided tour of Medorama with the demo, and how to remove the demo. |
 | [Building and installing](building.md) | Every build option, machines without administrator rights or internet access, updating and uninstalling, and troubleshooting. |
 | [Administration](administration.md) | Running Medorama for other people: settings, PostgreSQL, imports, users, the audit log, deployment and backups. |
-| [User's manual](user-manual) | The complete manual, installation included. |
+| [User's manual](user-manual/medorama-user-manual.pdf) | The complete manual, installation included. |

@@ -462,7 +462,7 @@ def create_app(settings, protected=None):
         if k is not None and not os.path.isdir(p):
             return {'path': p, 'type': 'file'}
         if not os.path.isdir(p):
-            raise HTTPException(400, f'not a folder or a recording this viewer reads: {p}')
+            raise HTTPException(400, wfdb_folder.signal_file_note(p) or f'not a folder or a recording this viewer reads: {p}')
         try:
             names = sorted(os.listdir(p), key=str.lower)
         except PermissionError:
@@ -556,7 +556,7 @@ def create_app(settings, protected=None):
     def open_path(path, reindex):
         p = check_path(path)
         if not os.path.isdir(p) and kind_of(p) is None:
-            raise HTTPException(400, f'not a recording this viewer reads: {p}')
+            raise HTTPException(400, wfdb_folder.signal_file_note(p) or f'not a recording this viewer reads: {p}')
         # a WFDB record or folder without WFDB support
         why = unreadable(p)
         if why:

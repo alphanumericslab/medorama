@@ -360,6 +360,11 @@ WFDB header (\file{.hea}) & Comments that identify the patient (name, ID, MRN, d
   \code{90+}; the record's name and its signal files' names are replaced by tokens. \\
 WFDB samples (\file{.dat}) & Sent as they are (they hold only numbers) when a header of the same
   item names them; any other \file{.dat} file is refused. \\
+WFDB samples in a MATLAB file (\file{.mat}) & When a header of the same item names it: its first
+  matrix only (the samples WFDB reads; other variables after it are not sent), with the file's
+  descriptive text (the program, the computer and the time it was written) and the matrix's name
+  blanked. A \file{.mat} file that is not a MATLAB file WFDB reads (level 4, or level 5 not
+  compressed), and any other \file{.mat} file, is refused. \\
 GE MUSE XML (\file{.xml} with a \code{RestingECG} element) & The patient's demographics are
   removed except age (capped) and sex, whatever attributes or spaces their tags hold; the order
   is removed; staff names become \code{[Staff Name]} and their IDs are emptied; a patient's name

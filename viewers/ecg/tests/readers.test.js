@@ -30,7 +30,14 @@ test('every reader of the page is in the registry, in order, the page\'s own kin
   }
   assert.deepStrictEqual(Readers.labels(), Readers.all().map((r) => r.label));
   const accept = Readers.accept().split(',');
-  for (const e of ['.hea', '.dat', '.xml', '.dcm', '.edf', '.bdf', '.json', '.pdf', '.png', '.jpg']) assert.ok(accept.includes(e), e);
+  for (const e of ['.hea', '.xml', '.dcm', '.edf', '.bdf', '.json', '.pdf', '.png', '.jpg']) assert.ok(accept.includes(e), e);
+  // a WFDB record is chosen by its header; its signal files after it, with a chooser of their own
+  assert.ok(!accept.includes('.dat') && !accept.includes('.mat'));
+  assert.strictEqual(Readers.companions(), '.dat,.mat');
+  assert.strictEqual(Readers.companionOf('100.dat')?.key, 'wfdb');
+  assert.strictEqual(Readers.companionOf('A0001.MAT')?.key, 'wfdb');
+  assert.strictEqual(Readers.companionOf('100.hea'), null);
+  assert.strictEqual(Readers.companionOf('a.xml'), null);
 });
 
 test('by extension, in any case', () => {

@@ -73,7 +73,7 @@ records…** and select the `examples/` folder.
 
 | File | How it is shown |
 |---|---|
-| A WFDB record: the `.hea` header with its signal files (choose them together) | Drawn on paper. Signal formats 8, 16, 24, 32, 61, 80, 160 and 212 are read, and the first 10 seconds are shown. A skewed signal (`16:3`) is read that many frames later, as the WFDB library reads it. The header's comments (`# QT: 410 ms`, `# Dx: …`) become the report. Where the header leaves a value out, WFDB's own defaults apply: 250 Hz, a gain of 200 adu/mV (also for a gain of 0), millivolts, and the baseline at the ADC zero. (VitalStream, unlike this viewer, reads only what a header states.) |
+| A WFDB record: the `.hea` header, then its signal files ([below](#wfdb-records)) | Drawn on paper. Signal formats 8, 16, 24, 32, 61, 80, 160 and 212 are read, and the first 10 seconds are shown (no more than the header states). A signal file may be a MATLAB file (`.mat`, the PhysioNet Challenge files and those `wfdb2mat` writes) that matches its header ([docs/wfdb-collection.md](../../docs/wfdb-collection.md#matlab-signal-files)). A skewed signal (`16:3`) is read that many frames later, as the WFDB library reads it. The header's comments (`# QT: 410 ms`, `# Dx: …`) become the report. Where the header leaves a value out, WFDB's own defaults apply: 250 Hz, a gain of 200 adu/mV (also for a gain of 0), millivolts, and the baseline at the ADC zero. (VitalStream, unlike this viewer, reads only what a header states.) |
 | A WFDB multi-segment record: the master header with its segments' headers and signal files | The same. The segments follow each other from the record's start; a null segment, and a lead that a segment does not hold, are gaps. |
 | GE MUSE XML (resting ECG) | Drawn on paper: the rhythm strip, with leads III, aVR, aVL and aVF derived from I and II. The report holds the test's details, the measurements, the Marquette 12SL statements and the confirmed or edited ones. |
 | A DICOM ECG (a 12-lead, Holter or other waveform object) | Drawn on paper, with its annotations as the report. Any other DICOM file is refused, with a pointer to the [PACS viewer](../pacs/README.md). |
@@ -89,7 +89,7 @@ read is refused with a message that lists the formats it reads.
 
 | Control | Opens |
 |---|---|
-| **Open record…** | One ECG: choose its file, or a WFDB record's `.hea` together with its signal files (and a multi-segment record's segments). |
+| **Open record…** | One ECG: choose its file; of a WFDB record, its `.hea` header, and the page asks for its signal files ([below](#wfdb-records)). |
 | **Open multiple records…** | A folder: every ECG in it and in its subfolders, one at a time. ‹ and › (or `←` and `→`) step through them, and the list between them picks one. The title shows the ECG's path in the folder and its place (`3 of 12`). |
 | Drop | The files dropped onto the page, as with **Open record…**. |
 | **Server folders…** | The folders of the computer serving the page. The button is shown only when the page is served by `muse-py serve` ([below](#serve-it-from-a-computer-muse-py-serve)). |
@@ -102,6 +102,29 @@ folder and name:
   are taken from its own folder.
 - A folder of more than 5000 ECGs is refused, so that a large folder chosen by mistake cannot
   overwhelm the page: open a subfolder instead.
+
+### WFDB records
+
+A page reads only the files chosen in it, not the folder they lie in. So a WFDB record is opened
+in two steps:
+1. **Open record…** lists the files the viewer opens, a record's `.hea` header among them, but
+   not its signal files.
+2. Once the header is chosen, the page names the file it needs, `This record's samples are in
+   100.dat: choose it`, with a button that opens a second chooser of signal files (`.dat`,
+   `.mat`). The file chosen must be the one the header names: another is refused, and asked for
+   again. A multi-segment record asks in turn for its segments' headers and their signal files;
+   all of a record's files can also be chosen at once.
+
+A signal file chosen alone (or dropped) asks for its header: `100.dat is a WFDB signal file:
+choose its header (100.hea, or the .hea file that names it)`; it is kept, and read once the
+header is chosen. Dropping a header together with its signal files, or opening a folder (**Open
+multiple records…**), needs no second step. Nor does a record opened from an address (`#src=`,
+[below](#opened-by-another-program)): Medorama's ECG pages, and any program that serves a record's
+files next to each other, let the page fetch the signal files itself.
+
+A MATLAB signal file that does not match its header (compressed, of doubles, transposed, of
+another offset or length) is refused with the reason, with the same messages as Medorama and
+VitalStream ([docs/wfdb-collection.md](../../docs/wfdb-collection.md#matlab-signal-files)).
 
 ## Read an ECG
 
@@ -298,7 +321,8 @@ Medorama, whose cohorts search those columns. Both readers are tested on the sam
 ## Opened by another program
 
 `index.html#src=URL` shows the file at `URL`; a WFDB header's signal files (and a multi-segment
-record's segments) are read beside it. The fragment may also hold:
+record's segments) are fetched beside it, by the names the header gives them (`URL`'s folder,
+then the name: a program that embeds the viewer serves them there). The fragment may also hold:
 
 | Parameter | Effect |
 |---|---|
@@ -353,8 +377,9 @@ pytest viewers/ecg/python/muse/tests
 
 | Test | Checks |
 |---|---|
-| `readers.test.js` | The registry: what a file is, by its extension or its content, and which reader reads it. |
+| `readers.test.js` | The registry: what a file is, by its extension or its content, and which reader reads it; the file chooser's extensions, and the companions chosen after (WFDB signal files). |
 | `ecg.test.js` | WFDB records (single- and multi-segment), the JSON form, the report read from header comments (never the identity), and the calipers' snapping to the trace. |
+| `wfdb-mat.test.js` | WFDB records with MATLAB signal files: read as the `.dat` file, refused when they do not match their header (the engine's messages), no more samples than the header states, a missing signal file named. |
 | `muse.test.js` | The JavaScript MUSE reader against the Python one, on the same synthetic file. |
 | `dicom.test.js` | A DICOM ECG waveform read into the viewer. |
 | `edf.test.js` | EDF, EDF+, BDF and BDF+ files as ECG records. |

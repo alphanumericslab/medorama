@@ -1347,14 +1347,16 @@ fn import_row(
             // a recording in a format no installed reader reads (one an add-on reads, not yet
             // installed), and no file a viewer opens: not kept as an attachment nothing could
             // open; the row comes in when the table is imported again
-            warn(
-                &mut rep.warnings,
-                format!(
-                    "{line}: {}: not a recording Medorama reads. A format read by an add-on needs it \
-                     installed (docs/adapters.md); then remove this import and import the table again.",
-                    g("file")
-                ),
+            // a WFDB signal file: its header is the recording
+            let why = recording_engine::sources::wfdb_folder::signal_file_note(&abs).map_or_else(
+                || {
+                    "not a recording Medorama reads. A format read by an add-on needs it installed \
+                     (docs/adapters.md); then remove this import and import the table again."
+                        .to_string()
+                },
+                |n| format!("{n} (name it in the file column, then import the table again)"),
             );
+            warn(&mut rep.warnings, format!("{line}: {}: {why}", g("file")));
             note.status = "skipped";
             return Ok(None);
         } else {

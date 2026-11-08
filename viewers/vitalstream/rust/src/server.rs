@@ -430,7 +430,9 @@ async fn browse(State(app): State<Shared>, RawQuery(raw): RawQuery) -> Result<Re
             return ok(Value::Dict(dict! { "path" => p, "type" => "file" }));
         }
         if !Path::new(&p).is_dir() {
-            return Err(err(StatusCode::BAD_REQUEST, format!("not a folder or a recording this viewer reads: {p}")));
+            let why = wfdb_folder::signal_file_note(Path::new(&p))
+                .unwrap_or_else(|| format!("not a folder or a recording this viewer reads: {p}"));
+            return Err(err(StatusCode::BAD_REQUEST, why));
         }
         let names = sorted_names(&p).map_err(|_| err(StatusCode::FORBIDDEN, format!("permission denied: {p}")))?;
         // the segments and layout headers of the multi-segment records here: part of those
@@ -566,7 +568,9 @@ async fn open(State(app): State<Shared>, req: Request) -> Result<Response, ApiEr
     let p = app.check_path(&req.path)?;
     let path = Path::new(&p).to_path_buf();
     if !path.is_dir() && kind_of(&path).is_none() {
-        return Err(err(StatusCode::BAD_REQUEST, format!("not a recording this viewer reads: {p}")));
+        let why =
+            wfdb_folder::signal_file_note(&path).unwrap_or_else(|| format!("not a recording this viewer reads: {p}"));
+        return Err(err(StatusCode::BAD_REQUEST, why));
     }
     // a WFDB record or folder in a build without WFDB support
     if let Some(why) = unreadable(&path) {

@@ -115,6 +115,10 @@ the package afresh with wfdb-x made unimportable.
   the mock adapter of the engine's tests; the viewer's root and the settings keys; the file
   browser (links, typed paths, completion, records and their segments); `scan`, `open` and
   `cancel`; a build without password support; the password; and the page behind a path prefix.
+- [`test_wfdb_mat.py`](tests/test_wfdb_mat.py) tests MATLAB signal files with the checks and
+  messages of the Rust engine's `libs/engine/tests/wfdb_mat.rs`: read as the `.dat` file,
+  refused when they do not match their header, and a signal file opened alone answered with its
+  header.
 - [`test_edf.py`](tests/test_edf.py) tests EDF, EDF+ and BDF files with the checks of the Rust
   engine's `tests/edf.rs`, the header dates and the annotation lists.
 - [`test_limits.py`](tests/test_limits.py) tests the limits and checks shared with the Rust

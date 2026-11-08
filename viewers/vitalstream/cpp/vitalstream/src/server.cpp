@@ -816,7 +816,10 @@ void add_routes(httplib::Server& svr, std::shared_ptr<App> app) {
             bool dir = fs::is_directory(core::utf8_path(p), ec);
             // a recording file (a WFDB record's .hea, or a file an adapter reads)
             if (k && !dir) return json(res, 200, Value(Dict{{"path", Value(p)}, {"type", Value("file")}}));
-            if (!dir) throw ApiError{400, "not a folder or a recording this viewer reads: " + p};
+            if (!dir) {
+              auto note = signal_file_note(core::utf8_path(p));
+              throw ApiError{400, note ? *note : "not a folder or a recording this viewer reads: " + p};
+            }
             auto names = sorted_names(p);
             if (!names) throw ApiError{403, "permission denied: " + p};
             // the segments and layout headers of the multi-segment records here: part of those
@@ -935,7 +938,10 @@ void add_routes(httplib::Server& svr, std::shared_ptr<App> app) {
              std::error_code ec;
              const fs::path path = core::utf8_path(p);
              const bool dir = fs::is_directory(path, ec);
-             if (!dir && !kind_of(path)) throw ApiError{400, "not a recording this viewer reads: " + p};
+             if (!dir && !kind_of(path)) {
+               auto note = signal_file_note(path);
+               throw ApiError{400, note ? *note : "not a recording this viewer reads: " + p};
+             }
              // a WFDB record or folder in a build without WFDB support
              if (auto why = unreadable(path)) throw ApiError{422, *why};
              // one record: every file it reads lies inside the data roots (its signal files may be links)

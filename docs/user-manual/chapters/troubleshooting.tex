@@ -92,9 +92,10 @@ A search is refused in Privacy Mode & Searches of names, MRNs, dates of birth, a
   or withheld columns are refused there; find patients by their pseudonyms, or leave Privacy
   Mode with the PHI permission (\cref{chap:users-privacy}) \\
 A file does not open in Privacy Mode (403) & Privacy Mode sends only the files it can
-  de-identify or mark (WFDB headers and \file{.dat} signal files, GE MUSE XML, DICOM, EDF and BDF,
-  pictures, videos and PDF) and refuses the rest: JSON ECGs, text files, signal files with an
-  extension other than \file{.dat}, deflated or big-endian DICOM, and EDF+ files with annotations
+  de-identify or mark (WFDB headers and their \file{.dat} and \file{.mat} signal files, GE MUSE
+  XML, DICOM, EDF and BDF, pictures, videos and PDF) and refuses the rest: JSON ECGs, text files,
+  signal files with an extension other than \file{.dat} or \file{.mat}, MATLAB files that are
+  compressed or not MAT files WFDB reads, deflated or big-endian DICOM, and EDF+ files with annotations
   larger than 64\,MB, which VitalStream still shows (\cref{sec:protecting-files}) \\
 Notes read \code{[Withheld]} in Privacy Mode & The admin withholds \ui{The text of notes and
   reports} in \ui{Admin} $\rightarrow$ \ui{Privacy Mode}; by default notes are shown, the

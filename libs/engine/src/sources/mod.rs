@@ -63,6 +63,12 @@ pub fn kind_of(p: &Path) -> Option<String> {
     None
 }
 
+/// Why `p` is not opened as a recording: for a WFDB signal file (`.dat`, `.mat`), to open its
+/// header in its place; else that it is not a recording this program reads.
+pub fn not_a_recording(p: &Path) -> String {
+    wfdb_folder::signal_file_note(p).unwrap_or_else(|| format!("not a recording this program reads: {}", p.display()))
+}
+
 /// The label of the format a recording at `p` is read as (`WFDB record`, `EDF+`, an adapter's
 /// label), or an empty string.
 pub fn format_label(p: &Path) -> String {
@@ -95,8 +101,7 @@ pub(crate) fn build(path: &Path, dir: &Path, progress: &dyn Fn(f64), cancelled: 
         meta.insert("format".into(), edf::format_label(path).into());
         return Ok(Building::Here((meta, arrays)));
     }
-    let (adapter, format) = adapters::for_file(path)
-        .ok_or_else(|| Error::Value(format!("not a recording this program reads: {}", path.display())))?;
+    let (adapter, format) = adapters::for_file(path).ok_or_else(|| Error::Value(not_a_recording(path)))?;
     adapter.index(path, dir, progress, cancelled)?;
     let text = std::fs::read_to_string(dir.join("meta.json")).map_err(Error::io(&dir.join("meta.json")))?;
     let Ok(Value::Dict(mut meta)) = Value::from_json(&text) else {

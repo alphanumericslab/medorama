@@ -44,7 +44,8 @@
 //                  `sibling(fileName) -> Promise<ArrayBuffer>` gives a file next to this one
 //                  (a WFDB header's signal files).
 //   and, optionally:
-//     companions   extensions of the files read with it, not opened alone: WFDB's ['dat']
+//     companions   extensions of the files read with it, not opened alone: WFDB's ['dat', 'mat'];
+//                  the page asks for them once the file they belong to is chosen
 //     parts(name, bytes) -> [file names]
 //                  the files of a folder that belong to this record and are not ECGs of their
 //                  own (a multi-segment WFDB record's segment headers)
@@ -117,8 +118,15 @@
   /** What the page reads, in order. */
   const labels = () => all().map((r) => r.label);
 
-  /** For a file chooser: every extension read, with the companions ('.hea,.dat,…'). */
-  const accept = () => [...new Set(all().flatMap((r) => [...r.extensions, ...(r.companions || [])]))].map((e) => `.${e}`).join(',');
+  /** For a file chooser: every extension read ('.hea,.xml,…'), not the companions: those are
+   * chosen once the file they belong to is (a WFDB header first, then its signal files). */
+  const accept = () => [...new Set(all().flatMap((r) => r.extensions))].map((e) => `.${e}`).join(',');
+
+  /** For the chooser of a file's companions: their extensions ('.dat,.mat'). */
+  const companions = () => [...new Set(all().flatMap((r) => r.companions || []))].map((e) => `.${e}`).join(',');
+
+  /** The reader a file is a companion of (a WFDB signal file: the WFDB reader), or null. */
+  const companionOf = (name) => { const e = ext(name); return (e && !byName(name) && all().find((r) => (r.companions || []).includes(e))) || null; };
 
   // ---------------------------------------------------------------- the page's own kinds
   const ECG = () => (typeof module !== 'undefined' && module.exports ? require('./ecg.js') : root.ECG);
@@ -141,7 +149,7 @@
     },
   ].map(valid);
 
-  const api = { add, find, byName, labels, accept, all, ext, u8, latin1 };
+  const api = { add, find, byName, labels, accept, companions, companionOf, all, ext, u8, latin1 };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Readers = api;
 })(typeof self !== 'undefined' ? self : this);

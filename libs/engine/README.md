@@ -63,8 +63,9 @@ feature `wfdb`), `indexmap`, `memmap2`, `rayon` and `sha2`.
 | [`tests/adapters.rs`](tests/adapters.rs) | The adapter protocol end to end, with the mock adapter [`tests/fake_adapter.py`](tests/fake_adapter.py), which every viewer's tests also use. |
 | [`tests/edf.rs`](tests/edf.rs) | The EDF, EDF+ and BDF reader. |
 | [`tests/wfdb.rs`](tests/wfdb.rs) | The WFDB reader. |
+| [`tests/wfdb_mat.rs`](tests/wfdb_mat.rs) | MATLAB signal files (`.mat`): level 4 and 5 read as the `.dat` file of the same samples, a file that does not match its header refused with the reason, a signal file opened alone answered with its header ([docs/wfdb-collection.md](../../docs/wfdb-collection.md#matlab-signal-files)). |
 | [`tests/roots.rs`](tests/roots.rs) | Files outside the data roots, never opened. |
-| [`tests/no_wfdb.rs`](tests/no_wfdb.rs) | Without the feature `wfdb` (`cargo test -p recording-engine --no-default-features`): WFDB records refused with `NO_WFDB`, EDF files read. `wfdb.rs` and `roots.rs` need the feature. |
+| [`tests/no_wfdb.rs`](tests/no_wfdb.rs) | Without the feature `wfdb` (`cargo test -p recording-engine --no-default-features`): WFDB records refused with `NO_WFDB`, EDF files read. `wfdb.rs`, `wfdb_mat.rs` and `roots.rs` need the feature. |
 
 The viewers' tests also index and query the synthetic recordings of
 [`viewers/vitalstream/testdata`](../../viewers/vitalstream/testdata) through the library. Changes

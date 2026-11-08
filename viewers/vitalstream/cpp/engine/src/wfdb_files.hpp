@@ -29,5 +29,23 @@ fs::path join(const fs::path& base, const std::string& name);
 bool is_file(const fs::path& p);
 // The lines of a header file that are neither blank nor comments, trimmed.
 std::vector<std::string> header_lines(const fs::path& hea);
+// The file a signal file name of a header designates, as wfdb-x opens it: ~ expanded, an absolute
+// name as given, any other next to the header.  Nothing for a signal without a file.  record: the
+// record's path without .hea.
+std::optional<fs::path> signal_file(const fs::path& record, const std::string& fname);
+
+// One signal line of a header: its file name, storage format, samples per frame and byte offset
+// ("file fmt[xspf][:skew][+offset] ...").
+struct SignalLine {
+  std::string file;
+  std::int64_t fmt = 0;
+  std::uint64_t spf = 1;
+  std::uint64_t offset = 0;
+};
+// The record line's number of samples per signal (0: not stated), and the signal lines of a
+// single-segment header (none for a multi-segment one, or a header that cannot be read).
+std::pair<std::uint64_t, std::vector<SignalLine>> header_record(const fs::path& hea);
+// The extension of p, lower case ("" without one).
+std::string lower_extension(const fs::path& p);
 
 }  // namespace vitalstream::engine::wfdb_files

@@ -37,7 +37,7 @@ import wfdbx
 from .. import paths
 # re-exported: the same names as wfdb_none
 from .wfdb_files import MAX_FINGERPRINT_FILES, Limits, format_label, is_record, is_wfdb_folder  # noqa: F401
-from .wfdb_files import limits, segment_table, set_limits  # noqa: F401
+from .wfdb_files import limits, segment_table, set_limits, signal_file_note  # noqa: F401
 from . import wfdb_files
 from ..common import MAX_MARKER_NAMES, OTHER_MARKERS, Channels, Pieces, Vitals, plausible_time, untimed_spans
 
@@ -352,6 +352,9 @@ def _unit(base, name, row=None):
     check_files(base, name)
     path = Path(base) / name
     h = _header(path)
+    # a MAT signal file is read as frames from the header's byte offset: one of another layout
+    # would be read as noise
+    wfdb_files.check_mat_files(_hea(path))
     if row is None:
         t = _start_unix(h)
         row = {'record': name, 'modality': 'wfdb', 'start_unix': repr(t) if t is not None else ''}

@@ -127,7 +127,7 @@ pub(super) fn mime_of(p: &Path) -> Option<&'static str> {
         Some("mov") => "video/quicktime",
         Some("dcm" | "dicom") => "application/dicom",
         Some("xml") => "application/xml",
-        Some("dat" | "edf" | "bdf") => "application/octet-stream",
+        Some("dat" | "mat" | "edf" | "bdf") => "application/octet-stream",
         // DICOM files often have no extension
         None => "application/octet-stream",
         _ => return None,

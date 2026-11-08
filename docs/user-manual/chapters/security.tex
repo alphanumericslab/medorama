@@ -555,6 +555,11 @@ WFDB header & Identifying comments removed (their keys compared without case, sp
   \code{[Staff Name]}; dates moved; ages capped; file names replaced by tokens \\
 WFDB samples & Sent as they are (numbers only), when a header of the same attachment names the
   file; any other \file{.dat} file refused \\
+WFDB samples in a MATLAB file & When a header of the same attachment names the \file{.mat} file:
+  its first matrix only (other variables after it not sent), its descriptive text and the
+  matrix's name blanked (\code{mat\_deidentified} in
+  \file{libs/engine/src/sources/wfdb\_files.rs}); a file that is not a level 4 or uncompressed
+  level 5 MAT file, and any other \file{.mat} file, refused \\
 GE MUSE XML & Demographics removed except age and sex (their tags found with attributes and
   spaces too); the order removed; staff replaced; the patient's own names and date of birth
   replaced in the statements; dates moved. A file that still holds a patient's name, ID or date

@@ -271,6 +271,14 @@ PIDX77214_ecg.dat 16 200/mV 16 0 0 0 0 I\nPIDX77214_ecg.dat 16 200/mV 16 0 0 0 0
 # Birthdate: 1931-05-17\n# seen 01/02/2024 at 08:00, born 1931-05-17\n";
     std::fs::write(data.join("ecg/PIDX77214_ecg.hea"), hea).unwrap();
     std::fs::write(data.join("ecg/PIDX77214_ecg.dat"), vec![0u8; 4000]).unwrap();
+    // a record whose signal file is a MATLAB file: identifiers in its text, its matrix's name and
+    // another variable after the samples
+    std::fs::write(
+        data.join("ecg/PIDX77214_mat.hea"),
+        "PIDX77214_mat 1 500 4 08:00:00 02/01/2024\nPIDX77214_mat.mat 16+200 200/mV 16 0 0 0 0 I\n",
+    )
+    .unwrap();
+    std::fs::write(data.join("ecg/PIDX77214_mat.mat"), mat_file()).unwrap();
     std::fs::write(data.join("ecg/PIDX77214_muse_20240102.xml"), MUSE).unwrap();
     std::fs::write(data.join("ecg/PIDX77214_ecg.edf"), edf()).unwrap();
     std::fs::write(data.join("ecg/PIDX77214_muse_b.xml"), MUSE_VARIANT).unwrap();
@@ -325,7 +333,8 @@ PIDX77214,ENC55102,2024-01-02 08:05,Sinus rhythm,ecg/PIDX77214_muse_20240102.xml
 PIDX77214,ENC55102,2024-01-02 08:10,Sinus rhythm,ecg/PIDX77214_ecg.edf\n\
 PIDX77214,ENC55102,2024-01-02 08:15,Sinus rhythm,ecg/PIDX77214_muse_b.xml\n\
 PIDX77214,ENC55102,2024-01-02 08:20,Sinus rhythm,ecg/PIDX77214_plain.edf\n\
-PIDX77214,ENC55102,2024-01-02 08:25,Sinus rhythm,ecg/PIDX77214_plain.bdf\n",
+PIDX77214,ENC55102,2024-01-02 08:25,Sinus rhythm,ecg/PIDX77214_plain.bdf\n\
+PIDX77214,ENC55102,2024-01-02 08:30,Sinus rhythm,ecg/PIDX77214_mat.hea\n",
         "ecg",
     );
     import(
@@ -374,6 +383,32 @@ impl Client {
         assert_eq!(status, StatusCode::OK);
         h["set-cookie"].split(';').next().unwrap().to_string()
     }
+}
+
+/// A MATLAB (level 5) signal file of four samples, its samples at byte 200, with identifiers
+/// in its descriptive text, as its matrix's name, and in a second variable after it.
+fn mat_file() -> Vec<u8> {
+    let u32s = |v: &[u32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+    let mut out = b"MATLAB 5.0 MAT-file, Platform: MACI64, Created on: Tue Jan  2 08:00:00 2024 by Zyxwortha".to_vec();
+    out.resize(116, b' ');
+    out.extend([0u8; 8]);
+    out.extend([0x00, 0x01, b'I', b'M']);
+    let samples: Vec<u8> = [0i16, 10, -10, 0].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let mut m = u32s(&[6, 8, 10, 0, 5, 8, 1, 4, 1, 9]);
+    m.extend(b"Zyxwortha\0\0\0\0\0\0\0");
+    m.extend(u32s(&[3, 8]));
+    m.extend(&samples);
+    out.extend(u32s(&[14, m.len() as u32]));
+    out.extend(m);
+    // a second variable: text
+    let mut t = u32s(&[6, 8, 4, 0, 5, 8, 1, 11, 1, 3]);
+    t.extend(b"mrn\0\0\0\0\0");
+    t.extend(u32s(&[16, 11]));
+    t.extend(b"MRN83651927\0\0\0\0\0");
+    out.extend(u32s(&[14, t.len() as u32]));
+    out.extend(t);
+    assert_eq!(&out[192..200], &[3, 0, 0, 0, 8, 0, 0, 0]);
+    out
 }
 
 fn leaks(body: &[u8]) -> Vec<&'static str> {
@@ -527,6 +562,7 @@ async fn privacy_mode_sends_no_identifier() {
         let mut refused = 0;
         let mut marked = 0;
         let mut edf_sent = 0;
+        let mut mat_sent = 0;
         let mut sent: HashMap<String, usize> = HashMap::new();
         for (kind, url, src) in &files {
             for u in [url, src] {
@@ -569,6 +605,13 @@ async fn privacy_mode_sends_no_identifier() {
                     let (st, h, b) = cl.send("GET", &format!("{api}/{base}/{dat}"), cookie, None).await;
                     assert!(st.is_success(), "{dat}: {st}");
                     check(&dat, st, &h, &b);
+                    if dat.ends_with(".mat") {
+                        // its first matrix only, its texts blanked: still the samples WFDB reads
+                        assert_eq!(b.len(), 208, "{dat}");
+                        assert!(b.starts_with(b"MATLAB 5.0 MAT-file  "), "{dat}");
+                        assert_eq!(&b[200..], &[0, 0, 10, 0, 246, 255, 0, 0]);
+                        mat_sent += 1;
+                    }
                     // a real file name is not accepted in Privacy Mode
                     let (st, _, _) = cl.send("GET", &format!("{api}/{base}/PIDX77214_ecg.dat"), cookie, None).await;
                     assert_eq!(st, StatusCode::NOT_FOUND);
@@ -577,6 +620,7 @@ async fn privacy_mode_sends_no_identifier() {
         }
         assert!(refused >= 1, "{who}: the text file is refused");
         assert_eq!(edf_sent, 3, "{who}: the EDF+, plain EDF and BDF files are among the files");
+        assert_eq!(mat_sent, 1, "{who}: the MATLAB signal file is sent");
         // both MUSE files (one with attributes in its tags) and both DICOM files (one in implicit
         // VR) are sent, de-identified
         assert_eq!((sent.get("xml"), sent.get("dicom")), (Some(&2), Some(&2)), "{who}: {sent:?}");

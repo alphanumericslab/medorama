@@ -224,7 +224,7 @@ Two buttons at the top of the page, repeated on the empty page, open recordings:
 
 | Button | Key | Opens |
 |---|---|---|
-| **Open record…** | `O` | One recording: a WFDB record (its `.hea` file; a multi-segment record whole, or one of its segments alone through the segment's own header), an EDF or BDF file, or a file in a format an installed adapter reads. |
+| **Open record…** | `O` | One recording: a WFDB record (its `.hea` file, which names its `.dat` or `.mat` signal files; a multi-segment record whole, or one of its segments alone through the segment's own header), an EDF or BDF file, or a file in a format an installed adapter reads. A signal file typed as the path is refused with the header to open in its place ([docs/wfdb-collection.md](../../docs/wfdb-collection.md#one-record)). |
 | **Open multiple records…** | `Shift`+`O` | A folder: every WFDB record in it and in its subfolders, on one time axis (**one session**), or a WFDB collection. |
 
 ### The file browser

@@ -96,7 +96,8 @@ The tests cover the viewer and its engine:
   record, a folder read as one session, the limits on a folder, a record's index key,
   cancelling, a header stating too many samples, rates that are not numbers, a collection's
   records that cannot be read, writers of one key at once, an index that disagrees with its
-  arrays, many signals) and [`tests/roots.rs`](../../../libs/engine/tests/roots.rs) files
+  arrays, many signals), [`tests/wfdb_mat.rs`](../../../libs/engine/tests/wfdb_mat.rs) MATLAB
+  signal files, and [`tests/roots.rs`](../../../libs/engine/tests/roots.rs) files
   outside the data roots;
 - the engine's [`tests/edf.rs`](../../../libs/engine/tests/edf.rs) tests EDF, EDF+ and BDF files
   (channels and rates, runs and breaks, annotations, start times, a record cut short, 24-bit

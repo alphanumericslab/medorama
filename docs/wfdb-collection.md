@@ -29,6 +29,7 @@ the engines' own ([readers.md](readers.md)).
 - [Markers](#markers)
 - [How a collection is read](#how-a-collection-is-read)
 - [One record](#one-record)
+- [MATLAB signal files](#matlab-signal-files)
 - [Multi-segment records](#multi-segment-records)
 - [A folder of records: one session](#a-folder-of-records-one-session)
 - [Overlapping records](#overlapping-records)
@@ -177,6 +178,55 @@ a name starting with `~` in the home folder, any other next to the header), its 
 for a multi-segment record, those of its segments. A viewer opens none of them when it leads
 outside its data roots, symbolic links resolved
 ([index-format.md](../viewers/vitalstream/docs/index-format.md#files-outside-the-data-roots)).
+
+**A record is opened by its header.** A signal file (`.dat`, `.mat`) is not a record of its own:
+opened or added by itself (a path typed in a viewer's file browser, `medorama add`, a table's
+`file` column), it is refused with what to open in its place: `100.dat is a WFDB signal file:
+open its header, 100.hea` when the header of the same name next to it names it, else `… open the
+header (.hea) that names it`. The ECG viewer, which reads only the files chosen in it, asks for
+the header in the same words ([its README](../viewers/ecg/README.md#wfdb-records)).
+
+## MATLAB signal files
+
+A record's signal file may be a MATLAB file (`.mat`) paired with a header: the PhysioNet/CinC
+Challenge files (`A0001.hea` with `A0001.mat`), and those `wfdb2mat` writes (`100m.hea` with
+`100m.mat`). Such a file holds one matrix, `val`, of one row per signal and one column per
+sample; MATLAB stores a matrix column by column, so its samples are in the frame order of a
+`.dat` file. Its header names it like any signal file, with the byte offset of the samples:
+
+```
+A0001 12 500 7500
+A0001.mat 16+24 1000/mV 16 0 28 -1716 0 I
+...
+```
+
+It is read as WFDB reads any signal file, from that offset, and gives the same samples as the
+`.dat` file of the same record. MATLAB files of **level 4** (`+24` for a matrix named `val`) and
+of **level 5, uncompressed** (`+192` as `wfdb2mat` writes them; `+184` as MATLAB's
+`save(..., '-v6')` does) are read.
+
+Because a MAT file of another layout would be read as noise, the readers (Medorama, the three
+VitalStream viewers and the ECG viewer, with the same messages) first check that the file matches
+its header, and refuse the record otherwise (`A0001.mat does not match its header A0001.hea:
+…`, listed among a folder's skipped records). The first matrix of the file must:
+
+| Check | Refused, for example |
+|---|---|
+| be a MAT file of level 4, or of level 5 not compressed | `it is compressed (MATLAB saves so by default): save it with save(..., '-v6') or '-v4'`; a MATLAB 7.3 (HDF5) file |
+| hold real numbers, as a full matrix | a complex, sparse or text matrix |
+| hold the elements of the header's format, in its byte order | `it holds little-endian double-precision numbers; format 16 reads little-endian 16-bit integers` |
+| have one row per signal of the file (one per sample of a frame) | `its matrix has 7500 rows; the header gives 12 signals in it, one row each (it is transposed: one column per signal)` |
+| start its samples at the header's byte offset | `its samples start at byte 24; the header gives +0` |
+| have as many columns as the header states samples (when it states them) | `it holds 5000 samples per signal; the header gives 7500` |
+| be as long as its matrix | `it is shorter than its 12 × 7500 matrix` |
+
+The formats and the elements they read: 16 (16-bit integers, little-endian), 61 (16-bit,
+big-endian), 160 (16-bit unsigned, little-endian), 80 (8-bit unsigned) and 32 (32-bit integers,
+little-endian); a `.mat` file of any other format is refused. A MAT file may hold other variables
+after the first matrix: they are not read. A `.mat` file a header names is checked whatever its
+name; a `.dat` file is read as WFDB reads it, without these checks. In Privacy Mode, Medorama sends
+a MAT signal file's first matrix only, with its descriptive text and the matrix's name blanked
+([security.md](security.md)).
 
 ## Multi-segment records
 

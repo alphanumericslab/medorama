@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <tuple>
 
@@ -93,6 +94,90 @@ std::vector<std::string> header_lines(const fs::path& hea) {
   return out;
 }
 
+// The home folder (HOME, else USERPROFILE; on Windows the other way round).
+std::string home_folder() {
+#ifdef _WIN32
+  const char* names[2] = {"USERPROFILE", "HOME"};
+#else
+  const char* names[2] = {"HOME", "USERPROFILE"};
+#endif
+  for (const char* n : names)
+    if (const char* v = std::getenv(n)) return v;
+#ifdef _WIN32
+  return "C:\\";
+#else
+  return "/";
+#endif
+}
+
+bool is_sep(char c) {
+#ifdef _WIN32
+  return c == '/' || c == '\\';
+#else
+  return c == '/';
+#endif
+}
+
+// The file a signal file name of a header designates, as wfdb-x opens it: ~ expanded, an absolute
+// name as given, any other next to the header.  Nothing for a signal without a file.  record: the
+// record's path without .hea.
+std::optional<fs::path> signal_file(const fs::path& record, const std::string& fname) {
+  if (fname.empty() || fname == "-" || fname == "~") return std::nullopt;
+  std::string f = fname;
+  if (f.size() >= 2 && f[0] == '~' && is_sep(f[1])) {
+    std::string h = home_folder();
+    while (!h.empty() && is_sep(h.back())) h.pop_back();
+#ifdef _WIN32
+    f = h + "\\" + f.substr(2);
+#else
+    f = h + "/" + f.substr(2);
+#endif
+  }
+  fs::path p = core::utf8_path(f);
+  if (p.is_absolute()) return p;
+  return record.parent_path() / p;
+}
+
+std::string lower_extension(const fs::path& p) {
+  std::string e = core::path_utf8(p.extension());
+  for (char& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return e;
+}
+
+std::pair<std::uint64_t, std::vector<SignalLine>> header_record(const fs::path& hea) {
+  auto lines = header_lines(hea);
+  if (lines.empty()) return {0, {}};
+  auto rec = split_whitespace(lines[0]);
+  if (rec.empty() || rec[0].find('/') != std::string::npos) return {0, {}};
+  std::int64_t nsig = 0, nsamp = 0;
+  if (rec.size() < 2 || !parse_i64(rec[1], nsig, true)) nsig = 0;
+  if (rec.size() < 4 || !parse_i64(rec[3], nsamp, true)) nsamp = 0;
+  // the digits at the start of s, as a number (nothing without one)
+  auto num = [](const std::string& s) -> std::optional<std::uint64_t> {
+    std::size_t k = 0;
+    while (k < s.size() && std::isdigit(static_cast<unsigned char>(s[k]))) ++k;
+    if (k == 0) return std::nullopt;
+    std::int64_t v;
+    if (!parse_i64(s.substr(0, k), v, true)) return std::nullopt;
+    return static_cast<std::uint64_t>(v);
+  };
+  std::vector<SignalLine> out;
+  for (std::size_t i = 1; i < lines.size() && static_cast<std::int64_t>(i) <= nsig; ++i) {
+    auto w = split_whitespace(lines[i]);
+    if (w.size() < 2) break;
+    const std::string& f = w[1];
+    auto after = [&](char c) -> std::optional<std::uint64_t> {
+      std::size_t at = f.find(c);
+      return at == std::string::npos ? std::nullopt : num(f.substr(at + 1));
+    };
+    auto fmt = num(f);
+    if (!fmt) break;
+    out.push_back(SignalLine{w[0], static_cast<std::int64_t>(*fmt), std::max<std::uint64_t>(after('x').value_or(1), 1),
+                             after('+').value_or(0)});
+  }
+  return {static_cast<std::uint64_t>(nsamp), out};
+}
+
 }  // namespace wfdb_files
 
 using namespace wfdb_files;
@@ -151,6 +236,29 @@ std::optional<Segments> segment_table(const fs::path& record) {
     if (w.size() >= 2 && parse_i64(w[1], n)) out.emplace_back(w[0], n);
   }
   return out;
+}
+
+bool is_signal_file(const fs::path& p) {
+  std::string e = lower_extension(p);
+  return e == ".dat" || e == ".mat";
+}
+
+std::optional<std::string> signal_file_note(const fs::path& p) {
+  if (!is_file(p) || !is_signal_file(p)) return std::nullopt;
+  std::string name = core::path_utf8(p.filename());
+  fs::path hea = with_extension(p, "hea");
+  bool names_it = false;
+  for (const auto& s : header_record(hea).second) {
+    auto f = signal_file(with_extension(hea, ""), s.file);
+    if (f && f->filename() == p.filename() && f->parent_path() == hea.parent_path()) names_it = true;
+  }
+  if (names_it) return name + " is a WFDB signal file: open its header, " + core::path_utf8(hea.filename());
+  return name + " is a WFDB signal file: open the header (.hea) that names it";
+}
+
+std::string not_a_recording(const fs::path& p) {
+  if (auto n = signal_file_note(p)) return *n;
+  return "not a recording this program reads: " + core::path_utf8(p);
 }
 
 const char* format_label(const fs::path& path) {

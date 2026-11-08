@@ -9,7 +9,7 @@ from pathlib import Path
 from . import wfdb_files
 # re-exported: the same names as wfdb_folder
 from .wfdb_files import MAX_FINGERPRINT_FILES, Limits, format_label, is_record, is_wfdb_folder  # noqa: F401
-from .wfdb_files import limits, segment_table, set_limits  # noqa: F401
+from .wfdb_files import limits, segment_table, set_limits, signal_file_note  # noqa: F401
 from .wfdb_files import NO_WFDB
 
 SUPPORTED = False   # this installation reads no WFDB records (wfdb-x is not installed)

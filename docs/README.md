@@ -22,7 +22,7 @@ For researchers, clinicians and anyone trying Medorama for the first time.
 | [Install](install.md) | Commands to install Medorama, VitalStream, and the ECG and PACS viewers' servers on Linux, macOS and Windows. |
 | [Get started](getting-started.md) | Install Medorama with the demo, sign in, take a guided tour, and remove the demo. |
 | [User guide](user-guide.md) | The web page: cohorts, the Patient Catalog and patient pages, the Databases tab, Privacy Mode, searching, the viewers, actions and history. |
-| [User's manual](user-manual) | The complete manual as a book (LaTeX and PDF): every feature, setting and interface, installation and deployment, and the formats read. |
+| [User's manual](user-manual/medorama-user-manual.pdf) | The complete manual as a book (LaTeX and PDF): every feature, setting and interface, installation and deployment, and the formats read. |
 
 ## Running Medorama
 

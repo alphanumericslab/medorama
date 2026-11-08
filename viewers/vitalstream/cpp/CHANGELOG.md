@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- WFDB records with MATLAB signal files (`.mat`) are read once checked against their header, and
+  refused with the reason otherwise; a signal file (`.dat`, `.mat`) typed as the path to open or
+  browse is refused with the header to open in its place (`check_mat_files` and
+  `signal_file_note`, with the Rust engine's checks and messages). Test: `Wfdb.MatSignalFiles`.
 - wfdb-x 1.2.1 (commit `4a91916`, was `a707ba9`; `cmake/deps.cmake`, with its new SHA-256), its
   library under the GNU LGPL v2.1 or later.
 - **A build without WFDB support**: the CMake option `VS_WFDB` (`ON` by default) and the preset

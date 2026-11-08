@@ -160,7 +160,7 @@ Building build_source(const fs::path& path, const fs::path& dir, const Progress&
     return b;
   }
   auto found = adapters::for_file(path);
-  if (!found) throw std::runtime_error("not a recording this program reads: " + core::path_utf8(path));
+  if (!found) throw std::runtime_error(not_a_recording(path));
   const auto& [adapter, format] = *found;
   adapters::index(adapter, path, dir, progress, cancelled);
   Value v = Value::from_json(read_text(dir / "meta.json"));

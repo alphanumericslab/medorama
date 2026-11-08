@@ -685,6 +685,10 @@ pub enum FileKind {
     /// A WFDB record's samples (a `.dat` file a header of the same attachment names): numbers
     /// only, sent as they are.
     Signal,
+    /// A WFDB record's samples in a MATLAB file (a `.mat` file a header of the same attachment
+    /// names): its first matrix only, its descriptive text and the matrix's name blanked
+    /// (`wfdb_folder::mat_deidentified`); one that is not a MAT file WFDB reads is refused.
+    MatSignal,
     /// GE MUSE XML: de-identified.
     MuseXml,
     /// DICOM: the header de-identified, the pixels as they are (marked).
@@ -706,6 +710,8 @@ pub fn file_kind(path: &Path, signals: &[String]) -> FileKind {
         "hea" => FileKind::WfdbHeader,
         "dat" if named => FileKind::Signal,
         "dat" => FileKind::Refused,
+        "mat" if named => FileKind::MatSignal,
+        "mat" => FileKind::Refused,
         "xml" => FileKind::MuseXml,
         "dcm" | "dicom" => FileKind::Dicom,
         "edf" | "bdf" => FileKind::Edf,
@@ -950,6 +956,8 @@ mod tests {
         // samples only when a header of the attachment names them
         assert_eq!(file_kind(Path::new("/d/a.dat"), &["a.dat".into()]), FileKind::Signal);
         assert_eq!(file_kind(Path::new("/d/b.dat"), &["a.dat".into()]), FileKind::Refused);
+        assert_eq!(file_kind(Path::new("/d/a.mat"), &["a.mat".into()]), FileKind::MatSignal);
+        assert_eq!(file_kind(Path::new("/d/b.mat"), &["a.mat".into()]), FileKind::Refused);
     }
 
     #[test]

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **WFDB records with MATLAB signal files** (`.hea` with `.mat`: the PhysioNet Challenge files,
+  `wfdb2mat`'s) are read, once the `.mat` file is checked against its header; one that does not
+  match (compressed, of doubles, transposed, of another offset or length) is refused with the
+  reason ([docs/wfdb-collection.md](../docs/wfdb-collection.md#matlab-signal-files)). In Privacy
+  Mode, a `.mat` file a header of the same item names is sent as its first matrix only, its
+  descriptive text and the matrix's name blanked (`FileKind::MatSignal`); any other `.mat` file
+  is refused. `tests/privacy.rs` holds such a file, with identifiers in its text, its name and a
+  second variable.
+- **A WFDB record is opened by its header**: a signal file (`.dat`, `.mat`) given to `add` or in
+  a table's `file` column is skipped with the header to give in its place (`100.dat is a WFDB
+  signal file: open its header, 100.hea`).
+- **The ECG viewer opens a WFDB record in two steps**: **Open record…** offers the header (not the
+  signal files); once it is chosen, the page names the signal file it needs and opens a second
+  chooser for it (`This record's samples are in 100.dat: choose it`), refusing a file the header
+  does not name; a signal file chosen or dropped alone asks for its header. Opened from an address
+  (`#src`, Medorama's ECG pages), the page fetches the signal files itself, as before. It reads
+  `.mat` signal files, with the engine's checks and messages, and no more samples than a header
+  states. Tests: `viewers/ecg/tests/wfdb-mat.test.js`.
 - **wfdb-x 1.2.1** (commit `4a91916`, was `a707ba9`, version 1.0.0): its library is now under
   the GNU LGPL v2.1 or later (its command-line tools, which Medorama does not use, stay under the
   GPL v3 or later), so the binary releases are no longer held back: `release.yml` runs on every

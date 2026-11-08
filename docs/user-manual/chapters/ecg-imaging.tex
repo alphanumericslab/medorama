@@ -254,6 +254,8 @@ items.
 WFDB header (\file{.hea}) & Identifying comments removed; dates moved back; ages capped; the
   record's and signal files' names replaced by tokens. \\
 WFDB samples (\file{.dat}) & Sent as they are: they hold only numbers. \\
+WFDB samples in a MATLAB file (\file{.mat}) & The first matrix only, its descriptive text and
+  name blanked. \\
 GE MUSE XML & Demographics removed except age and sex; the order removed; staff names replaced;
   every date moved back. Any other XML file is refused. \\
 DICOM & The header rewritten following DICOM PS3.15 Annex E (the Basic Application Level
@@ -265,7 +267,7 @@ EDF, EDF+, BDF, BDF+ & The header de-identified and the texts of annotations rem
 Pictures, videos, PDF & Sent as they are, marked as possibly identifying: the page shows an amber
   warning triangle on the viewer's tab. \\
 Anything else & Refused: JSON ECGs, text files, and signal files with an extension other than
-  \file{.dat}. \\
+  \file{.dat} or \file{.mat}. \\
 \bottomrule
 \end{tabularx}
 \end{table}

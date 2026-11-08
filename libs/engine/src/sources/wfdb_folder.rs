@@ -21,9 +21,10 @@
 //! its place.  What needs no wfdb-x (which paths are records, segment tables, limits) is in
 //! `wfdb_files.rs`, shared by both.
 
-use super::wfdb_files::with_ext;
+use super::wfdb_files::{check_mat_files, with_ext};
 pub use super::wfdb_files::{
-    format_label, is_record, is_wfdb_folder, limits, read_csv, segment_table, set_limits, Limits, MAX_FINGERPRINT_FILES,
+    format_label, is_record, is_wfdb_folder, limits, mat_deidentified, read_csv, segment_table, set_limits,
+    signal_file_note, Limits, MAX_FINGERPRINT_FILES,
 };
 use super::Built;
 use crate::common::*;
@@ -394,6 +395,9 @@ fn unit(base: &Path, name: &str, row: Option<IndexMap<String, String>>) -> signa
     check_files(base, name)?;
     let path = base.join(name);
     let h = header(&path)?;
+    // a MAT signal file is read as frames from the header's byte offset: one of another layout
+    // would be read as noise
+    check_mat_files(&with_ext(&path, "hea")).map_err(signal_core::Error::Format)?;
     let row = row.unwrap_or_else(|| {
         let start = start_unix(&h).map(signal_core::pyfmt::repr).unwrap_or_default();
         IndexMap::from([

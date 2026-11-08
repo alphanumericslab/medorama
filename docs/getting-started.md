@@ -266,7 +266,7 @@ results folder; to uninstall, delete the clone ([building](building.md#update-an
 
 | You are | Continue with |
 |---|---|
-| A researcher or clinician | The [user guide](user-guide.md) and the [user's manual](user-manual) |
+| A researcher or clinician | The [user guide](user-guide.md) and the [user's manual](user-manual/medorama-user-manual.pdf) |
 | An administrator | [Administration](administration.md): settings, PostgreSQL, users and roles, deployment as a service, backups |
 | A security or privacy reviewer | [Security and privacy](security.md), [architecture](architecture.md), [protecting patient data](protecting-patient-data.md) and [sign-in](sign-in.md) |
 | A data manager | [Databases](databases.md) and [importing](importing.md): the tables to export, the columns Medorama recognizes, connecting OMOP or SQL databases |

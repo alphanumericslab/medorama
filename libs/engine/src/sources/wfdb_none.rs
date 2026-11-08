@@ -7,7 +7,8 @@
 
 use super::wfdb_files::with_ext;
 pub use super::wfdb_files::{
-    format_label, is_record, is_wfdb_folder, limits, read_csv, segment_table, set_limits, Limits, MAX_FINGERPRINT_FILES,
+    format_label, is_record, is_wfdb_folder, limits, mat_deidentified, read_csv, segment_table, set_limits,
+    signal_file_note, Limits, MAX_FINGERPRINT_FILES,
 };
 use super::{Built, NO_WFDB};
 use signal_core::value::Dict;

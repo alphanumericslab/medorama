@@ -89,6 +89,17 @@ std::optional<Segments> segment_table(const fs::path& record);
 // collection" or "WFDB records".
 const char* format_label(const fs::path& path);
 
+// Whether p is named as a WFDB signal file is (.dat, or .mat, a MATLAB file a header names): not
+// a record of its own, but read with the header that names it.
+bool is_signal_file(const fs::path& p);
+// For a WFDB signal file (.dat, .mat) opened or added as a recording: what to open in its place,
+// its header (with the name of the header next to it that names it, when there is one).  Nothing
+// for any other path.
+std::optional<std::string> signal_file_note(const fs::path& p);
+// Why p is not opened as a recording: for a WFDB signal file, to open its header in its place;
+// else that it is not a recording this program reads.
+std::string not_a_recording(const fs::path& p);
+
 // What opening path would read, from the headers alone (no signal file is opened), within
 // limits (the scan's time limit too).  Throws over a limit (docs/wfdb-collection.md, "Limits"),
 // and NO_WFDB without VS_WFDB.

@@ -7,7 +7,7 @@ waveforms, imaging and laboratory results across databases.**
 
 [Install](docs/install.md) ·
 [Get started](docs/getting-started.md) ·
-[User's manual](docs/user-manual) ·
+[User's manual](docs/user-manual/medorama-user-manual.pdf) ·
 [Documentation](docs/README.md) ·
 [Security review](docs/security.md) ·
 [Source code](https://github.com/alphanumericslab/medorama)
@@ -92,7 +92,7 @@ examples or on your own files, which are read in your browser and never leave yo
 | Someone who only needs a viewer | VitalStream, the ECG viewer or the PACS viewer, on your own computer | [The viewers](viewers/README.md), [install](docs/install.md#vitalstream-on-its-own) |
 
 The [documentation index](docs/README.md) lists every page, and the
-[user's manual](docs/user-manual) covers everything in one book.
+[user's manual](docs/user-manual/medorama-user-manual.pdf) covers everything in one book.
 
 ## How it fits into an institution
 
