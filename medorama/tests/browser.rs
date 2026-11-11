@@ -788,6 +788,32 @@ fn the_pages_workflows() {
     let report = api(&mut b, &format!("patients/{id}/report")).to_string();
     assert!(report.contains("Troponin T"), "the imported result on the patient's page: {report}");
 
+    // a table on the server, chosen in the page's own dialog (the server lists its folders),
+    // imported where it is
+    let served = std::path::Path::new(&cfg.data_roots[0]).join("creatinine.csv");
+    std::fs::write(
+        &served,
+        "Patient ID,Test Name,Result,Units,Collected\nP440002,Creatinine,80,umol/L,2024-02-01 09:00\n",
+    )
+    .unwrap();
+    let pick = "#sf-list input[data-path$=\"creatinine.csv\"]";
+    b.click("#tb-server");
+    b.until("document.querySelector('#sf').open && !!document.querySelector('#sf-list [data-dir]')", "the data roots");
+    b.click("#sf-list [data-dir]");
+    b.until(&format!("!!document.querySelector({pick:?})"), "the table on the server");
+    let problems = b.accessibility("Choose on the server");
+    assert!(problems.is_empty(), "{problems:#?}");
+    b.click(pick);
+    b.click("#sf-ok");
+    b.until("document.querySelector('#tb-list').innerText.includes('1 rows')", "the server table's columns");
+    b.click("#tb-import");
+    b.until(
+        "document.querySelector('#imports-table').innerText.includes('creatinine.csv')",
+        "the server table imported",
+    );
+    let report = api(&mut b, &format!("patients/{id}/report")).to_string();
+    assert!(report.contains("Creatinine"), "the result imported from the server: {report}");
+
     // a user: added, their role and PHI permission changed, their password reset, deleted
     b.eval("location.hash = '#/admin'; true");
     b.until("!document.querySelector('#view-admin').classList.contains('hidden')", "the admin page");

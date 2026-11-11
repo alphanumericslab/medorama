@@ -857,6 +857,45 @@ must lie inside \code{data\_roots}. Admins.
 \code{report}; the files skipped.}
 \raises{\code{400} no such folder, or a folder outside \code{data\_roots}.}
 
+\apientry{GET server-files}{A folder on the server}
+\begin{lstlisting}[style=signature]
+GET /api/v1/server-files?dir=FOLDER&kind=tables|databases|folders
+\end{lstlisting}
+A folder on the server, as the page's \ui{Choose on the server} dialog shows it: its folders,
+and its files of the kind asked for. Inside \code{data\_roots} (anywhere when it is empty);
+hidden entries, and links that lead out of the roots, are not listed. Admins, and not in Privacy
+Mode, whose folders' names may identify.
+\begin{params}
+\item[dir] An absolute folder. Empty: the data roots themselves.
+\item[kind] \code{tables} (the default: CSV, spreadsheets, Parquet), \code{databases} (SQLite
+  files) or \code{folders} (no file).
+\end{params}
+\returns{\code{\{dir, parent, items, truncated\}}: each item's \code{name}, \code{path},
+\code{dir} (a folder) and \code{size} (a file's); \code{parent} the folder above, empty above a
+root (the list of the roots); \code{truncated} when more than 5000 entries.}
+\raises{\code{400} no such folder, a folder outside \code{data\_roots}, or an unknown
+\code{kind}; \code{403} not an admin, or Privacy Mode.}
+
+\apientry{POST tables/server/inspect}{Look at a table on the server}
+\begin{lstlisting}[style=signature]
+POST /api/v1/tables/server/inspect   {"path": FILE, "format": TEXT}
+\end{lstlisting}
+As \code{POST tables/inspect}, a table on the server, inside \code{data\_roots}, read where it is
+and row by row, so of any size. Admins.
+
+\apientry{POST tables/server}{Import tables on the server}
+\begin{lstlisting}[style=signature]
+POST /api/v1/tables/server   {"paths": [FILE, ...], "batch": NAME, "source": TEXT,
+  "category": KEY, "mapping": TEXT, "format": TEXT, "dry_run": BOOL, "background": BOOL}
+\end{lstlisting}
+Imports tables on the server where they are, as \cmd{medorama import-table} does: read row by
+row, of any size, each inside \code{data\_roots}. One table, or several with the same columns as
+one database, which \code{batch} then names. A relative path in a \code{file} column is read
+from the first table's folder. The other fields are those of \code{POST tables}; with
+\code{background}, as in \code{POST tables/files}. Admins.
+\raises{\code{400} no file, a file outside \code{data\_roots} or not a file, or several files
+without \code{batch}.}
+
 \apientry{GET import-tasks}{The imports in the background}
 \begin{lstlisting}[style=signature]
 GET /api/v1/import-tasks

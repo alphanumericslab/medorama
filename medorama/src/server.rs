@@ -961,7 +961,7 @@ async fn import_clif(State(app): State<Shared>, Auth(u): Auth, Json(b): Json<Cli
             return Err(bad(format!("no folder {}", dir.display())));
         }
         if !app.cfg.import_allowed(&dir) {
-            return Err(bad("the folder is outside the folders data may come from (data_roots)"));
+            return Err(bad(OUTSIDE_ROOTS));
         }
         let source = if b.source.trim().is_empty() { "clif" } else { b.source.trim() };
         let mut c = app.db.get().map_err(internal)?;
@@ -978,6 +978,208 @@ async fn import_clif(State(app): State<Shared>, Auth(u): Auth, Json(b): Json<Cli
     };
     if background_wanted {
         return in_background(&app, &u2, "CLIF folder", move |a, p| run(a, Some(p)));
+    }
+    blocking(move || run(app, None).and_then(ok)).await
+}
+
+/// What an import is told of a folder or file outside `data_roots`.
+const OUTSIDE_ROOTS: &str = "the folder is outside the folders data may come from (data_roots)";
+
+/// The extensions of the tables the page imports (as its upload accepts).
+const TABLE_EXTENSIONS: &[&str] = &["csv", "xlsx", "xls", "ods", "parquet"];
+
+/// The extensions of the SQLite database files that may be connected.
+const DATABASE_EXTENSIONS: &[&str] = &["sqlite", "sqlite3", "db"];
+
+/// The most entries a folder's listing shows.
+const MAX_LISTED: usize = 5000;
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct FolderQuery {
+    /// An absolute folder; empty: the folders data may come from.
+    dir: String,
+    /// The files listed with the folders: `tables` (default), `databases` (SQLite files) or
+    /// `folders` (none).
+    kind: String,
+}
+
+/// A folder on this server, as the page's "Choose on the server" dialog shows it (admins: the
+/// tables to import, a CLIF folder, a database file): its folders and the files of the kind
+/// asked for, inside `data_roots` (anywhere when it is empty).  Not in Privacy Mode, as the
+/// viewer's Open dialog: folders' and files' names may identify.
+async fn server_files(State(app): State<Shared>, Auth(u): Auth, Query(q): Query<FolderQuery>) -> ApiResult {
+    admin(&u)?;
+    let wanted: &'static [&'static str] = match q.kind.as_str() {
+        "" | "tables" => TABLE_EXTENSIONS,
+        "databases" => DATABASE_EXTENSIONS,
+        "folders" => &[],
+        other => return Err(bad(format!("unknown kind {other:?} (tables, databases, folders)"))),
+    };
+    if u.privacy {
+        return Err(forbidden(
+            "folders are not browsed in Privacy Mode (their names may identify): leave Privacy Mode to choose tables on the server",
+        ));
+    }
+    blocking(move || {
+        let roots: Vec<String> = if app.cfg.data_roots.is_empty() {
+            let (home, root) = (recording_engine::paths::home(), recording_engine::paths::fs_root());
+            if home == root {
+                vec![root]
+            } else {
+                vec![home, root]
+            }
+        } else {
+            app.cfg.data_roots.clone()
+        };
+        if q.dir.trim().is_empty() {
+            let items: Vec<Value> = roots.iter().map(|r| json!({ "name": r, "path": r, "dir": true })).collect();
+            return ok(json!({ "dir": "", "parent": null, "items": items, "truncated": false }));
+        }
+        let dir = crate::config::real(std::path::Path::new(&recording_engine::paths::absolute(q.dir.trim())));
+        if !dir.is_dir() {
+            return Err(bad(format!("no folder {}", dir.display())));
+        }
+        if !app.cfg.import_allowed(&dir) {
+            return Err(bad(OUTSIDE_ROOTS));
+        }
+        let rd = std::fs::read_dir(&dir).map_err(|e| bad(format!("{}: {e}", dir.display())))?;
+        let (mut items, mut truncated) = (vec![], false);
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let path = e.path();
+            let link = e.file_type().map(|t| t.is_symlink()).unwrap_or(false);
+            // a link followed (a broken one is left out), and only when it stays inside a root
+            let Ok(meta) = std::fs::metadata(&path) else { continue };
+            let file = meta.is_file()
+                && std::path::Path::new(&name)
+                    .extension()
+                    .is_some_and(|x| wanted.iter().any(|t| x.eq_ignore_ascii_case(t)));
+            if !(meta.is_dir() || file) || (link && !app.cfg.import_allowed(&path)) {
+                continue;
+            }
+            if items.len() == MAX_LISTED {
+                truncated = true;
+                break;
+            }
+            let size = if file { Some(meta.len()) } else { None };
+            items.push((meta.is_dir(), name, path.to_string_lossy().to_string(), size));
+        }
+        items.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase())));
+        // one level up: the parent while it stays inside a root, else the list of the roots
+        let is_root = roots.iter().any(|r| crate::config::real(std::path::Path::new(r)) == dir);
+        let parent = match dir.parent() {
+            Some(p) if !is_root && app.cfg.import_allowed(p) => p.to_string_lossy().to_string(),
+            _ => String::new(),
+        };
+        let items: Vec<Value> = items
+            .into_iter()
+            .map(|(d, name, path, size)| json!({ "name": name, "path": path, "dir": d, "size": size }))
+            .collect();
+        ok(json!({ "dir": dir.to_string_lossy(), "parent": parent, "items": items, "truncated": truncated }))
+    })
+    .await
+}
+
+/// A table file on this server that may be imported: it exists, inside `data_roots`.
+fn server_table(cfg: &crate::config::Config, path: &str) -> Result<std::path::PathBuf, ApiError> {
+    let p = crate::config::real(std::path::Path::new(&recording_engine::paths::absolute(path.trim())));
+    if !p.is_file() {
+        return Err(bad(format!("no file {}", p.display())));
+    }
+    if !cfg.import_allowed(&p) {
+        return Err(bad(OUTSIDE_ROOTS));
+    }
+    Ok(p)
+}
+
+fn file_name_of(p: &std::path::Path) -> String {
+    p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
+}
+
+#[derive(Deserialize)]
+struct ServerTable {
+    path: String,
+    /// `auto` (default), `none`, or a format's key.
+    #[serde(default)]
+    format: String,
+}
+
+/// As `tables/inspect`, a table on this server, read where it is, row by row (any size).
+async fn inspect_server_table(State(app): State<Shared>, Auth(u): Auth, Json(b): Json<ServerTable>) -> ApiResult {
+    admin(&u)?;
+    blocking(move || {
+        let path = server_table(&app.cfg, &b.path)?;
+        let known = crate::formats::all(&app.cfg).0;
+        let choice = crate::formats::Choice::parse(&b.format, &known).map_err(bad)?;
+        let part = crate::tables::Part { name: file_name_of(&path), data: crate::tables::PartData::File(path) };
+        ok(crate::tables::inspect_part(&app.cfg, &part, u.phi, &choice).map_err(bad)?)
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+struct ServerTables {
+    /// One table, or several with the same columns (one database, named by `batch`).
+    paths: Vec<String>,
+    /// The rest as `POST tables` (`name`: by default the first file's name).
+    #[serde(flatten)]
+    q: UploadQuery,
+}
+
+/// Tables on this server imported where they are, as `medorama import-table` does (admins):
+/// read row by row, so of any size; a relative path in a `file` column is read from the first
+/// table's folder.
+async fn import_server_tables(State(app): State<Shared>, Auth(u): Auth, Json(b): Json<ServerTables>) -> ApiResult {
+    admin(&u)?;
+    let ServerTables { paths, mut q } = b;
+    if paths.is_empty() {
+        return Err(bad("no file"));
+    }
+    if paths.len() > 1 && q.batch.trim().is_empty() {
+        return Err(bad("several files make one database: give it a name"));
+    }
+    if q.name.is_empty() {
+        q.name = file_name_of(std::path::Path::new(paths[0].trim()));
+    }
+    let label = if q.batch.trim().is_empty() { q.name.clone() } else { q.batch.trim().to_string() };
+    let (background_wanted, u2) = (q.background, u.clone());
+    let run = move |app: Shared, progress: Option<Arc<crate::progress::Progress>>| -> Result<Value, ApiError> {
+        let files = paths.iter().map(|p| server_table(&app.cfg, p)).collect::<Result<Vec<_>, _>>()?;
+        let map = if q.mapping.trim().is_empty() {
+            Default::default()
+        } else {
+            linkage::read_mapping(&q.mapping).map_err(bad)?
+        };
+        let known = crate::formats::all(&app.cfg).0;
+        let format = crate::formats::Choice::parse(&q.format, &known).map_err(bad)?;
+        let parts: Vec<crate::tables::Part> = files
+            .iter()
+            .map(|f| crate::tables::Part { name: file_name_of(f), data: crate::tables::PartData::File(f.clone()) })
+            .collect();
+        let base = files[0].parent().map(|p| p.to_path_buf());
+        let mut c = app.db.get().map_err(internal)?;
+        let mut opts = q.opts();
+        opts.progress = progress;
+        let r = crate::tables::import_parts(
+            &mut c,
+            &app.cfg,
+            &u,
+            &parts,
+            &map,
+            &q.category,
+            base.as_deref(),
+            &opts,
+            format,
+        )
+        .map_err(bad)?;
+        serde_json::to_value(r).map_err(internal)
+    };
+    if background_wanted {
+        return in_background(&app, &u2, &label, move |a, p| run(a, Some(p)));
     }
     blocking(move || run(app, None).and_then(ok)).await
 }
@@ -2481,6 +2683,9 @@ pub fn router(app: Shared) -> Router {
         .route("/formats", get(formats_list))
         .route("/admin/addons", get(addons_list))
         .route("/tables/clif", post(import_clif))
+        .route("/tables/server", post(import_server_tables))
+        .route("/tables/server/inspect", post(inspect_server_table))
+        .route("/server-files", get(server_files))
         .route("/patients", get(patients))
         .route("/patients/{id}", get(patient_summary))
         .route("/patients/{id}/journey", get(patient_journey))

@@ -82,7 +82,7 @@ entries, users and settings) or a **connected database** that Medorama reads in 
 | Header | The first row holds one name per column. When two columns would be read as the same catalog field (`value,value`), the first is; the other is kept as imported only, and the report says so. |
 | Rows | One row per patient, encounter, bed stay, result, note or file, or several of these at once: one row may describe a patient, the patient's encounter and a result. Empty rows are skipped. |
 | Cells | Text or numbers. Leading and trailing spaces are removed. An empty cell means "no value". |
-| Size | Up to 1 GiB per upload in the web page. The command line has no limit, and reads CSV and Parquet files row by row. |
+| Size | A table chosen on the server (**Choose tables on the server…**) and the command line have no limit: CSV and Parquet files are read row by row. A table uploaded from your computer is limited to 1 GiB. |
 | Several files | Several files with exactly the same columns can be imported as one database (the page's **One database from these files** option, or several files given to `import-table` with `--name`). |
 | Kept as imported | Every cell is kept under its column's own name. The Databases tab shows the table as it came. Column names are never changed. A table of more than 500 columns is kept whole too; criteria on its columns read its cells (slower) rather than a table of its numbers. |
 | Warnings | A row that cannot be read is named by its line in its file (`line 12`; `b.csv, line 12` for a database of several files). |
@@ -562,7 +562,11 @@ DEMO ([administration.md, The demo](administration.md#the-demo)).
 1. Open **Import** › **Add a database** and keep **Import tables** selected.
 2. Optionally choose the **Kind of data** (the category of the table's entries) and the
    **Format** (a known export, or recognition by the columns).
-3. Drop the files, or choose them. For each file, Medorama shows the columns it recognized and
+3. Select **Choose tables on the server…**, open the folder (the dialog starts at the data roots,
+   `data_roots`, and remembers the last folder) and tick the tables. They are read where they
+   are, of any size, and a relative path in a `file` column is read from the table's folder. A
+   table that is only on your own computer is dropped on the zone, or chosen with **upload from
+   this computer** (up to 1 GiB). For each file, Medorama shows the columns it recognized and
    those it did not. Map the others under **Columns**, and save the mapping if you will import
    tables of the same shape again.
 4. Select **Preview all** to read and check every row without keeping anything. The report says

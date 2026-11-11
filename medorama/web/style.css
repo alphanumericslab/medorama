@@ -344,6 +344,19 @@ table.grid td.nowrap, table.grid th.nowrap { white-space: nowrap; }
 .bar > i { display: block; height: 100%; background: var(--busy); }
 .results { margin: 4px 0 0; font-size: 12px; color: var(--muted); }
 
+/* "Choose on the server" (serverfiles.js) */
+dialog.sf { width: min(720px, calc(100vw - 32px)); max-height: calc(100vh - 64px); padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); box-shadow: var(--shadow); }
+dialog.sf::backdrop { background: rgb(0 0 0 / .35); }
+.sf-body { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; max-height: calc(100vh - 64px); box-sizing: border-box; }
+.sf-head { display: flex; align-items: center; }
+.sf-head h2 { font-size: 16px; margin: 0; flex: 1; }
+#sf-dir { flex: 1; min-width: 0; }
+.sf-list { overflow: auto; min-height: 160px; max-height: 50vh; border: 1px solid var(--line); border-radius: 8px; padding: 4px; }
+.sf-item button.menu { width: 100%; }
+.sf-file { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
+.sf-file:hover { background: var(--soft); }
+.sf-file span:first-of-type { flex: 1; overflow-wrap: anywhere; }
+
 /* encounter drawer */
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(760px, 100vw); background: var(--bg); border-left: 1px solid var(--line); box-shadow: var(--shadow); z-index: 20; display: flex; flex-direction: column; }
 .drawer-head { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
@@ -516,11 +529,12 @@ details.cohist td.what { white-space: normal; }
 /* importing: the drop zone, the progress of imports (here and in the top bar) */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 .dropzone { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; padding: 18px 16px; margin: 8px 0 10px;
-  border: 1.5px dashed var(--soft2); border-radius: 10px; background: var(--bg); cursor: pointer; transition: border-color .15s; }
+  border: 1.5px dashed var(--soft2); border-radius: 10px; background: var(--bg); transition: border-color .15s; }
 .dropzone:hover { border-color: var(--accent); }
 .dropzone.over { border-color: var(--accent); background: var(--accent-soft); }
 .dropzone:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
 .dropzone:has(input:disabled) { opacity: .6; cursor: default; }
+.dropzone label.like-link { cursor: pointer; }
 .like-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .running { margin: 10px 0; display: flex; flex-direction: column; gap: 8px; }
 .running h4 { margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }

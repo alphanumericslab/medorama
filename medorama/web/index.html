@@ -288,14 +288,14 @@
                 <label>Format <select id="tb-format" aria-label="Format"></select></label>
               </div>
               <p id="tb-format-about" class="muted small"></p>
-              <label id="tb-drop" class="dropzone">
-                <input id="tb-files" type="file" class="sr-only" aria-label="Files to import" accept=".csv,.xlsx,.xls,.ods,.parquet,text/csv" multiple>
-                <b>Drop files here, or <span class="like-link">choose files</span></b>
-                <span class="muted small">CSV, Parquet or spreadsheets, up to 1 GB here; several files with the same columns can make one database. Larger tables: <code>medorama import-table FILE…</code> on the server.</span>
-              </label>
+              <div id="tb-drop" class="dropzone">
+                <button type="button" id="tb-server" class="primary">Choose tables on the server…</button>
+                <span>or drop files here, or <label class="like-link">upload from this computer<input id="tb-files" type="file" class="sr-only" aria-label="Upload tables from this computer" accept=".csv,.xlsx,.xls,.ods,.parquet,text/csv" multiple></label></span>
+                <span class="muted small">CSV, Parquet or spreadsheets; several files with the same columns can make one database. Tables on the server (inside <code>data_roots</code>) are read where they are, of any size; an upload is up to 1 GB.</span>
+              </div>
               <details class="clifbox"><summary>A CLIF folder on the server</summary>
                 <p class="muted small">CLIF, the Common Longitudinal ICU data Format: its tables (CSV or Parquet) are recognised and imported in order, each a database (<code>clif_vitals</code> …). The folder must be inside <code>data_roots</code>; on the command line: <code>medorama import-clif FOLDER</code>.</p>
-                <div class="ftools wrap"><input id="clif-dir" placeholder="/data/clif" aria-label="The CLIF folder"><button id="clif-preview" type="button">Preview</button><button id="clif-import" type="button" class="primary">Import the folder</button></div>
+                <div class="ftools wrap"><input id="clif-dir" placeholder="/data/clif" aria-label="The CLIF folder"><button id="clif-pick" type="button">Choose…</button><button id="clif-preview" type="button">Preview</button><button id="clif-import" type="button" class="primary">Import the folder</button></div>
                 <pre id="clif-report" class="report hidden"></pre>
               </details>
               <div id="tb-together" class="ftools wrap hidden">
@@ -313,7 +313,7 @@
               <div class="formgrid">
                 <label>Name <input id="cn-name" required placeholder="omop" aria-describedby="cn-name-hint"><small id="cn-name-hint" class="muted">Criteria write it: <code>omop.lactate</code></small></label>
                 <label>Layout <select id="cn-kind" aria-label="Layout"><option value="omop">OMOP CDM 5.3 or 5.4</option><option value="sql">Any layout, through SQL views</option></select></label>
-                <label id="cn-path-l">File on this server <input id="cn-path" placeholder="/data/omop/omop.sqlite"></label>
+                <label id="cn-path-l">File on this server <span class="ftools"><input id="cn-path" placeholder="/data/omop/omop.sqlite"><button id="cn-path-pick" type="button">Choose…</button></span></label>
                 <label id="cn-url-l" class="hidden">Server <input id="cn-url" placeholder="postgres://reader@db.example.org/omop?sslmode=require"><small class="muted">No password in it.</small></label>
                 <label id="cn-pass-l" class="hidden">Password <input id="cn-pass" type="password" autocomplete="new-password"><small class="muted">Kept in a file only the catalog reads; never shown again.</small></label>
                 <label id="cn-schema-l" class="hidden">Schema <input id="cn-schema" placeholder="cdm"></label>

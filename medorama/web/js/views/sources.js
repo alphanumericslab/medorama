@@ -6,6 +6,7 @@ import { $, api, esc, fail, fmtTime, qs, removalText, toast } from '../core.js';
 import { reviewBadge } from './review.js';
 import { checkData } from '../live.js';
 import { cancel, dismiss, onImports, progressHtml, sizeBars, upload, watch, watched, whenDone } from '../imports.js';
+import { chooseOnServer } from '../serverfiles.js';
 
 const imp = { tables: [], mappings: [], formats: [], categories: [], problems: [], kind: 'import', busy: false, uploading: null, ours: new Set() };
 
@@ -59,11 +60,16 @@ function renderChoices() {
 
 const together = () => imp.tables.length > 1 && document.querySelector('input[name="tb-mode"]:checked')?.value === 'one';
 
+/** A table on the server, as the page holds it beside the browser's files: read where it is. */
+const onServer = (path) => ({ name: path.split(/[\\/]/).pop(), path });
+
 async function addFiles(files) {
   const format = $('#tb-format').value;
   for (const file of files) {
     try {
-      const ins = await api(`tables/inspect?${qs({ name: file.name, format })}`, { method: 'POST', body: file });
+      const ins = file.path
+        ? await api('tables/server/inspect', { method: 'POST', json: { path: file.path, format } })
+        : await api(`tables/inspect?${qs({ name: file.name, format })}`, { method: 'POST', body: file });
       imp.tables.push({ file, ins, map: { ...ins.mapping }, category: $('#tb-cat').value || ins.category, name: file.name, source: '', report: '' });
     } catch (e) {
       imp.tables.push({ file, ins: null, map: {}, category: '', name: file.name, source: '', report: e.message });
@@ -143,17 +149,25 @@ async function importTables(dryRun) {
   try {
     for (const run of runs) {
       const { t } = run;
-      const form = new FormData();
-      for (const x of run.files) form.append('file', x.file, x.file.name);
       t.report = '';
-      imp.uploading = { id: 'upload', label: run.name, state: 'running', fraction: 0, loaded: 0, total: run.files.reduce((n, x) => n + x.file.size, 0) };
-      renderRunning();
       try {
-        const query = qs({ batch: run.name, source: t.source, category: t.category, mapping: mappingOf(t), format, dry_run: dryRun, background: true });
-        const task = await upload(`tables/files?${query}`, form, (fraction, loaded, total) => {
-          Object.assign(imp.uploading, { fraction, loaded, total });
+        const fields = { batch: run.name, source: t.source, category: t.category, mapping: mappingOf(t), format, dry_run: dryRun, background: true };
+        const served = run.files.filter((x) => x.file.path).length;
+        let task;
+        if (served && served < run.files.length) throw new Error('Tables on the server and tables from this computer cannot make one database: import them apart');
+        if (served) {
+          // read on the server where they are: nothing to upload
+          task = await api('tables/server', { method: 'POST', json: { ...fields, paths: run.files.map((x) => x.file.path) } });
+        } else {
+          const form = new FormData();
+          for (const x of run.files) form.append('file', x.file, x.file.name);
+          imp.uploading = { id: 'upload', label: run.name, state: 'running', fraction: 0, loaded: 0, total: run.files.reduce((n, x) => n + x.file.size, 0) };
           renderRunning();
-        });
+          task = await upload(`tables/files?${qs(fields)}`, form, (fraction, loaded, total) => {
+            Object.assign(imp.uploading, { fraction, loaded, total });
+            renderRunning();
+          });
+        }
         imp.uploading = null;
         imp.ours.add(task.id);
         watch(task);
@@ -201,7 +215,7 @@ function renderRunning() {
   const busy = imp.busy || watched().some((t) => t.state === 'running');
   $('#tb-preview').disabled = $('#tb-import').disabled = busy || !imp.tables.length;
   $('#clif-preview').disabled = $('#clif-import').disabled = busy;
-  $('#tb-files').disabled = imp.busy;
+  $('#tb-files').disabled = $('#tb-server').disabled = imp.busy;
   $('#tb-import').textContent = imp.busy ? 'Importing…' : 'Import all';
 }
 
@@ -325,6 +339,17 @@ export default {
   show: () => load(),
   wire() {
     $('#tb-files').addEventListener('change', (e) => { addFiles([...e.target.files]).catch(fail); e.target.value = ''; });
+    $('#tb-server').addEventListener('click', async () => {
+      const paths = await chooseOnServer({ kind: 'tables' });
+      if (paths?.length) addFiles(paths.map(onServer)).catch(fail);
+    });
+    // a folder or a database file on the server, chosen rather than typed
+    for (const [button, input, kind] of [['#clif-pick', '#clif-dir', 'folders'], ['#cn-path-pick', '#cn-path', 'databases']]) {
+      $(button).addEventListener('click', async () => {
+        const [path] = (await chooseOnServer({ kind, multiple: false })) || [];
+        if (path) $(input).value = path;
+      });
+    }
     // files dropped on the zone
     const drop = $('#tb-drop');
     for (const ev of ['dragenter', 'dragover']) drop.addEventListener(ev, (e) => { e.preventDefault(); if (!imp.busy) drop.classList.add('over'); });

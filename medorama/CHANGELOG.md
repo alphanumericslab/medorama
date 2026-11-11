@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Choose on the server**: the page picks files and folders on the server in a dialog of its
+  own, which the server lists (`GET server-files?dir&kind`: folders, and tables, SQLite files or
+  nothing else; inside `data_roots`, for admins, refused in Privacy Mode as the viewer's folders
+  are), the way VitalStream's Open dialog does. Import › Import tables leads with **Choose tables
+  on the server…**: the tables are read where they are, row by row, of any size, as
+  `medorama import-table` reads them (`POST tables/server/inspect`, `POST tables/server`; a
+  relative `file` path is read from the table's folder). **Upload from this computer** and
+  dropping files stay, for a table that is not on the server. The CLIF folder and a connected
+  database's file get a **Choose…** button. The browser's own file dialog, which may not open a
+  share it would have to mount itself ("operation permitted for root only"), is no longer the way
+  to a table on the server. Inspecting a table now reads it row by row and keeps only its first
+  five rows, uploads included. Tests: `tests/server_tables.rs`, and `tests/browser.rs` (the
+  dialog in Chrome, with the accessibility check).
+
 - **WFDB records with MATLAB signal files** (`.hea` with `.mat`: the PhysioNet Challenge files,
   `wfdb2mat`'s) are read, once the `.mat` file is checked against its header; one that does not
   match (compressed, of doubles, transposed, of another offset or length) is refused with the

@@ -502,6 +502,9 @@ Every file and table is treated as untrusted.
 - **DICOM sequences** nested more than 32 deep are refused (the rewrite would otherwise recurse
   without bound on a crafted file).
 - **Uploads** (imports) are limited to 1 GiB and to administrators.
+- **Files on the server** (`server-files`, `tables/server`) are listed and read for
+  administrators only, inside `data_roots` (real paths, as above; hidden entries and links that
+  lead out are not listed), and never listed in Privacy Mode, whose folders' names may identify.
 - **The VitalStream viewers** read WFDB records with wfdb-x, a reimplementation of the WFDB C
   library that finds files only where they are named, keeps a header's signal files inside its
   folder, and has network access off. Medorama's fuzzing does not cover it: open WFDB records

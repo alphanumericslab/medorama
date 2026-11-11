@@ -686,9 +686,13 @@ database}, with the choice \ui{Import tables}:
 \begin{enumerate}
 \item Choose the \ui{Kind of data} (the category of the tables' items; \ui{Any kind (from the
   files)} by default) and the \ui{Format}.
-\item Drop the files on the drop zone, or click \ui{choose files}. The files may be CSV, Parquet
-  or spreadsheets, up to 1\,GiB per upload, and the files of one database are uploaded together.
-  Each file is read at once and shown in a card, with its format if it is a known export, its
+\item Click \ui{Choose tables on the server\ldots}, open the folder and tick the tables. The
+  dialog is the page's own: the server lists its folders, starting at the data roots
+  (\code{data\_roots}), and the dialog remembers the last folder. The tables are read where they
+  are, row by row, of any size, and a relative path in a \code{file} column is read from the
+  table's folder. A table that is only on your own computer is dropped on the drop zone, or
+  chosen with \ui{upload from this computer}: up to 1\,GiB per upload, the files of one database
+  uploaded together. The files may be CSV, Parquet or spreadsheets. Each file is read at once and shown in a card, with its format if it is a known export, its
   rows, how many of its columns are mapped, \ui{Items are} (its category), the saved mappings,
   its name and its source. Under \ui{Columns}, the card lists the catalog's fields by group, each
   with its drop-down list. Users with the PHI permission also see the file's \ui{First rows}.
@@ -705,7 +709,8 @@ their progress (rows, share done, time left) wherever you are. \ui{Cancel} stops
 nothing of it is kept, so the catalog stays as it was before. When an import ends, each file's
 card reports what was added (new patients, new encounters, bed stays, items, recordings, attached
 files), the items already there, the rows held back, the database's own columns, and the
-warnings. A table larger than the upload limit is imported on the server, with the command line.
+warnings. A table larger than the upload limit is chosen on the server, or imported with the
+command line.
 
 \section{Importing on the command line}
 \label{sec:importing-cli}

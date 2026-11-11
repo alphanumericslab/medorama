@@ -258,6 +258,26 @@ paths:
       parameters: [{ $ref: "#/components/parameters/Csrf" }]
       requestBody: { content: { application/json: { schema: { type: object, required: [dir], properties: { dir: { type: string }, source: { type: string }, dry_run: { type: boolean }, background: { type: boolean } } } } } }
       responses: { "200": { $ref: "#/components/responses/Json" }, "202": { $ref: "#/components/responses/Task" }, "400": { $ref: "#/components/responses/Error" } }
+  /server-files:
+    get:
+      tags: [imports]
+      summary: "The folders of a folder on this server and its files of a kind (tables: CSV, spreadsheets, Parquet; databases: SQLite files), inside data_roots (admins; refused in Privacy Mode): {dir, parent, items: [{name, path, dir, size}], truncated}; without dir, the folders data may come from"
+      parameters: [{ name: dir, in: query, schema: { type: string, description: "an absolute folder; empty: the data roots" } }, { name: kind, in: query, schema: { type: string, enum: [tables, databases, folders], description: "the files listed with the folders (default tables)" } }]
+      responses: { "200": { $ref: "#/components/responses/Json" }, "400": { $ref: "#/components/responses/Error" }, "403": { $ref: "#/components/responses/Error" } }
+  /tables/server/inspect:
+    post:
+      tags: [imports]
+      summary: "As POST tables/inspect, a table on this server (inside data_roots), read where it is, row by row (admins)"
+      parameters: [{ $ref: "#/components/parameters/Csrf" }]
+      requestBody: { content: { application/json: { schema: { type: object, required: [path], properties: { path: { type: string }, format: { type: string } } } } } }
+      responses: { "200": { $ref: "#/components/responses/Json" }, "400": { $ref: "#/components/responses/Error" } }
+  /tables/server:
+    post:
+      tags: [imports]
+      summary: "Tables on this server (inside data_roots) imported where they are, of any size, as medorama import-table (admins): one, or several with the same columns as one database named by batch; the other fields as POST tables; a relative file path is read from the first table's folder"
+      parameters: [{ $ref: "#/components/parameters/Csrf" }]
+      requestBody: { content: { application/json: { schema: { type: object, required: [paths], properties: { paths: { type: array, items: { type: string } }, batch: { type: string }, source: { type: string }, category: { type: string }, mapping: { type: string }, format: { type: string }, dry_run: { type: boolean }, background: { type: boolean } } } } } }
+      responses: { "200": { $ref: "#/components/responses/Json" }, "202": { $ref: "#/components/responses/Task" }, "400": { $ref: "#/components/responses/Error" } }
   /formats:
     get: { tags: [imports], summary: "The import formats (built in, and described in formats_dirs), the files that could not be read, the categories (admins)", responses: { "200": { $ref: "#/components/responses/Json" } } }
   /connections/{id}/check:

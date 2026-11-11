@@ -33,7 +33,7 @@ For administrators who install Medorama and run it for other people.
 | [Administration](administration.md) | Setting up a catalog, settings, PostgreSQL, importing data, identity across databases, connected databases, add-ons, users and the PHI permission, the audit log, deployment, services, backups and troubleshooting. |
 | [Install](install.md) | The installation commands for each operating system. |
 | [Building and installing](building.md) | Building every part on Linux, macOS and Windows, including without administrator rights or internet access, and updating or uninstalling. |
-| [Performance](performance.md) | Measured import times, page times and query counts at 50,000 patients on SQLite and PostgreSQL, and many users at once. |
+| [Performance](performance.md) | Measured import times, page times and query counts at 50,000 patients on SQLite and PostgreSQL, and many users at once; how fast the three VitalStream viewers index and read WFDB, EDF, BDF and `.Stp` recordings. |
 
 ## Reviewing security and privacy
 

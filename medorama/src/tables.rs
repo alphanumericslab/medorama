@@ -328,21 +328,48 @@ pub fn inspect(
     phi: bool,
     choice: &crate::formats::Choice,
 ) -> anyhow::Result<Inspection> {
-    let (headers, rows) = read_rows(data)?;
-    let rows: Vec<Vec<String>> = rows.into_iter().filter(|r| r.iter().any(|v| !v.is_empty())).collect();
+    inspect_part(cfg, &Part { name: file_name.to_string(), data: PartData::Bytes(data) }, phi, choice)
+}
+
+/// As [`inspect`], for a table uploaded or a file on this server: read row by row, its rows
+/// counted and only the first five kept, so that a table of any size is inspected.
+pub fn inspect_part(
+    cfg: &Config,
+    part: &Part,
+    phi: bool,
+    choice: &crate::formats::Choice,
+) -> anyhow::Result<Inspection> {
+    let Rows { headers, rows, .. } = open_rows(part)?;
     // a known export: shown as it will be stored, converted
     let known = crate::formats::all(cfg).0;
     let format = choice.resolve(&headers, &known);
     let format_key = format.as_ref().map(|f| f.key().to_string());
-    let (headers, rows, category) = match &format {
-        Some(f) => {
-            let mut conv = f.start(&headers)?;
-            let converted: Vec<Vec<String>> = rows.iter().filter_map(|r| conv.rows(r).ok()).flatten().collect();
-            (conv.headers(), converted, f.category().to_string())
+    let mut conv = match &format {
+        Some(f) => Some(f.start(&headers)?),
+        None => None,
+    };
+    let (mut n, mut sample) = (0usize, vec![]);
+    for row in rows {
+        let (_, cells) = row?;
+        if !cells.iter().any(|v| !v.is_empty()) {
+            continue;
         }
-        None => {
-            let cat = guess_category(file_name, &headers);
-            (headers, rows, cat)
+        let out = match conv.as_mut() {
+            Some(c) => c.rows(&cells).unwrap_or_default(),
+            None => vec![cells],
+        };
+        for r in out {
+            n += 1;
+            if sample.len() < 5 {
+                sample.push(r);
+            }
+        }
+    }
+    let (headers, category) = match (&format, &conv) {
+        (Some(f), Some(c)) => (c.headers(), f.category().to_string()),
+        _ => {
+            let cat = guess_category(&part.name, &headers);
+            (headers, cat)
         }
     };
     Ok(Inspection {
@@ -352,8 +379,8 @@ pub fn inspect(
         category,
         groups: GROUPS.iter().map(|(g, c)| (g.to_string(), c.iter().map(|x| x.to_string()).collect())).collect(),
         categories: categories::CATEGORIES.iter().map(|c| (c.0.to_string(), c.1.to_string())).collect(),
-        rows: rows.len(),
-        sample: phi.then(|| rows.iter().take(5).cloned().collect()),
+        rows: n,
+        sample: phi.then_some(sample),
         headers,
     })
 }

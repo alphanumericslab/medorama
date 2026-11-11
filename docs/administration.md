@@ -125,7 +125,7 @@ mistake is never silently ignored.
 | `viewer` | `auto` | The VitalStream viewer that Medorama runs: `auto`, `cpp`, `rs`, `py`, `none`, or the path of a viewer program ([The waveform viewer](#the-waveform-viewer)). |
 | `viewer_url` | Empty | Instead, a viewer running elsewhere, opened in a new browser tab. |
 | `qc_verbose` | `false` | The viewer that the catalog runs also outlines, with a dashed line, the data a reader repaired, such as data blocks that a file stored out of order and the reader put back in order. Breaks are shaded either way. |
-| `data_roots` | `[]` (anywhere) | The folders that files may be imported from. |
+| `data_roots` | `[]` (anywhere) | The folders that files may be imported from, and that the page's **Choose on the server** dialog and the viewer's Open dialog show. |
 | `actions_dirs` | `["actions"]` | The folders of action plug-ins ([actions.md](actions.md)). |
 | `formats_dirs` | `["formats"]` | The folders of import formats ([Import formats](#import-formats)). |
 | `session_hours` | 12 | How long a sign-in lasts. A value below 1 is read as 1. |
@@ -1112,6 +1112,7 @@ studies, de-identified on the way (`tools/make-demo-data.py --help`).
 | `cannot listen on 127.0.0.1:8090` | Another program uses the port. Use `--port N`, or set `port` in `medorama.toml`. |
 | Import: `skipped …: the catalog writes to …` | The results, index or home folder is a recording's folder or inside one. Choose folders elsewhere. |
 | Import: `outside the configured data_roots` | Add the folder to `data_roots` (an empty list allows any folder). |
+| Import: the browser's file dialog says `operation permitted for root only`, or does not show a mounted share | That dialog is the browser's, on the computer the browser runs on, and it tries to mount the share itself. Use **Choose tables on the server…** instead: the server lists its own folders, inside `data_roots`. |
 | Import: `… not a recording Medorama reads. A format read by an add-on needs it installed …` | An ICU, Holter, EEG or Sleep row names a file that no installed reader reads. Install the add-on that reads it, restart the server, then remove that import and import the table again ([adapters.md, Installing an add-on](adapters.md#installing-an-add-on)). |
 | A recording stays gray (not indexed) | Check that the server runs with workers and `auto_index = true`, or run `medorama run index --recording ID` and `medorama work`. When indexing failed, the Jobs tab shows the error. |
 | Recordings are not linked to encounters | Linking needs a row that names the file, or a bed stay with the same `UNIT_BED` that overlaps the recording's time. Check `medorama recordings --unlinked` and the databases' times, in particular their time zone. |

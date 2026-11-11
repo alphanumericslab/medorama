@@ -95,10 +95,40 @@ run side by side.
 | Default port | 8070 | 8060 | 8050 |
 | Folder | [`cpp/`](cpp) | [`rust/`](rust) | [`python/vitalstream`](python/vitalstream) |
 | Needs to run | the C++ runtime only (one file) | nothing (one file) | Python 3.9 or later |
-| Indexing a day of ICU data | a few seconds | a few seconds | about a minute |
+| Indexing a day of 8 signals at 250 Hz (WFDB, 346 MB) | 1.5 s | 1.2 s | 1.1 s |
+| Memory: nothing open, and while indexing that day | 3 MB, 220 MB | 4 MB, 230 MB | 88 MB, 360 MB |
 
 The names of every command, package, option and file across the three are listed in
 [docs/naming.md](docs/naming.md).
+
+### Speed
+
+The three viewers were measured on the same recordings, through their HTTP API, on a laptop
+(Apple M2 Max, 32 GB, SSD), with the files in the system's cache. Indexing is the median of three
+runs, in seconds. A 10-second window is the median of 20 requests for raw samples at random
+places, every channel, in milliseconds. The full tables, every request measured, and the
+commands to repeat it are in [docs/performance.md](../../docs/performance.md#the-vitalstream-viewers).
+
+| Recording | Size | Indexing: C++ / Rust / Python | 10-second window: C++ / Rust / Python |
+|---|---|---|---|
+| WFDB, one day: 8 signals at 250 Hz, 16-bit (synthetic) | 346 MB | 1.5 / 1.2 / 1.1 s | 3 / 6 / 18 ms |
+| The same day, samples in a MATLAB `.mat` file | 346 MB | 1.5 / 1.3 / 1.1 s | 3 / 5 / 18 ms |
+| The same day as EDF | 346 MB | 1.1 / 1.2 / 0.5 s | 2 / 9 / 6 ms |
+| The same day as BDF (24-bit) | 518 MB | 1.1 / 1.3 / 0.8 s | 2 / 7 / 6 ms |
+| WFDB, three days | 1,037 MB | 4.7 / 3.8 / 3.4 s | 3 / 6 / 20 ms |
+| A 24-hour Holter, 2 leads at 128 Hz | 44 MB | 0.21 / 0.17 / 0.13 s | 1 / 1 / 4 ms |
+| A folder of 24 ICU records, one session | 7 MB | 0.08 / 0.07 / 0.11 s | <1 / <1 / <1 ms |
+| A typical `.Stp` file (GE, 75–170 MB, 14–27 h), Rust add-on | 75–170 MB | 3.1 / 3.1 / 3.3 s | 5 / 7 / 8 ms |
+| The same, C++ add-on (Rust viewer) | 75–170 MB | 2.9 s | 9 ms |
+| The same, Python add-on (Rust viewer) | 75–170 MB | 68 s | 80 ms |
+
+- WFDB, EDF and BDF are about as fast in the three viewers, and every request to read takes
+  milliseconds; the C++ viewer answers fastest. A recording already indexed opens in 25 ms at
+  most.
+- For `.Stp` files the [adapter](../../docs/adapters.md)'s implementation decides: the Rust and
+  C++ add-ons are about 20 times faster than the Python one, whichever viewer runs them.
+- The Python viewer needs more memory: 88 MB with nothing open, about 1.5 times the others while
+  indexing.
 
 ## Install
 

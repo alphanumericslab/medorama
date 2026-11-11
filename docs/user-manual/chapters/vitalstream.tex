@@ -137,7 +137,8 @@ Port (default) & 8050 & 8060 & 8070 \\
 Folder & \file{python/vitalstream} & \file{rust/} & \file{cpp/} \\
 Needs to run & Python 3.9 or later & Nothing (one file) & Nothing but the C++ runtime (one
   file) \\
-Indexing a day of ICU data & About a minute & A few seconds & A few seconds \\
+Indexing a day of 8 signals at 250\,Hz (WFDB, 346\,MB) & 1.1\,s & 1.2\,s & 1.5\,s \\
+Memory: nothing open, and while indexing that day & 88\,MB, 360\,MB & 4\,MB, 230\,MB & 3\,MB, 220\,MB \\
 Package, library & The Python package \code{vitalstream\_py} & The crate \code{vitalstream-rs},
   with the engine \code{recording-engine} (\file{libs/engine}) & The CMake targets
   \code{vs\_core}, \code{vs\_engine}, \code{vs\_viewer} \\
@@ -153,6 +154,56 @@ share one settings file, one password, one index folder and one adapter folder. 
 user meets ends in the implementation's suffix, \code{-py}, \code{-rs} or \code{-cpp}; without a
 suffix, a name refers to what the three have in common (``the viewer'', \file{vitalstream.toml}).
 The three read WFDB records with wfdb-x, in each language.
+
+\subsection{Speed}
+\label{sec:vitalstream-speed}
+
+The three viewers were measured on the same recordings through their HTTP API
+(\cref{tab:vitalstream-speed}), on a laptop (Apple M2 Max, 32\,GB, SSD) with the files in the
+system's cache, using \file{tools/bench-viewers.py}. Each recording got a viewer of its own with
+an empty index folder. Indexing is the time from the \code{open} request until the recording is
+ready, the median of three runs. A 10-second window is the median of 20 requests for raw
+samples at random places, every channel. The full tables (opening again, the whole recording,
+10-minute windows, vital signs, memory) and the commands to repeat the measurement are in
+\file{docs/performance.md}. The three viewers answered the same data to every request.
+
+\begin{table}[htbp]
+\centering
+\caption{Indexing and reading in the three viewers. The \code{.Stp} rows are the 12 GE
+  recordings of 75 to 170\,MB (14 to 27 hours) among 16 measured.}
+\label{tab:vitalstream-speed}
+\begin{tabularx}{\linewidth}{@{}LP{1.6cm}P{3.2cm}P{3.2cm}@{}}
+\toprule
+\tabhead Recording & \tabhead Size & \tabhead Indexing: Python / Rust / C++ & \tabhead 10-second
+  window: Python / Rust / C++ \\
+\midrule
+WFDB, one day: 8 signals at 250\,Hz, 16-bit (synthetic) & 346\,MB & 1.1 / 1.2 / 1.5\,s & 18 / 6 / 3\,ms \\
+The same day, samples in a MATLAB \file{.mat} file & 346\,MB & 1.1 / 1.3 / 1.5\,s & 18 / 5 / 3\,ms \\
+The same day as EDF & 346\,MB & 0.5 / 1.2 / 1.1\,s & 6 / 9 / 2\,ms \\
+The same day as BDF (24-bit) & 518\,MB & 0.8 / 1.3 / 1.1\,s & 6 / 7 / 2\,ms \\
+WFDB, three days & 1,037\,MB & 3.4 / 3.8 / 4.7\,s & 20 / 6 / 3\,ms \\
+A 24-hour Holter, 2 leads at 128\,Hz & 44\,MB & 0.13 / 0.17 / 0.21\,s & 4 / 1 / 1\,ms \\
+A folder of 24 ICU records, one session & 7\,MB & 0.11 / 0.07 / 0.08\,s & under 1\,ms \\
+A typical \code{.Stp} file, Rust add-on & 75--170\,MB & 3.3 / 3.1 / 3.1\,s & 8 / 7 / 5\,ms \\
+The same, C++ add-on (Rust viewer) & 75--170\,MB & 2.9\,s & 9\,ms \\
+The same, Python add-on (Rust viewer) & 75--170\,MB & 68\,s & 80\,ms \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{itemize}
+\item WFDB, EDF and BDF are about as fast in the three viewers: a day of 8 signals is indexed in
+  0.5 to 1.5\,s, three days in 3.4 to 4.7\,s. Every request to read takes milliseconds; the C++
+  viewer answers fastest. A recording already indexed opens in 25\,ms at most.
+\item For \code{.Stp} files, the adapter's implementation decides (\cref{sec:vitalstream-adapters}):
+  the Rust and C++ add-ons index 27 to 32\,MB a second, about 20 times faster than the Python
+  one, and its zoomed views are ten times slower. With the same add-on, the three viewers take the
+  same time.
+\item Waveform markers and breaks cost time and memory, as samples do: a 24\,MB file with 32
+  million markers took 7 to 8\,s and 1.9 to 2.6\,GB of memory with the Rust or C++ add-on.
+\item The Python viewer needs more memory: 88\,MB with nothing open, about 1.5 times the others
+  while indexing.
+\end{itemize}
 
 % ==========================================================================================
 \section{Installing}

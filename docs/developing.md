@@ -60,6 +60,7 @@ Each part is a program of its own, in its own folder:
 | `viewers/ecg/`, `viewers/pacs/` | The ECG and PACS viewers: static pages with plain scripts, usable on their own. The ECG viewer's readers are registered in `readers.js`. | JavaScript |
 | `viewers/ecg/python/muse/`, `viewers/pacs/python/dicom/` | `muse-py` and `dicom-py`: tools that build databases to import, and serve the viewers on their own. | Python |
 | `tools/make-demo-data.py` | The synthetic demo data set: patients, databases and files. | Python |
+| `tools/bench-viewers.py` | How fast the three VitalStream viewers index and read recordings ([performance.md](performance.md#the-vitalstream-viewers)). | Python |
 
 The server embeds the page and the ECG and PACS viewers when it is built (`include_dir!` in
 `server.rs`). **Rebuild after changing them** (`cargo build`), then reload the browser.

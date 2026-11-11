@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Documentation: the speed of the three viewers, measured on WFDB (with `.dat` and `.mat`
+  files), EDF, BDF and `.Stp` recordings, indexing and reading, in place of the estimates ("about
+  a minute" for the Python viewer was wrong): the VitalStream README's "Speed" and
+  [docs/performance.md](../../../docs/performance.md#the-vitalstream-viewers). `tools/bench-viewers.py`
+  repeats the measurement.
 - WFDB records with MATLAB signal files (`.mat`) are read once checked against their header, and
   refused with the reason otherwise; a signal file (`.dat`, `.mat`) typed as the path to open or
   browse is refused with the header to open in its place (the engine's `check_mat_files` and
