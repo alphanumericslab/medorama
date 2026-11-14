@@ -70,4 +70,4 @@ tempfile = "3"
 # a spreadsheet written in the tests (calamine already depends on it)
 zip = { version = "9", default-features = false, features = ["deflate"] }
 tower = { version = "0.5", features = ["util"] }
-tungstenite = { version = "0.27", default-features = false, features = ["handshake"] }
+tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
