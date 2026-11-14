@@ -27,7 +27,7 @@ clap.workspace = true
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query", "form", "json"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
 scrypt = { version = "0.11", default-features = false, optional = true }
-hmac = { version = "0.12", optional = true }
+hmac = { version = "0.13", optional = true }
 getrandom = { version = "0.3", optional = true }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 chrono-tz = { version = "0.10", default-features = false }
