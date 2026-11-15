@@ -1,13 +1,19 @@
-// "Choose on the server": the one way the page picks files and folders on this server (admins).
+// "Choose on the server": the one way the page picks a file or folder on this server (admins: a
+// SQLite database to connect).
 // The server lists them (GET server-files), inside data_roots, as the viewer's Open dialog does;
 // the browser's own file dialog only uploads a file from this computer.  Not in Privacy Mode:
 // the server refuses, and the dialog says why.
 
 import { $, api, esc, qs, store } from './core.js';
-import { size } from './imports.js';
+
+/** A file's size as people read it. */
+function size(n) {
+  if (n < 1e6) return `${Math.max(1, Math.round(n / 1e3))} kB`;
+  if (n < 1e9) return `${(n / 1e6).toFixed(n < 1e7 ? 1 : 0)} MB`;
+  return `${(n / 1e9).toFixed(1)} GB`;
+}
 
 const KINDS = {
-  tables: { title: 'Choose tables on the server', none: 'No folder or table here (CSV, spreadsheets, Parquet).' },
   databases: { title: 'Choose a database file on the server', none: 'No folder or SQLite file here.' },
   folders: { title: 'Choose a folder on the server', none: 'No folder here.' },
 };
@@ -19,25 +25,25 @@ function build() {
   dlg.id = 'sf';
   dlg.className = 'sf';
   dlg.setAttribute('aria-labelledby', 'sf-title');
+  // ✕ and Cancel are plain buttons (they close it): Enter in the form chooses, never cancels
   dlg.innerHTML = `<form method="dialog" class="sf-body">
-    <div class="sf-head"><h2 id="sf-title"></h2><button value="" class="icon" title="Close" aria-label="Close">✕</button></div>
+    <div class="sf-head"><h2 id="sf-title"></h2><button type="button" data-close class="icon" title="Close" aria-label="Close">✕</button></div>
     <div class="ftools"><button type="button" id="sf-up" title="One folder up" aria-label="One folder up">↑</button>
       <input id="sf-dir" class="mono" aria-label="Folder on the server" placeholder="The data roots" spellcheck="false">
       <button type="button" id="sf-go">Go</button><button type="button" id="sf-roots" class="link">Data roots</button></div>
     <div id="sf-list" class="sf-list" role="list"></div>
     <p id="sf-msg" class="muted small"></p>
     <div class="ftools"><span id="sf-count" class="muted"></span><span class="spacer"></span>
-      <button value="">Cancel</button><button id="sf-ok" value="ok" class="primary">Choose</button></div>
+      <button type="button" data-close>Cancel</button><button id="sf-ok" value="ok" class="primary">Choose</button></div>
   </form>`;
   document.body.append(dlg);
 }
 
 /**
  * The paths chosen on the server, or null if cancelled.
- * kind: `tables` (several, unless `multiple` is false), `databases` (one SQLite file) or
- * `folders` (the folder shown).
+ * kind: `databases` (a SQLite file; several with `multiple`) or `folders` (the folder shown).
  */
-export function chooseOnServer({ kind = 'tables', multiple = kind === 'tables' } = {}) {
+export function chooseOnServer({ kind = 'databases', multiple = false } = {}) {
   if (!dlg) build();
   const k = KINDS[kind];
   const key = `serverDir.${kind}`;
@@ -49,7 +55,7 @@ export function chooseOnServer({ kind = 'tables', multiple = kind === 'tables' }
   const update = () => {
     const ok = kind === 'folders' ? !!here.dir : sel.size > 0;
     $('#sf-ok', dlg).disabled = !ok;
-    $('#sf-count', dlg).textContent = kind === 'tables' && sel.size ? `${sel.size} chosen` : '';
+    $('#sf-count', dlg).textContent = multiple && sel.size ? `${sel.size} chosen` : '';
     $('#sf-up', dlg).disabled = here.parent === null;
   };
 
@@ -75,6 +81,7 @@ export function chooseOnServer({ kind = 'tables', multiple = kind === 'tables' }
 
   return new Promise((resolve) => {
     const onClick = (e) => {
+      if (e.target.closest('[data-close]')) { dlg.close(''); return; }
       const b = e.target.closest('[data-dir]');
       if (b) { show(b.dataset.dir); return; }
       if (e.target.closest('#sf-up') && here.parent !== null) show(here.parent);

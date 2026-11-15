@@ -117,3 +117,16 @@ test("the page's own redraws ask in the background", async () => {
   }
   assert.deepEqual(seen, [undefined, '1']);
 });
+
+test("a stay's days are calendar days in the catalog's time zone, not UTC days", () => {
+  st.cfg = { timezone: 'America/New_York' };
+  core.resetFormats();
+  // 22:00 to 08:00 the next morning in New York: both on one UTC day (03:00 and 13:00 UTC)
+  const a = Date.UTC(2024, 0, 3, 3) / 1000;
+  const b = Date.UTC(2024, 0, 3, 13) / 1000;
+  assert.equal(core.daysBetween(a, b), 1);
+  assert.equal(core.daysBetween(b, b + 3600), 0);
+  assert.ok(Number.isNaN(core.daysBetween(null, b)));
+  st.cfg = { timezone: 'UTC' };
+  core.resetFormats();
+});

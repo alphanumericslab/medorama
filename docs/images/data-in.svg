@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 600" width="1000" height="600" role="img" aria-labelledby="t d">
+<title id="t">How data come in: databases, connected</title><desc id="d">Medorama imports nothing. Tables, known exports and folders of recordings become a SQLite database with db-builder, a separate command; OMOP databases and any SQL database through views are connected directly. Medorama reads every connected database in place, read-only, and the recording files it names where they lie.</desc>
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#4B5563"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#B97A00"/></marker></defs>
+<rect x="0" y="0" width="1000" height="600" rx="14" fill="#FFFFFF"/>
+<g font-family="Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#1F2937">
+<text x="24" y="34" font-size="17" font-weight="700" fill="#1F2937" text-anchor="start">How data come in: databases, connected</text>
+<text x="24" y="54" font-size="12" font-weight="400" fill="#4B5563" text-anchor="start">Medorama imports nothing. A data manager builds a database with db-builder, or a site writes views; an admin connects it.</text>
+<text x="24" y="84" font-size="12" font-weight="650" fill="#6B7280" text-anchor="start">What a site has</text>
+<text x="276" y="84" font-size="12" font-weight="650" fill="#6B7280" text-anchor="start">Built by</text>
+<text x="528" y="84" font-size="12" font-weight="650" fill="#6B7280" text-anchor="start">A database</text>
+<text x="776" y="84" font-size="12" font-weight="650" fill="#6B7280" text-anchor="start">Medorama</text>
+<rect x="24" y="96" width="220" height="80" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4"/>
+<text x="36" y="117" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start">Tables</text>
+<text x="36" y="136.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">CSV, Excel, OpenDocument,</text>
+<text x="36" y="152.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Parquet</text>
+<rect x="24" y="190" width="220" height="80" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4"/>
+<text x="36" y="211" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start">Known exports</text>
+<text x="36" y="230.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">GE MUSE XML, CLIF folders,</text>
+<text x="36" y="246.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">a site’s export (TOML)</text>
+<rect x="24" y="284" width="220" height="80" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4"/>
+<text x="36" y="305" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start">Folders of recordings</text>
+<text x="36" y="324.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">WFDB, EDF, ECGs, DICOM,</text>
+<text x="36" y="340.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">pictures, PDF</text>
+<rect x="276" y="96" width="220" height="268" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="288" y="117" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">db-builder</text>
+<text x="288" y="136.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">a separate command, run</text>
+<text x="288" y="152.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">by a data manager:</text>
+<text x="288" y="169.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start"></text>
+<text x="288" y="185.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">recognizes the columns</text>
+<text x="288" y="202.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(docs/importing.md)</text>
+<text x="288" y="218.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">names each patient by</text>
+<text x="304" y="235.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(issuer, identifier)</text>
+<text x="288" y="251.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">keeps every other column</text>
+<text x="288" y="268.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">lists every file a row</text>
+<text x="304" y="284.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">names as a recording</text>
+<text x="288" y="301.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">writes only its output</text>
+<path d="M244 136 L276 136" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M244 230 L276 230" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M244 324 L276 324" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="528" y="96" width="208" height="120" rx="9" fill="#F2F3F5" stroke="#6B7280" stroke-width="1.4"/>
+<text x="540" y="117" font-size="13.5" font-weight="650" fill="#1F2937" text-anchor="start">A SQLite database</text>
+<text x="540" y="136.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">persons, visits, entries,</text>
+<text x="540" y="152.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">recordings, meta (version):</text>
+<text x="540" y="169.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">an open schema; may be</text>
+<text x="540" y="185.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">encrypted (--encrypt)</text>
+<path d="M496 156 L528 156" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="528" y="232" width="208" height="92" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="540" y="253" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start">An OMOP database</text>
+<text x="540" y="272.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">OMOP CDM 5.3 or 5.4,</text>
+<text x="540" y="288.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">PostgreSQL or SQLite:</text>
+<text x="540" y="305.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">views built in</text>
+<rect x="528" y="340" width="208" height="108" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="540" y="361" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start">Any SQL database</text>
+<text x="540" y="380.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">views written by the site:</text>
+<text x="540" y="396.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">persons, visits, entries,</text>
+<text x="540" y="413.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">recordings, version</text>
+<rect x="776" y="96" width="200" height="352" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="788" y="117" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">Connected</text>
+<text x="788" y="136.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Databases › Connect a</text>
+<text x="788" y="152.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">database, or medorama</text>
+<text x="788" y="169.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">databases connect</text>
+<text x="788" y="185.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start"></text>
+<text x="788" y="202.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">read in place, through</text>
+<text x="788" y="218.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">read-only sessions;</text>
+<text x="788" y="235.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">persons linked by exact</text>
+<text x="788" y="251.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(issuer, identifier) pairs;</text>
+<text x="788" y="268.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">variables and recordings</text>
+<text x="788" y="284.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">read; checked every</text>
+<text x="788" y="301.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">minute, read again when</text>
+<text x="788" y="317.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">its version changes</text>
+<path d="M736 156 L776 156" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M736 278 L776 278" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M736 394 L776 394" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="24" y="476" width="952" height="68" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="36" y="497" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start">Recording files, ECGs, images, documents</text>
+<text x="36" y="516.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">stay where they lie, inside data_roots; a database’s recordings rows name them, with their patient. Medorama reads them, never copies or writes them.</text>
+<path d="M876 476 L876 448" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M134 364 L134 476" fill="none" stroke="#9CA3AF" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="144" y="424" font-size="11" font-weight="400" fill="#4B5563" text-anchor="start">the same files: listed, never copied</text>
+<text x="24" y="572" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Dashed: kept by the site. No part of Medorama writes into a connected database; requirements on one: docs/databases.md.</text>
+</g></svg>

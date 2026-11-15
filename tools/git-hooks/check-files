@@ -15,12 +15,17 @@ MAX_BYTES=$((5 * 1024 * 1024))
 # the user's manual, built from docs/user-manual/: its pictures make it larger
 MANUAL='docs/user-manual/medorama-user-manual.pdf'
 MAX_MANUAL_BYTES=$((20 * 1024 * 1024))
-# Data files are allowed only in the synthetic test data and the viewers' synthetic examples
-# (tools/make-viewer-examples.py); the catalog's schema files are SQL.
-ALLOW_DATA='^(viewers/vitalstream/testdata/|medorama/(tests/fixtures|fuzz/seeds)/|viewers/(ecg|pacs)/examples/|viewers/ecg/tests/fixtures/)'
+# Data files are allowed only in the synthetic test data, the viewers' synthetic examples
+# (tools/make-viewer-examples.py) and the demo library (tools/demo/library: transformed, checked
+# pieces of signals and pixels, raw 16-bit arrays; tools/demo/README.md); the catalog's schema
+# files are SQL.
+ALLOW_DATA='^(viewers/vitalstream/testdata/|medorama/(tests/fixtures|fuzz/seeds)/|viewers/(ecg|pacs)/examples/|viewers/ecg/tests/fixtures/|tools/demo/library/)'
+# The demo library holds raw arrays and JSON, never DICOM or MUSE XML files: their content checks
+# apply there too.
+LIBRARY='^tools/demo/library/'
 ALLOW_SQL='^medorama/src/schema/(sqlite|postgres)/[^/]+\.sql$'
 # recordings, signal arrays, tables, databases and their journals, dumps, images, archives
-DATA_EXT='\.(stp|dat|hea|atr|mrk|tim|vit|alr|ann|edf|bdf|mat|npy|npz|pkl|pickle|parquet|feather|arrow|h5|hdf5|csv|tsv|xlsx|xlsm|xls|sqlite|sqlite3|sqlite-wal|sqlite-shm|sqlite-journal|db|db-wal|db-shm|db-journal|sql|dump|bak|dcm|dicom|zip|gz|tgz|bz2|xz|zst|7z|rar|tar)$'
+DATA_EXT='\.(stp|dat|hea|atr|mrk|tim|vit|alr|ann|edf|bdf|mat|i16|u16|npy|npz|pkl|pickle|parquet|feather|arrow|h5|hdf5|csv|tsv|xlsx|xlsm|xls|sqlite|sqlite3|sqlite-wal|sqlite-shm|sqlite-journal|db|db-wal|db-shm|db-journal|sql|dump|bak|dcm|dicom|zip|gz|tgz|bz2|xz|zst|7z|rar|tar)$'
 # Bedside-monitor systems name recordings UNIT_BED-<Unix time> (the bed may hold spaces):
 # such a name dates a patient's stay.
 REC_NAME='[A-Za-z0-9]+_[A-Za-z0-9]+( +[A-Za-z0-9]+)*-1[0-9]{9}'
@@ -49,7 +54,7 @@ check() {
     complain "$f$at: the path holds a recording name (UNIT_BED-<unix time>); use a generic name such as recording"
   fi
   if [[ "$lower" =~ $DATA_EXT ]] && ! [[ "$f" =~ $ALLOW_DATA ]] && ! [[ "$f" =~ $ALLOW_SQL ]]; then
-    complain "$f$at: data file type (recordings, tables, databases, dumps, images, archives) outside the synthetic test data (viewers/vitalstream/testdata/, medorama/tests/fixtures/, medorama/fuzz/seeds/, viewers/ecg/tests/fixtures/) and the viewers' synthetic examples (viewers/ecg/examples/, viewers/pacs/examples/)"
+    complain "$f$at: data file type (recordings, tables, databases, dumps, images, archives) outside the synthetic test data (viewers/vitalstream/testdata/, medorama/tests/fixtures/, medorama/fuzz/seeds/, viewers/ecg/tests/fixtures/), the viewers' synthetic examples (viewers/ecg/examples/, viewers/pacs/examples/) and the demo library (tools/demo/library/)"
   fi
 
   # symbolic links (their blob is the target's path) and submodules have no content to read
@@ -68,7 +73,7 @@ check() {
   if grep -aqE "$REC_NAME" "$TMP"; then
     complain "$f$at: contains a recording name (UNIT_BED-<unix time>); use a generic name such as recording"
   fi
-  if ! [[ "$f" =~ $ALLOW_DATA ]]; then
+  if ! [[ "$f" =~ $ALLOW_DATA ]] || [[ "$f" =~ $LIBRARY ]]; then
     # DICOM, whatever the extension: "DICM" after the 128-byte preamble
     magic=$(head -c 132 "$TMP" | tail -c +129 | tr -d '\0')
     if [ "$magic" = DICM ]; then

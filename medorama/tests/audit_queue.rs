@@ -17,7 +17,7 @@ fn a_refused_audit_entry_is_written_later_in_order() {
     medorama::db::audit(&refusing, None, "view", "first", "");
     let export = std::fs::read_to_string(root.join("audit.jsonl")).unwrap();
     assert!(export.contains(r#""pending":true"#) && export.contains("first"), "appended to audit_export at once");
-    // the next entry the catalog takes: the waiting one first
+    // the next entry the control store takes: the waiting one first
     medorama::db::audit(&c, None, "view", "second", "");
     let mut st = c.prepare("SELECT target FROM audit WHERE event = 'view' ORDER BY id").unwrap();
     let targets: Vec<String> = st.query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();

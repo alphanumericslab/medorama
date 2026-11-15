@@ -1,13 +1,13 @@
-//! The search syntax (docs/user-guide.md, "Searching"), shared by the Encounters and Recordings
-//! tabs and the commands:
+//! The search syntax (docs/user-guide.md, "Searching"), used by the Patient Catalog's list
+//! (patient/list.rs, its fields `LIST_FIELDS`):
 //!
 //! - words: each must appear in some field (`smith 1950`);
 //! - `field:value`: only in that field (`name:smith`, `dob:1950-03`, `source:pilot`);
 //! - quotes for spaces: `source:"ICU pilot"`, `"van der"`;
 //! - never case-sensitive; a value matches anywhere in the field (`name:smi` finds Smith).
 //!
-//! Identifier fields (names, date of birth, MRN, encounter number, and what the recordings'
-//! files hold) are searchable only with the PHI permission; asking for one without it is an
+//! Identifier fields (names, date of birth, MRN) are searchable only with the PHI permission, and
+//! then in the databases granted with it; asking for one without it is an
 //! error, not an empty result.
 //!
 //! In Privacy Mode a search, a filter and an order use only what the session is shown (gate.rs):
@@ -74,47 +74,6 @@ pub fn parse(q: &str) -> Vec<Term> {
 /// Fields searchable only with the PHI permission.
 pub const PHI_FIELDS: &[&str] = &["name", "first", "last", "dob", "mrn", "csn", "file-name", "file-id", "file-dob"];
 
-/// The fields of the Encounters search.
-pub const ENCOUNTER_FIELDS: &[&str] = &[
-    "encounter",
-    "patient",
-    "source",
-    "unit",
-    "bed",
-    "admit",
-    "discharge",
-    "disposition",
-    "sex",
-    "status",
-    "file",
-    "name",
-    "first",
-    "last",
-    "dob",
-    "mrn",
-    "csn",
-    "file-name",
-    "file-id",
-    "file-dob",
-];
-
-/// The fields of the Recordings search.
-pub const RECORDING_FIELDS: &[&str] = &[
-    "file",
-    "path",
-    "kind",
-    "format",
-    "unit",
-    "bed",
-    "start",
-    "status",
-    "source",
-    "encounter",
-    "file-name",
-    "file-id",
-    "file-dob",
-];
-
 /// Check the terms against the fields of a list and the user's permission.
 pub fn check(terms: &[Term], fields: &[&str], phi: bool) -> Result<(), String> {
     for t in terms {
@@ -158,11 +117,11 @@ impl Doc {
 
 /// A Privacy Mode gate built here, for callers that have none at hand (the server keeps one with
 /// its dictionary cached: `server::restricted`).
-pub fn build_gate(c: &Connection) -> anyhow::Result<Restricted> {
+pub fn build_gate(c: &Connection, cfg: &crate::config::Config) -> anyhow::Result<Restricted> {
     let version: i64 = c.query_row("SELECT version FROM data_version", [], |r| r.get(0))?;
     Ok(Restricted {
         settings: crate::deid::load(c)?,
-        dict: std::sync::Arc::new(crate::gate::Dict::build(c, version)?),
+        dict: std::sync::Arc::new(crate::gate::Dict::build(c, cfg, version)?),
         secret: crate::gate::secret(c)?,
     })
 }
@@ -185,10 +144,15 @@ impl SessionGate<'_> {
     }
 }
 
-pub fn session_gate<'a>(c: &Connection, user: &User, given: Option<&'a Restricted>) -> anyhow::Result<SessionGate<'a>> {
+pub fn session_gate<'a>(
+    c: &Connection,
+    cfg: &crate::config::Config,
+    user: &User,
+    given: Option<&'a Restricted>,
+) -> anyhow::Result<SessionGate<'a>> {
     Ok(match given {
         Some(g) => SessionGate::Given(g),
-        None if user.privacy => SessionGate::Own(Box::new(build_gate(c)?)),
+        None if user.privacy => SessionGate::Own(Box::new(build_gate(c, cfg)?)),
         None => SessionGate::None,
     })
 }
@@ -210,7 +174,7 @@ pub fn strings(v: &serde_json::Value) -> Vec<String> {
     }
 }
 
-/// How far Privacy Mode moves each patient's times back (deid.rs): the catalog's offset and the
+/// How far Privacy Mode moves each patient's times back (deid.rs): Medorama's offset and the
 /// patient's own days; nothing when it shows real dates.  Searches compare dates as shown with
 /// a time moved by it, and sort by shown times, so that neither reveals real ones.
 pub struct Offsets {
@@ -235,7 +199,7 @@ impl Offsets {
         }
     }
 
-    /// The offsets of the catalog's settings and patients.
+    /// The offsets of Medorama's settings and patients.
     pub fn load(c: &Connection) -> anyhow::Result<Offsets> {
         let draws: HashMap<i64, f64> = c
             .prepare("SELECT id, date_draw FROM patients WHERE date_draw IS NOT NULL")?
@@ -249,7 +213,7 @@ impl Offsets {
         Offsets::of(&g.settings, &g.dict.draws)
     }
 
-    /// Seconds a patient's times move back by (`None`: no patient, the catalog's offset alone).
+    /// Seconds a patient's times move back by (`None`: no patient, Medorama's offset alone).
     pub fn seconds(&self, patient: Option<i64>) -> f64 {
         if !self.hides {
             return 0.0;
@@ -291,8 +255,10 @@ mod tests {
         assert_eq!(parse(r#"source:"ICU Pilot" "van der""#), vec![t(Some("source"), "icu pilot"), t(None, "van der")]);
         assert_eq!(parse("dob:1950-03 file-id:SYN"), vec![t(Some("dob"), "1950-03"), t(Some("file-id"), "syn")]);
         assert_eq!(parse("time 12:30"), vec![t(None, "time"), t(None, "12:30")]);
-        assert!(check(&parse("name:x"), ENCOUNTER_FIELDS, false).unwrap_err().contains("PHI"));
-        assert!(check(&parse("color:x"), ENCOUNTER_FIELDS, true).unwrap_err().contains("unknown field color"));
+        assert!(check(&parse("name:x"), crate::patient::LIST_FIELDS, false).unwrap_err().contains("PHI"));
+        assert!(check(&parse("color:x"), crate::patient::LIST_FIELDS, true)
+            .unwrap_err()
+            .contains("unknown field color"));
         let mut d = Doc::default();
         d.add("name", "Doe, Jane");
         d.add("source", "Pilot A");

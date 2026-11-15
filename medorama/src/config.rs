@@ -1,8 +1,9 @@
-//! Settings: the catalog's home folder holds `medorama.toml` and (by default) the database.
-//! `medorama init` writes both; the results folder is chosen then.
+//! Settings: Medorama's home folder holds `medorama.toml`, the master key and (by default) the
+//! control store.
+//! `medorama init` writes both; the workspace is chosen then.
 //!
 //! Home folder, the first given: `--home DIR`, the environment variable `MEDORAMA_HOME`, the
-//! catalog `init` created last (remembered in [`pointer_file`]), else [`builtin_home`].
+//! home `init` created last (remembered in [`pointer_file`]), else [`builtin_home`].
 //! Relative paths in `medorama.toml` are relative to the home folder.
 
 use recording_engine::paths::{absolute, expand, plain};
@@ -16,7 +17,7 @@ pub const CONFIG_NAME: &str = "medorama.toml";
 pub struct Config {
     /// Folder of medorama.toml.
     pub home: PathBuf,
-    /// The SQLite database (holds identifiers: keep it private).
+    /// The SQLite control store (no patient data: docs/administration.md).
     pub database: PathBuf,
     /// A PostgreSQL database instead (`postgres://user@host/db?sslmode=require`), without its
     /// password; `$MEDORAMA_DATABASE_URL` overrides it.  Empty: the SQLite `database`.
@@ -27,10 +28,14 @@ pub struct Config {
     /// Certificate authorities (PEM) trusted for the database server's certificate, besides
     /// the system's.
     pub database_ca_file: Option<PathBuf>,
-    /// Where actions write their results (`<results_dir>/actions/...`).
-    pub results_dir: PathBuf,
-    /// Index folders (one per recording, the viewers' format).
-    pub index_dir: PathBuf,
+    /// The workspace: what Medorama generates for each connected database and each cohort,
+    /// encrypted (workspace.rs).
+    pub workspace_dir: PathBuf,
+    /// The master key's file (default `<home>/master.key`), unless `$MEDORAMA_MASTER_KEY` or
+    /// `master_key_command` gives it.
+    pub master_key_file: Option<PathBuf>,
+    /// A command that prints the master key (a keyring, Vault, a KMS).
+    pub master_key_command: String,
     /// The folder of adapters: programs that read recording formats Medorama does not read
     /// itself (docs/adapters.md).
     pub adapters_dir: PathBuf,
@@ -42,35 +47,48 @@ pub struct Config {
     pub auto_index: bool,
     /// The server re-checks the recordings (missing, changed) this often; 0 = never.
     pub check_interval_s: u64,
-    /// Time zone for times in imported CSV files without an offset, and for display.
+    /// Time zone for times a database writes without an offset (unless its own setting says), and
+    /// for display.
     pub timezone: String,
-    /// The viewer the catalog runs for its users: `auto`, `cpp`, `rs`, `py`, `none`, or the
+    /// The viewer Medorama runs for its users: `auto`, `cpp`, `rs`, `py`, `none`, or the
     /// path of a viewer program (see viewer.rs).
     pub viewer: String,
     /// A viewer running elsewhere, linked to instead of running one (e.g. http://host:8060/).
     pub viewer_url: String,
-    /// The viewer the catalog runs also marks the data a reader repaired (its `qc_verbose`).
+    /// The viewer Medorama runs also marks the data a reader repaired (its `qc_verbose`).
     pub qc_verbose: bool,
-    /// Folders recordings may be imported from; empty = anywhere.
+    /// Folders the files Medorama reads may lie in (SQLite databases, recordings); empty = anywhere.
     pub data_roots: Vec<String>,
     /// Folders holding action plug-ins (each a subfolder with action.toml).
     pub actions_dirs: Vec<PathBuf>,
-    /// Folders holding import formats described in TOML files (formats/declared.rs).
-    pub formats_dirs: Vec<PathBuf>,
     pub session_hours: u64,
     /// A session unused this long ends (minutes; 0: only `session_hours` ends it).
     pub session_idle_minutes: u64,
-    /// Mark the sign-in cookie Secure (set when the catalog is served over HTTPS).
+    /// Mark the sign-in cookie Secure (set when Medorama is served over HTTPS).
     pub secure_cookies: bool,
+    /// Reverse proxies in front of Medorama (their addresses): a sign-in coming from one is
+    /// counted for the client its `X-Forwarded-For` names, so that the failed-sign-in limits
+    /// apply per client, not to everyone behind the proxy (signin.rs).
+    pub trusted_proxies: Vec<std::net::IpAddr>,
     /// How users sign in (signin.rs): `sign_in = "password"` (the default), or `"proxy"` with
     /// `proxy_user_header`, `proxy_addresses` and `proxy_logout_url`.
     pub sign_in: crate::signin::Method,
-    /// File holding the database key (builds with the `encryption` feature).
+    /// File holding the SQLite control store's key (SQLCipher).
     pub key_file: Option<PathBuf>,
     /// A file the audit log's sealed entries are appended to (audit.rs), on storage the
     /// database's administrators cannot change.
     pub audit_export: Option<PathBuf>,
+    /// The root folder of the db-builder Medorama runs (dbbuilder.rs): it builds databases
+    /// there, and reads and writes nothing above it.  None: Medorama runs no db-builder.
+    pub db_builder_root: Option<PathBuf>,
+    /// The port of the db-builder Medorama runs (on 127.0.0.1).
+    pub db_builder_port: u16,
+    /// A db-builder running elsewhere, linked to instead of running one.
+    pub db_builder_url: String,
 }
+
+/// db-builder's default port.
+pub const DEFAULT_DB_BUILDER_PORT: u16 = 8091;
 
 /// The sign-in method the settings name (signin.rs): `password` (the default), or `proxy` with
 /// the header the proxy sets (default `X-Remote-User`), the addresses it connects from (default
@@ -126,14 +144,14 @@ fn settings_file(parts: &[&str]) -> PathBuf {
     parts.iter().fold(PathBuf::from(expand("~/.config")), |p, part| p.join(part))
 }
 
-/// The file where `init` remembers the home folder of the catalog it created, so that later
+/// The file where `init` remembers the home folder of Medorama it created, so that later
 /// commands find it without `--home`: `~/.config/medorama/home` (Windows:
 /// `%APPDATA%\medorama\home`).
 pub fn pointer_file() -> PathBuf {
     settings_file(&["medorama", "home"])
 }
 
-/// Remember `home` as the catalog later commands use by default.
+/// Remember `home` as Medorama later commands use by default.
 pub fn remember_home(home: &Path) -> std::io::Result<PathBuf> {
     let p = pointer_file();
     if let Some(d) = p.parent() {
@@ -144,7 +162,7 @@ pub fn remember_home(home: &Path) -> std::io::Result<PathBuf> {
 }
 
 /// The home folder when `--home` is not given: `$MEDORAMA_HOME`, else the one `init`
-/// remembered (if it still holds a catalog), else the built-in one.
+/// remembered (if it is still set up), else the built-in one.
 pub fn default_home() -> PathBuf {
     if let Some(h) = std::env::var("MEDORAMA_HOME").ok().filter(|h| !h.is_empty()) {
         return PathBuf::from(absolute(&h));
@@ -181,16 +199,17 @@ pub fn real(path: &Path) -> PathBuf {
 }
 
 impl Config {
-    /// Defaults for a home folder and a results folder.
-    pub fn new(home: &Path, results_dir: &Path) -> Config {
+    /// Defaults for a home folder and a workspace.
+    pub fn new(home: &Path, workspace_dir: &Path) -> Config {
         Config {
             home: home.to_path_buf(),
             database: home.join("medorama.sqlite"),
             database_url: String::new(),
             database_password_file: None,
             database_ca_file: None,
-            results_dir: results_dir.to_path_buf(),
-            index_dir: results_dir.join("index"),
+            workspace_dir: workspace_dir.to_path_buf(),
+            master_key_file: None,
+            master_key_command: String::new(),
             adapters_dir: recording_engine::adapters::default_folder(),
             host: "127.0.0.1".into(),
             port: DEFAULT_PORT,
@@ -203,13 +222,16 @@ impl Config {
             qc_verbose: false,
             data_roots: vec![],
             actions_dirs: vec![home.join("actions")],
-            formats_dirs: vec![home.join("formats")],
             session_hours: 12,
             session_idle_minutes: 60,
             secure_cookies: false,
+            trusted_proxies: vec![],
             sign_in: crate::signin::Method::Password,
             key_file: None,
             audit_export: None,
+            db_builder_root: None,
+            db_builder_port: DEFAULT_DB_BUILDER_PORT,
+            db_builder_url: String::new(),
         }
     }
 
@@ -219,7 +241,7 @@ impl Config {
         let text = std::fs::read_to_string(&file).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 format!(
-                    "no catalog in {}.\n  Create one: medorama init --results DIR [--home DIR]\n  Or use an existing one: --home DIR (or set MEDORAMA_HOME)",
+                    "Medorama is not set up in {}.\n  Set it up: medorama init --workspace DIR [--home DIR]\n  Or use an existing home: --home DIR (or set MEDORAMA_HOME)",
                     home.display()
                 )
             } else {
@@ -227,12 +249,14 @@ impl Config {
             }
         })?;
         let table: toml::Table = text.parse().map_err(|e| format!("{}: {e}", file.display()))?;
-        let results = table
-            .get("results_dir")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| format!("{}: results_dir is required", file.display()))?;
-        let mut c = Config::new(home, &rel(home, results));
-        let mut index_set = false;
+        let ws = table.get("workspace_dir").and_then(|v| v.as_str()).ok_or_else(|| {
+            format!(
+                "{}: workspace_dir is required (a home set up by Medorama 0.1.0 is not one for 0.2.0: \
+                     set 0.2.0 up in a new home, docs/install.md#upgrading-from-010)",
+                file.display()
+            )
+        })?;
+        let mut c = Config::new(home, &rel(home, ws));
         let mut unknown = vec![];
         let (mut sign_in, mut proxy_header, mut proxy_from, mut proxy_logout) = (None, None, None, None);
         for (k, v) in &table {
@@ -240,14 +264,18 @@ impl Config {
             let s = || v.as_str().ok_or_else(bad);
             let n = || v.as_integer().and_then(|x| u64::try_from(x).ok()).ok_or_else(bad);
             match k.as_str() {
-                "results_dir" => {}
+                "workspace_dir" => {}
                 "database" => c.database = rel(home, s()?),
                 "database_url" => c.database_url = s()?.trim().to_string(),
                 "database_password_file" => c.database_password_file = Some(rel(home, s()?)),
                 "database_ca_file" => c.database_ca_file = Some(rel(home, s()?)),
+                // index format 3: each database's indexes are in its workspace folder
                 "index_dir" => {
-                    c.index_dir = rel(home, s()?);
-                    index_set = true;
+                    return Err(format!(
+                        "{}: index_dir is no longer a setting: indexes are kept in each database's workspace folder \
+                     (index format 3); remove the line",
+                        file.display()
+                    ))
                 }
                 "adapters_dir" => c.adapters_dir = rel(home, s()?),
                 "host" => c.host = s()?.to_string(),
@@ -275,17 +303,20 @@ impl Config {
                         .map(|x| x.as_str().map(|p| rel(home, p)).ok_or_else(bad))
                         .collect::<Result<_, _>>()?
                 }
-                "formats_dirs" => {
-                    c.formats_dirs = v
-                        .as_array()
-                        .ok_or_else(bad)?
-                        .iter()
-                        .map(|x| x.as_str().map(|p| rel(home, p)).ok_or_else(bad))
-                        .collect::<Result<_, _>>()?
-                }
                 "session_hours" => c.session_hours = n()?.max(1),
                 "session_idle_minutes" => c.session_idle_minutes = n()?,
                 "secure_cookies" => c.secure_cookies = v.as_bool().ok_or_else(bad)?,
+                "trusted_proxies" => {
+                    c.trusted_proxies = v
+                        .as_array()
+                        .ok_or_else(bad)?
+                        .iter()
+                        .map(|x| {
+                            let a = x.as_str().ok_or_else(bad)?;
+                            a.trim().parse().map_err(|_| format!("trusted_proxies: {a:?} is not an IP address"))
+                        })
+                        .collect::<Result<_, _>>()?
+                }
                 "sign_in" => sign_in = Some(s()?.to_string()),
                 "proxy_user_header" => proxy_header = Some(s()?.trim().to_string()),
                 "proxy_addresses" => {
@@ -299,7 +330,14 @@ impl Config {
                 }
                 "proxy_logout_url" => proxy_logout = Some(s()?.trim().to_string()),
                 "key_file" => c.key_file = Some(rel(home, s()?)),
+                "master_key_file" => c.master_key_file = Some(rel(home, s()?)),
+                "master_key_command" => c.master_key_command = s()?.to_string(),
                 "audit_export" => c.audit_export = Some(rel(home, s()?)),
+                "db_builder_root" => {
+                    c.db_builder_root = Some(s()?.trim()).filter(|r| !r.is_empty()).map(|r| rel(home, r))
+                }
+                "db_builder_port" => c.db_builder_port = u16::try_from(n()?).map_err(|_| bad())?,
+                "db_builder_url" => c.db_builder_url = s()?.trim().to_string(),
                 _ => unknown.push(k.clone()),
             }
         }
@@ -309,9 +347,6 @@ impl Config {
         }
         c.sign_in = sign_in_method(sign_in, proxy_header, proxy_from, proxy_logout)
             .map_err(|e| format!("{}: {e}", file.display()))?;
-        if !index_set {
-            c.index_dir = c.results_dir.join("index");
-        }
         if let Some(u) = std::env::var("MEDORAMA_DATABASE_URL").ok().filter(|u| !u.trim().is_empty()) {
             c.database_url = u.trim().to_string();
         }
@@ -342,26 +377,25 @@ impl Config {
     /// The text of a new medorama.toml.
     pub fn to_toml(&self) -> String {
         let q = |p: &Path| toml::Value::String(p.to_string_lossy().to_string()).to_string();
-        let index = if self.index_dir == self.results_dir.join("index") {
-            format!("# index_dir = {}", q(&self.index_dir))
-        } else {
-            format!("index_dir = {}", q(&self.index_dir))
-        };
         format!(
             r#"# Medorama settings (docs/administration.md, "Settings").  Relative paths are
 # relative to this folder.
 
-# Where the catalog writes: action results (actions/...) and, unless index_dir says
-# otherwise, the recordings' indexes (index/).  Never inside a folder of recordings.
-results_dir = {results}
-# Index folders.  Point this at the viewers' cache_dir and they open recordings the catalog
-# has indexed without indexing them again.
-{index}
+# The workspace: what Medorama generates for each connected database (its persons, variables,
+# recordings' state, action results) and each cohort, one folder or file each, encrypted with
+# its own key (docs/design/databases-only.md).  Never inside a folder of recordings or of a
+# connected database.
+workspace_dir = {workspace}
+# The master key wraps every data key.  By default the file master.key in this folder; else
+# MEDORAMA_MASTER_KEY, or a command that prints it (a keyring, Vault, a KMS):
+# master_key_file = "/etc/medorama/master.key"
+# master_key_command = "security find-generic-password -s medorama -w"
 # Adapters: programs that read recording formats Medorama does not read itself, such as
 # licensed vendor formats (docs/adapters.md).
 adapters_dir = {adapters}
 
-# The database.  It holds identifiers (MRN, names, dates of birth): keep it private.
+# The control store: users, grants, the list of databases, keyed hashes of patients'
+# identifiers (never the identifiers), cohorts' definitions, jobs and the audit log.
 {database}
 
 host = "127.0.0.1"
@@ -372,9 +406,10 @@ workers = {workers}
 auto_index = true
 # Re-check the recordings (missing, changed) every so many seconds; 0 = never.
 check_interval_s = 900
-# Time zone of CSV times written without an offset, and of the times shown.
+# Time zone of times a database writes without an offset (unless its own timezone says), and
+# of the times shown.
 timezone = {tz}
-# The viewer the catalog runs and shows in its VitalStream tab: "auto" (the one installed with
+# The viewer Medorama runs and shows in its VitalStream tab: "auto" (the one installed with
 # tools/install-medorama, else the first found of the C++, Rust and Python viewers), "cpp", "rs",
 # "py", "none", or the path of a viewer program.
 viewer = "auto"
@@ -383,20 +418,21 @@ viewer_url = ""
 # The viewer also marks (dashed outline) the data a reader repaired, such as data blocks a file
 # stored out of order and the reader put back in order.  Breaks are shaded either way.
 qc_verbose = false
-# Folders recordings may be imported from (empty: anywhere).
+# Folders the files Medorama reads may lie in: SQLite databases connected, recording files
+# (empty: anywhere).
 data_roots = {roots}
 # Folders of action plug-ins (each a subfolder with an action.toml).
-actions_dirs = ["actions"]
-# Folders of import formats described in TOML files (each a <key>.toml: docs/administration.md,
-# "Import formats"), besides the built-in ones.
-formats_dirs = ["formats"]
+actions_dirs = {actions}
 # Sign-ins last this long.
 session_hours = 12
 # A sign-in unused this long ends (minutes; 0: never before session_hours). The page's own
 # checks for new data do not count as use.
 session_idle_minutes = 60
-# Set to true when the catalog is served over HTTPS (behind a reverse proxy).
+# Set to true when Medorama is served over HTTPS (behind a reverse proxy).
 secure_cookies = false
+# The reverse proxy's addresses: failed sign-ins are then counted per client (the proxy's
+# X-Forwarded-For), not for everyone behind the proxy at once.
+# trusted_proxies = ["127.0.0.1", "::1"]
 # How users sign in: "password" (Medorama's own accounts), or "proxy": the institution's sign-in
 # (single sign-on, MFA, a VPN gateway) done by an authenticating reverse proxy in front of
 # Medorama, which names the user in a header (docs/sign-in.md).  Accounts, their roles and the
@@ -408,6 +444,15 @@ secure_cookies = false
 # The audit log is sealed every minute (tamper evidence); also append the sealed entries to this
 # file, on storage the database's administrators cannot change (docs/security.md, "Audit logging").
 # audit_export = "/var/log/medorama/audit.jsonl"
+# db-builder's web interface, for the Databases tab's "Create a database…": Medorama runs it on
+# its own port (127.0.0.1), with its own sign-in (its password set once with
+# db-builder serve --set-password --home <this folder>/db-builder), building databases in this
+# folder and never above it.  Keep it inside data_roots, so that what it builds can be connected.
+# Empty: not run.  `medorama serve --db-builder-root DIR` overrides it.
+db_builder_root = ""
+db_builder_port = {dbb_port}
+# Or a db-builder running elsewhere, linked to instead (e.g. "http://host:8091/").
+db_builder_url = ""
 "#,
             database = if self.database_url.is_empty() {
                 "# database = \"medorama.sqlite\"\n# Or a PostgreSQL database, for several servers and many users (docs/administration.md, \"Settings\"):\n# database_url = \"postgres://medorama@db.example.org/medorama?sslmode=require\"\n# database_password_file = \"/etc/medorama/database-password\"".to_string()
@@ -421,19 +466,33 @@ secure_cookies = false
                 }
                 d
             },
-            results = q(&self.results_dir),
+            workspace = q(&self.workspace_dir),
             roots = toml::Value::Array(self.data_roots.iter().map(|r| toml::Value::String(r.clone())).collect()),
+            // this folder's actions/ as "actions"; others (the demo's plug-in) as they are
+            actions = toml::Value::Array(
+                self.actions_dirs
+                    .iter()
+                    .map(|p| {
+                        toml::Value::String(if *p == self.home.join("actions") {
+                            "actions".into()
+                        } else {
+                            p.to_string_lossy().to_string()
+                        })
+                    })
+                    .collect()
+            ),
             adapters = q(&self.adapters_dir),
             port = self.port,
+            dbb_port = self.db_builder_port,
             workers = self.workers,
             tz = toml::Value::String(self.timezone.clone()),
         )
     }
 
-    /// True if recordings may be imported from `path` (absolute), which must exist: its real
+    /// True if Medorama may read `path` (absolute), which must exist: its real
     /// path (symbolic links resolved) lies in a data root's real path.  A link inside a root
     /// that points out of it is outside.
-    pub fn import_allowed(&self, path: &Path) -> bool {
+    pub fn in_data_roots(&self, path: &Path) -> bool {
         if self.data_roots.is_empty() {
             return true;
         }
@@ -455,9 +514,17 @@ secure_cookies = false
                     .to_string(),
             );
         }
+        if let Some(root) = self.db_builder_root.as_ref().filter(|_| self.db_builder_url.is_empty()) {
+            if !self.data_roots.is_empty() && !self.in_data_roots(root) {
+                out.push(format!(
+                    "db_builder_root {} is not inside data_roots: the databases db-builder builds there cannot be connected.",
+                    root.display()
+                ));
+            }
+        }
         if matches!(self.sign_in, crate::signin::Method::Proxy { .. }) && !self.secure_cookies {
             out.push(
-                "sign_in = \"proxy\" with secure_cookies = false: the proxy serves the catalog over HTTPS; set \
+                "sign_in = \"proxy\" with secure_cookies = false: the proxy serves Medorama over HTTPS; set \
                  secure_cookies = true (docs/sign-in.md)."
                     .to_string(),
             );
@@ -465,9 +532,9 @@ secure_cookies = false
         out
     }
 
-    /// The folders the catalog writes to (results, indexes, its home).
+    /// The folders Medorama writes to (the workspace, its home).
     pub fn written_folders(&self) -> Vec<PathBuf> {
-        let mut v = vec![real(&self.results_dir), real(&self.index_dir), real(&self.home)];
+        let mut v = vec![real(&self.workspace_dir), real(&self.home)];
         if self.database_url.is_empty() {
             if let Some(d) = self.database.parent() {
                 v.push(real(d));
@@ -531,14 +598,14 @@ mod tests {
         std::os::unix::fs::symlink(&outside, root.join("away")).unwrap();
         let mut c = Config::new(&outside, &base.join("results"));
         c.data_roots = vec![root.to_string_lossy().to_string()];
-        assert!(c.import_allowed(&root.join("a.dat")));
-        assert!(!c.import_allowed(&root.join("b.dat")), "a link out of the root");
-        assert!(!c.import_allowed(&root.join("away/medorama.sqlite")), "a folder linked out of the root");
-        assert!(!c.import_allowed(&root.join("missing.dat")), "must exist");
+        assert!(c.in_data_roots(&root.join("a.dat")));
+        assert!(!c.in_data_roots(&root.join("b.dat")), "a link out of the root");
+        assert!(!c.in_data_roots(&root.join("away/medorama.sqlite")), "a folder linked out of the root");
+        assert!(!c.in_data_roots(&root.join("missing.dat")), "must exist");
         // a root given through a link is its real folder
         std::os::unix::fs::symlink(&root, base.join("link")).unwrap();
         c.data_roots = vec![base.join("link").to_string_lossy().to_string()];
-        assert!(c.import_allowed(&root.join("a.dat")) && c.import_allowed(&base.join("link/a.dat")));
+        assert!(c.in_data_roots(&root.join("a.dat")) && c.in_data_roots(&base.join("link/a.dat")));
     }
 
     #[test]
@@ -555,6 +622,37 @@ mod tests {
     }
 
     #[test]
+    fn db_builder_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let c = Config::new(dir.path(), &dir.path().join("results"));
+        std::fs::write(dir.path().join(CONFIG_NAME), c.to_toml()).unwrap();
+        let d = Config::load(dir.path()).unwrap();
+        assert_eq!((d.db_builder_root.clone(), d.db_builder_port, d.db_builder_url.as_str()), (None, 8091, ""));
+        let text = c
+            .to_toml()
+            .replace("db_builder_root = \"\"", "db_builder_root = \"build\"")
+            .replace("db_builder_port = 8091", "db_builder_port = 9001");
+        std::fs::write(dir.path().join(CONFIG_NAME), text).unwrap();
+        let d = Config::load(dir.path()).unwrap();
+        assert_eq!(d.db_builder_root, Some(dir.path().join("build")), "relative to the home folder");
+        assert_eq!(d.db_builder_port, 9001);
+        // outside data_roots: said at start
+        let mut d = d;
+        std::fs::create_dir_all(dir.path().join("build")).unwrap();
+        std::fs::create_dir_all(dir.path().join("data")).unwrap();
+        d.data_roots = vec![dir.path().join("data").to_string_lossy().to_string()];
+        assert!(d.start_warnings().iter().any(|w| w.contains("db_builder_root")));
+        d.data_roots = vec![dir.path().to_string_lossy().to_string()];
+        assert!(d.start_warnings().is_empty());
+        std::fs::write(
+            dir.path().join(CONFIG_NAME),
+            c.to_toml().replace("db_builder_port = 8091", "db_builder_port = \"x\""),
+        )
+        .unwrap();
+        assert!(Config::load(dir.path()).unwrap_err().contains("bad value for db_builder_port"));
+    }
+
+    #[test]
     fn data_roots_are_written() {
         let dir = tempfile::tempdir().unwrap();
         let data = dir.path().join("data");
@@ -568,14 +666,13 @@ mod tests {
     #[test]
     fn round_trip() {
         let dir = tempfile::tempdir().unwrap();
-        let c = Config::new(dir.path(), &dir.path().join("results"));
+        let c = Config::new(dir.path(), &dir.path().join("workspace"));
         std::fs::write(dir.path().join(CONFIG_NAME), c.to_toml()).unwrap();
         let d = Config::load(dir.path()).unwrap();
-        assert_eq!(d.results_dir, dir.path().join("results"));
-        assert_eq!(d.index_dir, dir.path().join("results").join("index"));
+        assert_eq!(d.workspace_dir, dir.path().join("workspace"));
         assert_eq!(d.actions_dirs, vec![dir.path().join("actions")]);
         assert_eq!(d.port, DEFAULT_PORT);
-        std::fs::write(dir.path().join(CONFIG_NAME), "results_dir = \"r\"\nbogus = 1\n").unwrap();
+        std::fs::write(dir.path().join(CONFIG_NAME), "workspace_dir = \"w\"\nbogus = 1\n").unwrap();
         assert!(Config::load(dir.path()).unwrap_err().contains("unknown settings: bogus"));
     }
 }

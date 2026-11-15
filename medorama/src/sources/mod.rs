@@ -1,17 +1,18 @@
-//! Connected databases: live databases Medorama reads beside its catalog (docs/design/sources.md).
+//! Connected databases as Medorama reads them (docs/design/databases-only.md, "Kinds of
+//! databases"): the databases Medorama reads in place, read-only, never writing them.
 //!
-//! A connection names a database (PostgreSQL, or a SQLite file), its kind and settings.  It is
-//! read through three views, SQL queries that give the canonical columns: `persons`, `visits`,
-//! `entries` ([`omop`] has them built in; a connection of kind `sql` gives its own).  Medorama
-//! reads only those columns, opens the database read-only, and never stores its password.
+//! A database (PostgreSQL, or a SQLite file) is read through views, SQL queries that give the
+//! canonical columns: `persons`, `visits`, `entries`, and `recordings` for a recording database;
+//! `stays` (a visit's stays in its units: the intensive-care ones) when the database has them.
+//! [`omop`] has them built in, a db-builder database (kind `dbb`) has them as tables, and a
+//! database of kind `views` gives its own.  Medorama reads only those columns.  Connecting,
+//! status, grants and removal are in `databases.rs`.
 //!
 //! | Module | Contents |
 //! |---|---|
-//! | here | connections: settings, adding, removing, the pools; reading the views; the filters pushed down |
+//! | here | settings, the pools; reading the views; the filters pushed down |
 //! | [`omop`] | the OMOP CDM's views |
-//! | [`link`] | the person registry: a connection's persons linked to the catalog's patients |
 
-pub mod link;
 pub mod omop;
 
 use std::collections::HashMap;
@@ -20,11 +21,10 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
-use crate::db::{audit, now};
-use crate::sql::{params, Connection, Dialect, OptionalExtension, Value};
-use crate::users::User;
+use crate::db::now;
+use crate::sql::{Connection, Dialect, OptionalExtension, Value};
 
-/// A connection's settings (`connections.settings`, JSON).
+/// A database's settings (`databases.settings`, JSON).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -34,29 +34,42 @@ pub struct Settings {
     /// The schema of OMOP's vocabulary (`concept`), when apart from the CDM's.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub vocabulary_schema: String,
-    /// The time zone of the database's times; empty: the catalog's.
+    /// The time zone of the database's times; empty: Medorama's.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub timezone: String,
     /// What OMOP's `person_source_value` holds: `mrn` (the default), `patient_id` or `none`.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub identifier: String,
-    /// The authority that issued the database's MRNs.
+    /// The authority that issued the database's MRNs (when a row names none).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub mrn_authority: String,
+    /// Who issued the database's patient IDs (when a row names none).  Empty: the database
+    /// itself, so that its patient IDs link only its own persons.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub issuer: String,
+    /// The folder a recording's relative `file` is read from; empty: a SQLite database's own
+    /// folder.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub files_root: String,
     /// Each query's time limit, seconds (PostgreSQL); 0: 60.
     #[serde(skip_serializing_if = "is_zero")]
     pub timeout_s: u64,
     /// The rows a criterion may read; 0: 1,000,000.
     #[serde(skip_serializing_if = "is_zero")]
     pub max_rows: u64,
-    /// Kind `sql`: the views, as SQL (canonical columns; docs/design/sources.md).
+    /// Kind `views`: the views, as SQL (canonical columns; docs/databases.md).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub persons: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub visits: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub entries: String,
-    /// Kind `sql`: a query whose one value names the data's version (for cohorts).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub recordings: String,
+    /// Kind `views`, optional: a visit's stays in its units (bed stays, transfers).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub stays: String,
+    /// Kind `views`: a query whose one value names the data's version (for cohorts).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub version: String,
 }
@@ -87,10 +100,11 @@ pub struct Source {
     /// Without a password.
     pub url: String,
     pub password_file: String,
+    /// The password given to Medorama, wrapped by the master key (workspace.rs); never shown.
+    #[serde(skip)]
+    pub password_wrapped: String,
     pub ca_file: String,
     pub settings: Settings,
-    /// Its batch in the catalog (what it added).
-    pub import_id: i64,
     pub created_at: f64,
 }
 
@@ -100,51 +114,55 @@ pub struct Views {
     pub persons: String,
     pub visits: String,
     pub entries: String,
+    pub recordings: String,
+    /// A visit's stays in its units (optional: empty when the database has none).
+    pub stays: String,
     pub version: String,
 }
 
-const COLS: &str = "id, name, kind, url, password_file, ca_file, settings, import_id, created_at";
+const COLS: &str = "id, name, kind, url, password_file, password_wrapped, ca_file, settings, created_at";
 
 fn row_source(r: &crate::sql::Row) -> crate::sql::Result<Source> {
-    let settings: String = r.get(6)?;
+    let settings: String = r.get(7)?;
     Ok(Source {
         id: r.get(0)?,
         name: r.get(1)?,
         kind: r.get(2)?,
         url: r.get(3)?,
         password_file: r.get(4)?,
-        ca_file: r.get(5)?,
+        password_wrapped: r.get(5)?,
+        ca_file: r.get(6)?,
         settings: serde_json::from_str(&settings).unwrap_or_default(),
-        import_id: r.get(7)?,
         created_at: r.get(8)?,
     })
 }
 
-/// The connected databases, by name.
+/// The connected databases, by name (those being removed left out).
 pub fn list(c: &Connection) -> anyhow::Result<Vec<Source>> {
-    let mut st = c.prepare(&format!("SELECT {COLS} FROM connections ORDER BY name"))?;
+    let mut st = c.prepare(&format!("SELECT {COLS} FROM databases WHERE status != 'removing' ORDER BY name"))?;
     Ok(st.query_map([], row_source)?.collect::<Result<_, _>>()?)
 }
 
 pub fn get(c: &Connection, id: i64) -> anyhow::Result<Option<Source>> {
-    Ok(c.query_row(&format!("SELECT {COLS} FROM connections WHERE id = ?1"), [id], row_source).optional()?)
+    Ok(c.query_row(&format!("SELECT {COLS} FROM databases WHERE id = ?1 AND status != 'removing'"), [id], row_source)
+        .optional()?)
+}
+
+/// A database by id, also while it is being removed.
+pub fn get_any(c: &Connection, id: i64) -> anyhow::Result<Option<Source>> {
+    Ok(c.query_row(&format!("SELECT {COLS} FROM databases WHERE id = ?1"), [id], row_source).optional()?)
 }
 
 pub fn by_name(c: &Connection, name: &str) -> anyhow::Result<Option<Source>> {
     Ok(c.query_row(
-        &format!("SELECT {COLS} FROM connections WHERE lower(name) = lower(?1)",),
+        &format!("SELECT {COLS} FROM databases WHERE lower(name) = lower(?1) AND status != 'removing'",),
         [name.trim()],
         row_source,
     )
     .optional()?)
 }
 
-/// The connection whose batch is `import`, if it is one.
-pub fn of_import(c: &Connection, import: i64) -> anyhow::Result<Option<Source>> {
-    Ok(c.query_row(&format!("SELECT {COLS} FROM connections WHERE import_id = ?1"), [import], row_source).optional()?)
-}
-
-/// A new connection.
+/// A database to connect.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct NewSource {
@@ -156,73 +174,60 @@ pub struct NewSource {
     pub settings: Settings,
 }
 
-/// Where a connection's password given to Medorama (the page) is kept:
-/// `<home>/secrets/<name>.password`, owner-only.
-pub fn secret_file(cfg: &crate::config::Config, name: &str) -> std::path::PathBuf {
-    cfg.home.join("secrets").join(format!("{name}.password"))
-}
-
-/// Connect a database whose password is given (the page): as [`add`], the password kept in
-/// [`secret_file`] once the connection is checked and only then (a name already used, or a
-/// connection that does not answer, leaves every file as it was).
-pub fn add_with_password(
-    c: &Connection,
-    cfg: &crate::config::Config,
-    user: &User,
-    n: &NewSource,
-    password: &str,
-) -> anyhow::Result<i64> {
-    if password.is_empty() {
-        return add(c, user, n);
-    }
-    if !user.is_admin() {
-        anyhow::bail!("only admins connect databases");
-    }
-    let name = n.name.trim();
-    if !valid_name(name) || by_name(c, name)?.is_some() {
-        return add(c, user, n); // its error, before any file is written
-    }
-    let kept = secret_file(cfg, name);
-    let existed = kept.exists();
-    let dir = kept.parent().unwrap_or(std::path::Path::new("."));
-    std::fs::create_dir_all(dir).map_err(|e| anyhow::anyhow!("{}: {e}", dir.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-    }
-    let given = dir.join(format!(".{name}.password.{}", std::process::id()));
-    let mut o = std::fs::OpenOptions::new();
-    o.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
-    {
-        use std::io::Write;
-        let mut f = o.open(&given).map_err(|e| anyhow::anyhow!("{}: {e}", given.display()))?;
-        f.write_all(password.as_bytes())?;
-        f.sync_all()?;
-    }
-    let mut n = n.clone();
-    n.password_file = given.to_string_lossy().to_string();
-    let r = add_as(c, user, &n, Some((&given, &kept)));
-    if r.is_err() {
-        let _ = std::fs::remove_file(&given);
-        if c.query_row("SELECT 1 FROM connections WHERE lower(name) = lower(?1)", [name], |r| r.get::<_, i64>(0))
-            .optional()?
-            .is_none()
-            && !existed
-            && kept.is_file()
+impl NewSource {
+    /// The settings' rules, before anything is read.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let name = self.name.trim();
+        if !valid_name(name) {
+            anyhow::bail!("a database's name: letters, digits, - and _, starting with a letter (it is written in criteria: {name}.lactate)");
+        }
+        if !matches!(self.kind.as_str(), "omop" | "views" | "dbb") {
+            anyhow::bail!("kind: omop, views or dbb (a db-builder database)");
+        }
+        if crate::db::has_password(self.url.trim()) {
+            anyhow::bail!("leave the password out of the URL: give it apart (the page, --password-file)");
+        }
+        for (what, schema) in
+            [("schema", &self.settings.schema), ("vocabulary_schema", &self.settings.vocabulary_schema)]
         {
-            // renamed before a failure after it: not kept for a connection that is not there
-            let _ = std::fs::remove_file(&kept);
+            if !omop::valid_schema(schema) {
+                anyhow::bail!("{what} {schema:?}: letters, digits and _ only");
+            }
+        }
+        let zone = self.settings.timezone.trim();
+        if !zone.is_empty() && zone.parse::<chrono_tz::Tz>().is_err() {
+            anyhow::bail!("timezone {zone:?} is not a time zone (an IANA name: Europe/Paris, America/New_York, UTC)");
+        }
+        if self.kind == "views" && [&self.settings.persons, &self.settings.entries].iter().any(|v| v.trim().is_empty())
+        {
+            anyhow::bail!("a database of kind views needs its views: persons and entries (visits, recordings if any)");
+        }
+        if self.kind == "dbb" && !self.url.trim().starts_with("sqlite:") {
+            anyhow::bail!("a db-builder database is a SQLite file: sqlite:/path/to/file.sqlite");
+        }
+        Ok(())
+    }
+
+    /// As a source, to check before it is kept.
+    pub fn source(&self, password_wrapped: String) -> Source {
+        Source {
+            id: 0,
+            name: self.name.trim().into(),
+            kind: self.kind.clone(),
+            url: self.url.trim().into(),
+            password_file: self.password_file.trim().into(),
+            password_wrapped,
+            ca_file: self.ca_file.trim().into(),
+            settings: self.settings.clone(),
+            created_at: now(),
         }
     }
-    r
 }
 
-/// A `sqlite:` URL's file, checked as a connection may name it: absolute, an existing file,
-/// inside the folders data may come from (`data_roots`), and never the catalog's own
-/// database; returns the URL with its path made absolute.  Other URLs as they are.
+/// A `sqlite:` URL's file, checked as a database may name it: absolute, an existing file,
+/// inside the folders data may come from (`data_roots`), and never Medorama's own control store
+/// or a file of its workspace; returns the URL with its path made absolute.  Other URLs as
+/// they are.
 pub fn checked_url(cfg: &crate::config::Config, url: &str) -> anyhow::Result<String> {
     let url = url.trim();
     let Some(p) = url.strip_prefix("sqlite://").or_else(|| url.strip_prefix("sqlite:")) else {
@@ -232,11 +237,14 @@ pub fn checked_url(cfg: &crate::config::Config, url: &str) -> anyhow::Result<Str
     if !path.is_file() {
         anyhow::bail!("no database file {}", path.display());
     }
-    if !cfg.import_allowed(&path) {
+    if !cfg.in_data_roots(&path) {
         anyhow::bail!("the file is outside the folders data may come from (data_roots)");
     }
     if crate::config::real(&cfg.database) == path {
-        anyhow::bail!("that is the catalog's own database");
+        anyhow::bail!("that is Medorama's own control store");
+    }
+    if crate::config::within(&path, &crate::config::real(&cfg.workspace_dir)) {
+        anyhow::bail!("that file is in Medorama's workspace");
     }
     Ok(format!("sqlite:{}", path.display()))
 }
@@ -247,125 +255,6 @@ pub fn valid_name(n: &str) -> bool {
         && n.len() <= 40
         && n.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
         && n.chars().next().is_some_and(|ch| ch.is_ascii_alphabetic())
-}
-
-/// Connect a database (admins): checked first (each view must answer), then kept, with its
-/// batch.  Returns its id.
-pub fn add(c: &Connection, user: &User, n: &NewSource) -> anyhow::Result<i64> {
-    add_as(c, user, n, None)
-}
-
-/// `add`; `keep_password`: (the password file written, where it is kept once the connection
-/// works: [`add_with_password`]).
-fn add_as(
-    c: &Connection,
-    user: &User,
-    n: &NewSource,
-    keep_password: Option<(&std::path::Path, &std::path::Path)>,
-) -> anyhow::Result<i64> {
-    if !user.is_admin() {
-        anyhow::bail!("only admins connect databases");
-    }
-    let name = n.name.trim();
-    if !valid_name(name) {
-        anyhow::bail!("a connection's name: letters, digits, - and _, starting with a letter (it is written in criteria: {name}.lactate)");
-    }
-    if by_name(c, name)?.is_some() {
-        anyhow::bail!("a connection {name} exists");
-    }
-    let dup: Option<i64> = c
-        .query_row(
-            "SELECT id FROM imports WHERE state = 'active' AND lower(CASE WHEN name != '' THEN name ELSE origin END) = lower(?1)",
-            [name],
-            |r| r.get(0),
-        )
-        .optional()?;
-    if dup.is_some() {
-        anyhow::bail!("an imported database is named {name}: choose another name");
-    }
-    if !matches!(n.kind.as_str(), "omop" | "sql") {
-        anyhow::bail!("kind: omop or sql");
-    }
-    let url = n.url.trim();
-    if crate::db::has_password(url) {
-        anyhow::bail!("leave the password out of the URL: give the file that holds it (--password-file)");
-    }
-    for (what, schema) in [("schema", &n.settings.schema), ("vocabulary_schema", &n.settings.vocabulary_schema)] {
-        if !omop::valid_schema(schema) {
-            anyhow::bail!("{what} {schema:?}: letters, digits and _ only");
-        }
-    }
-    let zone = n.settings.timezone.trim();
-    if !zone.is_empty() && zone.parse::<chrono_tz::Tz>().is_err() {
-        anyhow::bail!("timezone {zone:?} is not a time zone (an IANA name: Europe/Paris, America/New_York, UTC)");
-    }
-    if n.kind == "sql" && [&n.settings.persons, &n.settings.entries].iter().any(|v| v.trim().is_empty()) {
-        anyhow::bail!("a connection of kind sql needs its views: persons and entries (visits if any)");
-    }
-    let s = Source {
-        id: 0,
-        name: name.into(),
-        kind: n.kind.clone(),
-        url: url.into(),
-        password_file: n.password_file.trim().into(),
-        ca_file: n.ca_file.trim().into(),
-        settings: n.settings.clone(),
-        import_id: 0,
-        created_at: now(),
-    };
-    s.check()?;
-    // a password given to keep (`add_with_password`): in its place now that it works
-    if let Some((given, kept)) = keep_password {
-        std::fs::rename(given, kept).map_err(|e| anyhow::anyhow!("{}: {e}", kept.display()))?;
-    }
-    let stored = match keep_password {
-        Some((_, kept)) => kept.to_string_lossy().to_string(),
-        None => s.password_file.clone(),
-    };
-    let import = c.insert(
-        "INSERT INTO imports (kind, origin, user_id, time, summary, name, source) VALUES ('connection', ?1, ?2, ?3, '{}', ?4, ?4)",
-        params![crate::db::shown_url(url), (user.id > 0).then_some(user.id), now(), name],
-    )?;
-    let id = c.insert(
-        "INSERT INTO connections (name, kind, url, password_file, ca_file, settings, import_id, created_by, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![
-            name,
-            n.kind,
-            url,
-            stored,
-            s.ca_file,
-            serde_json::to_string(&n.settings)?,
-            import,
-            (user.id > 0).then_some(user.id),
-            now()
-        ],
-    )?;
-    audit(c, Some(user), "connect", name, &format!("{} {}", n.kind, crate::db::shown_url(url)));
-    Ok(id)
-}
-
-/// Disconnect a database (admins): its links and what it added to the catalog go (its batch
-/// is removed); the database itself is not touched.
-pub fn remove(c: &mut Connection, cfg: &crate::config::Config, user: &User, id: i64) -> anyhow::Result<()> {
-    if !user.is_admin() {
-        anyhow::bail!("only admins disconnect databases");
-    }
-    let s = get(c, id)?.ok_or_else(|| anyhow::anyhow!("no connection {id}"))?;
-    // (the connection goes with its batch: its pools and the password kept for it too)
-    crate::imports::remove_import(c, cfg, user, s.import_id, false, false)?;
-    audit(c, Some(user), "disconnect", &s.name, "");
-    Ok(())
-}
-
-/// What goes with a removed connection on this server: its pooled connections, what was read
-/// from it, and the password file kept for it ([`secret_file`]; never a file an admin named).
-pub fn removed(cfg: &crate::config::Config, s: &Source) {
-    forget(s);
-    let f = secret_file(cfg, &s.name);
-    if s.password_file == f.to_string_lossy() {
-        let _ = std::fs::remove_file(f);
-    }
 }
 
 // ------------------------------------------------------------------ the databases
@@ -415,10 +304,11 @@ pub fn password_var(name: &str) -> String {
 }
 
 impl Source {
+    /// What a pooled connection was opened with: another password (or key) is another pool.
     fn pool_key(&self) -> String {
         format!(
-            "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
-            self.id, self.url, self.password_file, self.ca_file, self.settings.timeout_s
+            "{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}\u{1}{}",
+            self.id, self.url, self.password_file, self.password_wrapped, self.ca_file, self.settings.timeout_s
         )
     }
 
@@ -426,6 +316,24 @@ impl Source {
     fn sqlite_path(&self) -> Option<std::path::PathBuf> {
         let u = self.url.trim();
         u.strip_prefix("sqlite://").or_else(|| u.strip_prefix("sqlite:")).map(std::path::PathBuf::from)
+    }
+
+    /// The database's password: from `$MEDORAMA_SOURCE_PASSWORD_<NAME>`, else the one given to
+    /// Medorama (kept sealed), else its password file.
+    fn password(&self) -> anyhow::Result<Option<String>> {
+        Ok(match std::env::var(password_var(&self.name)).ok().filter(|p| !p.is_empty()) {
+            Some(p) => Some(p),
+            None if !self.password_wrapped.is_empty() => {
+                Some(crate::workspace::unwrap_secret(&format!("password:{}", self.id), &self.password_wrapped)?)
+            }
+            None if !self.password_file.is_empty() => Some(
+                std::fs::read_to_string(&self.password_file)
+                    .map_err(|e| anyhow::anyhow!("{}: {e}", self.password_file))?
+                    .trim()
+                    .to_string(),
+            ),
+            None => None,
+        })
     }
 
     fn open(&self) -> anyhow::Result<Connection> {
@@ -438,6 +346,17 @@ impl Source {
                 &path,
                 OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
             )?;
+            // a SQLite database encrypted with SQLCipher (db-builder's --encrypt): its password
+            // is its key, 64 hex digits a raw key (as db-builder writes it), else a passphrase
+            if let Some(k) = self.password()? {
+                if k.len() == 64 && k.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    c.execute_batch(&format!("PRAGMA key = \"x'{k}'\";"))?;
+                } else {
+                    c.pragma_update(None, "key", &k)?;
+                }
+                c.query_row("SELECT COUNT(*) FROM sqlite_master", [], |_| Ok(()))
+                    .map_err(|_| anyhow::anyhow!("{}: cannot be read with this key", path.display()))?;
+            }
             c.busy_timeout(Duration::from_secs(10))?;
             c.pragma_update(None, "query_only", "ON")?;
             return Ok(Connection::from_sqlite(c));
@@ -446,16 +365,7 @@ impl Source {
         if !(lower.starts_with("postgres://") || lower.starts_with("postgresql://")) {
             anyhow::bail!("{}: a postgres:// URL or a sqlite: file", self.url);
         }
-        let password = match std::env::var(password_var(&self.name)).ok().filter(|p| !p.is_empty()) {
-            Some(p) => Some(p),
-            None if !self.password_file.is_empty() => Some(
-                std::fs::read_to_string(&self.password_file)
-                    .map_err(|e| anyhow::anyhow!("{}: {e}", self.password_file))?
-                    .trim()
-                    .to_string(),
-            ),
-            None => None,
-        };
+        let password = self.password()?;
         let tls = crate::sql::Tls { ca_file: (!self.ca_file.is_empty()).then(|| self.ca_file.clone().into()) };
         // read only, whatever the account may do; each query within its time limit
         let options =
@@ -490,30 +400,74 @@ impl Source {
     pub fn views(&self) -> Views {
         match self.kind.as_str() {
             "omop" => omop::views(&self.settings, self.dialect()),
+            // a db-builder database: its tables are the views (db-builder/docs/schema.md)
+            "dbb" => Views {
+                persons: format!("SELECT {PERSON_COLS} FROM persons"),
+                visits: format!("SELECT {VISIT_COLS} FROM visits"),
+                entries: format!("SELECT {ENTRY_COLS} FROM entries"),
+                recordings: format!("SELECT {RECORDING_COLS} FROM recordings"),
+                stays: DBB_STAYS.into(),
+                version: "SELECT value FROM meta WHERE key = 'version'".into(),
+            },
             _ => Views {
                 persons: self.settings.persons.clone(),
                 visits: self.settings.visits.clone(),
                 entries: self.settings.entries.clone(),
+                recordings: self.settings.recordings.clone(),
+                stays: self.settings.stays.clone(),
                 version: self.settings.version.clone(),
             },
         }
     }
 
-    pub fn zone(&self, catalog_zone: &str) -> chrono_tz::Tz {
-        crate::util::tz(if self.settings.timezone.is_empty() { catalog_zone } else { &self.settings.timezone })
+    /// A recording's file: as the database names it, or read from `files_root` (else a SQLite
+    /// database's folder) when relative.
+    pub fn recording_path(&self, file: &str) -> std::path::PathBuf {
+        let f = std::path::Path::new(file);
+        if f.is_absolute() {
+            return f.to_path_buf();
+        }
+        let root = if !self.settings.files_root.is_empty() {
+            std::path::PathBuf::from(&self.settings.files_root)
+        } else {
+            match self.sqlite_path().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+                Some(d) => d,
+                None => std::path::PathBuf::from("."),
+            }
+        };
+        root.join(f)
+    }
+
+    pub fn zone(&self, medorama_zone: &str) -> chrono_tz::Tz {
+        crate::util::tz(if self.settings.timezone.is_empty() { medorama_zone } else { &self.settings.timezone })
     }
 
     /// Whether each view answers (one row each) and what the data's version is.
     pub fn check(&self) -> anyhow::Result<Checked> {
         let t = Instant::now();
+        // a SQLite file moved or deleted: a pooled connection would still read it
+        if let Some(p) = self.sqlite_path() {
+            if !p.is_file() {
+                forget(self);
+                anyhow::bail!("{}: no such SQLite file", p.display());
+            }
+        }
         let db = self.db()?;
         let v = self.views();
+        let none = String::new();
         let mut views = vec![];
         for (name, sql, cols) in [
             ("persons", &v.persons, PERSON_COLS),
             ("visits", &v.visits, VISIT_COLS),
             ("entries", &v.entries, ENTRY_COLS),
+            ("recordings", &v.recordings, RECORDING_COLS),
+            // (stays are optional: only a site's own view is checked)
+            ("stays", if self.kind == "views" { &v.stays } else { &none }, STAY_COLS),
         ] {
+            // a db-builder database without recordings, or recordings without entries
+            if self.kind == "dbb" && !self.has_table(&db, name)? {
+                continue;
+            }
             if sql.trim().is_empty() {
                 continue;
             }
@@ -545,7 +499,27 @@ impl Source {
     }
 }
 
-/// What checking a connection found.
+impl Source {
+    /// Whether a SQLite database has a table (a db-builder database may hold no recordings).
+    fn has_table(&self, db: &Connection, table: &str) -> anyhow::Result<bool> {
+        Ok(db
+            .query_row_native("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1", [table], |r| {
+                r.get::<_, i64>(0)
+            })
+            .map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?
+            > 0)
+    }
+
+    /// Whether it is a recording database (it has the `recordings` view).
+    pub fn has_recordings(&self) -> bool {
+        if self.kind == "dbb" {
+            return self.db().and_then(|db| self.has_table(&db, "recordings")).unwrap_or(false);
+        }
+        !self.views().recordings.trim().is_empty()
+    }
+}
+
+/// What checking a database found.
 #[derive(Debug, Serialize)]
 pub struct Checked {
     pub views: Vec<String>,
@@ -561,22 +535,22 @@ pub fn forget(s: &Source) {
     recent().map.lock().unwrap().retain(|k, _| !k.starts_with(&prefix));
 }
 
-/// What was read lately from connected databases, by query: (entries, visits), kept
+/// What was read lately from connected databases, by query: (entries, visits, stays), kept
 /// [`Recent::TTL`], at most [`Recent::MAX`] answers (the oldest go first).
 struct Recent {
-    map: Mutex<HashMap<String, (Instant, (Vec<Entry>, Vec<Visit>))>>,
+    map: Mutex<HashMap<String, (Instant, (Vec<Entry>, Vec<Visit>, Vec<Stay>))>>,
 }
 
 impl Recent {
     const TTL: Duration = Duration::from_secs(30);
     const MAX: usize = 256;
 
-    fn get(&self, key: &str) -> Option<(Vec<Entry>, Vec<Visit>)> {
+    fn get(&self, key: &str) -> Option<(Vec<Entry>, Vec<Visit>, Vec<Stay>)> {
         let map = self.map.lock().unwrap();
         map.get(key).filter(|(t, _)| t.elapsed() < Self::TTL).map(|(_, v)| v.clone())
     }
 
-    fn put(&self, key: String, v: (Vec<Entry>, Vec<Visit>)) {
+    fn put(&self, key: String, v: (Vec<Entry>, Vec<Visit>, Vec<Stay>)) {
         let mut map = self.map.lock().unwrap();
         map.retain(|_, (t, _)| t.elapsed() < Self::TTL);
         if map.len() >= Self::MAX {
@@ -595,13 +569,26 @@ fn recent() -> &'static Recent {
 
 // ------------------------------------------------------------------ reading the views
 
-const PERSON_COLS: &str = "person_key, patient_id, mrn, mrn_authority, last_name, first_name, birth_date, sex";
+const PERSON_COLS: &str =
+    "person_key, patient_id, patient_id_issuer, mrn, mrn_authority, last_name, first_name, birth_date, sex";
 const VISIT_COLS: &str = "visit_key, person_key, start_time, end_time, unit, icu";
 const ENTRY_COLS: &str =
     "entry_key, person_key, visit_key, category, time, end_time, name, code, vocabulary, value_num, \
                           value_text, unit, ref_low, ref_high, flag, author, text";
+const STAY_COLS: &str = "stay_key, person_key, visit_key, start_time, end_time, unit, icu";
+/// A db-builder database's stays: its bed stays, kept in `extras` (db-builder/docs/schema.md,
+/// "extras"), with their visits' persons.
+const DBB_STAYS: &str = "SELECT b.stay_key, v.person_key, b.visit_key, b.start_time, b.end_time, b.unit, 0 AS icu
+     FROM (SELECT row_key AS stay_key, MAX(CASE WHEN name = 'visit_key' THEN value END) AS visit_key,
+                  MAX(CASE WHEN name = 'bed_start' THEN value END) AS start_time,
+                  MAX(CASE WHEN name = 'bed_end' THEN value END) AS end_time,
+                  COALESCE(MAX(CASE WHEN name = 'care_unit' THEN value END), '') AS unit
+           FROM extras WHERE table_name = 'bed_stays' GROUP BY row_key) b
+     JOIN visits v ON v.visit_key = b.visit_key";
+const RECORDING_COLS: &str =
+    "recording_key, person_key, visit_key, file, format, start_time, end_time, label, category, size, fingerprint";
 
-/// A key or a value as text (keys are compared as text in the catalog).
+/// A key or a value as text (keys are compared as text in Medorama).
 pub fn text_of(v: &Value) -> String {
     match v {
         Value::Null => String::new(),
@@ -650,6 +637,7 @@ pub fn time_of(v: &Value, zone: chrono_tz::Tz) -> Option<f64> {
 pub struct Person {
     pub key: String,
     pub patient_id: String,
+    pub patient_id_issuer: String,
     pub mrn: String,
     pub mrn_authority: String,
     pub last_name: String,
@@ -665,6 +653,19 @@ pub struct Visit {
     pub start: Option<f64>,
     pub end: Option<f64>,
     pub unit: String,
+    pub icu: bool,
+}
+
+/// A stay in a unit during a visit (a bed stay, OMOP's `visit_detail`).
+#[derive(Debug, Clone)]
+pub struct Stay {
+    pub key: String,
+    pub person: String,
+    pub visit: String,
+    pub start: Option<f64>,
+    pub end: Option<f64>,
+    pub unit: String,
+    /// In an intensive-care unit: by the database's say, or by the unit's name.
     pub icu: bool,
 }
 
@@ -727,23 +728,16 @@ impl Source {
                 Ok(Person {
                     key: t(0)?,
                     patient_id: t(1)?,
-                    mrn: t(2)?,
-                    mrn_authority: t(3)?,
-                    last_name: t(4)?,
-                    first_name: t(5)?,
-                    birth_date: t(6)?,
-                    sex: t(7)?,
+                    patient_id_issuer: t(2)?,
+                    mrn: t(3)?,
+                    mrn_authority: t(4)?,
+                    last_name: t(5)?,
+                    first_name: t(6)?,
+                    birth_date: t(7)?,
+                    sex: t(8)?,
                 })
             })?;
-        Ok(rows
-            .into_iter()
-            .map(|mut p| {
-                if p.mrn_authority.is_empty() {
-                    p.mrn_authority = self.settings.mrn_authority.clone();
-                }
-                p
-            })
-            .collect())
+        Ok(rows.into_iter().map(|p| self.with_issuers(p)).collect())
     }
 
     /// The entries of these persons, in time; kept 30 seconds (a page reads them for its
@@ -757,7 +751,7 @@ impl Source {
             return Ok(v.0);
         }
         let v = self.entries_now(keys, zone)?;
-        recent().put(key, (v.clone(), vec![]));
+        recent().put(key, (v.clone(), vec![], vec![]));
         Ok(v)
     }
 
@@ -787,7 +781,31 @@ impl Source {
             db.query_in_native(&format!("SELECT {VISIT_COLS} FROM ({v}) v WHERE person_key IN ({{}})"), keys, |r| {
                 visit_of(r, zone)
             })?;
-        recent().put(key, (vec![], out.clone()));
+        recent().put(key, (vec![], out.clone(), vec![]));
+        Ok(out)
+    }
+
+    /// The stays of these persons in their visits' units (empty when the database gives none);
+    /// kept 30 seconds, as entries are.
+    pub fn stays(&self, keys: &[String], zone: chrono_tz::Tz) -> anyhow::Result<Vec<Stay>> {
+        let v = self.views().stays;
+        if keys.is_empty() || v.trim().is_empty() {
+            return Ok(vec![]);
+        }
+        let key = format!("{}\u{1}stays\u{1}{zone}\u{1}{}", self.pool_key(), keys.join("\u{1}"));
+        if let Some(c) = recent().get(&key) {
+            return Ok(c.2);
+        }
+        let db = self.db()?;
+        // a db-builder database made before bed stays were kept has no extras
+        if self.kind == "dbb" && !self.has_table(&db, "extras")? {
+            return Ok(vec![]);
+        }
+        let out =
+            db.query_in_native(&format!("SELECT {STAY_COLS} FROM ({v}) s WHERE person_key IN ({{}})"), keys, |r| {
+                stay_of(r, zone)
+            })?;
+        recent().put(key, (vec![], vec![], out.clone()));
         Ok(out)
     }
 }
@@ -801,6 +819,20 @@ fn visit_of(r: &crate::sql::Row, zone: chrono_tz::Tz) -> crate::sql::Result<Visi
         end: time_of(&g(3)?, zone),
         unit: text_of(&g(4)?),
         icu: num_of(&g(5)?).is_some_and(|x| x != 0.0),
+    })
+}
+
+fn stay_of(r: &crate::sql::Row, zone: chrono_tz::Tz) -> crate::sql::Result<Stay> {
+    let g = |i: usize| -> crate::sql::Result<Value> { r.get::<_, Value>(i) };
+    let unit = text_of(&g(5)?);
+    Ok(Stay {
+        key: text_of(&g(0)?),
+        person: text_of(&g(1)?),
+        visit: text_of(&g(2)?),
+        start: time_of(&g(3)?, zone),
+        end: time_of(&g(4)?, zone),
+        icu: num_of(&g(6)?).is_some_and(|x| x != 0.0) || crate::categories::is_icu_unit(&unit),
+        unit,
     })
 }
 
@@ -825,6 +857,19 @@ pub struct Find {
     pub notes: bool,
 }
 
+/// Whether a diagnosis's text is a word to find in names (`sepsis`, `heart failure`): it has a
+/// letter and three characters, and is not shaped like a code (ICD-10's `I21.9`, `E11`;
+/// ICD-9's `410.1`, `V45.81`).
+pub fn names_a_word(text: &str) -> bool {
+    let t = text.trim();
+    let cs: Vec<char> = t.chars().collect();
+    let code_like = !cs.is_empty()
+        && cs.iter().all(|c| c.is_ascii_alphanumeric() || *c == '.')
+        && (cs[0].is_ascii_digit() || (cs[0].is_ascii_alphabetic() && cs.get(1).is_some_and(|c| c.is_ascii_digit())))
+        && cs.len() <= 8;
+    cs.len() >= 3 && cs.iter().any(|c| c.is_alphabetic()) && !code_like
+}
+
 fn like(s: &str) -> String {
     format!("%{}%", s.trim().to_lowercase().replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"))
 }
@@ -846,8 +891,6 @@ impl Source {
                 format!("?{}", args.len())
             }
         };
-        // SQLite's LIKE ignores the case of ASCII letters, PostgreSQL's ILIKE of all
-        let like_op = if pg { "ILIKE" } else { "LIKE" };
         if !f.categories.is_empty() {
             let mut cats = f.categories.clone();
             if cats.iter().any(|c| c == "vit") && !cats.iter().any(|c| c == "lab") {
@@ -866,10 +909,18 @@ impl Source {
             wh.push(format!("lower(name) LIKE {} ESCAPE '\\'", arg(like(n).into(), &mut args)));
         }
         if let Some(t) = &f.code_or_name {
-            let prefix = format!("{}%", t.trim().replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
+            // codes compared without their dots (I21.9 is I219), the text's prefix in upper case;
+            // names only for words (`sepsis`), not for codes (`I21`, `410.1`)
+            let dotless: String = t.trim().replace('.', "").to_uppercase();
+            let prefix = format!("{}%", dotless.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_"));
             let a = arg(prefix.into(), &mut args);
-            let b = arg(like(t).into(), &mut args);
-            wh.push(format!("(code {like_op} {a} ESCAPE '\\' OR lower(name) LIKE {b} ESCAPE '\\')"));
+            let code = format!("upper(replace(code, '.', '')) LIKE {a} ESCAPE '\\'");
+            if names_a_word(t) {
+                let b = arg(like(t).into(), &mut args);
+                wh.push(format!("({code} OR lower(name) LIKE {b} ESCAPE '\\')"));
+            } else {
+                wh.push(code);
+            }
         }
         if let Some(t) = &f.text {
             let a = arg(like(t).into(), &mut args);
@@ -918,16 +969,61 @@ impl Source {
         self.keys_of(&sql, args)
     }
 
-    /// The persons who have visits (`icu`: intensive-care ones only).
+    /// The persons who have visits (`icu`: intensive-care ones only: a visit the database says
+    /// is, or in a unit named like an intensive-care unit, as the encounter criterion and the
+    /// patient's page read them; or with a stay in one).
     pub fn visit_persons(&self, icu: bool) -> anyhow::Result<Vec<String>> {
-        let v = self.views().visits;
+        let views = self.views();
+        let v = views.visits;
         if v.trim().is_empty() {
             return Ok(vec![]);
         }
-        // (CAST: a view's icu may be a boolean, as PostgreSQL's)
-        let sql =
-            format!("SELECT DISTINCT person_key FROM ({v}) v{}", if icu { " WHERE CAST(icu AS INT) = 1" } else { "" });
-        self.keys_of(&sql, vec![])
+        if !icu {
+            return self.keys_of(&format!("SELECT DISTINCT person_key FROM ({v}) v"), vec![]);
+        }
+        // (CAST: a view's icu may be a boolean, as PostgreSQL's; the units' names are tested here)
+        let mut keys = self.icu_keys(&format!("SELECT DISTINCT person_key, unit, CAST(icu AS INT) FROM ({v}) v"))?;
+        let stays = views.stays;
+        if !stays.trim().is_empty() {
+            let sql = format!("SELECT DISTINCT person_key, unit, CAST(icu AS INT) FROM ({stays}) s");
+            match self.icu_keys(&sql) {
+                Ok(k) => keys.extend(k),
+                // (stays are optional: a database without them is read without)
+                Err(e) if self.kind != "views" => eprintln!("medorama: {}: stays: {e}", self.name),
+                Err(e) => return Err(e),
+            }
+        }
+        keys.sort();
+        keys.dedup();
+        Ok(keys)
+    }
+
+    /// The persons of rows (person_key, unit, icu) in intensive care.
+    fn icu_keys(&self, sql: &str) -> anyhow::Result<Vec<String>> {
+        let max = self.settings.max_rows();
+        let db = self.db()?;
+        if self.kind == "dbb" && sql.contains("FROM extras") && !self.has_table(&db, "extras")? {
+            return Ok(vec![]);
+        }
+        let mut st = db
+            .prepare_native(&format!("{sql} LIMIT {}", max + 1))
+            .map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?;
+        let rows: Vec<(String, String, bool)> = st
+            .query_map(Vec::<Value>::new(), |r| {
+                let g = |i: usize| -> crate::sql::Result<Value> { r.get::<_, Value>(i) };
+                Ok((text_of(&g(0)?), text_of(&g(1)?), num_of(&g(2)?).is_some_and(|x| x != 0.0)))
+            })
+            .map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?
+            .collect::<Result<_, _>>()
+            .map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?;
+        if rows.len() > max {
+            anyhow::bail!("{}: the criterion finds more than {max} persons: narrow it", self.name);
+        }
+        Ok(rows
+            .into_iter()
+            .filter(|(p, unit, icu)| !p.is_empty() && (*icu || crate::categories::is_icu_unit(unit)))
+            .map(|(p, ..)| p)
+            .collect())
     }
 
     fn keys_of(&self, sql: &str, args: Vec<Value>) -> anyhow::Result<Vec<String>> {
@@ -960,19 +1056,20 @@ impl Source {
                 Ok(Person {
                     key: t(0)?,
                     patient_id: t(1)?,
-                    mrn: t(2)?,
-                    mrn_authority: t(3)?,
-                    last_name: t(4)?,
-                    first_name: t(5)?,
-                    birth_date: t(6)?,
-                    sex: t(7)?,
+                    patient_id_issuer: t(2)?,
+                    mrn: t(3)?,
+                    mrn_authority: t(4)?,
+                    last_name: t(5)?,
+                    first_name: t(6)?,
+                    birth_date: t(7)?,
+                    sex: t(8)?,
                 })
             })?
             .collect::<Result<_, _>>()?;
         if rows.len() > max {
             anyhow::bail!("{}: more than {max} persons: narrow the criteria", self.name);
         }
-        Ok(rows)
+        Ok(rows.into_iter().map(|p| self.with_issuers(p)).collect())
     }
 
     /// Every visit, at most `max_rows`.
@@ -1024,40 +1121,107 @@ impl Source {
     }
 }
 
-// ------------------------------------------------------------------ for the pages
+// ------------------------------------------------------------------ recordings
 
-/// A connection as admins see it (no secrets: the password file's name only).
-#[derive(Debug, Serialize)]
-pub struct Shown {
-    pub id: i64,
-    pub name: String,
-    pub kind: String,
-    pub url: String,
-    pub database: &'static str,
-    pub import_id: i64,
-    pub persons: i64,
-    pub created_at: f64,
-    pub settings: Settings,
+/// A recording of a recording database, as its view gives it.
+#[derive(Debug, Clone, Default)]
+pub struct Recording {
+    pub key: String,
+    pub person: String,
+    pub visit: String,
+    pub file: String,
+    pub format: String,
+    pub start: Option<f64>,
+    pub end: Option<f64>,
+    pub label: String,
+    pub category: String,
+    pub size: Option<f64>,
+    pub fingerprint: String,
 }
 
-pub fn shown(c: &Connection) -> anyhow::Result<Vec<Shown>> {
-    let mut out = vec![];
-    for s in list(c)? {
-        let persons: i64 =
-            c.query_row("SELECT COUNT(*) FROM source_persons WHERE connection = ?1", [s.id], |r| r.get(0))?;
-        out.push(Shown {
-            id: s.id,
-            database: if s.dialect() == Dialect::Sqlite { "SQLite" } else { "PostgreSQL" },
-            name: s.name,
-            kind: s.kind,
-            url: s.url,
-            import_id: s.import_id,
-            persons,
-            created_at: s.created_at,
-            settings: s.settings,
-        });
+fn recording_of(r: &crate::sql::Row, zone: chrono_tz::Tz) -> crate::sql::Result<Recording> {
+    let g = |i: usize| -> crate::sql::Result<Value> { r.get::<_, Value>(i) };
+    let t = |i: usize| -> crate::sql::Result<String> { Ok(text_of(&g(i)?).trim().to_string()) };
+    Ok(Recording {
+        key: t(0)?,
+        person: t(1)?,
+        visit: t(2)?,
+        file: t(3)?,
+        format: t(4)?,
+        start: time_of(&g(5)?, zone),
+        end: time_of(&g(6)?, zone),
+        label: t(7)?,
+        category: t(8)?,
+        size: num_of(&g(9)?),
+        fingerprint: t(10)?,
+    })
+}
+
+impl Source {
+    /// The issuers a row leaves empty: the database's settings; a patient ID with no issuer at
+    /// all is the database's own (it links only its own persons).
+    fn with_issuers(&self, mut p: Person) -> Person {
+        if p.mrn_authority.is_empty() {
+            p.mrn_authority = self.settings.mrn_authority.clone();
+        }
+        if p.patient_id_issuer.is_empty() {
+            p.patient_id_issuer = if self.settings.issuer.is_empty() {
+                format!("db:{}", self.name)
+            } else {
+                self.settings.issuer.clone()
+            };
+        }
+        p
     }
-    Ok(out)
+
+    /// Every recording (a recording database), at most `max_rows`.
+    pub fn all_recordings(&self, zone: chrono_tz::Tz) -> anyhow::Result<Vec<Recording>> {
+        let v = self.views().recordings;
+        if v.trim().is_empty() || !self.has_recordings() {
+            return Ok(vec![]);
+        }
+        let max = self.settings.max_rows();
+        let db = self.db()?;
+        let mut st = db.prepare_native(&format!("SELECT {RECORDING_COLS} FROM ({v}) r LIMIT {}", max + 1))?;
+        let rows: Vec<Recording> = st.query_map([], |r| recording_of(r, zone))?.collect::<Result<_, _>>()?;
+        if rows.len() > max {
+            anyhow::bail!("{}: more than {max} recordings", self.name);
+        }
+        Ok(rows)
+    }
+
+    /// The recordings of these persons.
+    pub fn recordings(&self, keys: &[String], zone: chrono_tz::Tz) -> anyhow::Result<Vec<Recording>> {
+        let v = self.views().recordings;
+        if keys.is_empty() || v.trim().is_empty() || !self.has_recordings() {
+            return Ok(vec![]);
+        }
+        let db = self.db()?;
+        let mut out = db.query_in_native(
+            &format!("SELECT {RECORDING_COLS} FROM ({v}) r WHERE person_key IN ({{}})"),
+            keys,
+            |r| recording_of(r, zone),
+        )?;
+        out.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal).then(a.key.cmp(&b.key)));
+        Ok(out)
+    }
+
+    /// One recording, by its key.
+    pub fn recording(&self, key: &str, zone: chrono_tz::Tz) -> anyhow::Result<Option<Recording>> {
+        let v = self.views().recordings;
+        if v.trim().is_empty() || !self.has_recordings() {
+            return Ok(None);
+        }
+        let db = self.db()?;
+        Ok(db
+            .query_in_native(
+                &format!("SELECT {RECORDING_COLS} FROM ({v}) r WHERE recording_key IN ({{}})"),
+                &[key.to_string()],
+                |r| recording_of(r, zone),
+            )?
+            .into_iter()
+            .next())
+    }
 }
 
 #[cfg(test)]

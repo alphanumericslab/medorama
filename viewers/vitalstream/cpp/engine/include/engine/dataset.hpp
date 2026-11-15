@@ -27,6 +27,12 @@ struct Piece {
   std::pair<std::int64_t, std::int64_t> span(double w0, double w1) const;
 };
 
+// Of found (pieces of one channel, by start then id), with more than px of them over [t0, t1]: of
+// the pieces that start in each pixel column, the one that ends latest (the first of those) and
+// every one that reaches past the column, so that a long piece is never lost among short ones.
+std::vector<std::size_t> thin(const std::vector<Piece>& pieces, const std::vector<std::size_t>& found, double t0,
+                              double t1, double px);
+
 class Dataset {
  public:
   Dataset(Dict meta, Loaded arrays);
@@ -48,8 +54,8 @@ class Dataset {
   std::vector<Piece> pieces;
 
  private:
-  // The channel's pieces that lie in [t0, t1], in order of id; with more than px of them, only
-  // the first (by start, then id) to start in each pixel column.
+  // The channel's pieces that lie in [t0, t1], in order of id; with more than px of them, those
+  // thin keeps.
   std::vector<std::size_t> pieces_in(std::int64_t ch, double t0, double t1, double px) const;
   std::string raw_block(const Piece& p, std::int64_t a, const std::vector<double>& y, double per_px) const;
   std::string env_block(const Piece& p, std::int64_t a, std::int64_t b, double per_px) const;

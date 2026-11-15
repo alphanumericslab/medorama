@@ -75,8 +75,9 @@ impl User {
         self.role == Role::Admin
     }
 
-    /// May read the text of notes: with the PHI permission, or in Privacy Mode when its settings
-    /// let notes through.
+    /// May read free text (the text of notes and reports, and of any entry: patient/detail.rs
+    /// `is_free_text`): with the PHI permission, or in Privacy Mode when its settings let it
+    /// through (de-identified as far as the gate can, and marked).
     pub fn reads_notes(&self) -> bool {
         self.phi || (self.privacy && self.privacy_notes)
     }
@@ -229,7 +230,7 @@ pub struct Changes<'a> {
     pub password: Option<&'a str>,
 }
 
-/// Change a user; refuses to leave the catalog without an enabled admin.
+/// Change a user; refuses to leave Medorama without an enabled admin.
 pub fn update(c: &mut Connection, id: i64, ch: &Changes) -> anyhow::Result<()> {
     let Some(u) = get(c, id)? else { anyhow::bail!("no such user") };
     let tx = c.transaction()?;
@@ -256,7 +257,7 @@ pub fn update(c: &mut Connection, id: i64, ch: &Changes) -> anyhow::Result<()> {
     let admins: i64 =
         tx.query_row("SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0", [], |r| r.get(0))?;
     if u.is_admin() && admins == 0 {
-        anyhow::bail!("the catalog needs at least one enabled admin");
+        anyhow::bail!("Medorama needs at least one enabled admin");
     }
     tx.commit()?;
     Ok(())
@@ -268,7 +269,7 @@ pub fn delete(c: &mut Connection, id: i64) -> anyhow::Result<()> {
     let admins: i64 =
         tx.query_row("SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0", [], |r| r.get(0))?;
     if admins == 0 {
-        anyhow::bail!("the catalog needs at least one enabled admin");
+        anyhow::bail!("Medorama needs at least one enabled admin");
     }
     tx.commit()?;
     Ok(())

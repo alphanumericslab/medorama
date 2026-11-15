@@ -76,7 +76,7 @@ if (typeof module !== 'undefined' && module.exports) module.exports = PacsDrop;
   const CANVAS = ['stack', 'cine', 'still', 'video'];
   const st = {
     items: [], studies: 1, cur: 0, frame: 0, win: null, zoom: 1, pan: [0, 0], cache: new Map(), urls: [],
-    playing: false, speed: 1, last: 0, acc: 0, calipers: false, marks: [], map: null, video: null,
+    playing: false, speed: 1, last: 0, acc: 0, calipers: false, marks: [], map: null, video: null, frameWin: null,
   };
 
   // ---------------------------------------------------------------- theme
@@ -307,7 +307,21 @@ if (typeof module !== 'undefined' && module.exports) module.exports = PacsDrop;
     const info = fr.info;
     if (info.jpeg && !info.decoded) {
       const key = `j:${info.name}:${fr.frame}`;
-      if (!st.cache.has(key)) st.cache.set(key, await createImageBitmap(new Blob([Dicom.jpegFrame(info, fr.frame)], { type: 'image/jpeg' })));
+      if (!st.cache.has(key)) {
+        let bmp = await createImageBitmap(new Blob([Dicom.jpegFrame(info, fr.frame)], { type: 'image/jpeg' }));
+        if (info.photometric === 'MONOCHROME1') {
+          // MONOCHROME1: white is the lowest value, as for native pixels (dicom.js toRgba)
+          const c = document.createElement('canvas');
+          c.width = bmp.width; c.height = bmp.height;
+          const ctx = c.getContext('2d');
+          ctx.drawImage(bmp, 0, 0);
+          const im = ctx.getImageData(0, 0, c.width, c.height);
+          Dicom.invertRgba(im.data);
+          ctx.putImageData(im, 0, 0);
+          bmp = c;
+        }
+        st.cache.set(key, bmp);
+      }
       return st.cache.get(key);
     }
     const key = `v:${info.name}:${fr.frame}`;
@@ -321,10 +335,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = PacsDrop;
       for (let k = 0, p = 0; k < values.length; k += 3, p += 4) { im.data[p] = values[k]; im.data[p + 1] = values[k + 1]; im.data[p + 2] = values[k + 2]; im.data[p + 3] = 255; }
     } else {
       let w = auto ? null : st.win;
-      if (!w) {
-        // one window for the whole item (a cine does not flicker): the file's, else the first frame's
-        w = it.win || (it.win = Dicom.autoWindow(info, values));
-        if (!auto) st.win = w;
+      if (!w || (w === st.frameWin && info.frameWindows)) {
+        // a frame's own window (enhanced multi-frame: per-frame VOI), until the user sets one;
+        // else one window for the whole item (a cine does not flicker): the file's, else the first frame's
+        w = info.frameWindows ? Dicom.autoWindow(info, values, fr.frame) : it.win || (it.win = Dicom.autoWindow(info, values));
+        if (!auto) st.win = st.frameWin = w;
       }
       Dicom.toRgba(info, values, w[0], w[1], im.data);
     }
@@ -393,9 +408,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = PacsDrop;
     if (info) {
       const r = (info.regions || []).find((g) => g.unitsX === 3 && g.dx > 0 && ax >= (g.x0 ?? 0) && ax <= (g.x1 ?? 1e9) && ay >= (g.y0 ?? 0) && ay <= (g.y1 ?? 1e9));
       if (r) return { kx: r.dx, ky: r.dy || r.dx, unit: 'cm', digits: 2, note: '' };
-      const sp = Array.isArray(info.spacing) ? info.spacing : Array.isArray(info.imagerSpacing) ? info.imagerSpacing : null;
+      // the frame's own spacing (enhanced multi-frame: per-frame pixel measures), else the file's
+      const spacing = Dicom.frameAttrs(info, fr.frame).spacing;
+      const sp = Array.isArray(spacing) ? spacing : Array.isArray(info.imagerSpacing) ? info.imagerSpacing : null;
       // DICOM spacing: between rows (y), then between columns (x)
-      if (sp && sp[0] > 0) return { kx: sp[1] || sp[0], ky: sp[0], unit: 'mm', digits: 1, note: info.spacing ? '' : ' at the detector' };
+      if (sp && sp[0] > 0) return { kx: sp[1] || sp[0], ky: sp[0], unit: 'mm', digits: 1, note: Array.isArray(spacing) ? '' : ' at the detector' };
     }
     const mm = +params.get('mm');
     if (mm > 0) return { kx: mm, ky: mm, unit: 'mm', digits: 1, note: '' };
@@ -442,9 +459,11 @@ if (typeof module !== 'undefined' && module.exports) module.exports = PacsDrop;
     if (!img) { corners(it); return; }
     const iw = img.videoWidth || img.width;
     const ih = img.videoHeight || img.height;
-    const info = it.frames?.[st.frame]?.info;
+    const fr = it.frames?.[st.frame];
+    const info = fr?.info;
+    const attrs = info ? Dicom.frameAttrs(info, fr.frame) : null;
     // non-square pixels are drawn to scale
-    const sp = Array.isArray(info?.spacing) ? info.spacing : null;
+    const sp = Array.isArray(attrs?.spacing) ? attrs.spacing : null;
     const aspect = sp && sp[0] > 0 && sp[1] > 0 ? sp[0] / sp[1] : 1;
     const k = Math.min(W / iw, H / (ih * aspect)) * st.zoom;
     const x0 = (W - iw * k) / 2 + st.pan[0] * dpr;
@@ -467,12 +486,13 @@ if (typeof module !== 'undefined' && module.exports) module.exports = PacsDrop;
       }
     }
     $('#slider').value = st.frame;
-    corners(it, info, iw, ih);
+    corners(it, info, iw, ih, attrs);
   }
 
-  function corners(it, info, iw, ih) {
+  function corners(it, info, iw, ih, attrs) {
     const n = it.frames?.length || 0;
-    $('#tl').innerHTML = CANVAS.includes(it.kind) ? `<b>${esc(it.title)}</b><br>${esc(it.modality || '')}${+info?.thickness ? ` · ${esc(+(+info.thickness).toFixed(2))} mm` : ''}${info?.heartRate ? ` · HR ${esc(info.heartRate)}` : ''}` : '';
+    const thickness = attrs ? attrs.thickness : info?.thickness;
+    $('#tl').innerHTML = CANVAS.includes(it.kind) ? `<b>${esc(it.title)}</b><br>${esc(it.modality || '')}${+thickness ? ` · ${esc(+(+thickness).toFixed(2))} mm` : ''}${info?.heartRate ? ` · HR ${esc(info.heartRate)}` : ''}` : '';
     $('#tr').innerHTML = n > 1 ? `${it.kind === 'cine' ? 'Frame' : 'Image'} ${st.frame + 1} / ${n}${it.kind !== 'cine' && info?.location !== null && info?.location !== undefined ? `<br>${(+info.location).toFixed(1)} mm` : ''}` : '';
     $('#bl').innerHTML = info && info.samples === 1 && st.win ? `W ${Math.round(st.win[1])} · L ${Math.round(st.win[0])}` : '';
     $('#br').innerHTML = iw ? `${iw} × ${ih}${st.zoom !== 1 ? ` · ${Math.round(st.zoom * 100)} %` : ''}${it.kind === 'cine' ? ` · ${Math.round(it.fps * st.speed)} fps` : ''}` : '';

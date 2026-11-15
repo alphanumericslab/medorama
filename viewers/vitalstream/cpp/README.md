@@ -5,14 +5,14 @@ build options and how its code is organized. It is written for developers and fo
 builds the viewer by hand. For installing, running, using and deploying the viewer, see
 [VitalStream's README](../README.md).
 
-`vitalstream-cpp` is one self-contained program, with wfdb-x's C++ library (for WFDB records)
-and the web page built in. It answers the same API with the same JSON as the Rust and Python
+`vitalstream-cpp` is one self-contained program, with wfdb-x's C++ library (for WFDB records),
+SQLite and SQLCipher (for its index store) and the web page built in. It answers the same API with the same JSON as the Rust and Python
 viewers, and writes the same index ([docs/naming.md](../docs/naming.md)).
 
 | | |
 |---|---|
 | Command | `vitalstream-cpp` (default port 8070) |
-| Libraries | `vs_core` (values, Python-compatible formatting, SHA-256, the wfdb-x calls), `vs_engine` (the WFDB and EDF readers, the adapter protocol, the index, the queries) and `vs_viewer` (the HTTP server, settings, the password). |
+| Libraries | `vs_core` (values, Python-compatible formatting, SHA-256, the wfdb-x calls), `vs_engine` (the WFDB and EDF readers, the adapter protocol, the index and the index store, the queries), `vs_viewer` (the HTTP server, settings, the password) and `vs_sqlite` (SQLCipher, with libtomcrypt). |
 | Build | C++20 (GCC 12+, Clang 15+, Apple Clang 15+, Visual Studio 2022), CMake 3.24+ and Ninja. Every system, including builds without administrator rights or internet access: [docs/building.md](../../../docs/building.md#the-c-viewer). |
 | Install alone | `viewers/vitalstream/install.sh` builds it in `cpp/build/standalone` and installs `~/.local/bin/vitalstream-cpp` ([VitalStream's README](../README.md#install)). |
 | Run, settings, services | [VitalStream's README](../README.md#run). |
@@ -31,7 +31,7 @@ build/release/bin/vitalstream-cpp                            # opens http://127.
 | Folder | Contents |
 |---|---|
 | [`core/`](core) | `vs_core`, namespace `vitalstream::core`: dynamic values and JSON written exactly as the Rust and Python implementations write them, number formatting, text helpers, paths, SHA-256, memory-mapped files, and wfdb-x behind one lock ([`wfdb_c.cpp`](core/src/wfdb_c.cpp)). |
-| [`engine/`](engine) | `vs_engine`, namespace `vitalstream::engine`: the built-in readers, adapters, channels, pieces and envelopes, the index and the queries. [`sources.cpp`](engine/src/sources.cpp) chooses the reader. [`sources_wfdb.cpp`](engine/src/sources_wfdb.cpp) reads WFDB records: one record, a collection, and a folder of records read as one session ([`sources_wfdb_files.cpp`](engine/src/sources_wfdb_files.cpp) holds what needs no wfdb-x; [`sources_wfdb_none.cpp`](engine/src/sources_wfdb_none.cpp) takes the reader's place with `VS_WFDB=OFF`). [`sources_edf.cpp`](engine/src/sources_edf.cpp) reads EDF, EDF+, BDF and BDF+ files ([docs/edf.md](../../../docs/edf.md)). [`adapters.cpp`](engine/src/adapters.cpp) finds adapters, runs their commands and keeps their `serve` sessions. |
+| [`engine/`](engine) | `vs_engine`, namespace `vitalstream::engine`: the built-in readers, adapters, channels, pieces and envelopes, the index and the queries. [`sources.cpp`](engine/src/sources.cpp) chooses the reader. [`sources_wfdb.cpp`](engine/src/sources_wfdb.cpp) reads WFDB records: one record, a collection, and a folder of records read as one session ([`sources_wfdb_files.cpp`](engine/src/sources_wfdb_files.cpp) holds what needs no wfdb-x; [`sources_wfdb_none.cpp`](engine/src/sources_wfdb_none.cpp) takes the reader's place with `VS_WFDB=OFF`). [`sources_edf.cpp`](engine/src/sources_edf.cpp) reads EDF, EDF+, BDF and BDF+ files ([docs/edf.md](../../../docs/edf.md)). [`adapters.cpp`](engine/src/adapters.cpp) finds adapters, runs their commands and keeps their `serve` sessions. [`index.cpp`](engine/src/index.cpp) builds an index's files (and the index folders of format 2, which the tests and the benchmark still use); [`store.cpp`](engine/src/store.cpp) is the index store (format 3). |
 | [`vitalstream/`](vitalstream) | The viewer: the HTTP server (cpp-httplib), settings (toml++), the password ([`auth.cpp`](vitalstream/src/auth.cpp), or [`auth_none.cpp`](vitalstream/src/auth_none.cpp) without password support), and the command line (CLI11). |
 | [`cmake/`](cmake) | The pinned dependencies (wfdb-x among them), the embedding of [`web/`](../web), the paths fixed at build time ([`build_paths.cmake`](cmake/build_paths.cmake)), and the compiler warnings. |
 | [`deps/`](deps/README.md) | Archives of the dependencies, for building without internet access. |
@@ -45,6 +45,22 @@ that the viewers write the same bytes. It is compiled without floating-point con
 static library ([`cmake/deps.cmake`](cmake/deps.cmake)). The library keeps process-wide state,
 so every call holds one lock. Records are opened by their full path, and nothing is assumed that
 a header does not state (sampling frequency, gain or units).
+
+**The index store** (index format 3,
+[index-format.md, Version 3](../docs/index-format.md#version-3-the-index-store)) is one SQLite
+database, encrypted with SQLCipher when its owner has a key: an index is built as version 2
+files in a private temporary folder next to the store (`index.tmp/`), then packed in one
+transaction; markers and vital signs are loaded whole, envelopes read by range, a chunk at a
+time (the last 16 chunks of each array kept). The viewer writes `cache_dir/index.sqlite`,
+encrypted when `index_key_file` names a file of 64 hex digits; launched by Medorama with
+`--keys-on-stdin`, it reads the stores and keys Medorama writes on its standard input (one JSON
+line each, `{"store": PATH, "key": HEX, "own": BOOL}` or `{"forget": PATH}`), keeps the keys in
+memory only, looks in those stores first, and forgets them all when standard input closes.
+`--index PATH` indexes into the viewer's own store. SQLite and SQLCipher are built from source
+with libtomcrypt as SQLCipher's crypto provider: no OpenSSL and no system library is needed
+([`cmake/deps.cmake`](cmake/deps.cmake)). A store written by the Rust engine opens here and the
+other way round; both write the same rows (`Store.TheRustViewersStoreHoldsTheSameBytes`, and
+`tests/parity/index_parity.py`).
 
 **EDF files** are read by the engine itself, by the rules of
 [docs/edf.md, Reading rules](../../../docs/edf.md#reading-rules-for-implementers), with the same
@@ -74,6 +90,8 @@ them:
   data root.
 - `max_records`, `max_depth` and `max_scan_s` are the limits on a folder of WFDB records
   (defaults 5000, 20 and 10 s; [docs/wfdb-collection.md, Limits](../../../docs/wfdb-collection.md#limits)).
+- `index_key_file`: a file holding 64 hex digits, the key the viewer's index store
+  (`cache_dir/index.sqlite`) is encrypted with; empty (the default): a plain store.
 - `require_password` makes the viewer refuse to start without a password. Medorama sets it for
   the viewer it runs.
 - `allowed_hosts` and `secure_cookie`: the host names the viewer answers for besides the local
@@ -122,6 +140,18 @@ rather than held, so that guessing never occupies the server's threads. Indexes 
   `tests/viewer.rs`: requests from other sites, bodies and their limits, the query grammar,
   sign-in (the delay after wrong passwords, logout, `Secure`), a recording that cannot be
   indexed, and a record whose signal file leads outside the data roots;
+- [`test_store.cpp`](vitalstream/tests/test_store.cpp): the index store, as the Rust engine's
+  `tests/store.rs`: a store (plain and encrypted, in small chunks) answers as an index folder
+  does; without its key, or with another, nothing is read, and the file holds no readable text
+  of the index; an index kept, replaced and removed whole; a cancelled build leaves nothing;
+  envelopes read across chunk boundaries, and chunks or lengths that disagree refused; what a
+  killed program left in `index.tmp/` removed a day later; another store format refused; stores
+  and keys on a pipe (`Stores`, as the Rust viewer's `stores_and_keys_on_a_pipe`);
+  `index_key_file`; and, when the Rust viewer is built (`cargo build --release -p
+  vitalstream-rs`, or `VS_RUST_VIEWER`; Linux and macOS), a store it wrote holds the same rows
+  as this engine's and each opens the other's (skipped otherwise). `Adapters.EndToEnd` also
+  reads an adapter's samples through a store (the private folder holding only `meta.json`,
+  removed with the dataset);
 - [`build_paths/`](vitalstream/tests/build_paths): a root with spaces, quotes and backslashes
   reaches the program as given.
 

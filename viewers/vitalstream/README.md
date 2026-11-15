@@ -50,7 +50,7 @@ a start time), the page says so.
   them may take keep a folder opened by mistake from overwhelming the viewer, and indexing can
   be cancelled at any time ([Limits on a large folder](#limits-on-a-large-folder)).
 - **Fast after the first opening.** The first opening builds an **index** of the recording (its
-  structure and envelopes, kept in an index folder); later openings are instant. The three
+  structure and envelopes, kept in an index store, one SQLite database); later openings are instant. The three
   implementations and Medorama write the same index and can share it.
 - **Light and dark themes.** The page follows the system's setting until you choose one with the
   ◐ button.
@@ -86,7 +86,7 @@ described in [docs/readers.md](../../docs/readers.md).
 VitalStream exists in three implementations. They serve the same page ([`web/`](web)), answer
 the same API with the same JSON ([docs/viewer-api.md](docs/viewer-api.md)), write the same index
 byte for byte ([docs/index-format.md](docs/index-format.md)), and share one settings file, one
-password, one index folder and one adapter folder. Use whichever fits the machine; several can
+password, one index store and one adapter folder. Use whichever fits the machine; several can
 run side by side.
 
 | | C++ | Rust | Python |
@@ -156,8 +156,10 @@ situation, including machines without internet access.
    viewers/vitalstream/install.sh --no-wfdb             # a viewer without WFDB support (no wfdb-x)
    ```
 
-The script ends by printing the program's path and its root, for example
-`Installed ~/.local/bin/vitalstream-cpp (root: ~)`. Run it again to change either.
+The script first shows the license terms and goes on only if you type `y` or `yes`
+(`--accept-license` accepts them in scripts). It ends by printing the program's path and its
+root, for example `Installed ~/.local/bin/vitalstream-cpp (root: ~)`. Run it again to change
+either.
 
 ### Windows
 
@@ -178,6 +180,7 @@ powershell -ExecutionPolicy Bypass -File viewers\vitalstream\install.ps1 -Viewer
 | `--no-password` | `-NoPassword` | password support | Builds the viewer without password support: no password can be set (`--set-password` fails), and the viewer refuses to run where a password is required. |
 | `--no-wfdb` | `-NoWfdb` | WFDB support | Builds the viewer without WFDB support: it contains no wfdb-x code, refuses a WFDB record or folder with a message, and reads every other format ([docs/building.md](../../docs/building.md#without-wfdb)). |
 | `--no-rustup` | | | Fails, rather than installing Rust, when `cargo` is missing (Rust viewer). |
+| `--accept-license` | `-AcceptLicense` | asked | Accepts the license terms without asking (scripts, CI; or `MEDORAMA_ACCEPT_LICENSE=yes`). Otherwise the installer shows them first and goes on only if you type `y` or `yes` ([docs/building.md, License terms](../../docs/building.md#license-terms)). |
 
 ### Build options: root, password and WFDB
 
@@ -235,16 +238,17 @@ vitalstream-cpp --help                # lists every option
 | `--host`, `--port` | The address and port to listen on. The default address, 127.0.0.1, accepts connections from this computer only. |
 | `--timezone ZONE` | The display time zone, for example `America/New_York`. |
 | `--root DIR` | A folder the viewer may open, inside its root. Repeat it for several folders. Default: the viewer's root. |
-| `--cache-dir DIR` | The index folder. |
+| `--cache-dir DIR` | The folder of the index store. |
 | `--adapters-dir DIR` | The adapter folder. |
 | `--qc-verbose` | Also marks the data a reader repaired, such as data blocks it put back in order. |
 | `--no-browser` | Does not open a browser window. |
 | `--set-password`, `--clear-password` | Sets (or changes), or removes, the password the page asks for, then exits. |
 | `--no-auth` | Runs without asking for the password. |
-| `--index PATH` | Indexes `PATH` into the index folder, then exits. |
-| `-V`, `--version` | Prints the program's name and version (`vitalstream-py 0.1.0`), then exits. |
+| `--index PATH` | Indexes `PATH` into the index store, prints `indexed PATH -> …/index.sqlite (KEY)`, then exits. |
+| `--keys-on-stdin` | Reads the index stores to use, and their keys, on standard input ([The index store](#the-index-store)). Medorama starts its viewer with it. |
+| `-V`, `--version` | Prints the program's name and version (`vitalstream-py 0.2.0`), then exits. |
 
-When it starts, the viewer prints its address, its root, its data roots, the index folder, the
+When it starts, the viewer prints its address, its root, its data roots, the cache folder, the
 time zone, and whether a password protects it. A data root outside the viewer's root is left
 out, with a warning.
 
@@ -290,8 +294,12 @@ The records of a folder are put together as follows
   paths. Hidden entries (names that start with `.`) and symbolic links are skipped. The segments
   of a multi-segment record belong to that record.
 - A record starts at its header's base date and time, taken as UTC. A record without one is
-  placed after the data before it and shaded **time not stated**. A single record without a time
-  starts at 0 (1970-01-01).
+  placed after the data before it and shaded **time not stated**; records without one that come
+  before the first record with one end where it starts. A single record without a time starts at
+  0 (1970-01-01).
+- A header that states no number of samples is read to the end of its data, and a signal of
+  several samples per frame is shown at its own rate, with every sample
+  ([multi-frequency records](../../docs/wfdb-collection.md#multi-frequency-records)).
 - A record that cannot be read, or whose header states no sampling frequency, is left out. The
   recording's notes say how many were left out.
 - A **signal recorded twice at the same time** (two records of lead II that overlap) is never
@@ -310,6 +318,23 @@ A folder of EDF files is not yet opened as one session: open EDF files one at a 
 The first opening of a recording builds its index. A progress bar shows how far it is, and
 **Cancel** stops it; nothing of a cancelled index is kept. Later openings are instant, until the
 recording's files change.
+
+### The index store
+
+The viewers keep their indexes in one SQLite database, the **index store**:
+`index.sqlite` in the cache folder (`cache_dir`). The three viewers write the same rows, so they
+share one store ([docs/index-format.md, Version 3: the index store](docs/index-format.md#version-3-the-index-store)).
+A store is plain unless `index_key_file` names a file of 64 hex digits: it is then encrypted
+with that key (SQLCipher 4), and opens only with it. An index is built in a private temporary
+folder next to the store (`index.tmp/`), then packed into the store in one transaction, so a
+cancelled or failed index leaves nothing behind.
+
+**Launched by Medorama.** Medorama starts its viewer with `--keys-on-stdin` and writes, on its
+standard input, one JSON line per store: `{"store": PATH, "key": HEX}` for the store of each
+recording database, with `"own": true` for the one the viewer writes what it indexes itself, and
+`{"forget": PATH}` before a database is removed. The viewer looks a recording up in the stores it
+was given, then in its own; it keeps the keys in memory only, never writes or logs them, and
+forgets them all when its standard input closes.
 
 ### Limits on a large folder
 
@@ -518,7 +543,8 @@ error too. Start from [`vitalstream.example.toml`](vitalstream.example.toml).
 | `allowed_hosts` | `[]` | The host names the viewer answers for besides `localhost`, `127.0.0.1`, `::1` and `host`: the names this machine is reached by when `host` is `0.0.0.0`, or a reverse proxy's public name; `["*"]` allows any. A request naming another host is refused, which defeats DNS rebinding ([docs/viewer-api.md, Requests](docs/viewer-api.md#requests)). |
 | `secure_cookie` | `false` | Marks the sign-in cookie `Secure`, so that the browser sends it over HTTPS only: set it for a viewer behind an HTTPS proxy. |
 | `index_workers` | 2 | The number of recordings indexed at the same time. |
-| `cache_dir` (`--cache-dir`) | `~/.cache/vitalstream` (in a clone, `viewers/vitalstream/sample_data/outputs/index`) | The index folder. It is shared by the three viewers, and with Medorama when it is set to Medorama's `index_dir`. |
+| `cache_dir` (`--cache-dir`) | `~/.cache/vitalstream` (in a clone, `viewers/vitalstream/sample_data/outputs/index`) | The folder of the viewer's index store, `index.sqlite` ([The index store](#the-index-store)). It is shared by the three viewers, which write the same rows. |
+| `index_key_file` | empty | A file holding 64 hex digits: the key the index store is encrypted with (SQLCipher 4, a raw 256-bit key). Empty: a plain store. A store made with a key opens only with it. |
 | `adapters_dir` (`--adapters-dir`) | `~/.local/share/medorama/adapters` (Windows: `%LOCALAPPDATA%\medorama\adapters`) | The adapter folder. |
 | `auth_file` | `~/.config/vitalstream/auth.json` | The password, stored as a salted scrypt hash readable only by you. |
 | `qc_verbose` (`--qc-verbose`) | `false` | When `true`, data the reader repaired (blocks stored out of order and put back in order) is outlined with a dashed line, with details on hover. Breaks are shaded either way. |
@@ -572,7 +598,7 @@ Run these commands from the repository root:
 | `cargo test -p vitalstream-rs -p recording-engine` | The Rust viewer and engine on the synthetic recordings of [`testdata/`](testdata): one record, a folder read as one session, the limits, a record's index key, cancelling, EDF, EDF+ and BDF files; the viewer's root; the adapter protocol with a mock adapter. |
 | `(cd viewers/vitalstream/cpp && ctest --preset release)` | The C++ viewer and engine on the same recordings and adapter, EDF files included. |
 | `pytest viewers/vitalstream/python/vitalstream/tests` | The Python viewer on the same recordings and adapter, EDF files included; sign-in, the file browser, and a build without password support. |
-| `make parity` | The viewers that are built, against each other: byte-identical indexes under the specified key, and the same API answers ([`tests/parity`](tests/parity)). |
+| `make parity` | The viewers that are built, against each other: byte-identical index stores under the specified key (the `store`, `meta`, `arrays` and `chunks` rows), and the same API answers ([`tests/parity`](tests/parity)). |
 
 [`testdata/generate.py`](testdata/generate.py) writes the synthetic recordings deterministically,
 with the Python standard library only:
@@ -594,7 +620,7 @@ The viewers never read or show a patient's identity: no name, identifier or date
 read from a recording, kept in an index or sent to the page. This includes the patient and
 recording identification fields of EDF headers. A recording's path may still identify a patient
 (bedside-monitor systems name files by unit, bed and time), and its values are patient data, so
-keep recordings, and the index folders made from them, on protected storage. In a clone,
+keep recordings, and the index stores made from them, on protected storage. In a clone,
 `sample_data/` is the place for them; git ignores it.
 
 A viewer alone has no user accounts, database or de-identification; those are Medorama's
@@ -607,9 +633,11 @@ VitalStream is research software, not a medical device, and is not intended for 
 
 VitalStream is written by Reza Sameni. To cite it, see [CITATION.cff](../../CITATION.cff).
 
-VitalStream is licensed, like the rest of the repository, under the PolyForm Noncommercial
-License 1.0.0 ([LICENSE](../../LICENSE)): free for noncommercial use, with commercial licenses by
-agreement ([COMMERCIAL.md](../../COMMERCIAL.md)). The three viewers read WFDB records with
+VitalStream is licensed, like the rest of the repository's software, under the PolyForm
+Noncommercial License 1.0.0 ([LICENSE](../../LICENSE)): free for noncommercial use, with
+commercial licenses by agreement ([COMMERCIAL.md](../../COMMERCIAL.md)). Its installers ask you
+to accept these terms first. The documentation is under CC BY-NC-ND 4.0
+([docs/LICENSE.md](../../docs/LICENSE.md)). The three viewers read WFDB records with
 [wfdb-x](https://github.com/alphanumericslab/wfdb-x), a separate project whose library is under
 the GNU LGPL v2.1 or later. Every dependency and its license is listed in
 [THIRD_PARTY_LICENSES.md](../../THIRD_PARTY_LICENSES.md).

@@ -1,4 +1,5 @@
-//! Stored cohorts: their definitions and sources, who may read and change them, their members.
+//! Stored cohorts: their definitions and sources, who may read and change them (grants on
+//! `cohort:ID`), their members (in the workspace: members.rs).
 
 use super::*;
 
@@ -28,17 +29,19 @@ pub struct SourceRef {
     pub deleted: bool,
 }
 
-/// A cohort's whole definition, in words: where its members come from, its criteria, and the
-/// patients added or removed manually (by patient ID).
+/// A cohort's whole definition, in words: where its members come from, its criteria, the
+/// databases it searches, and the patients added or removed manually (by pseudonym).
 #[derive(Debug, Default, Serialize)]
 pub struct Definition {
-    /// `within`, `union`, `intersection`, `difference`; empty: the whole catalog.
+    /// `within`, `union`, `intersection`, `difference`; empty: every database it searches.
     pub op: String,
     pub sources: Vec<SourceRef>,
     /// The source in words: "Subcohort of “A”", "In “A” or “B”" …
     pub from: String,
     pub include: String,
     pub exclude: Vec<String>,
+    /// The databases it searches, by name (empty: every one its users may search).
+    pub databases: Vec<String>,
     pub added: Vec<String>,
     pub removed: Vec<String>,
     /// How it was made, when not from scratch: "Cloned from “A”".
@@ -53,6 +56,8 @@ pub struct Cohort {
     pub owner: Option<i64>,
     pub owner_name: String,
     pub criteria: Criteria,
+    /// The databases it searches (ids; empty: every one its user may search).
+    pub databases: Vec<i64>,
     pub source: Option<Source>,
     /// A subcohort's parent.
     pub parent: Option<i64>,
@@ -61,14 +66,11 @@ pub struct Cohort {
     pub created_at: f64,
     pub updated_at: f64,
     pub refreshed_at: Option<f64>,
-    /// The version of each source when its members were last found: the catalog's data
-    /// version, and each connected database's own (docs/design/sources.md, "Cohorts across sources").
+    /// The version of each database when its members were last found.
     pub source_versions: BTreeMap<String, String>,
     pub can_edit: bool,
     pub is_owner: bool,
-    /// The demo's cohort (demo.rs): deleting it removes the demo's patients.
-    pub demo: bool,
-    /// Who else may see it (the owner only sees this).
+    /// Who else may see it (who manages it only sees this).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shares: Option<Vec<Share>>,
 }
@@ -82,30 +84,22 @@ pub struct Share {
     pub can_edit: bool,
 }
 
-/// (may read, may edit, is owner)
-pub(super) fn access(c: &Connection, user: &User, id: i64) -> anyhow::Result<(bool, bool, bool)> {
-    let owner: Option<Option<i64>> =
-        c.query_row("SELECT owner FROM cohorts WHERE id = ?1", [id], |r| r.get(0)).optional()?;
-    let Some(owner) = owner else { anyhow::bail!("no cohort {id}") };
-    // the local command line (user 0) is the catalog's owner
-    let is_owner = user.id == 0 || owner == Some(user.id);
-    if is_owner {
-        return Ok((true, true, true));
-    }
-    let share: Option<bool> = c
-        .query_row("SELECT can_edit FROM cohort_shares WHERE cohort = ?1 AND user_id = ?2", [id, user.id], |r| r.get(0))
-        .optional()?;
-    // the demo's cohort: every user sees it
-    Ok((share.is_some() || is_demo(c, id)?, share == Some(true), false))
+fn object(id: i64) -> String {
+    format!("cohort:{id}")
 }
 
-/// Whether the cohort is the demo's (demo.rs).
-pub fn is_demo(c: &Connection, id: i64) -> anyhow::Result<bool> {
-    Ok(c.query_row(
-        "SELECT EXISTS (SELECT 1 FROM cohorts WHERE id = ?1 AND origin = ?2)",
-        params![id, crate::demo::ORIGIN],
-        |r| r.get(0),
-    )?)
+/// (may read, may edit, may manage: share and delete it)
+pub(super) fn access(c: &Connection, user: &User, id: i64) -> anyhow::Result<(bool, bool, bool)> {
+    let exists: Option<i64> = c.query_row("SELECT id FROM cohorts WHERE id = ?1", [id], |r| r.get(0)).optional()?;
+    if exists.is_none() {
+        anyhow::bail!("no cohort {id}");
+    }
+    let o = object(id);
+    Ok((
+        crate::grants::can(c, user, &o, "view")?,
+        crate::grants::can(c, user, &o, "edit")?,
+        crate::grants::can(c, user, &o, "manage")?,
+    ))
 }
 
 pub(super) fn readable(c: &Connection, user: &User, id: i64) -> anyhow::Result<(bool, bool)> {
@@ -117,21 +111,20 @@ pub(super) fn readable(c: &Connection, user: &User, id: i64) -> anyhow::Result<(
 }
 
 pub(super) fn editable(c: &Connection, user: &User, id: i64) -> anyhow::Result<bool> {
-    let (_, can_edit, is_owner) = access(c, user, id)?;
+    let (_, can_edit, manages) = access(c, user, id)?;
     if !can_edit {
         anyhow::bail!("this cohort is shared with you to read only");
     }
-    Ok(is_owner)
+    Ok(manages)
 }
 
-/// Patients' IDs as definitions and the history show them (the catalog's number when a
-/// patient has no patient ID), in order.
+/// Patients as definitions and the history show them: by pseudonym, in order.
 pub(super) fn patient_ids(c: &Connection, ids: impl IntoIterator<Item = i64>) -> anyhow::Result<Vec<String>> {
-    let mut st = c.prepare("SELECT patient_id FROM patients WHERE id = ?1")?;
+    let mut st = c.prepare("SELECT pseudonym FROM patients WHERE id = ?1")?;
     let mut out: Vec<String> = vec![];
     for id in ids {
-        let pid: Option<String> = st.query_row([id], |r| r.get(0)).optional()?;
-        out.push(pid.filter(|p| !p.is_empty()).unwrap_or_else(|| format!("#{id}")));
+        let p: Option<Option<String>> = st.query_row([id], |r| r.get(0)).optional()?;
+        out.push(p.flatten().unwrap_or_else(|| format!("#{id}")));
     }
     out.sort_by(|a, b| natural(a, b));
     Ok(out)
@@ -184,10 +177,13 @@ pub(super) fn source_words(op: &str, names: &[String]) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn definition(
     c: &Connection,
+    cfg: &Config,
     id: i64,
     criteria: &Criteria,
+    databases: &[i64],
     source: Option<&Source>,
     origin: &str,
 ) -> anyhow::Result<Definition> {
@@ -217,25 +213,21 @@ pub(super) fn definition(
     d.include = words["include"].as_str().unwrap_or("").to_string();
     d.exclude =
         words["exclude"].as_array().into_iter().flatten().filter_map(|x| x.as_str()).map(String::from).collect();
-    let manual: Vec<i64> = c
-        .prepare("SELECT patient FROM cohort_members WHERE cohort = ?1 AND how = 'manual'")?
-        .query_map([id], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
-    d.added = patient_ids(c, manual)?;
-    let removed: Vec<i64> = c
-        .prepare("SELECT patient FROM cohort_removed WHERE cohort = ?1")?
-        .query_map([id], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
-    d.removed = patient_ids(c, removed)?;
+    for db in databases {
+        let name: Option<String> =
+            c.query_row("SELECT name FROM databases WHERE id = ?1", [db], |r| r.get(0)).optional()?;
+        d.databases.push(name.unwrap_or_else(|| "(removed)".into()));
+    }
+    d.added = patient_ids(c, members::manual(cfg, c, id)?)?;
+    d.removed = patient_ids(c, members::removed(cfg, c, id)?)?;
     Ok(d)
 }
 
-pub(super) fn load(c: &Connection, user: &User, id: i64) -> anyhow::Result<Cohort> {
-    let (can_edit, is_owner) = readable(c, user, id)?;
+pub(super) fn load(c: &Connection, cfg: &Config, user: &User, id: i64) -> anyhow::Result<Cohort> {
+    let (can_edit, manages) = readable(c, user, id)?;
     let (mut co, origin) = c.query_row(
         "SELECT c.id, c.name, c.description, c.owner, COALESCE(u.username, ''), c.criteria, c.created_at, c.updated_at,
-                c.refreshed_at, (SELECT COUNT(*) FROM cohort_members m WHERE m.cohort = c.id), c.source, c.origin,
-                c.source_versions
+                c.refreshed_at, c.databases, c.source, c.origin, c.source_versions
          FROM cohorts c LEFT JOIN users u ON u.id = c.owner WHERE c.id = ?1",
         [id],
         |r| {
@@ -248,6 +240,7 @@ pub(super) fn load(c: &Connection, user: &User, id: i64) -> anyhow::Result<Cohor
                     owner: r.get(3)?,
                     owner_name: r.get(4)?,
                     criteria: serde_json::from_str(&r.get::<_, String>(5)?).unwrap_or_default(),
+                    databases: serde_json::from_str(&r.get::<_, String>(9)?).unwrap_or_default(),
                     parent: source.as_ref().filter(|s| s.op == "within").and_then(|s| s.of.first().copied()),
                     source,
                     definition: Definition::default(),
@@ -255,62 +248,69 @@ pub(super) fn load(c: &Connection, user: &User, id: i64) -> anyhow::Result<Cohor
                     updated_at: r.get(7)?,
                     refreshed_at: r.get(8)?,
                     source_versions: serde_json::from_str(&r.get::<_, String>(12)?).unwrap_or_default(),
-                    members: r.get(9)?,
+                    members: 0,
                     can_edit,
-                    is_owner,
-                    demo: false,
+                    is_owner: manages,
                     shares: None,
                 },
                 r.get::<_, String>(11)?,
             ))
         },
     )?;
-    co.demo = origin == crate::demo::ORIGIN;
-    co.definition = definition(c, id, &co.criteria, co.source.as_ref(), &origin)?;
-    if is_owner {
-        let mut st = c.prepare(
-            "SELECT s.user_id, u.username, s.can_edit FROM cohort_shares s JOIN users u ON u.id = s.user_id
-             WHERE s.cohort = ?1 ORDER BY u.username",
-        )?;
-        co.shares = Some(
-            st.query_map([id], |r| Ok(Share { user_id: r.get(0)?, username: r.get(1)?, can_edit: r.get(2)? }))?
-                .collect::<Result<_, _>>()?,
-        );
+    co.members = members::count(cfg, c, id)?;
+    co.definition = definition(c, cfg, id, &co.criteria, &co.databases, co.source.as_ref(), &origin)?;
+    if manages {
+        let mut shares: BTreeMap<i64, Share> = BTreeMap::new();
+        for (uid, name, perm) in crate::grants::of_object(c, &object(id))? {
+            if Some(uid) == co.owner || uid == user.id {
+                continue;
+            }
+            let s = shares.entry(uid).or_insert(Share { user_id: uid, username: name, can_edit: false });
+            s.can_edit |= perm != "view";
+        }
+        co.shares = Some(shares.into_values().collect());
     }
     Ok(co)
 }
 
-/// The cohorts a user may see: their own, those shared with them and the demo's.
-pub fn list(c: &Connection, user: &User) -> anyhow::Result<Vec<Cohort>> {
-    let ids: Vec<i64> = c
-        .prepare(
-            "SELECT id FROM cohorts WHERE ?1 = 0 OR owner = ?1 OR origin = ?2
-               OR id IN (SELECT cohort FROM cohort_shares WHERE user_id = ?1) ORDER BY updated_at DESC, id DESC",
-        )?
-        .query_map(params![user.id, crate::demo::ORIGIN], |r| r.get(0))?
+/// The cohorts a user may see: their own and those shared with them.
+pub fn list(c: &Connection, cfg: &Config, user: &User) -> anyhow::Result<Vec<Cohort>> {
+    let all: Vec<i64> = c
+        .prepare("SELECT id FROM cohorts ORDER BY updated_at DESC, id DESC")?
+        .query_map([], |r| r.get(0))?
         .collect::<Result<_, _>>()?;
-    ids.into_iter().map(|id| load(c, user, id)).collect()
+    let visible = crate::grants::objects(c, user, "cohort", "view")?;
+    all.into_iter()
+        .filter(|id| visible.as_ref().is_none_or(|v| v.contains(id)))
+        .map(|id| load(c, cfg, user, id))
+        .collect()
 }
 
-pub fn get(c: &Connection, user: &User, id: i64) -> anyhow::Result<Cohort> {
-    load(c, user, id)
+pub fn get(c: &Connection, cfg: &Config, user: &User, id: i64) -> anyhow::Result<Cohort> {
+    load(c, cfg, user, id)
 }
 
 /// The members of a cohort, as the patient list shows them, with how and when each was added.
 pub fn members(
     c: &Connection,
+    cfg: &Config,
     user: &User,
     id: i64,
     limit: usize,
     offset: usize,
 ) -> anyhow::Result<(usize, Vec<serde_json::Value>)> {
-    members_with(c, user, id, |ids| patient::list_in(c, user, "", &[], Some(ids), limit, offset))
+    members_with(c, cfg, user, id, |ids| patient::list_in(c, cfg, user, "", &[], Some(ids), limit, offset))
 }
 
 /// Every member, as [`members`] lists them (exports: no pages).
-pub(super) fn all_members(c: &Connection, user: &User, id: i64) -> anyhow::Result<Vec<serde_json::Value>> {
-    Ok(members_with(c, user, id, |ids| {
-        let rows = patient::list_all_in(c, user, ids)?;
+pub(super) fn all_members(
+    c: &Connection,
+    cfg: &Config,
+    user: &User,
+    id: i64,
+) -> anyhow::Result<Vec<serde_json::Value>> {
+    Ok(members_with(c, cfg, user, id, |ids| {
+        let rows = patient::list_all_in(c, cfg, user, ids)?;
         Ok((rows.len(), rows))
     })?
     .1)
@@ -318,17 +318,13 @@ pub(super) fn all_members(c: &Connection, user: &User, id: i64) -> anyhow::Resul
 
 fn members_with(
     c: &Connection,
+    cfg: &Config,
     user: &User,
     id: i64,
     list: impl FnOnce(&HashSet<i64>) -> anyhow::Result<(usize, Vec<PatientRow>)>,
 ) -> anyhow::Result<(usize, Vec<serde_json::Value>)> {
     readable(c, user, id)?;
-    let mut how: HashMap<i64, (String, f64)> = HashMap::new();
-    let mut st = c.prepare("SELECT patient, how, added_at FROM cohort_members WHERE cohort = ?1")?;
-    for r in st.query_map([id], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?)))? {
-        let (p, h, t) = r?;
-        how.insert(p, (h, t));
-    }
+    let how = members::how(cfg, c, id)?;
     let ids: HashSet<i64> = how.keys().copied().collect();
     let (total, rows) = list(&ids)?;
     let out = rows
@@ -345,15 +341,9 @@ fn members_with(
 }
 
 /// The patient ids of a cohort (for job selections and the patient list).
-pub fn member_ids(c: &Connection, user: &User, id: i64) -> anyhow::Result<HashSet<i64>> {
+pub fn member_ids(c: &Connection, cfg: &Config, user: &User, id: i64) -> anyhow::Result<HashSet<i64>> {
     readable(c, user, id)?;
-    stored_members(c, id)
-}
-
-pub(super) fn stored_members(c: &Connection, id: i64) -> anyhow::Result<HashSet<i64>> {
-    Ok(c.prepare("SELECT patient FROM cohort_members WHERE cohort = ?1")?
-        .query_map([id], |r| r.get(0))?
-        .collect::<Result<_, _>>()?)
+    members::ids(cfg, c, id)
 }
 
 /// A source as the user asked for it, checked: a known operation, the right number of cohorts,
@@ -382,7 +372,7 @@ pub fn checked_source(c: &Connection, user: &User, s: &Source) -> anyhow::Result
 
 /// [`source_members`], for a user who may still read each of its cohorts (a cohort no longer
 /// shared with them is not followed: they may not see who is in it).
-pub fn readable_source_members(c: &Connection, user: &User, s: &Source) -> anyhow::Result<HashSet<i64>> {
+pub fn readable_source_members(c: &Connection, cfg: &Config, user: &User, s: &Source) -> anyhow::Result<HashSet<i64>> {
     for x in s.of.iter().filter(|x| !s.frozen.contains_key(x)) {
         if !access(c, user, *x)?.0 {
             let name = s.names.get(x).cloned().unwrap_or_else(|| x.to_string());
@@ -391,16 +381,16 @@ pub fn readable_source_members(c: &Connection, user: &User, s: &Source) -> anyho
             );
         }
     }
-    source_members(c, s)
+    source_members(c, cfg, s)
 }
 
 /// The patients a source gives: its cohorts' members now (or as kept when one was deleted).
-pub fn source_members(c: &Connection, s: &Source) -> anyhow::Result<HashSet<i64>> {
+pub fn source_members(c: &Connection, cfg: &Config, s: &Source) -> anyhow::Result<HashSet<i64>> {
     let mut sets = vec![];
     for x in &s.of {
         sets.push(match s.frozen.get(x) {
             Some(kept) => kept.iter().copied().collect(),
-            None => stored_members(c, *x)?,
+            None => members::ids(cfg, c, *x)?,
         });
     }
     let mut sets = sets.into_iter();
@@ -416,92 +406,68 @@ pub fn source_members(c: &Connection, s: &Source) -> anyhow::Result<HashSet<i64>
     })
 }
 
-/// The patients a definition selects before its manual changes: those of its source (the whole
-/// catalog without one) who meet its criteria.  Without a source or criteria: nobody (a cohort
-/// of patients added manually).
+/// The patients a definition selects before its manual changes, with the databases each came
+/// from: those of its source (every patient of its databases without one) who meet its
+/// criteria.  Without criteria: those of its source, or nobody (a cohort of patients added
+/// manually).
 pub(super) fn selected(
     c: &Connection,
+    cfg: &Config,
     user: &User,
-    timezone: &str,
     criteria: &Criteria,
+    databases: &[i64],
     source: Option<&Source>,
-) -> anyhow::Result<HashSet<i64>> {
-    let from = source.map(|s| readable_source_members(c, user, s)).transpose()?;
+) -> anyhow::Result<Hits> {
+    let from = source.map(|s| readable_source_members(c, cfg, user, s)).transpose()?;
     if criteria.is_empty() {
-        return Ok(from.unwrap_or_default());
+        let Some(from) = from else { return Ok(HashMap::new()) };
+        return from
+            .into_iter()
+            .map(|p| Ok((p, Hit { why: vec![], from: crate::persons::databases_of(c, p)?.into_iter().collect() })))
+            .collect();
     }
-    let found = evaluate(c, user, timezone, criteria)?;
-    Ok(found.into_keys().filter(|p| from.as_ref().is_none_or(|f| f.contains(p))).collect())
+    let found = evaluate(c, cfg, user, criteria, Some(databases))?;
+    Ok(found.into_iter().filter(|(p, _)| from.as_ref().is_none_or(|f| f.contains(p))).collect())
 }
 
-/// A stored cohort's selection (its criteria and source as saved).
-pub(super) fn selected_by(c: &Connection, user: &User, timezone: &str, id: i64) -> anyhow::Result<HashSet<i64>> {
-    let (criteria, source): (String, Option<String>) =
-        c.query_row("SELECT criteria, source FROM cohorts WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+/// A stored cohort's selection (its criteria, databases and source as saved).
+pub(super) fn selected_by(c: &Connection, cfg: &Config, user: &User, id: i64) -> anyhow::Result<Hits> {
+    let (criteria, databases, source): (String, String, Option<String>) =
+        c.query_row("SELECT criteria, databases, source FROM cohorts WHERE id = ?1", [id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?;
     let criteria: Criteria = serde_json::from_str(&criteria).unwrap_or_default();
+    let databases: Vec<i64> = serde_json::from_str(&databases).unwrap_or_default();
     let source: Option<Source> = source.and_then(|s| serde_json::from_str(&s).ok());
     criteria.check_reader(user)?;
-    selected(c, user, timezone, &criteria, source.as_ref())
+    selected(c, cfg, user, &criteria, &databases, source.as_ref())
 }
 
 /// Adds patients who are not members yet: those the definition selects (`sel`) as found by it,
-/// the others as added manually.  Patients removed manually before are no longer kept out.
-/// Returns those added, by how.
+/// with the databases it found them in, the others as added manually, with the databases that
+/// link them now.  Patients removed manually before are no longer kept out.  Returns those
+/// added, by how.
 pub(super) fn add_members(
     c: &Connection,
+    cfg: &Config,
     user: &User,
     id: i64,
     patients: &[i64],
-    sel: &HashSet<i64>,
+    sel: &Hits,
 ) -> anyhow::Result<(Vec<i64>, Vec<i64>)> {
-    let t = now();
-    // the patients that exist and are not members yet, then added many to a statement
-    let known: HashSet<i64> = c
-        .query_in(
-            &format!("SELECT id FROM patients WHERE id IN ({{}}) AND {}", patient::patient_shown("id")),
-            patients,
-            |r| r.get(0),
-        )?
-        .into_iter()
-        .collect();
-    let members: HashSet<i64> = c
-        .query_in(
-            &format!("SELECT patient FROM cohort_members WHERE cohort = {id} AND patient IN ({{}})"),
-            patients,
-            |r| r.get(0),
-        )?
-        .into_iter()
-        .collect();
+    let known: HashSet<i64> =
+        c.query_in("SELECT id FROM patients WHERE id IN ({})", patients, |r| r.get(0))?.into_iter().collect();
+    let current = members::ids(cfg, c, id)?;
     let mut seen = HashSet::new();
-    let new: Vec<i64> =
-        patients.iter().copied().filter(|p| known.contains(p) && !members.contains(p) && seen.insert(*p)).collect();
-    let by = (user.id > 0).then_some(user.id);
-    for chunk in new.chunks(400) {
-        let mut values: Vec<crate::sql::Value> = vec![];
-        let rows: Vec<String> = chunk
-            .iter()
-            .map(|p| {
-                let n = values.len();
-                values.extend([
-                    crate::sql::Value::Integer(id),
-                    crate::sql::Value::Integer(*p),
-                    (if sel.contains(p) { "criteria" } else { "manual" }).into(),
-                    by.into(),
-                    t.into(),
-                ]);
-                format!("(?{}, ?{}, ?{}, ?{}, ?{})", n + 1, n + 2, n + 3, n + 4, n + 5)
-            })
-            .collect();
-        c.execute(
-            &format!(
-                "INSERT OR IGNORE INTO cohort_members (cohort, patient, how, added_by, added_at) VALUES {}",
-                rows.join(", ")
-            ),
-            values,
-        )?;
+    let mut rows: Vec<(i64, &str, BTreeSet<i64>)> = vec![];
+    for p in patients.iter().copied().filter(|p| known.contains(p) && !current.contains(p) && seen.insert(*p)) {
+        match sel.get(&p) {
+            Some(h) => rows.push((p, "criteria", h.from.clone())),
+            None => rows.push((p, "manual", crate::persons::databases_of(c, p)?.into_iter().collect())),
+        }
     }
-    c.query_in(&format!("DELETE FROM cohort_removed WHERE cohort = {id} AND patient IN ({{}})"), &new, |_| Ok(()))?;
-    let (by_def, manual): (Vec<i64>, Vec<i64>) = new.into_iter().partition(|p| sel.contains(p));
+    let added = members::add(cfg, c, id, &rows, (user.id > 0).then_some(user.id))?;
+    let (by_def, manual): (Vec<i64>, Vec<i64>) = added.into_iter().partition(|p| sel.contains_key(p));
     Ok((by_def, manual))
 }
 

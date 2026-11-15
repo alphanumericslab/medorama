@@ -39,7 +39,7 @@ extensions.
 |---|---|
 | A VitalStream viewer (Rust, C++ or Python) | Choose **Open record…** and pick the file, or type its path in the dialog. |
 | The ECG viewer | Choose **Open record…**, or drop the file on the page. **Open multiple records…** opens a folder and lists every ECG file in it and its subfolders, EDF files included, one at a time. |
-| Medorama | List the file in an imported table, with its patient and a category ([importing.md, Files](importing.md#files)). With the category `eeg`, `sleep`, `holter` or `icu`, Medorama indexes it in the background and opens it in VitalStream from the patient's page. With the category `ecg`, it is an attachment, opened by the ECG viewer. |
+| Medorama | List the file in a recording database, with its patient and a category: name it in a table given to db-builder ([importing.md, Files](importing.md#files)), or in a `recordings` view. With the category `eeg`, `sleep`, `holter` or `icu`, Medorama indexes it in the background and opens it in VitalStream from the patient's page. With the category `ecg`, it is an attachment, opened by the ECG viewer. |
 
 ## What you see in VitalStream
 
@@ -79,20 +79,26 @@ so it reads a short span of the file:
 
 Medorama has two recording categories for these files, **EEG** (`eeg`) and **Sleep** (`sleep`),
 beside ICU and Holter ([medorama/src/categories.rs](../medorama/src/categories.rs)). Each is a
-column of the patient page's journey, and its recordings open in VitalStream. A table's
-`category` column, the import's category, or its file name (`eeg`, `polysomnography`, `psg`,
-`sleep study` …) chooses the category ([importing.md, Categories](importing.md#categories)).
+column of the patient page's journey, and its recordings open in VitalStream. The recording's
+`category` in its database chooses it. db-builder sets it from a table's `category` column, its
+`--category`, or the table's file name (`eeg`, `polysomnography`, `psg`, `sleep study` …)
+([importing.md, Categories](importing.md#categories)).
 
 The demo made by `tools/make-demo-data.py` includes an overnight sleep study for patient P900004:
 a two-hour EDF+ file (`sleep/P900004_psg_20240305.edf`) with EEG, EOG, ECG, airflow, thoracic
 effort and SpO2 signals, and its scoring (sleep stages and events) as annotations. Its table,
-`sleep_index.csv`, links it to the patient's sleep-laboratory encounter (a recording reaches a
-patient's page through an encounter):
+`sleep_index.csv`, names its patient and the sleep-laboratory visit, and the installers' `--demo`
+makes it a recording of the demo's db-builder database:
 
 ```csv
 patient_id,encounter_id,time,study,category,file
 P900004,E9100010,2024-03-05 22:30,Polysomnography,sleep,../sleep/P900004_psg_20240305.edf
 ```
+
+More sleep studies, and routine EEGs as BDF+ files (24-bit, with eyes-open and eyes-closed
+epochs, photic stimulation, hyperventilation and a run of spike-and-wave as annotations), are in
+the demo's `sleeplab/` and `eeglab/` folders, which the installers add with `db-builder
+recordings --pattern '{patient}_*.edf'` (and `*.bdf`): their patient is in their file names.
 
 ![The demo's sleep study on the patient's page](images/screens/patient-sleep.png)
 
@@ -109,14 +115,8 @@ These fields often hold protected health information (PHI), so they are handled 
 
 - **The index never contains them**, and neither does anything the viewers send to the browser:
   VitalStream and the ECG viewer do not show them, in Medorama or on their own.
-- **Medorama's `identify` action reads them** (`from_edf` in
-  [medorama/src/identify.rs](../medorama/src/identify.rs);
-  [administration.md, Identifiers in recordings](administration.md#identifiers-in-recordings)).
-  It stores the code, sex, birth date, name and admin code in the catalog's identifier tables,
-  next to the database's own values, so that an administrator can check that the file belongs to
-  the patient it is linked to. A plain EDF patient field, which has no structure, is kept whole as
-  the code. These values are shown only to users with the PHI permission, like every other
-  identifier ([security.md](security.md)).
+- **Medorama does not read them.** A recording's patient is the one its recording database
+  names; what the file's header says is not compared or kept.
 - **EDF+ annotations are free text**, and an annotation could name a person. In Privacy Mode,
   VitalStream receives them as Medorama treats clinical notes: when Privacy Mode withholds notes'
   text, each annotation reads `[Annotation]`; otherwise the patient's own names and date of birth
@@ -199,8 +199,9 @@ Three implementations reading the same file must write byte-identical indexes
   used: the day and the month always come from the header's date, and the second word's dashes
   and month are not checked. The header's year positions are then ignored (any two characters
   are accepted, typically `yy`, which EDF+ writes after 2084).
-- The month must be 1–12, the day 1–31 (not checked against the month: 31.02 becomes March 2),
-  the hour 0–23, the minute and second 0–59.
+- The month must be 1–12, the day 1 to the days of that month in that year (Gregorian: 29
+  February only in leap years, so `31.02.24` and `29.02.23` are invalid), the hour 0–23, the
+  minute and second 0–59.
 - The start, in Unix seconds, is that date and time taken as UTC.
 - An invalid date or time means the file states no start. Times then count from 0, and every
   piece is marked untimed (`timed: false`).
@@ -281,6 +282,5 @@ written by `viewers/vitalstream/testdata/generate.py`:
 | `plain.edf` | EDF of 1999 (a two-digit year); the number of records unknown (`-1`); a record cut short at the end |
 | `eeg_plus.bdf` | BDF+C: 24-bit samples; a signal whose digital range is zero |
 
-They are checked by `libs/engine/tests/edf.rs`, by Medorama's `identify` and de-identification
-tests, by the index parity test across the three viewers, and (for the ECG viewer) by
+They are checked by `libs/engine/tests/edf.rs`, by Medorama's de-identification tests, by the index parity test across the three viewers, and (for the ECG viewer) by
 `viewers/ecg/tests/edf.test.js`.

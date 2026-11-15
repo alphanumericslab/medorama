@@ -100,113 +100,166 @@ pub struct Detail {
     pub notes: Vec<NoteBrief>,
 }
 
+/// Whether an entry's text is free text that "the text of notes and reports" covers (Admin ›
+/// Privacy Mode): a note's or a report's, and any long text (a result's comment, a value
+/// written out), whatever the entry's category.
+pub(super) fn is_free_text(it: &It) -> bool {
+    it.category == "note"
+        || it.category == "report"
+        || it.text.chars().count() > FREE_TEXT_CHARS
+        || it.text.contains('\n')
+}
+
+/// The length from which an entry's text counts as free text, whatever its category.
+pub(super) const FREE_TEXT_CHARS: usize = 40;
+
+/// The notes of the same visit around a moment (or during the stay), latest first.
 pub(super) fn notes_near(
-    c: &Connection,
-    patient: i64,
+    items: &[It],
     encounter: Option<i64>,
     t0: f64,
     t1: f64,
     read_notes: bool,
     except: i64,
-) -> anyhow::Result<Vec<NoteBrief>> {
-    let mut st = c.prepare(&format!(
-        "SELECT id, time, name, author, service, value_text FROM ehr_items
-         WHERE patient = ?1 AND category = 'note' AND id != ?2 AND (CAST(?3 AS INTEGER) IS NULL OR encounter = ?3) AND time BETWEEN ?4 AND ?5
-           AND {}
-         ORDER BY time DESC, id DESC LIMIT 12",
-        item_shown("")
-    ))?;
-    let v = st
-        .query_map(params![patient, except, encounter, t0, t1], |r| {
-            let text: String = r.get(5)?;
-            Ok(NoteBrief {
-                key: format!("item:{}", r.get::<_, i64>(0)?),
-                time: r.get(1)?,
-                title: r.get(2)?,
-                author: r.get(3)?,
-                service: r.get(4)?,
-                text: read_notes.then_some(text),
-            })
-        })?
-        .collect::<Result<_, _>>()?;
-    Ok(v)
+) -> Vec<NoteBrief> {
+    let mut v: Vec<NoteBrief> = items
+        .iter()
+        .filter(|i| i.category == "note" && i.id != except && (encounter.is_none() || i.encounter == encounter))
+        .filter(|i| i.time.is_some_and(|t| t >= t0 && t <= t1))
+        .map(|i| NoteBrief {
+            key: entry_key(i),
+            time: i.time,
+            title: i.name.clone(),
+            author: i.author.clone(),
+            service: i.service.clone(),
+            text: read_notes.then(|| i.text.clone()),
+        })
+        .collect();
+    v.sort_by(|a, b| b.time.partial_cmp(&a.time).unwrap_or(std::cmp::Ordering::Equal));
+    v.truncate(12);
+    v
 }
 
-pub(super) fn sources_of_items(c: &Connection, ids: &[i64]) -> anyhow::Result<Vec<String>> {
-    let mut out: Vec<String> = vec![];
-    for id in ids {
-        let mut st = c.prepare("SELECT DISTINCT source FROM ehr_provenance WHERE item = ?1")?;
-        for s in st.query_map([id], |r| r.get::<_, String>(0))? {
-            let s = s?;
-            if !out.contains(&s) {
-                out.push(s);
-            }
-        }
+/// A recording shown as a file (an ECG, images, a letter), by a viewer that shows it;
+/// `restricted`: its database is shown de-identified (Privacy Mode, or granted without `phi`).
+fn attachment_of(restricted: bool, patient: i64, r: &crate::recordings::Recording) -> Attachment {
+    let fkind = file_kind(&r.path);
+    let real = r.name.clone();
+    // de-identified, a file is named by its token: its name may identify (gate.rs)
+    let name = if restricted { crate::gate::file_token(0, &real) } else { real };
+    let url = format!("patients/{patient}/file/{}", r.id);
+    Attachment {
+        src: viewer_src(&url, fkind, &name),
+        name,
+        kind: fkind.into(),
+        viewer: viewer_for(&r.category, fkind).map(String::from),
+        url,
+        hints: Default::default(),
     }
-    Ok(out)
 }
 
 pub fn detail(c: &Connection, cfg: &Config, user: &User, id: i64, key: &str) -> anyhow::Result<Detail> {
-    patient_exists(c, id)?;
+    patient_exists(c, user, id)?;
     // notes' text: with the PHI permission, or in a de-identified session that lets notes through
     let read_notes = user.reads_notes();
     let (kind, rest) = key.split_once(':').ok_or_else(|| anyhow::anyhow!("no entry {key}"))?;
+    let data = load(cfg, c, user, id)?;
+    // the databases shown de-identified outside Privacy Mode (granted without `phi`)
+    let per_db = PerDatabase::of_patient(c, cfg, user, id)?;
+    let restricted = |db: i64| user.privacy || per_db.as_ref().is_some_and(|p| p.dbs.contains(&db));
     if kind == "rec" {
         let rid: i64 = rest.parse()?;
-        let Some(cat) = recordings_of(c, id)?.into_iter().find(|r| r.0 == rid).map(|r| r.4) else {
-            anyhow::bail!("no entry {key}");
-        };
-        let r = crate::recordings::get(c, rid)?.ok_or_else(|| anyhow::anyhow!("no entry {key}"))?;
-        let enc: Option<i64> = c
-            .query_row(
-                &format!(
-                    "SELECT l.encounter FROM recording_links l JOIN encounters e ON e.id = l.encounter
-                     WHERE l.recording = ?1 AND e.patient = ?2 AND {} LIMIT 1",
-                    encounter_shown("e.id")
-                ),
-                [rid, id],
-                |x| x.get(0),
-            )
-            .optional()?;
-        let (t0, t1) = (r.t_start.or(r.name_time), r.t_end);
+        let r =
+            data.recordings.iter().find(|r| r.id == rid).cloned().ok_or_else(|| anyhow::anyhow!("no entry {key}"))?;
+        let enc = visit_of_recording(&data, &r);
+        let (t0, t1) = (r.t_start, r.t_end);
         let notes = match t0 {
-            Some(a) => notes_near(c, id, enc, a - 12.0 * 3600.0, t1.unwrap_or(a) + 12.0 * 3600.0, read_notes, -1)?,
+            Some(a) => notes_near(&data.items, enc, a - 12.0 * 3600.0, t1.unwrap_or(a) + 12.0 * 3600.0, read_notes, 0),
             None => vec![],
         };
-        let monitoring = index_overview(c, cfg, &r);
-        let sources = crate::imports::sources_of(c, "recording", rid)?;
-        return Ok(Detail {
-            key: key.into(),
-            title: recording_title(&cat).into(),
-            category: cat,
-            time: t0,
-            end: t1,
-            encounter: enc,
-            sources,
-            rows: vec![],
-            fields: vec![],
-            text: None,
-            attachment: None,
-            monitoring: Some(monitoring.unwrap_or(Monitoring {
-                recording: r,
+        // read with the recording's real times (its index's are), then as shown
+        let monitoring = match &per_db {
+            Some(p) if p.dbs.contains(&r.database) => {
+                let real = crate::recordings::get(cfg, c, r.id)?.ok_or_else(|| anyhow::anyhow!("no entry {key}"))?;
+                index_overview(c, cfg, &real).map(|mut m| {
+                    p.monitoring(&mut m);
+                    m
+                })
+            }
+            _ => index_overview(c, cfg, &r),
+        };
+        // a file (an ECG, images, a letter): opened from the recording, by a viewer that shows
+        // it; a waveform recording is opened in VitalStream instead
+        let waveform = matches!(r.category.as_str(), "icu" | "holter" | "eeg" | "sleep");
+        let attachment = (!waveform).then(|| attachment_of(restricted(r.database), id, &r));
+        let monitoring = if attachment.is_some() {
+            monitoring
+        } else {
+            let mut shown = r.clone();
+            if !user.privacy && restricted(r.database) {
+                // its path and name never leave (the answer is not gated again outside Privacy Mode)
+                shown.path = crate::gate::recording_token(r.id);
+                shown.name = crate::gate::RECORDING.into();
+            }
+            Some(monitoring.unwrap_or(Monitoring {
+                recording: shown,
                 waveforms: vec![],
                 vitals: vec![],
                 derived: vec![],
                 trends: vec![],
                 gaps: vec![],
                 recorded: None,
-            })),
+            }))
+        };
+        return Ok(Detail {
+            key: key.into(),
+            title: recording_title(&r.category).into(),
+            category: r.category.clone(),
+            time: t0,
+            end: t1,
+            encounter: enc,
+            sources: vec![r.source.clone()],
+            rows: vec![],
+            fields: vec![],
+            text: None,
+            attachment,
+            monitoring,
             notes,
         });
     }
-    let items = items_of(c, id)?;
+    if kind == "enc" {
+        let v = data.visits.iter().find(|v| v.key == key).ok_or_else(|| anyhow::anyhow!("no entry {key}"))?;
+        let mut fields = vec![("Database".to_string(), v.source.clone())];
+        if !v.unit.is_empty() {
+            fields.push(("Unit".into(), v.unit.clone()));
+        }
+        let notes = match v.admit {
+            Some(a) => notes_near(&data.items, Some(v.id), a, v.discharge.unwrap_or(a) + 86400.0, read_notes, 0),
+            None => vec![],
+        };
+        return Ok(Detail {
+            key: key.into(),
+            category: if v.icu { "icu".into() } else { "enc".into() },
+            title: if v.icu { "Intensive-care stay".into() } else { "Visit".into() },
+            time: v.admit,
+            end: v.discharge,
+            encounter: Some(v.id),
+            sources: vec![v.source.clone()],
+            rows: vec![],
+            fields,
+            text: None,
+            attachment: None,
+            monitoring: None,
+            notes,
+        });
+    }
+    let items = &data.items;
     let group: Vec<&It> = items.iter().filter(|i| entry_key(i) == key).collect();
     if group.is_empty() {
         anyhow::bail!("no entry {key}");
     }
     let first = group[0];
     let t = first.time;
-    let ids: Vec<i64> = group.iter().map(|i| i.id).collect();
     let mut d = Detail {
         key: key.into(),
         category: first.category.clone(),
@@ -215,7 +268,7 @@ pub fn detail(c: &Connection, cfg: &Config, user: &User, id: i64, key: &str) -> 
         end: group.iter().filter_map(|i| i.end).fold(None, |a: Option<f64>, x| Some(a.map_or(x, |a| a.max(x)))),
         encounter: first.encounter,
         sources: {
-            let mut v = sources_of_items(c, &ids.iter().copied().filter(|i| *i > 0).collect::<Vec<_>>())?;
+            let mut v: Vec<String> = vec![];
             for l in group.iter().filter_map(|i| i.live.as_ref()) {
                 if !v.contains(&l.source) {
                     v.push(l.source.clone());
@@ -280,8 +333,9 @@ pub fn detail(c: &Connection, cfg: &Config, user: &User, id: i64, key: &str) -> 
                 .iter()
                 .filter(|o| o.name.eq_ignore_ascii_case(&it.name) && o.time.is_some() && o.time < it.time)
                 .max_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal))
-                .map(value_text);
-            let (value, num) = (it.num.map(fmt_num).unwrap_or_else(|| it.text.clone()), it.num);
+                .map(|o| shown_value(o, read_notes));
+            let text = if read_notes || !is_free_text(it) { it.text.clone() } else { crate::gate::WITHHELD.into() };
+            let (value, num) = (it.num.map(fmt_num).unwrap_or(text), it.num);
             d.rows.push(Row {
                 item: it.id,
                 name: it.name.clone(),
@@ -298,17 +352,10 @@ pub fn detail(c: &Connection, cfg: &Config, user: &User, id: i64, key: &str) -> 
             });
         }
     } else {
-        let (vocab, flag, lo, hi, file): (String, String, Option<f64>, Option<f64>, String) = match &first.live {
-            Some(_) => (first.vocabulary.clone(), first.flag.clone(), first.ref_low, first.ref_high, String::new()),
-            None => c.query_row(
-                "SELECT vocabulary, flag, ref_low, ref_high, file_path FROM ehr_items WHERE id = ?1",
-                [first.id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
-            )?,
-        };
+        let (vocab, flag, lo, hi) = (first.vocabulary.clone(), first.flag.clone(), first.ref_low, first.ref_high);
         let mut f = vec![];
         if first.num.is_some() {
-            f.push(("Value".to_string(), value_text(first)));
+            f.push(("Value".to_string(), shown_value(first, read_notes)));
         }
         if !first.code.is_empty() {
             f.push((
@@ -338,36 +385,23 @@ pub fn detail(c: &Connection, cfg: &Config, user: &User, id: i64, key: &str) -> 
             f.push(("Service".into(), first.service.clone()));
         }
         d.fields = f;
-        if !first.text.is_empty() && (read_notes || first.category != "note") {
+        // free text (a note's, a report's, any entry's): as the session may read it
+        if !first.text.is_empty() && (read_notes || !is_free_text(first)) {
             d.text = Some(first.text.clone());
         }
-        if !file.is_empty() {
-            let real = Path::new(&file).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            // in Privacy Mode a file is named by its token: its name may identify (gate.rs)
-            let name = if user.privacy { crate::gate::file_token(0, &real) } else { real };
-            let kind = file_kind(&file);
-            let url = format!("patients/{id}/file/{}", first.id);
-            let src = viewer_src(&url, kind, &name);
-            d.attachment = Some(Attachment {
-                name,
-                kind: kind.into(),
-                viewer: viewer_for(&first.category, kind).map(String::from),
-                url,
-                src,
-                hints: viewer_hints(c, first.id)?,
-            });
-        }
+        // the entry's file (items.rs)
+        let file = first.file.and_then(|rid| data.recordings.iter().find(|r| r.id == rid));
+        d.attachment = file.map(|r| attachment_of(restricted(r.database), id, r));
     }
     if let Some(t) = t {
         d.notes = notes_near(
-            c,
-            id,
+            items,
             first.encounter,
             t - 24.0 * 3600.0,
             t + 24.0 * 3600.0,
             read_notes,
-            if first.category == "note" { first.id } else { -1 },
-        )?;
+            if first.category == "note" { first.id } else { 0 },
+        );
     }
     Ok(d)
 }

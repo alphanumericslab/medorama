@@ -101,11 +101,8 @@ impl Client {
         if let Some(p) = password {
             cfg.password(p);
         }
-        let mut all = format!("{} {options}", cfg.get_options().unwrap_or_default());
-        if !all.contains("statement_timeout") {
-            all = format!("{all} -c statement_timeout={STATEMENT_TIMEOUT_MS}");
-        }
-        cfg.options(all.trim());
+        let all = session_options(&format!("{} {options}", cfg.get_options().unwrap_or_default()));
+        cfg.options(&all);
         // a server that does not answer, or is gone, is an error, not a wait without end
         let lower = url.to_lowercase();
         if cfg.get_connect_timeout().is_none() {
@@ -219,6 +216,24 @@ impl Client {
 }
 
 /// A host on this machine: a Unix socket, or a loopback address.
+/// A session's options: those given, with a statement time limit, and dates and intervals as
+/// text in one form whatever the role's settings say (a view's `CAST(d AS TEXT)` is then
+/// `2024-03-02`, never `03/02/2024`), unless given.
+fn session_options(given: &str) -> String {
+    let mut all = given.trim().to_string();
+    let low = all.to_lowercase();
+    for (name, set) in [
+        ("statement_timeout", format!("-c statement_timeout={STATEMENT_TIMEOUT_MS}")),
+        ("datestyle", "-c DateStyle=ISO,YMD".to_string()),
+        ("intervalstyle", "-c IntervalStyle=iso_8601".to_string()),
+    ] {
+        if !low.contains(name) {
+            all = format!("{all} {set}");
+        }
+    }
+    all.trim().to_string()
+}
+
 fn local(h: &tokio_postgres::config::Host) -> bool {
     match h {
         tokio_postgres::config::Host::Tcp(name) => {
@@ -479,6 +494,17 @@ mod tests {
                 && local(&Host::Tcp("::1".into()))
         );
         assert!(!local(&Host::Tcp("db.example.org".into())) && !local(&Host::Tcp("10.0.0.5".into())));
+    }
+
+    #[test]
+    fn session_options_fix_how_dates_are_written() {
+        let o = session_options(" -c default_transaction_read_only=on -c statement_timeout=60000");
+        assert!(o.starts_with("-c default_transaction_read_only=on -c statement_timeout=60000 "), "{o}");
+        assert!(o.ends_with("-c DateStyle=ISO,YMD -c IntervalStyle=iso_8601"), "{o}");
+        assert_eq!(o.matches("statement_timeout").count(), 1);
+        // the URL's own say wins
+        let o = session_options("-c datestyle=ISO,DMY");
+        assert!(!o.contains("YMD") && o.contains("IntervalStyle") && o.contains("statement_timeout"), "{o}");
     }
 
     #[test]

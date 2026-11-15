@@ -26,11 +26,12 @@ who install Medorama and for contributors. For a first installation with the def
 
 | Program | Language | Built from | Result |
 |---|---|---|---|
-| `medorama` | Rust | The workspace (`cargo build -p medorama`) | One binary of about 18 MB, which holds the database engine, the web page, and the ECG and PACS viewers. |
-| `vitalstream-rs` | Rust | The workspace (`-p vitalstream-rs`) | One binary, which holds its web page. |
-| `vitalstream-cpp` | C++20 | [`viewers/vitalstream/cpp`](../viewers/vitalstream/cpp) (CMake) | One binary, which holds its web page. |
+| `medorama` | Rust | The workspace (`cargo build -p medorama`) | One binary of about 18 MB, which holds the database engine (SQLite with SQLCipher), the web page, and the ECG and PACS viewers. |
+| `db-builder` | Rust | The workspace (`-p db-builder`; [its README](../db-builder/README.md)) | One binary, which makes tables, known exports and folders of recordings into a SQLite database for Medorama to connect. |
+| `vitalstream-rs` | Rust | The workspace (`-p vitalstream-rs`) | One binary, which holds its web page and SQLite with SQLCipher (for its index store). |
+| `vitalstream-cpp` | C++20 | [`viewers/vitalstream/cpp`](../viewers/vitalstream/cpp) (CMake) | One binary, which holds its web page and SQLite with SQLCipher, built from source with libtomcrypt ([its README](../viewers/vitalstream/cpp/README.md)). |
 | `vitalstream-py` | Python | [`viewers/vitalstream/python/vitalstream`](../viewers/vitalstream/python/vitalstream) | A Python package. |
-| `muse-py`, `dicom-py` | Python | [`viewers/ecg/python/muse`](../viewers/ecg/python/muse), [`viewers/pacs/python/dicom`](../viewers/pacs/python/dicom) | The viewers' Python tools, which build databases to import and serve the ECG and PACS viewers on their own. |
+| `muse-py`, `dicom-py` | Python | [`viewers/ecg/python/muse`](../viewers/ecg/python/muse), [`viewers/pacs/python/dicom`](../viewers/pacs/python/dicom) | The viewers' Python tools, which read GE MUSE and DICOM files into tables (for db-builder) and serve the ECG and PACS viewers on their own. |
 
 WFDB records are read with [wfdb-x](https://github.com/alphanumericslab/wfdb-x) in each
 language. Cargo, CMake and pip fetch it from GitHub at one pinned commit (`4a91916`), like any
@@ -52,9 +53,9 @@ rights, except on some systems for the compiler ([Prerequisites](#prerequisites)
 
 | Installer | What it builds |
 |---|---|
-| `tools/install-medorama.sh [--viewer cpp\|rs\|py\|none] [--no-tools] [--no-rustup] [--demo] [--no-wfdb]` (Windows: `tools\install-medorama.ps1 [-Viewer …] [-NoTools] [-NoRustup] [-Demo] [-NoWfdb]`) | Medorama, **one** VitalStream viewer (by default `cpp`) and the database tools, into `.venv/`. The viewer it builds is the one Medorama runs. |
-| `viewers/vitalstream/install.sh [--viewer cpp\|rs\|py] [--prefix DIR] [--root DIR] [--no-password] [--no-wfdb] [--no-rustup]` (Windows: `install.ps1 [-Viewer …] [-Prefix …] [-Root …] [-NoPassword] [-NoWfdb]`) | VitalStream alone, without Medorama, into `~/.local/bin` (Windows: `%LOCALAPPDATA%\vitalstream\bin`), with a root folder that it never leaves (by default the home folder). |
-| `tools/install.sh [--py] [--rs] [--cpp] [--no-rustup] [--demo]` (Windows: `tools\install.ps1 [-Py] [-Rs] [-Cpp] [-NoRustup] [-Demo]`) | Everything, for development: the Python packages, the Rust workspace, the C++ viewer and its tests, and the git hooks. |
+| `tools/install-medorama.sh [--viewer cpp\|rs\|py\|none] [--no-tools] [--no-rustup] [--demo] [--no-wfdb] [--accept-license]` (Windows: `tools\install-medorama.ps1 [-Viewer …] [-NoTools] [-NoRustup] [-Demo] [-NoWfdb] [-AcceptLicense]`) | Medorama, db-builder, **one** VitalStream viewer (by default `cpp`) and the database tools, into `.venv/`. The viewer it builds is the one Medorama runs. |
+| `viewers/vitalstream/install.sh [--viewer cpp\|rs\|py] [--prefix DIR] [--root DIR] [--no-password] [--no-wfdb] [--no-rustup] [--accept-license]` (Windows: `install.ps1 [-Viewer …] [-Prefix …] [-Root …] [-NoPassword] [-NoWfdb] [-AcceptLicense]`) | VitalStream alone, without Medorama, into `~/.local/bin` (Windows: `%LOCALAPPDATA%\vitalstream\bin`), with a root folder that it never leaves (by default the home folder). |
+| `tools/install.sh [--py] [--rs] [--cpp] [--no-rustup] [--demo] [--accept-license]` (Windows: `tools\install.ps1 [-Py] [-Rs] [-Cpp] [-NoRustup] [-Demo] [-AcceptLicense]`) | Everything, for development: the Python packages, the Rust workspace (Medorama, db-builder, `vitalstream-rs`), the C++ viewer and its tests, and the git hooks. |
 
 | Option | Installers | Effect |
 |---|---|---|
@@ -64,8 +65,37 @@ rights, except on some systems for the compiler ([Prerequisites](#prerequisites)
 | `--no-rustup` (`-NoRustup`) | `install-medorama.sh` and `.ps1`, `install.sh` and `.ps1`, VitalStream's `install.sh` | Fails instead of installing Rust when `cargo` is missing. VitalStream's `install.ps1` has no `-NoRustup`: it never installs Rust, and `-Viewer rs` fails when `cargo` is missing. |
 | `--root DIR` (`-Root`) | VitalStream's `install` | The viewer's root folder, fixed in the program: the viewer never opens anything outside it. The default is `~`, the home folder of whoever runs the viewer; `/` allows the whole file system. Medorama's installer gives its viewer the whole file system, because Medorama's own rules decide what each user may open. |
 | `--no-password` (`-NoPassword`) | VitalStream's `install` | Builds the viewer without password support: no password can be set, and the viewer refuses to run where one is required, as under Medorama. By default the viewer is built with password support, and a password is optional. |
-| `--demo` (`-Demo`) | `install-medorama`, `install` | Also makes **the demo**, invented patients that `medorama init` loads into a cohort named DEMO. It is **off by default** ([administrator's guide, The demo](administration.md#the-demo)). |
+| `--demo` (`-Demo`) | `install-medorama`, `install` | Also makes **the demo**: two databases of invented patients (one made with db-builder, one OMOP database) that `medorama init --demo` connects. It is **off by default** ([administrator's guide, The demo](administration.md#the-demo)). |
 | `--no-wfdb` (`-NoWfdb`) | `install-medorama`, VitalStream's `install` | Builds the programs without WFDB support, so that they contain no wfdb-x code: a WFDB recording is refused, and every other format is read ([Without WFDB](#without-wfdb)). `install-medorama` builds both Medorama and its viewer this way, and refuses `--demo` with it, because the demo's recordings are WFDB records. |
+| `--accept-license` (`-AcceptLicense`) | every installer | Accepts the license terms without asking, for scripts and CI (or set `MEDORAMA_ACCEPT_LICENSE=yes`). Without it, the installer first shows the terms ([License terms](#license-terms)) and goes on only if you type `y` or `yes`; without a terminal to ask, it stops and says how to accept. |
+
+### License terms
+
+Every installer shows Medorama's license terms (`tools/license-notice.txt`) before it builds
+anything, and goes on only if you accept them by typing `y` or `yes`:
+
+```
+Medorama - license terms
+Copyright 2025-2026 Reza Sameni (https://github.com/alphanumericslab/medorama)
+
+  * The software is licensed under the PolyForm Noncommercial License 1.0.0 (LICENSE).
+    It is free for noncommercial purposes: personal research, study and testing, and use by
+    universities and schools, public research and public health organizations, charities
+    and government institutions.
+  * Commercial use needs a commercial license from the author: use by or for a company, in a
+    product, or as a service to customers (COMMERCIAL.md, https://sameni.info).
+  * ...
+Do you accept these terms? Type y or yes to continue [no]:
+```
+
+Any other answer stops the installer, and nothing is installed. Scripts, CI and configuration
+management accept the terms with `--accept-license` (Windows: `-AcceptLicense`) or the
+environment variable `MEDORAMA_ACCEPT_LICENSE=yes`; without a terminal to ask and without
+either, the installer stops and says how to accept. The acceptance is recorded, with its date,
+the user and the version, in `~/.config/medorama/license-accepted` (Windows:
+`%APPDATA%\medorama\license-accepted`): the terms are asked once per user, and again only when
+they change. `medorama init` shows the same terms. Building by hand (`cargo build`, `pip
+install`) asks nothing, and the same license applies ([License and commercial use](../README.md#license-and-commercial-use)).
 
 To clone the repository, run the installer, and check the result:
 
@@ -102,7 +132,8 @@ it. The standalone installer builds in folders of its own (`target/standalone`,
 | Requirement | Linux | macOS | Windows 10 and 11 |
 |---|---|---|---|
 | Git, Python 3.9 or later | `sudo apt install git python3 python3-venv` (Debian, Ubuntu) or `sudo dnf install git python3` (Fedora, RHEL) | `xcode-select --install` (the Command Line Tools: Git, Python and compilers) | `winget install Git.Git` and `winget install Python.Python.3.12` |
-| A C compiler, for Rust (SQLite is compiled in) | `sudo apt install build-essential` or `sudo dnf install gcc` | The Command Line Tools | The Microsoft C++ Build Tools: `winget install Microsoft.VisualStudio.2022.BuildTools --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"` |
+| A C compiler, for Rust (SQLCipher and OpenSSL are compiled in) | `sudo apt install build-essential` or `sudo dnf install gcc make` | The Command Line Tools | The Microsoft C++ Build Tools: `winget install Microsoft.VisualStudio.2022.BuildTools --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"` |
+| Perl, for building OpenSSL (Medorama, db-builder and `vitalstream-rs`) | `sudo apt install perl` or `sudo dnf install perl` | Part of macOS | Strawberry Perl: `winget install StrawberryPerl.StrawberryPerl` |
 | A C++20 compiler, for the C++ viewer | GCC 12 or later, or Clang 15 or later (`sudo apt install g++` on Debian 12 and Ubuntu 22.04 or later) | Apple Clang 15 or later (the Command Line Tools) | Visual Studio 2022 (the Build Tools above) |
 | Rust 1.88 or later | [rustup](https://rustup.rs), in your user account (the installers install it when it is missing) | The same | The same |
 | CMake 3.24 or later and Ninja, for the C++ viewer | `pip install "cmake>=3.24" ninja` (the installers do this, into `.venv`) | The same | The same |
@@ -127,9 +158,11 @@ second one program, and the `cargo install` lines optionally copy the programs i
 `~/.cargo/bin`, which is on the `PATH`:
 
 ```bash
-cargo build --release --locked                       # medorama, vitalstream-rs -> target/release/
+cargo build --release --locked                       # medorama, db-builder, vitalstream-rs -> target/release/
 cargo build --release --locked -p medorama           # one program
+cargo build --release --locked -p db-builder
 cargo install --path medorama --locked               # optional: into ~/.cargo/bin (on the PATH)
+cargo install --path db-builder --locked
 cargo install --path viewers/vitalstream/rust --locked
 ```
 
@@ -143,12 +176,20 @@ cargo build --release --locked --target x86_64-unknown-linux-musl -p medorama
 # -> target/x86_64-unknown-linux-musl/release/medorama
 ```
 
-**Database encryption.** This build encrypts the catalog's SQLite database with SQLCipher. It
-builds OpenSSL from source, and so needs Perl and `make`:
+**SQLCipher.** Medorama always encrypts its workspace with SQLCipher, db-builder uses it for
+`--encrypt`, and the recording engine (`libs/engine`) keeps its index stores with it (index format
+3), so Medorama, db-builder and `vitalstream-rs` always build SQLCipher and OpenSSL from source
+(rusqlite 0.42's `bundled-sqlcipher-vendored-openssl`): the build needs Perl and a C compiler
+(and `make` on Linux and macOS), and takes a few minutes longer the first time. There is no build
+option to leave it out; the former `encryption` feature is gone. The C++ viewer builds SQLCipher
+from source with libtomcrypt and needs neither OpenSSL nor Perl
+([viewers/vitalstream/cpp/README.md](../viewers/vitalstream/cpp/README.md)); the Python viewer uses
+the `sqlcipher3` package's wheels.
 
-```bash
-cargo build --release --locked -p medorama --features encryption
-```
+**db-builder.** db-builder is a crate of the same workspace ([its README](../db-builder/README.md)).
+Its one Cargo feature, `wfdb` (on by default), reads WFDB records with wfdb-x; built without it
+(`cargo build --release --locked -p db-builder --no-default-features`), a WFDB record is still
+listed by its header, without its start and end. Its tests: `cargo test --release -p db-builder`.
 
 **macOS.** If the build stops with `linking with cc failed: exit status: 69` or "You have not
 agreed to the Xcode license agreements", Xcode is installed but its license was never accepted.
@@ -251,7 +292,7 @@ For development, install the packages in editable mode
 WFDB support is the only part of the programs that uses wfdb-x. Each program can be built without
 it, and such a build contains no wfdb-x code. It reads every other format as usual: EDF, EDF+,
 BDF and BDF+ files, the formats of installed adapters (such as STP, GE MUSE and DICOM), CLIF
-tables, and the databases Medorama imports or connects to. A WFDB recording (a `.hea` file, a
+tables, and the databases Medorama connects. A WFDB recording (a `.hea` file, a
 multi-segment record, a folder of records or a WFDB collection) is still recognised, and refused
 with one message, never skipped in silence:
 
@@ -260,21 +301,22 @@ this build has no WFDB support (built without the `wfdb` feature)
 ```
 
 The C++ viewer ends the message with `(built with VS_WFDB=OFF)`, and the Python viewer with
-`(wfdb-x is not installed: pip install 'vitalstream_py[wfdb]')`. Medorama does not add such a
-recording: an import lists it among the files it skipped, with this reason. A viewer lists it
+`(wfdb-x is not installed: pip install 'vitalstream_py[wfdb]')`. Medorama lists such a recording
+of a connected database, and refuses to index or open it, with this message. A viewer lists it
 when browsing, and refuses to open or scan it (HTTP 422, with the message). At start-up, every
 program built this way says so.
 
 | Program | Built without WFDB support | The default |
 |---|---|---|
-| `medorama` | `cargo build --release --locked -p medorama --no-default-features` (add `--features encryption` for database encryption) | The Cargo feature `wfdb`, on |
+| `medorama` | `cargo build --release --locked -p medorama --no-default-features` | The Cargo feature `wfdb`, on |
+| `db-builder` | `cargo build --release --locked -p db-builder --no-default-features` (a WFDB record is then listed by its header, without its start and end) | The Cargo feature `wfdb`, on |
 | `vitalstream-rs` | `cargo build --release --locked -p vitalstream-rs --no-default-features --features password` (leave out `--features password` for no password support either) | The Cargo features `password` and `wfdb`, on |
 | `recording-engine` (the library, for adapters written in Rust) | `recording-engine = { …, default-features = false }` in the adapter's `Cargo.toml` | The Cargo feature `wfdb`, on |
 | `vitalstream-cpp` | From `viewers/vitalstream/cpp`: `cmake --preset nowfdb && cmake --build --preset nowfdb` (into `build/nowfdb`), or `-DVS_WFDB=OFF` with any preset | `VS_WFDB=ON` |
 | `vitalstream-py` | `pip install ./viewers/vitalstream/python/vitalstream`, without the `[wfdb]` extra, in an environment that does not hold wfdb-x (`pip uninstall wfdb-x` removes it) | The installers install the `[wfdb]` extra |
 
 The installers do the same with one option: `tools/install-medorama.sh --no-wfdb` (Windows:
-`-NoWfdb`) builds both Medorama and its viewer this way, and `viewers/vitalstream/install.sh
+`-NoWfdb`) builds Medorama, db-builder and the viewer this way, and `viewers/vitalstream/install.sh
 --no-wfdb` one viewer alone. Medorama and its viewer are built separately, so a deployment
 without wfdb-x builds both without WFDB support. The demo (`--demo`) needs WFDB support, because
 its recordings are WFDB records written with wfdb-x.
@@ -317,7 +359,8 @@ unpack the official archives from <https://github.com/Kitware/CMake/releases> an
 <https://github.com/ninja-build/ninja/releases> into `~/.local`.
 
 **Windows.** For Rust, the self-contained GNU toolchain needs no Visual Studio:
-`rustup-init.exe --default-host x86_64-pc-windows-gnu` (SQLite then needs GCC from MSYS2). For
+`rustup-init.exe --default-host x86_64-pc-windows-gnu` (SQLCipher and OpenSSL then need GCC,
+`make` and Perl from MSYS2). For
 C++, [MSYS2](https://www.msys2.org), unpacked into your user folder, provides GCC, CMake and
 Ninja. These commands download and unpack it, update it, and install the tools:
 
@@ -368,15 +411,17 @@ pip install --no-index --find-links ../wheels --no-deps ./viewers/vitalstream/py
 Git ignores `vendor/`, `.cargo/` and `viewers/vitalstream/cpp/deps/`.
 
 **The demo, offline.** The installers' `--demo` option needs NumPy and wfdb-x in `.venv`, and
-`pip download` above saved both in `../wheels`. These commands install them from there, then make
-and load the demo by hand
-([administrator's guide, The demo](administration.md#load-it-later-or-into-another-catalog)):
+`pip download` above saved both in `../wheels`. These commands install them from there, make the
+demo and build its db-builder databases as the installer does, and name its folder for
+`medorama init --demo` ([administrator's guide, The demo](administration.md#the-demo), which
+also shows how to connect its databases one by one):
 
 ```bash
 .venv/bin/pip install --no-index --find-links ../wheels numpy \
     "wfdb-x @ file://$PWD/../wheels/4a91916f5282fba44ca3056802fbc7def298af08.tar.gz#subdirectory=python"
-.venv/bin/python tools/make-demo-data.py ~/medorama-demo
-medorama demo add ~/medorama-demo
+D=~/medorama-demo
+.venv/bin/python tools/make-demo-data.py $D --db-builder .venv/bin/db-builder
+echo "$D" > .venv/bin/medorama.demo
 ```
 
 ## Check the build
@@ -393,27 +438,34 @@ make test-nowfdb                                 # the builds without WFDB suppo
 make help                                        # every check
 ```
 
+`cargo test --release --locked` includes db-builder's tests (`-p db-builder` runs them alone).
+**Fuzzing** (`make fuzz`) runs Medorama's coverage-guided fuzz targets (`medorama/fuzz/`:
+`wfdb_header`, `muse_xml`, `dicom`, `edf` and `queries`; there is no `tables` target any more,
+since Medorama reads no tables), each `FUZZ_S` seconds; it needs the nightly toolchain
+(`rustup toolchain install nightly`) and `cargo install cargo-fuzz`.
 [developing.md](developing.md#tests) describes the tests.
 
 ## Update and uninstall
 
 **Update.** Run `git pull`, then the installer again with the same options (or
 `cargo build --release --locked` and `cmake --build --preset release`). Without `--demo`,
-catalogs created afterwards start empty; a catalog that already holds the demo keeps it. Restart
-the programs. Medorama updates its database when it starts, so back the database up first
-([administrator's guide](administration.md#backup-update-uninstall)).
+`medorama init --demo` has nothing to connect afterwards; databases already connected stay
+connected. Restart the programs. Medorama updates its control store when it starts, so back it up
+first ([administrator's guide](administration.md#backup-update-uninstall)). From 0.1.0 to 0.2.0
+there is no update in place: [upgrading from 0.1.0](install.md#upgrading-from-010).
 
 **Uninstall.** Delete the clone (the programs, `.venv/` and the builds are inside it), or the
 installed copies (`cargo uninstall medorama`, `~/.local/bin/vitalstream-*`). A standalone
-viewer's index folder is `~/.cache/vitalstream`, and its settings and password are in
-`~/.config/vitalstream/`. Medorama's home and results folders are where `init` put them.
-Recordings are never touched.
+viewer's index store is `~/.cache/vitalstream/index.sqlite`, and its settings and password are in
+`~/.config/vitalstream/`. Medorama's home folder (with its master key, by default) and its
+workspace are where `init` put them. Connected databases and recordings are never touched.
 
 ## Troubleshooting
 
 | Message | Cause and remedy |
 |---|---|
 | `command not found: medorama` | The program is in `.venv/bin`. Run `source .venv/bin/activate`, call `.venv/bin/medorama`, or run `cargo install --path medorama --locked`. |
+| `perl: command not found`, `Can't locate … .pm in @INC` while building `openssl-sys` | Perl, or one of its standard modules, is missing; OpenSSL's build needs it. Install `perl` ([Prerequisites](#prerequisites)); on Windows, Strawberry Perl, in a new PowerShell window. |
 | `linker 'cc' not found` (Linux) | No C toolchain is installed. Install `build-essential` or `gcc` ([Prerequisites](#prerequisites)), or see [Without administrator rights](#without-administrator-rights). |
 | `linker 'link.exe' not found`, `No CMAKE_CXX_COMPILER could be found` (Windows) | The Build Tools are missing, or lack **Desktop development with C++**. For C++, use a Developer PowerShell. |
 | `exit status: 69`, `You have not agreed to the Xcode license agreements` (macOS) | Run `sudo xcodebuild -license accept`, or `export DEVELOPER_DIR=/Library/Developer/CommandLineTools`. |

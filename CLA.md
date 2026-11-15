@@ -1,8 +1,10 @@
 # Contributor License Agreement
 
-Medorama is offered under the [PolyForm Noncommercial License 1.0.0](LICENSE) and, by separate
-agreement, under commercial licenses ([COMMERCIAL.md](COMMERCIAL.md)). To keep both possible, the
-author needs the right to license every contribution under both. This agreement gives that
+Medorama's software is offered under the [PolyForm Noncommercial License 1.0.0](LICENSE), its
+documentation under CC BY-NC-ND 4.0 and its demo and example data under CC BY-NC 4.0
+([REUSE.toml](REUSE.toml)), and, by separate agreement, under commercial licenses
+([COMMERCIAL.md](COMMERCIAL.md)). To keep all of these possible, the author needs the right to
+license every contribution, code, documentation or data, under each of them. This agreement gives that
 right while you keep the copyright in your work.
 
 You accept this agreement by submitting a contribution (a pull request, a patch, or any other

@@ -12,7 +12,7 @@
     3. C++ (-Cpp): installs CMake and Ninja into .venv, builds vitalstream-cpp and its tests
        with MSVC (copy in .venv\Scripts).
     4. Enables the repository's git hooks (privacy checks before each commit).
-  -Demo also makes the demo: invented patients that `medorama init` loads into a cohort DEMO,
+  -Demo also makes the demo: invented patients' databases that `medorama init --demo` connects,
   for trying Medorama (off by default; docs/administration.md, "The demo").
 
   Prerequisites: Python 3.9 or later (python.org installer or `winget install Python.Python.3.12`)
@@ -30,7 +30,8 @@ param(
   [switch]$Rs,           # Python + Rust
   [switch]$Cpp,          # Python + C++
   [switch]$NoRustup,     # do not install Rust if cargo is missing
-  [switch]$Demo          # also make the demo (invented patients that `medorama init` loads)
+  [switch]$Demo,         # also make the demo (invented patients' databases `medorama init --demo` connects)
+  [switch]$AcceptLicense # accept the license terms without asking (scripts, CI; or MEDORAMA_ACCEPT_LICENSE=yes)
 )
 if (-not ($Py -or $Rs -or $Cpp)) { $Rs = $true; $Cpp = $true }
 
@@ -39,6 +40,10 @@ $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
 function Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
+
+# the license terms, accepted before anything is built (tools\license-accept.ps1)
+. (Join-Path $Root 'tools\license-accept.ps1')
+Confirm-License -Accepted:$AcceptLicense
 
 # Runs a program and stops on a non-zero exit code (PowerShell does not, for programs).
 # A simple function (no param block), so that arguments such as -m reach the program.
@@ -120,12 +125,12 @@ function Need-Cargo {
 }
 if ($Rs) {
   Need-Cargo
-  Step "Building the Rust workspace (medorama, vitalstream-rs)"
+  Step "Building the Rust workspace (medorama, db-builder, vitalstream-rs)"
   Run cargo build --release --locked
-  foreach ($b in 'medorama', 'vitalstream-rs') {
+  foreach ($b in 'medorama', 'db-builder', 'vitalstream-rs') {
     Copy-Item "target\release\$b.exe" ".venv\Scripts\$b.exe" -Force
   }
-  $commands += ' medorama vitalstream-rs'
+  $commands += ' medorama db-builder vitalstream-rs'
 }
 
 # --- C++ --------------------------------------------------------------------------------
@@ -162,7 +167,7 @@ if ($Cpp) {
   $commands += ' vitalstream-cpp'
 }
 
-# --- the demo (-Demo): invented patients, loaded by `medorama init` (docs\administration.md) --
+# --- the demo (-Demo): invented patients' databases, connected by `medorama init --demo` ---------
 $demoDir = Join-Path $Root '.venv\share\medorama\demo'
 $demoFile = Join-Path $Root '.venv\Scripts\medorama.demo'
 if ($Demo) {
@@ -174,11 +179,18 @@ if ($Demo) {
     $wfdbx = (Select-String -Path 'viewers\vitalstream\python\vitalstream\pyproject.toml' -Pattern '"(wfdb-x @ [^"]*)"').Matches[0].Groups[1].Value
     Run $vpip install --quiet numpy $wfdbx
   }
-  Run $vpy tools\make-demo-data.py $demoDir
-  # `medorama init` loads the demo from the folder named here (UTF-8 without a byte-order mark)
+  # the full demo (its parts: tools\README.md, "The demo's features"), and its db-builder
+  # databases built as a site would build them (the steps in its demo-databases.json)
+  $builder = Join-Path $Root '.venv\Scripts\db-builder.exe'
+  if (Test-Path $builder) {
+    Run $vpy tools\make-demo-data.py $demoDir --db-builder $builder
+  } else {
+    Run $vpy tools\make-demo-data.py $demoDir
+  }
+  # `medorama init --demo` connects the demo's databases from the folder named here (UTF-8 without a byte-order mark)
   [System.IO.File]::WriteAllText($demoFile, $demoDir)
 } elseif (Test-Path $demoFile) {
-  # without -Demo, new catalogs start empty (a catalog that holds the demo keeps it)
+  # without -Demo, `init --demo` has nothing to connect
   Remove-Item $demoFile
 }
 
@@ -213,4 +225,4 @@ Step "Done"
 Write-Host "Commands in .venv\Scripts: $commands"
 Write-Host "Activate with:  .venv\Scripts\Activate.ps1   (or call .venv\Scripts\<command>.exe)"
 Write-Host "Check with:     cargo test --workspace   (docs/developing.md)"
-if ($Demo) { Write-Host "Then:           medorama init --results DIR   (loads the demo: the cohort DEMO), medorama serve" }
+if ($Demo) { Write-Host "Then:           medorama init --workspace DIR --demo   (connects the demo's databases), medorama serve" }

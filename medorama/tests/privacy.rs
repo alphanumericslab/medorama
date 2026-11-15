@@ -1,6 +1,6 @@
-//! Privacy Mode end to end (docs/security.md, "The privacy gate"): a catalog seeded with
-//! identifiers that cannot appear by chance, in every format the catalog serves (tables, notes,
-//! WFDB headers, GE MUSE XML, DICOM, pictures, ICU recordings), then every page's answers,
+//! Privacy Mode end to end (docs/security.md, "The privacy gate"): a connected database seeded
+//! with identifiers that cannot appear by chance, in every format Medorama serves (results,
+//! notes, WFDB headers, GE MUSE XML, DICOM, pictures, ICU recordings), then every page's answers,
 //! every file and every export, as a user without the PHI permission and as an admin who
 //! switched Privacy Mode on.  None of the identifiers may appear in any byte sent; their
 //! placeholders and pseudonyms must.  The same answers, identified, hold them (the test would
@@ -9,12 +9,11 @@
 mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::{bed_name, wfdb_record};
+use common::{wfdb_record, Dbb};
 use http_body_util::BodyExt;
 use medorama::config::Config;
 use medorama::db::Db;
-use medorama::imports::Opts;
-use medorama::users::{Role, User};
+use medorama::users::Role;
 use serde_json::Value;
 use std::collections::HashMap;
 use tower::ServiceExt;
@@ -25,8 +24,7 @@ const CANARIES: &[&str] = &[
     "Quilbert",       // first name
     "MRN83651927",    // MRN
     "PIDX77214",      // imported patient ID
-    "ENC55102",       // imported encounter ID
-    "CSN99183",       // account number
+    "ENC55102",       // the database's key for the visit
     "1931-05-17",     // date of birth
     "19310517",       // the same, as DICOM writes it
     "05-17-1931",     // and as MUSE does
@@ -42,6 +40,8 @@ const CANARIES: &[&str] = &[
     "Jan 2, 2024",    // and in words
     "2 January 2024", // and the other way
     "Canary General", // the institution (DICOM)
+    "555-014-2277",   // a telephone number in free text
+    "014-2278",       // and another, with its area code in brackets
 ];
 
 /// The stay's real times (Unix seconds), with a margin: no answer may hold a number in it.
@@ -234,34 +234,27 @@ struct Fx {
     _tmp: tempfile::TempDir,
     cfg: Config,
     db: Db,
+    /// The connected database, and its id.
+    dbb: Dbb,
+    id: i64,
+}
+
+/// A bedside-monitor recording's folder name, UNIT_BED-<time> (built here: such names are kept
+/// out of the sources).
+fn bed_name(unit: &str, bed: &str, t: i64) -> String {
+    format!("{unit}_{bed}-{t}")
 }
 
 fn fixture() -> Fx {
     let tmp = tempfile::tempdir().unwrap();
     let root = medorama::config::real(tmp.path());
-    let mut cfg = common::config(&root.join("home"), &root.join("results"));
+    let mut cfg = common::config(&root.join("home"), &root.join("ws"));
     cfg.timezone = "UTC".into();
     let data = root.join("data");
     cfg.data_roots = vec![data.to_string_lossy().to_string()];
     std::fs::create_dir_all(data.join("ecg")).unwrap();
     std::fs::create_dir_all(data.join("img/series")).unwrap();
     let db = Db::open(&cfg, true).unwrap();
-    let mut c = db.get().unwrap();
-    let admin = User::local();
-    let import = |c: &mut medorama::sql::Connection, name: &str, text: &str, category: &str| {
-        medorama::tables::import(
-            c,
-            &cfg,
-            &admin,
-            name,
-            text.as_bytes(),
-            &HashMap::new(),
-            category,
-            Some(&data),
-            &Opts::new(name, "", false),
-        )
-        .unwrap_or_else(|e| panic!("{name}: {e}"))
-    };
     // files, named as some sites name them: after the patient
     let hea = "PIDX77214_ecg 2 500 1000 08:00:00 02/01/2024\n\
 PIDX77214_ecg.dat 16 200/mV 16 0 0 0 0 I\nPIDX77214_ecg.dat 16 200/mV 16 0 0 0 0 II\n\
@@ -298,59 +291,84 @@ PIDX77214_ecg.dat 16 200/mV 16 0 0 0 0 I\nPIDX77214_ecg.dat 16 200/mV 16 0 0 0 0
         .unwrap();
     let rec = data.join("icu").join(bed_name("ICU7", "12", 1_704_110_400));
     wfdb_record(&rec, 0);
-    let rel = rec.strip_prefix(&data).unwrap().to_string_lossy().to_string();
-    import(
-        &mut c,
-        "patients.csv",
-        "MRN,Last Name,First Name,DOB,Sex,Patient ID\nMRN83651927,Zyxwortha,Quilbert,1931-05-17,F,PIDX77214\n",
-        "",
+    // the hospital's database, as db-builder makes it
+    let d = Dbb::new(&data.join("hospital.sqlite"));
+    d.person("p1", "PIDX77214", "HOSP-ID", "MRN83651927", "HOSP", "Zyxwortha", "Quilbert", "1931-05-17", "F")
+        .visit("ENC55102", "p1", "2024-01-01 10:00", "2024-01-05 10:00", "ICU7", true)
+        .entry("l1", "p1", "ENC55102", "lab", "2024-01-02 06:10", "Lactate", Some(4.1), "mmol/L");
+    d.note(
+        "n1",
+        "p1",
+        "2024-01-02 15:40",
+        "ICU progress note",
+        "Zyxwortha, Quilbert (MRN83651927), born 1931-05-17: septic shock, improving.",
     );
-    import(
-        &mut c,
-        "encounters.csv",
-        "Encounter ID,Patient ID,CSN,Admit Time,Discharge Time,Admit Unit,Care Unit,Bed,Bed Start,Bed End\n\
-ENC55102,PIDX77214,CSN99183,2024-01-01 10:00,2024-01-05 10:00,Cardiology,ICU7,12,2024-01-01 11:00,2024-01-03 11:00\n",
-        "",
+    d.exec("UPDATE entries SET author = 'Dr. Kwame Osei', visit_key = 'ENC55102' WHERE entry_key = 'n1'");
+    // identifiers and dates in an entry's name and written value, and in another category's text
+    // (exported cell by cell: each through the gate)
+    d.exec(
+        "INSERT INTO entries (entry_key, person_key, visit_key, category, time, name, value_text, text, flag, unit) VALUES
+         ('c1', 'p1', 'ENC55102', 'lab', '2024-01-02 07:00', 'Culture PIDX77214', 'MRN83651927 02/01/2024', \
+          'Zyxwortha called on Jan 2, 2024 from 1-555-014-2277', 'see 2024-01-02', 'mrn83651927'),
+         ('c2', 'p1', 'ENC55102', 'obs', '2024-01-02 07:30', 'Family contact', \
+          'Quilbert can be reached at (555) 014-2278 (her daughter) since 2 January 2024', '', '', '')",
     );
-    import(
-        &mut c,
-        "labs.csv",
-        "MRN,Encounter ID,Test Name,Result,Units,Collected\nMRN83651927,ENC55102,Lactate,4.1,mmol/L,2024-01-02 06:10\n",
-        "",
-    );
-    import(
-        &mut c,
-        "notes.csv",
-        "patient_id,encounter_id,time,note_type,author,note_text\n\
-PIDX77214,ENC55102,2024-01-02 15:40,ICU progress note,Dr. Kwame Osei,\"Zyxwortha, Quilbert (MRN83651927), born 1931-05-17: septic shock, improving.\"\n",
-        "",
-    );
-    import(
-        &mut c,
-        "ecg_index.csv",
-        "patient_id,encounter_id,time,interpretation,file\nPIDX77214,ENC55102,2024-01-02 08:00,Sinus rhythm,ecg/PIDX77214_ecg.hea\n\
-PIDX77214,ENC55102,2024-01-02 08:05,Sinus rhythm,ecg/PIDX77214_muse_20240102.xml\n\
-PIDX77214,ENC55102,2024-01-02 08:10,Sinus rhythm,ecg/PIDX77214_ecg.edf\n\
-PIDX77214,ENC55102,2024-01-02 08:15,Sinus rhythm,ecg/PIDX77214_muse_b.xml\n\
-PIDX77214,ENC55102,2024-01-02 08:20,Sinus rhythm,ecg/PIDX77214_plain.edf\n\
-PIDX77214,ENC55102,2024-01-02 08:25,Sinus rhythm,ecg/PIDX77214_plain.bdf\n\
-PIDX77214,ENC55102,2024-01-02 08:30,Sinus rhythm,ecg/PIDX77214_mat.hea\n",
-        "ecg",
-    );
-    import(
-        &mut c,
-        "imaging_index.csv",
-        "patient_id,encounter_id,time,study,file\nPIDX77214,ENC55102,2024-01-02 09:00,CT,img/PIDX77214_ct.dcm\n\
-PIDX77214,ENC55102,2024-01-02 09:10,CT series,img/series/\nPIDX77214,ENC55102,2024-01-02 09:20,Photo,img/PIDX77214_photo.png\n\
-PIDX77214,ENC55102,2024-01-02 09:30,Letter,img/PIDX77214_letter.txt\n\
-PIDX77214,ENC55102,2024-01-02 09:40,CT (implicit VR),img/PIDX77214_implicit.dcm\n",
-        "img",
-    );
-    import(&mut c, "icu_index.csv", &format!("patient_id,encounter_id,file\nPIDX77214,ENC55102,{rel}\n"), "");
+    let mut t = 8 * 60;
+    for f in [
+        "ecg/PIDX77214_ecg.hea",
+        "ecg/PIDX77214_muse_20240102.xml",
+        "ecg/PIDX77214_ecg.edf",
+        "ecg/PIDX77214_muse_b.xml",
+        "ecg/PIDX77214_plain.edf",
+        "ecg/PIDX77214_plain.bdf",
+        "ecg/PIDX77214_mat.hea",
+    ] {
+        d.recording(&format!("r{t}"), "p1", f, "ecg");
+        d.exec(&format!(
+            "UPDATE recordings SET start_time = '2024-01-02 {:02}:{:02}', label = 'Sinus rhythm', visit_key = 'ENC55102' WHERE recording_key = 'r{t}'",
+            t / 60,
+            t % 60
+        ));
+        t += 5;
+    }
+    let mut t = 9 * 60;
+    for f in [
+        "img/PIDX77214_ct.dcm",
+        "img/series",
+        "img/PIDX77214_photo.png",
+        "img/PIDX77214_letter.txt",
+        "img/PIDX77214_implicit.dcm",
+    ] {
+        d.recording(&format!("i{t}"), "p1", f, "img");
+        d.exec(&format!(
+            "UPDATE recordings SET start_time = '2024-01-02 {:02}:{:02}' WHERE recording_key = 'i{t}'",
+            t / 60,
+            t % 60
+        ));
+        t += 10;
+    }
+    d.recording("icu1", "p1", &rec.strip_prefix(&data).unwrap().join("rec.hea").to_string_lossy(), "icu");
+    let c = db.get().unwrap();
     medorama::users::add(&c, "boss", "", Role::Admin, true, "0123456789ab").unwrap();
     medorama::users::add(&c, "reader", "", Role::Analyst, false, "0123456789ab").unwrap();
+    let boss = medorama::users::get_by_name(&c, "boss").unwrap().unwrap();
+    let n = medorama::sources::NewSource {
+        name: "hospital".into(),
+        kind: "dbb".into(),
+        url: d.url(),
+        ..Default::default()
+    };
+    let id = medorama::databases::connect(&cfg, &c, &boss, &n, "").unwrap();
+    // the reader may see the hospital's data (never its identifiers: no PHI permission)
+    let reader = medorama::users::get_by_name(&c, "reader").unwrap().unwrap();
+    medorama::grants::grant(&c, &boss, reader.id, &format!("db:{id}"), "view").unwrap();
     drop(c);
-    Fx { _tmp: tmp, cfg, db }
+    Fx { _tmp: tmp, cfg, db, dbb: d, id }
+}
+
+/// The patient of the hospital's person `p1`.
+fn patient_of(f: &Fx) -> i64 {
+    medorama::persons::known(&f.cfg, &f.db.get().unwrap(), f.id, &["p1".into()]).unwrap()["p1"]
 }
 
 struct Client {
@@ -440,11 +458,7 @@ async fn privacy_mode_sends_no_identifier() {
     let api = "/api/v1";
     let boss = cl.login("boss").await;
     let reader = cl.login("reader").await;
-    let id: i64 =
-        f.db.get()
-            .unwrap()
-            .query_row("SELECT id FROM patients WHERE patient_id = 'PIDX77214'", [], |r| r.get(0))
-            .unwrap();
+    let id = patient_of(&f);
 
     // identified (an admin, Privacy Mode off by default): the identifiers are there
     let (_, _, plain) = cl.send("GET", &format!("{api}/patients/{id}"), &boss, None).await;
@@ -506,7 +520,6 @@ async fn privacy_mode_sends_no_identifier() {
             "/config",
             "/patients",
             "/patients?q=MO-",
-            "/encounters",
             "/recordings",
             "/databases",
             "/cohorts",
@@ -525,11 +538,7 @@ async fn privacy_mode_sends_no_identifier() {
         {
             uris.push(format!("{api}/cohorts/{cohort}{p}"));
         }
-        let (_, _, dbs) = cl.send("GET", &format!("{api}/databases"), cookie, None).await;
-        for d in serde_json::from_slice::<Value>(&dbs).unwrap()["items"].as_array().unwrap() {
-            uris.push(format!("{api}/databases/{}/rows?limit=500", d["id"]));
-            uris.push(format!("{api}/databases/{}/export", d["id"]));
-        }
+        uris.push(format!("{api}/databases/{}/variables", f.id));
         let (_, _, rep) = cl.send("GET", &format!("{api}/patients/{id}/report"), cookie, None).await;
         let entries: Vec<String> = serde_json::from_slice::<Value>(&rep).unwrap()["entries"]
             .as_array()
@@ -650,14 +659,14 @@ async fn privacy_mode_sends_no_identifier() {
         let (_, _, c) = cl.send("GET", &format!("{api}/patients/{id}{p}"), &reader2, None).await;
         assert!(a == b && a == c, "{p}: the same dates for every session");
     }
-    // the catalog's list moves them as the patient's page does
+    // the list moves them as the patient's page does: its latest within the page's span
     let (_, _, list) = cl.send("GET", &format!("{api}/patients"), &reader, None).await;
     let (_, _, page) = cl.send("GET", &format!("{api}/patients/{id}"), &reader, None).await;
     let list: Value = serde_json::from_slice(&list).unwrap();
     let page: Value = serde_json::from_slice(&page).unwrap();
-    let latest = &list["items"][0]["latest"];
-    let admits: Vec<&Value> = page["encounters"].as_array().into_iter().flatten().map(|e| &e["admit"]).collect();
-    assert!(latest.is_null() || admits.contains(&latest), "the list's {latest} among the page's {admits:?}");
+    let latest = list["items"][0]["latest"].as_f64().unwrap();
+    let (first, last) = (page["first"].as_f64().unwrap(), page["last"].as_f64().unwrap());
+    assert!(first <= latest && latest <= last, "the list's {latest} within the page's {first}–{last}");
 }
 
 fn app_of(f: &Fx) -> axum::Router {
@@ -669,6 +678,12 @@ fn app_of(f: &Fx) -> axum::Router {
 
 fn id_of(f: &Fx, sql: &str) -> i64 {
     f.db.get().unwrap().query_row(sql, [], |r| r.get(0)).unwrap()
+}
+
+/// The number of the recording whose path contains `part`.
+fn rec_of(f: &Fx, part: &str) -> i64 {
+    let all = medorama::recordings::all(&f.cfg, &f.db.get().unwrap()).unwrap();
+    all.iter().find(|r| r.path.contains(part)).unwrap_or_else(|| panic!("no recording {part}")).id
 }
 
 /// `(path, method)` of every route of the API router (server.rs), as tests/openapi.rs reads them.
@@ -713,30 +728,28 @@ async fn every_route_in_privacy_mode() {
         Some(serde_json::json!({"shares": [{"user_id": 2, "can_edit": true}]})),
     )
     .await;
-    let patient = id_of(&f, "SELECT id FROM patients WHERE patient_id = 'PIDX77214'");
-    let enc = id_of(&f, "SELECT id FROM encounters LIMIT 1");
-    let rec = id_of(&f, "SELECT id FROM recordings LIMIT 1");
-    let db = id_of(&f, "SELECT MIN(id) FROM imports");
-    let item = id_of(&f, "SELECT id FROM ehr_items WHERE file_path LIKE '%_ct.dcm'");
-    let folder = id_of(&f, "SELECT id FROM ehr_items WHERE file_path LIKE '%series%'");
+    let patient = patient_of(&f);
+    let rec = rec_of(&f, "rec.hea");
+    let db = f.id;
+    let item = rec_of(&f, "_ct.dcm");
+    let folder = rec_of(&f, "series");
     let fill = |path: &str| -> Option<Vec<String>> {
         let p = |s: &str| path.replace("{id}", s);
         Some(match path {
             _ if !path.contains('{') => vec![path.to_string()],
-            "/encounters/{id}" => vec![p(&enc.to_string())],
-            "/encounters/{id}/ehr" => vec![p(&enc.to_string()), format!("{}?patient_level=true", p(&enc.to_string()))],
             "/recordings/{id}" => vec![p(&rec.to_string())],
-            "/databases/{id}/rows" | "/databases/{id}/export" => vec![p(&db.to_string())],
+            "/databases/{id}/variables" | "/databases/{id}/conflicts" | "/databases/{id}/grants" => {
+                vec![p(&db.to_string())]
+            }
             "/cohorts/{id}" | "/cohorts/{id}/members" | "/cohorts/{id}/history" => vec![p(&cohort.to_string())],
             "/cohorts/{id}/export" => ["", "?what=criteria", "?what=data", "?what=xlsx"]
                 .iter()
                 .map(|q| format!("{}{q}", p(&cohort.to_string())))
                 .collect(),
-            "/import-tasks/{id}" => vec![p("1")],
             "/patients/{id}" | "/patients/{id}/journey" | "/patients/{id}/report" | "/patients/{id}/trends" => {
                 vec![p(&patient.to_string())]
             }
-            "/patients/{id}/detail" => vec![format!("{}?key=item%3A{item}", p(&patient.to_string()))],
+            "/patients/{id}/detail" => vec![format!("{}?key=rec%3A{item}", p(&patient.to_string()))],
             "/patients/{id}/file/{item}" => vec![p(&patient.to_string()).replace("{item}", &item.to_string())],
             "/patients/{id}/file/{item}/" => vec![p(&patient.to_string()).replace("{item}", &folder.to_string())],
             "/patients/{id}/file/{item}/{name}" => {
@@ -759,12 +772,7 @@ async fn every_route_in_privacy_mode() {
         (format!("/cohorts/{cohort}/clone"), serde_json::json!({})),
         (format!("/cohorts/{cohort}/refresh"), serde_json::json!({})),
         ("/check".into(), serde_json::json!({})),
-        ("/recordings/remove".into(), serde_json::json!({"ids": [rec], "dry_run": true})),
-        ("/encounters/remove".into(), serde_json::json!({"ids": [enc], "dry_run": true})),
-        ("/encounters/remove-matching".into(), serde_json::json!({"dry_run": true})),
-        ("/recordings/remove-matching".into(), serde_json::json!({"dry_run": true})),
-        (format!("/imports/{db}/remove"), serde_json::json!({"dry_run": true})),
-        ("/sources/remove".into(), serde_json::json!({"source": "patients.csv", "dry_run": true})),
+        (format!("/databases/{db}/check"), serde_json::json!({})),
     ];
     // the same answers, identified, hold identifiers (else this test would prove nothing)
     let (_, _, plain) = cl.send("GET", &format!("{api}/patients/{patient}"), &boss, None).await;
@@ -806,7 +814,7 @@ async fn around_the_gate() {
     let root = medorama::config::real(f._tmp.path());
     let data = root.join("data");
     let series = data.join("img/series");
-    // a symbolic link in an attached folder, to the catalog's own database
+    // a symbolic link in an attached folder, to Medorama's own control store
     #[cfg(unix)]
     std::os::unix::fs::symlink(&f.cfg.database, series.join("zz.png")).unwrap();
     // a signal file no header names, in an attached folder
@@ -816,48 +824,33 @@ async fn around_the_gate() {
     std::fs::write(data.join("linked/r.hea"), "r 1 250 10\nr.dat 16 200 16 0 0 0 0 I\n").unwrap();
     #[cfg(unix)]
     std::os::unix::fs::symlink(&f.cfg.database, data.join("linked/r.dat")).unwrap();
-    // a folder of recordings named after the patient, imported
+    // a folder of recordings named after the patient, in the database
     let pf = data.join("Zyxwortha_Quilbert");
     wfdb_record(&pf.join(bed_name("ICU9", "3", 1_704_200_000)), 0);
-    {
-        let mut c = f.db.get().unwrap();
-        let rows =
-            format!("patient_id,encounter_id,file\nPIDX77214,ENC55102,{}\n", pf.strip_prefix(&data).unwrap().display());
-        let import = |c: &mut medorama::sql::Connection, name: &str, rows: &str, category: &str| {
-            medorama::tables::import(
-                c,
-                &f.cfg,
-                &User::local(),
-                name,
-                rows.as_bytes(),
-                &HashMap::new(),
-                category,
-                Some(&data),
-                &Opts::new(name, "", false),
-            )
-            .unwrap()
-        };
-        import(&mut c, "more.csv", &rows, "");
-        import(
-            &mut c,
-            "linked.csv",
-            "patient_id,encounter_id,time,file\nPIDX77214,ENC55102,2024-01-02 10:05,linked/r.hea\n",
-            "ecg",
-        );
-    }
+    f.dbb.recording(
+        "more1",
+        "p1",
+        &pf.join(bed_name("ICU9", "3", 1_704_200_000)).join("rec.hea").strip_prefix(&data).unwrap().to_string_lossy(),
+        "icu",
+    );
+    f.dbb.recording("linked1", "p1", "linked/r.hea", "ecg");
+    f.dbb.exec("UPDATE meta SET value = 'v2' WHERE key = 'version'");
+    medorama::databases::refresh(
+        &f.cfg,
+        &f.db.get().unwrap(),
+        &medorama::users::get_by_name(&f.db.get().unwrap(), "boss").unwrap().unwrap(),
+        f.id,
+    )
+    .unwrap();
     // a job that failed on a recording, its error naming the path (as the engine's errors do)
-    let (rid, path): (i64, String) = f
-        .db
-        .get()
-        .unwrap()
-        .query_row("SELECT id, path FROM recordings WHERE path LIKE '%Zyxwortha%'", [], |r| Ok((r.get(0)?, r.get(1)?)))
-        .unwrap();
+    let rid = rec_of(&f, "Zyxwortha");
+    let path = medorama::recordings::get(&f.cfg, &f.db.get().unwrap(), rid).unwrap().unwrap().path;
     f.db.get()
         .unwrap()
         .execute(
-            "INSERT INTO jobs (action, action_version, params, params_hash, recording, fingerprint, state, priority, created_at, error, output_dir)
-             VALUES ('index', '1', '{}', 'x', ?1, 'f', 'failed', 0, 1.0, ?2, ?3)",
-            medorama::sql::params![rid, format!("not a recording this program reads: {path}/x.dat"), format!("{path}/results")],
+            "INSERT INTO jobs (action, action_version, params, params_hash, database_id, recording, fingerprint, state, priority, created_at, error, output_dir)
+             VALUES ('index', '1', '{}', 'x', ?1, ?2, 'f', 'failed', 0, 1.0, ?3, ?4)",
+            medorama::sql::params![f.id, rid, format!("not a recording this program reads: {path}/x.dat"), format!("{path}/results")],
         )
         .unwrap();
     let cl = Client { app: app_of(&f) };
@@ -865,7 +858,7 @@ async fn around_the_gate() {
     let reader = cl.login("reader").await;
     let boss = cl.login("boss").await;
     // the texts: the recording's path, its folder, the job's error and results folder
-    for u in ["/jobs", "/recordings", "/encounters", "/databases"] {
+    for u in ["/jobs", "/recordings", "/databases"] {
         let (st, _, b) = cl.send("GET", &format!("{api}{u}"), &reader, None).await;
         assert!(st.is_success(), "{u}: {st}");
         assert!(leaks(&b).is_empty(), "{u}: {:?}: {}", leaks(&b), String::from_utf8_lossy(&b));
@@ -879,8 +872,8 @@ async fn around_the_gate() {
     let (_, _, jobs) = cl.send("GET", &format!("{api}/jobs"), &boss, None).await;
     assert!(String::from_utf8_lossy(&jobs).contains("Zyxwortha_Quilbert/"));
     // the attached folder: neither the link nor the stray signal file is listed, or sent
-    let patient = id_of(&f, "SELECT id FROM patients WHERE patient_id = 'PIDX77214'");
-    let folder = id_of(&f, "SELECT id FROM ehr_items WHERE file_path LIKE '%series%'");
+    let patient = patient_of(&f);
+    let folder = rec_of(&f, "series");
     let (_, _, b) = cl.send("GET", &format!("{api}/patients/{patient}/file/{folder}/"), &reader, None).await;
     let listed: Value = serde_json::from_slice(&b).unwrap();
     assert_eq!(listed["files"].as_array().unwrap().len(), 2, "the two DICOM files only: {listed}");
@@ -900,8 +893,8 @@ async fn around_the_gate() {
     }
     let (st, _, _) = cl.send("GET", &format!("{api}/patients/{patient}/file/{folder}/stray.dat"), &reader, None).await;
     assert_eq!(st, StatusCode::NOT_FOUND, "a real name in Privacy Mode");
-    // the WFDB record's signal file, a link to the catalog's database: refused, both ways
-    let hea = id_of(&f, "SELECT id FROM ehr_items WHERE file_path LIKE '%linked/r.hea'");
+    // the WFDB record's signal file, a link to Medorama's control store: refused, both ways
+    let hea = rec_of(&f, "linked/r.hea");
     for (cookie, name) in [(&boss, "r.dat"), (&reader, "mo-f0001.dat")] {
         let (st, _, b) = cl.send("GET", &format!("{api}/patients/{patient}/file/{hea}/{name}"), cookie, None).await;
         assert_eq!(st, StatusCode::NOT_FOUND, "{name}");
@@ -909,58 +902,27 @@ async fn around_the_gate() {
     }
 }
 
-/// A held row applied by an admin adds identifiers (a new encounter ID, an account number):
-/// the gate's dictionary knows them at once.
+/// A database refreshed with new identifiers (another MRN): the gate's dictionary knows them at
+/// once.
 #[tokio::test]
 async fn the_dictionary_follows_the_identifiers() {
     let f = fixture();
     let cl = Client { app: app_of(&f) };
     let api = "/api/v1";
     let reader = cl.login("reader").await;
-    let boss = cl.login("boss").await;
+    let patient = patient_of(&f);
     // the reader's answers build the dictionary
-    cl.send("GET", &format!("{api}/encounters"), &reader, None).await;
-    // a row for a known patient with another MRN and a new encounter: held back
-    {
-        let mut c = f.db.get().unwrap();
-        medorama::tables::import(
-            &mut c,
-            &f.cfg,
-            &User::local(),
-            "late.csv",
-            b"Patient ID,MRN,Encounter ID,CSN,Admit Time\nPIDX77214,MRN44112299,ENC66601,CSN66602,2024-01-03 10:00\n",
-            &HashMap::new(),
-            "",
-            None,
-            &Opts::new("late.csv", "", false),
-        )
-        .unwrap();
-    }
-    cl.send("GET", &format!("{api}/encounters"), &reader, None).await;
-    let (_, _, rv) = cl.send("GET", &format!("{api}/review"), &boss, None).await;
-    let rv: Value = serde_json::from_slice(&rv).unwrap();
-    let held = rv["held"].as_array().unwrap();
-    assert!(!held.is_empty(), "{rv}");
-    for h in held {
-        let (st, _, b) = cl
-            .send(
-                "POST",
-                &format!("{api}/review/held/{}", h["id"]),
-                &boss,
-                Some(serde_json::json!({"action": "apply"})),
-            )
-            .await;
-        assert!(st.is_success(), "{st} {}", String::from_utf8_lossy(&b));
-    }
-    let (_, _, b) = cl.send("GET", &format!("{api}/encounters"), &boss, None).await;
-    assert!(String::from_utf8_lossy(&b).contains("ENC66601"), "the encounter was added");
-    let patient = id_of(&f, "SELECT id FROM patients WHERE patient_id = 'PIDX77214'");
-    for u in ["/encounters".to_string(), "/recordings".into(), format!("/patients/{patient}")] {
+    cl.send("GET", &format!("{api}/patients/{patient}"), &reader, None).await;
+    // the person's MRN changes in the database, and a note names it
+    f.dbb.exec("UPDATE persons SET mrn = 'MRN44112299' WHERE person_key = 'p1'");
+    f.dbb.note("n2", "p1", "2024-01-03 10:00", "Addendum", "Seen again: MRN44112299.");
+    f.dbb.exec("UPDATE meta SET value = 'v3' WHERE key = 'version'");
+    let boss = medorama::users::get_by_name(&f.db.get().unwrap(), "boss").unwrap().unwrap();
+    medorama::databases::refresh(&f.cfg, &f.db.get().unwrap(), &boss, f.id).unwrap();
+    for u in ["/recordings".to_string(), format!("/patients/{patient}"), format!("/patients/{patient}/report")] {
         let (_, _, b) = cl.send("GET", &format!("{api}{u}"), &reader, None).await;
         let t = String::from_utf8_lossy(&b);
-        for gone in ["ENC66601", "CSN66602", "MRN44112299"] {
-            assert!(!t.contains(gone), "{u}: {gone} shown: {t}");
-        }
+        assert!(!t.contains("MRN44112299"), "{u}: the new MRN shown: {t}");
     }
 }
 
@@ -970,6 +932,9 @@ async fn the_dictionary_follows_the_identifiers() {
 async fn the_privacy_choice_is_the_sessions() {
     let f = fixture();
     medorama::users::add(&f.db.get().unwrap(), "clinician", "", Role::Analyst, true, "0123456789ab").unwrap();
+    let boss = medorama::users::get_by_name(&f.db.get().unwrap(), "boss").unwrap().unwrap();
+    let clinician = medorama::users::get_by_name(&f.db.get().unwrap(), "clinician").unwrap().unwrap();
+    medorama::grants::grant(&f.db.get().unwrap(), &boss, clinician.id, &format!("db:{}", f.id), "phi").unwrap();
     let cl = Client { app: app_of(&f) };
     let api = "/api/v1";
     let privacy = |b: &[u8]| serde_json::from_slice::<Value>(b).unwrap()["user"]["privacy"].clone();
@@ -1020,27 +985,12 @@ async fn the_viewers_errors_in_privacy_mode() {
     let pf = data.join("Zyxwortha_Quilbert");
     let rec = pf.join(bed_name("ICU9", "3", 1_704_200_000));
     wfdb_record(&rec, 0);
-    {
-        let mut c = f.db.get().unwrap();
-        let rows = format!(
-            "patient_id,encounter_id,file\nPIDX77214,ENC55102,{}\n",
-            rec.strip_prefix(&data).unwrap().display()
-        );
-        medorama::tables::import(
-            &mut c,
-            &f.cfg,
-            &User::local(),
-            "more.csv",
-            rows.as_bytes(),
-            &HashMap::new(),
-            "",
-            Some(&data),
-            &Opts::new("more.csv", "", false),
-        )
-        .unwrap();
-    }
-    let id = id_of(&f, "SELECT id FROM recordings WHERE path LIKE '%Zyxwortha%'");
-    // the recording goes away after it was imported
+    f.dbb.recording("more1", "p1", &rec.join("rec.hea").strip_prefix(&data).unwrap().to_string_lossy(), "icu");
+    f.dbb.exec("UPDATE meta SET value = 'v2' WHERE key = 'version'");
+    let boss = medorama::users::get_by_name(&f.db.get().unwrap(), "boss").unwrap().unwrap();
+    medorama::databases::refresh(&f.cfg, &f.db.get().unwrap(), &boss, f.id).unwrap();
+    let id = rec_of(&f, "Zyxwortha");
+    // the recording goes away after it was listed
     std::fs::remove_dir_all(&pf).unwrap();
     let app = std::sync::Arc::new(medorama::server::App::new(
         std::sync::Arc::new(f.cfg.clone()),

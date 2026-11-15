@@ -5,7 +5,7 @@
 import { API, catClass, privacy, esc, externalViewerLink, fmtDay, fmtDate, fmtDuration, fmtHM, fmtShort, mark, phi, viewerMode } from '../core.js';
 import { go, href } from '../router.js';
 import { color, overview, spark } from './charts.js';
-import { APPS, appHref } from '../views/apps.js';
+import { APPS, appHref, mayShowIdentifiers } from '../views/apps.js';
 
 const fmtV = (v) => (v === null || v === undefined || v === '' ? '' : String(v));
 
@@ -23,8 +23,13 @@ function rowsTable(d, terms) {
   const vital = d.key.startsWith('vit:');
   let h = `<table class="t"><tr><th>${vital ? 'Sign' : 'Test'}</th><th class="num">${vital ? 'Last' : 'Value'}</th><th>Unit</th><th>Reference</th>${vital ? '' : '<th class="num">Previous</th>'}<th title="${vital ? 'The 12 hours before and after this reading' : 'This test over the stay'}">${vital ? '±12 h' : 'This stay'}</th></tr>`;
   for (const r of d.rows) {
-    const cls = r.level ? (r.num !== null && r.ref_low !== null && r.num < r.ref_low ? 'low' : 'bad') : '';
-    const badge = r.level ? ` <span class="badge${cls === 'low' ? ' lo' : ''}">${esc(r.flag || (cls === 'low' ? 'L' : 'H'))}</span>` : '';
+    // low (blue), abnormal (amber) or critical (amber, in bold, underlined, with its word)
+    const low = r.level && r.num !== null && r.ref_low !== null && r.num < r.ref_low;
+    const cls = r.level === 2 ? `crit${low ? ' low' : ''}` : r.level ? (low ? 'low' : 'bad') : '';
+    const flag = esc(r.flag || (low ? 'L' : 'H'));
+    const badge = r.level === 2
+      ? ` <span class="badge crit${low ? ' lo' : ''}">${flag} · critical</span>`
+      : r.level ? ` <span class="badge${low ? ' lo' : ''}">${flag}</span>` : '';
     const ref = r.ref_low !== null || r.ref_high !== null ? `${fmtV(r.ref_low)} – ${fmtV(r.ref_high)}` : '';
     const mk = r.num !== null && r.time ? [r.time, r.num] : null;
     h += `<tr><td>${mark(r.name, terms)}</td><td class="v ${cls}">${esc(r.value)}</td><td class="u">${esc(r.unit)}${badge}</td><td class="u">${esc(ref)}</td>
@@ -48,6 +53,14 @@ function notesList(notes, terms) {
  */
 function attachment(a) {
   const url = API + a.url;
+  // in Privacy Mode, a file sent as it is (a picture, a PDF, a video, a DICOM's pixels) may show
+  // a name burned into it: said above it, as its viewer's tab says (apps.js)
+  const asIs = privacy.on && mayShowIdentifiers(a);
+  const warn = asIs ? `<p class="idnote" data-asis><span class="idwarn" role="img" aria-label="May show identifiers">▲</span> May show identifiers as recorded: this file is sent as it is, and Privacy Mode cannot hide what its pixels or pages show.</p>` : '';
+  return warn + attachmentBody(a, url);
+}
+
+function attachmentBody(a, url) {
   const open = a.viewer
     ? `<div class="ftools"><a class="btn primary" href="${esc(appHref(a.viewer, a, API, shown))}">Open in ${esc(APPS[a.viewer])} ↗</a><span class="faint">${esc(a.name)}</span></div>`
     : '';
@@ -67,12 +80,15 @@ export function renderDetail(el, d, ctx) {
   shown = { patient: ctx.id, entry: d.key };
   const where = ctx.context(d.encounter, d.time);
   const when = d.end && d.end - d.time > 3600 ? `${fmtDate(d.time)} ${fmtHM(d.time)} → ${fmtShort(d.end)} ${fmtHM(d.end)}` : `${fmtDay(d.time)} · ${fmtHM(d.time)}`;
-  const sub = [when, where, d.sources.length ? d.sources.join(', ') : ''].filter(Boolean).join(' · ');
+  // the visit's context names its database already: the entry's databases only when they differ
+  const others = d.sources.filter((x) => !where.split(' · ').includes(x));
+  const sub = [when, where, others.join(', ')].filter(Boolean).join(' · ');
   let h = `<div class="row"><div><h2><span class="sw ${catClass(d.category)}"></span> ${esc(d.title)}</h2><div class="sub">${esc(sub)}</div></div>
     <div class="nav2"><button class="btn" data-step="-1" title="Previous of this kind"${ctx.nav.prev ? '' : ' disabled'}>‹</button><button class="btn" data-step="1" title="Next of this kind"${ctx.nav.next ? '' : ' disabled'}>›</button></div></div>`;
   if (d.rows.length) {
-    const ab = d.rows.filter((r) => r.level).length;
-    if (ab) h += `<div><span class="badge">${ab} abnormal</span></div>`;
+    const ab = d.rows.filter((r) => r.level === 1).length;
+    const cr = d.rows.filter((r) => r.level === 2).length;
+    if (ab || cr) h += `<div>${ab ? `<span class="badge">${ab} abnormal</span>` : ''}${cr ? `<span class="badge crit">${cr} critical</span>` : ''}</div>`;
     h += rowsTable(d, ctx.terms);
   }
   if (d.monitoring) h += monitoring(d, ctx);
@@ -136,7 +152,7 @@ function monitoring(d, ctx) {
     const vs = viewerTarget(r.path, t0, Math.min(t1, t0 + 60));
     h += `<div class="ftools"><a class="btn primary" href="${esc(vs.href)}"${vs.ext ? ' target="vitalstream-viewer" rel="noopener"' : ''}>Open in VitalStream ↗</a><span class="faint">${esc(r.name)}</span></div>`;
   } else {
-    h += '<p class="muted">No viewer is linked to the catalog.</p>';
+    h += '<p class="muted">No viewer is linked to Medorama.</p>';
   }
   return h;
 }

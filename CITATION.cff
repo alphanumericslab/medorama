@@ -4,9 +4,10 @@ title: "Medorama: A unified patient-journey research platform linking EHR data, 
 authors:
   - family-names: Sameni
     given-names: Reza
-version: 0.1.0
-# 0.1.0 is not released yet (no tag): date-released is added with the tag, together with the
-# versions of the crates, the Python packages, the C++ project and the manual (docs/developing.md)
+version: 0.2.0
+# a pre-release; the versions of the crates, the Python packages, the C++ project and the manual
+# are set with it (docs/developing.md)
+date-released: 2026-11-15
 license: "PolyForm-Noncommercial-1.0.0"
 repository-code: "https://github.com/alphanumericslab/medorama"
 url: "https://medorama.org"

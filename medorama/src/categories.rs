@@ -93,9 +93,14 @@ const VITALS: &[&str] = &[
     "hr",
     "heart rate",
     "pulse",
-    "rr",
+    // (not `rr` alone: an ECG's RR interval, in ms, has that name too)
     "resp",
+    "resp rate",
+    "resp. rate",
     "respiratory rate",
+    "rr (resp)",
+    "rr resp",
+    "rr (/min)",
     "spo2",
     "sao2",
     "temp",
@@ -177,6 +182,16 @@ pub fn is_recording(category: &str) -> bool {
 pub fn is_icu_unit(unit: &str) -> bool {
     let u = unit.to_uppercase();
     let words: Vec<&str> = u.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    // a step-down, post-ICU or intermediate-care unit is not one (IMCU, "ICU step-down")
+    let not_icu = |w: &&str| {
+        w.starts_with("STEP")
+            || w.starts_with("POST")
+            || w.starts_with("INTERMEDIATE")
+            || ["SDU", "IMCU", "IMC"].contains(w)
+    };
+    if words.iter().any(not_icu) {
+        return false;
+    }
     u.contains("INTENSIVE")
         || u.contains("CRITICAL CARE")
         || words.iter().any(|w| {
@@ -201,6 +216,10 @@ mod tests {
         assert_eq!(named("problem list"), Some("dx"));
         assert_eq!(named("blah"), None);
         assert_eq!(resolve("", "measurement", "Heart rate", ""), "vit");
+        // a bare RR is an ECG's interval; the respiratory rate is named so
+        assert_eq!(resolve("", "measurement", "RR", ""), "lab");
+        assert_eq!(resolve("", "measurement", "Resp rate", ""), "vit");
+        assert_eq!(resolve("", "measurement", "RR (resp)", ""), "vit");
         assert_eq!(resolve("", "measurement", "Lactate", ""), "lab");
         assert_eq!(resolve("", "measurement", "Lactate", "micro"), "micro");
         assert_eq!(resolve("imaging", "observation", "CT", "lab"), "img");
@@ -214,7 +233,19 @@ mod tests {
         for u in ["ICU7", "MICU", "CVICU 2", "CCU", "Neuro ICU", "Intensive Care Unit"] {
             assert!(is_icu_unit(u), "{u}");
         }
-        for u in ["Cardiology", "ED", "Medicine 4", "PACU"] {
+        for u in [
+            "Cardiology",
+            "ED",
+            "Medicine 4",
+            "PACU",
+            "ICU step-down",
+            "SICU Stepdown",
+            "Post-ICU ward",
+            "PostICU",
+            "IMCU",
+            "Intermediate care",
+            "Intermediate ICU",
+        ] {
             assert!(!is_icu_unit(u), "{u}");
         }
     }

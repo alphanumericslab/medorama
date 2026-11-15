@@ -114,8 +114,15 @@ only when you are certain the commit holds no patient data.
 
 ## License
 
-Medorama is licensed under the PolyForm Noncommercial License 1.0.0 ([LICENSE](LICENSE)) and,
-by separate agreement, under commercial licenses ([COMMERCIAL.md](COMMERCIAL.md)). Contributions
-are accepted under the [Contributor License Agreement](CLA.md), which lets the author offer your
-contribution under both while you keep its copyright. Confirm that you accept it in your pull
-request (the template has a checkbox).
+Medorama's software is licensed under the PolyForm Noncommercial License 1.0.0
+([LICENSE](LICENSE)), its documentation (the `docs/` folders) under CC BY-NC-ND 4.0 and its demo and example
+data under CC BY-NC 4.0, and, by separate agreement, under commercial licenses
+([COMMERCIAL.md](COMMERCIAL.md)). Contributions are accepted under the
+[Contributor License Agreement](CLA.md), which lets the author offer your contribution under all
+of these while you keep its copyright. Confirm that you accept it in your pull request (the
+template has a checkbox).
+
+Every file needs a license: a new file takes the one [REUSE.toml](REUSE.toml) gives its folder
+(the software's, unless it is in a `docs/` folder or is demo or example data). Material from others keeps
+its license: add an entry for it to `REUSE.toml`, its text to `LICENSES/` and a line to
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). `reuse lint` checks it, as CI does.

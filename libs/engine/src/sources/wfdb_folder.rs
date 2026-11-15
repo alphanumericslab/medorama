@@ -60,7 +60,9 @@ fn wfdb_err(record: &Path) -> impl Fn(wfdbx::record::Error) -> signal_core::Erro
 
 /// The header of a record (no signal file is opened); an error for a record that states no
 /// sampling frequency (or one that is not a finite positive number).  The number of samples is
-/// at most what the signal files can hold ([`frames_held`]).
+/// at most what the signal files can hold ([`frames_held`]); a header that states none (0, or
+/// no count on its record line) is read to the end of its data, as libwfdb reads it: up to what
+/// the files hold, `i64::MAX` when no file can be measured ([`counted`] then counts them).
 fn header(record: &Path) -> signal_core::Result<wfdbx::Header> {
     let mut h = quiet().read_header(wpath(record), false).map_err(wfdb_err(record))?;
     if !(h.fs > 0.0 && h.fs.is_finite()) {
@@ -69,8 +71,54 @@ fn header(record: &Path) -> signal_core::Result<wfdbx::Header> {
             record.display()
         )));
     }
-    h.nsamples = h.nsamples.max(0).min(frames_held(record, &h));
+    let held = frames_held(record, &h);
+    h.nsamples = if h.nsamples > 0 { h.nsamples.min(held) } else { held };
     Ok(h)
+}
+
+/// [`header`], with the frames counted by decoding them when the header states no number of
+/// samples and no signal file can be measured (compressed formats): 0 for a header that names
+/// no signal file (a layout segment's).
+fn counted(record: &Path) -> signal_core::Result<wfdbx::Header> {
+    let mut h = header(record)?;
+    if h.nsamples == i64::MAX {
+        let has_file = h.siginfo.iter().any(|s| signal_file(record, s.fname.as_deref().unwrap_or_default()).is_some());
+        let mut frames = 0u64;
+        if has_file {
+            let m = spf_max(&h);
+            decode(record, &h, 0, u64::MAX / m, &mut |_, _, got| {
+                frames += got as u64 / m;
+                Ok(())
+            })?;
+        }
+        h.nsamples = i64::try_from(frames).unwrap_or(i64::MAX);
+    }
+    Ok(h)
+}
+
+/// The most samples per frame of a record's signals: 1 when every signal has one sample per
+/// frame; more for a multi-frequency record, which is decoded in WFDB's high-resolution mode
+/// ([`decode`]).
+fn spf_max(h: &wfdbx::Header) -> u64 {
+    h.siginfo.iter().map(|s| s.spf.max(1) as u64).max().unwrap_or(1)
+}
+
+/// Samples per frame of a signal (at least 1).
+fn spf_of(s: &wfdbx::Siginfo) -> u64 {
+    s.spf.max(1) as u64
+}
+
+/// Whether high-resolution vector `k` of a frame (0 ≤ k < `m`, the record's [`spf_max`]) starts
+/// a new sample of a signal of `spf` samples per frame: WFDB's high-resolution mode repeats
+/// sample `floor(k × spf / m)` of the frame, so sample `j` first appears at `k = ceil(j × m / spf)`.
+fn new_sample(k: u64, spf: u64, m: u64) -> bool {
+    (k * spf) % m < spf
+}
+
+/// Signal `k`'s stored samples in `got` high-resolution vectors of `nsig` signals (whole frames
+/// of `m` vectors, the first at a frame's start): every sample of the signal, once.
+fn samples_of(buf: &[i32], got: usize, nsig: usize, k: usize, spf: u64, m: u64) -> impl Iterator<Item = i32> + '_ {
+    (0..got).filter(move |&i| m == 1 || new_sample(i as u64 % m, spf, m)).map(move |i| buf[i * nsig + k])
 }
 
 /// Three times the bits a sample of WFDB storage format `fmt` takes, for the formats of fixed
@@ -225,9 +273,11 @@ fn chunk_frames(nsig: usize) -> u64 {
     (CHUNK_SAMPLES / nsig.max(1) as u64).max(MIN_CHUNK_FRAMES)
 }
 
-/// Frames [from, to) of a record, decoded a chunk at a time: `sink(signals, frames, count)`
-/// gets the stored samples of `count` frames (`frames[i * nsig + k]`).  Stops at the end of
-/// the data (a chunk read short), whatever the header states.
+/// Frames [from, to) of a record, decoded a chunk at a time: `sink(signals, vectors, count)`
+/// gets the stored samples of `count` vectors (`vectors[i * nsig + k]`): one per frame, or, for
+/// a multi-frequency record, [`spf_max`] per frame (WFDB's high-resolution mode, whole frames;
+/// [`samples_of`] takes each signal's own samples from them).  Stops at the end of the data (a
+/// chunk read short), whatever the header states.
 fn decode(
     record: &Path,
     h: &wfdbx::Header,
@@ -236,17 +286,23 @@ fn decode(
     sink: &mut dyn FnMut(&[wfdbx::Siginfo], &[i32], usize) -> signal_core::Result<()>,
 ) -> signal_core::Result<()> {
     let nsig = h.nsig;
+    let m = spf_max(h);
+    let (from, to) = (from.saturating_mul(m), to.saturating_mul(m));
     let mut w = quiet();
     let mut si = vec![wfdbx::Siginfo::default(); nsig];
     let fail = || signal_core::Error::Wfdb(format!("{}: cannot read the signals", record.display()));
     if w.isigopen(wpath(record).as_slice(), &mut si, nsig as i32) != nsig as i32 {
         return Err(fail());
     }
+    if m > 1 {
+        w.setgvmode(wfdbx::WFDB_HIGHRES);
+    }
     if w.isigsettime(i64::try_from(from).unwrap_or(i64::MAX)) < 0 {
         w.wfdbquit();
         return Err(fail());
     }
-    let chunk = chunk_frames(nsig);
+    // whole frames at once
+    let chunk = (chunk_frames(nsig) / m).max(1) * m;
     let mut buf = vec![0i32; chunk.min(to.saturating_sub(from)) as usize * nsig];
     let mut a = from;
     let result = loop {
@@ -254,7 +310,8 @@ fn decode(
             break Ok(());
         }
         let n = chunk.min(to - a) as usize;
-        let got = w.getvecs(&mut buf[..n * nsig], n as i64).clamp(0, n as i64) as usize;
+        let mut got = w.getvecs(&mut buf[..n * nsig], n as i64).clamp(0, n as i64) as usize;
+        got -= got % m as usize;
         if let Err(e) = sink(&si, &buf[..got * nsig], got) {
             break Err(e);
         }
@@ -267,7 +324,8 @@ fn decode(
     result
 }
 
-/// Frames [from, to) of a record, the signals `want` in physical units (one vector each).
+/// Frames [from, to) of a record, the signals `want` in physical units (one vector each, with
+/// every sample of the signal: its samples per frame in each frame).
 fn read_frames(
     record: &Path,
     h: &wfdbx::Header,
@@ -275,12 +333,12 @@ fn read_frames(
     to: u64,
     want: &[usize],
 ) -> signal_core::Result<Vec<Vec<f64>>> {
-    let nsig = h.nsig;
+    let (nsig, m) = (h.nsig, spf_max(h));
     let mut out: Vec<Vec<f64>> = want.iter().map(|_| Vec::new()).collect();
     decode(record, h, from, to, &mut |si, buf, got| {
         for (o, &k) in out.iter_mut().zip(want) {
             if k < nsig {
-                o.extend((0..got).map(|i| physical(buf[i * nsig + k], &si[k])));
+                o.extend(samples_of(buf, got, nsig, k, spf_of(&si[k]), m).map(|v| physical(v, &si[k])));
             }
         }
         Ok(())
@@ -394,7 +452,7 @@ struct Unit {
 fn unit(base: &Path, name: &str, row: Option<IndexMap<String, String>>) -> signal_core::Result<Unit> {
     check_files(base, name)?;
     let path = base.join(name);
-    let h = header(&path)?;
+    let h = counted(&path)?;
     // a MAT signal file is read as frames from the header's byte offset: one of another layout
     // would be read as noise
     check_mat_files(&with_ext(&path, "hea")).map_err(signal_core::Error::Format)?;
@@ -425,7 +483,7 @@ fn unit(base: &Path, name: &str, row: Option<IndexMap<String, String>>) -> signa
             }
         } else if n > 0 {
             let rec = beside(name, &seg);
-            let sh = header(&base.join(&rec))?;
+            let sh = counted(&base.join(&rec))?;
             parts.push(Part { rec, offset, h: sh });
         }
         offset = offset.saturating_add(n.max(0)); // a layout segment has no samples
@@ -508,7 +566,9 @@ fn rec_path(units: &[Unit], name: &str) -> String {
 
 /// Start of each record on the time axis, and whether it is stated: records in order; those
 /// without a start follow the data before them, after the break gaps.csv states before them
-/// (gap_s), if any; records of the same stretch start together.
+/// (gap_s), if any; records of the same stretch start together.  Records without a start that
+/// come before the first record with one (the leading ones) are placed so that they end just
+/// where it starts; when no record has a start, the first starts at 0.
 fn placement(units: &[Unit], gap_rows: &[IndexMap<String, String>]) -> Vec<(f64, bool)> {
     let mut counted: IndexMap<String, f64> = IndexMap::new();
     for g in gap_rows {
@@ -518,6 +578,22 @@ fn placement(units: &[Unit], gap_rows: &[IndexMap<String, String>]) -> Vec<(f64,
             }
         }
     }
+    let start_of = |u: &Unit| fl(u.row.get("start_unix"));
+    let first_timed = units.iter().position(|u| start_of(u).is_some());
+    // the leading records, placed from 0: where they end
+    let origin = match first_timed {
+        Some(f) if f > 0 => {
+            let lead = place(&units[..f], &counted, 0.0);
+            let end = lead.iter().zip(units).map(|(s, u)| s.0 + u.n as f64 / u.fs).fold(f64::NEG_INFINITY, f64::max);
+            start_of(&units[f]).unwrap_or(0.0) - end
+        }
+        _ => 0.0,
+    };
+    place(units, &counted, origin)
+}
+
+/// [`placement`] with the first record without a start (and no data before it) at `origin`.
+fn place(units: &[Unit], counted: &IndexMap<String, f64>, origin: f64) -> Vec<(f64, bool)> {
     let mut out = Vec::with_capacity(units.len());
     let mut last_end: Option<f64> = None;
     let mut untimed_group: IndexMap<String, f64> = IndexMap::new();
@@ -530,7 +606,7 @@ fn placement(units: &[Unit], gap_rows: &[IndexMap<String, String>]) -> Vec<(f64,
                 let g = r.get("stretch").filter(|s| !s.is_empty()).cloned().unwrap_or_else(|| format!("record {i}"));
                 let t = *untimed_group
                     .entry(g)
-                    .or_insert_with(|| last_end.unwrap_or(0.0) + counted.get(&u.name).copied().unwrap_or(0.0));
+                    .or_insert_with(|| last_end.unwrap_or(origin) + counted.get(&u.name).copied().unwrap_or(0.0));
                 (t, false)
             }
         };
@@ -606,14 +682,16 @@ pub fn build(path: &Path, progress: &dyn Fn(f64), cancelled: &dyn Fn() -> bool) 
                     (format!("{key}\u{1}{lane}"), format!("{name} ({lane})"))
                 };
                 let cid = channels.get(key, &label, &unit, &modality, None);
-                ps.push(pieces.start(cid, part.h.fs, dict! { "t0" => tp, "timed" => timed }));
+                // a signal of several samples per frame at its own rate
+                let fs = part.h.fs * spf_of(&part.h.siginfo[j]) as f64;
+                ps.push(pieces.start(cid, fs, dict! { "t0" => tp, "timed" => timed }));
                 piece_info.push((part.rec.clone(), j));
                 by_name.entry(name).or_insert(j);
             }
             all.extend(ps.iter().copied());
             let path = base.join(&part.rec);
             let n = part.h.nsamples.max(0) as u64;
-            let nsig = part.h.nsig;
+            let (nsig, m) = (part.h.nsig, spf_max(&part.h));
             let mut xf: Vec<f32> = vec![];
             decode(&path, &part.h, 0, n, &mut |si, buf, got| {
                 if cancelled() {
@@ -621,10 +699,10 @@ pub fn build(path: &Path, progress: &dyn Fn(f64), cancelled: &dyn Fn() -> bool) 
                 }
                 for (j, &p) in ps.iter().enumerate() {
                     xf.clear();
-                    xf.extend((0..got).map(|i| physical(buf[i * nsig + j], &si[j]) as f32));
+                    xf.extend(samples_of(buf, got, nsig, j, spf_of(&si[j]), m).map(|v| physical(v, &si[j]) as f32));
                     pieces.add(p, &xf);
                 }
-                done = done.saturating_add(got as u64 * nsig as u64);
+                done = done.saturating_add(got as u64 / m * nsig as u64);
                 progress(done as f64 / total);
                 Ok(())
             })?;
@@ -647,10 +725,12 @@ pub fn build(path: &Path, progress: &dyn Fn(f64), cancelled: &dyn Fn() -> bool) 
                         .unwrap_or_else(|| String::from_utf8_lossy(&w.ecgstr(ann.codes[i])).trim().to_string());
                     let s = ann.samples[i];
                     match &master_names {
+                        // a marker is at a frame: the first sample of that frame of its signal
                         None => {
                             let ps = &part_pieces[0].0;
                             if c < ps.len() {
-                                pieces.marker(ps[c], s, &name);
+                                let spf = spf_of(&u.parts[0].h.siginfo[c]) as i64;
+                                pieces.marker(ps[c], s.saturating_mul(spf), &name);
                             }
                         }
                         Some(mn) => {
@@ -659,7 +739,8 @@ pub fn build(path: &Path, progress: &dyn Fn(f64), cancelled: &dyn Fn() -> bool) 
                             let Some(k) = at else { continue };
                             let (ps, by_name) = &part_pieces[k];
                             if let Some(&j) = by_name.get(sig) {
-                                pieces.marker(ps[j], s - u.parts[k].offset, &name);
+                                let spf = spf_of(&u.parts[k].h.siginfo[j]) as i64;
+                                pieces.marker(ps[j], (s - u.parts[k].offset).saturating_mul(spf), &name);
                             }
                         }
                     }
@@ -781,6 +862,11 @@ pub fn build(path: &Path, progress: &dyn Fn(f64), cancelled: &dyn Fn() -> bool) 
     }
     if items.iter().any(|p| p.get("timed") == Some(&Value::Bool(false))) {
         notes.push("Some records have no start time; they are placed after the data before them and marked \"time not stated\".".into());
+    }
+    if units.iter().position(|u| fl(u.row.get("start_unix")).is_some()).is_some_and(|f| f > 0) {
+        notes.push(
+            "The records without a start time that come before the first record with one end where it starts.".into(),
+        );
     }
     if lanes.taken.values().any(|l| l.len() > 1) {
         notes.push(
@@ -946,11 +1032,23 @@ impl Reader {
             check_files(&self.folder, rec)?;
             let path = self.folder.join(rec);
             let h = header(&path)?;
-            let (a, b) = (a as u64, (b as u64).min(h.nsamples.max(0) as u64));
+            let frames = h.nsamples.max(0) as u64;
+            // samples [a, b) of a signal of spf samples per frame: in frames [a / spf, ⌈b / spf⌉)
+            let spf = |s: usize| h.siginfo.get(s).map_or(1, spf_of);
+            let span = |s: usize| {
+                let k = spf(s);
+                let b = (b as u64).min(frames.saturating_mul(k));
+                (a as u64 / k, b.div_ceil(k).max(a as u64 / k), b)
+            };
+            let fa = items.iter().map(|&(_, s)| span(s).0).min().unwrap_or(0);
+            let fb = items.iter().map(|&(_, s)| span(s).1).max().unwrap_or(0);
             let sigs: Vec<usize> = items.iter().map(|&(_, s)| s).collect();
-            let x = read_frames(&path, &h, a, b.max(a), &sigs)?;
-            for ((k, _), y) in items.into_iter().zip(x) {
-                out[k] = y;
+            let x = read_frames(&path, &h, fa, fb.max(fa), &sigs)?;
+            for ((k, s), y) in items.into_iter().zip(x) {
+                // the samples read start at frame fa
+                let first = fa * spf(s);
+                let (lo, hi) = ((a as u64).saturating_sub(first) as usize, span(s).2.saturating_sub(first) as usize);
+                out[k] = if lo < hi.min(y.len()) { y[lo..hi.min(y.len())].to_vec() } else { vec![] };
             }
         }
         Ok(out)

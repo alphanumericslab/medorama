@@ -1,8 +1,7 @@
-// Actions: run actions (indexing, plug-ins) on selected encounters, a search, a cohort's
-// members (#/actions?cohort=…), or everything.
+// Actions: run actions (indexing, plug-ins) on the recordings of a cohort's members
+// (#/actions?cohort=…), or on every recording of the databases the user may view.
 
 import { $, $$, api, canRun, esc, fail, store, toast } from '../core.js';
-import { encState, updateSelection } from './encounters.js';
 import { pollJobs } from './jobs.js';
 
 async function load(r) {
@@ -24,7 +23,6 @@ async function load(r) {
   $('#act-problems').classList.toggle('hidden', !data.problems.length);
   $('#act-problems').textContent = data.problems.length ? `Not loaded: ${data.problems.join('; ')}` : '';
   $('#act-run').disabled = !canRun();
-  updateSelection();
 }
 
 async function run() {
@@ -33,16 +31,12 @@ async function run() {
   if (!names.length) return toast('Tick at least one action', true);
   const scope = $$('input[name="act-scope"]').find((i) => i.checked).value;
   let selection;
-  if (scope === 'selected') {
-    if (!encState.selected.size) return toast('No encounter selected (select some in Patient Catalog › Encounters)', true);
-    selection = { encounters: [...encState.selected] };
-  } else if (scope === 'search') selection = { search: encState.search };
-  else if (scope === 'cohort') {
+  if (scope === 'cohort') {
     if (!$('#act-cohort').value) return toast('No cohort yet: make one in Cohorts', true);
     selection = { cohort: +$('#act-cohort').value };
   }
   else {
-    if (!confirm('Run on every recording in the catalog?')) return;
+    if (!confirm('Run on every recording of the databases you may view?')) return;
     selection = { all: true };
   }
   const r = await api('runs', { method: 'POST', json: { actions: names, selection, force: $('#act-force').checked } });

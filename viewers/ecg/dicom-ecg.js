@@ -15,6 +15,27 @@
   /** A channel's units (UCUM `uV`, `mV`, or their meanings) as the JSON form names them; DICOM ECGs are in µV unless said. */
   const dicomUnits = (u) => (/^(mv|millivolt)/i.test(u || '') ? 'mV' : /^(v|volt)$/i.test(u || '') ? 'V' : 'uV');
 
+  // the twelve leads by their codes in the Channel Source Sequence (003A,0208): MDC (ISO/IEEE
+  // 11073-10101 MDC_ECG_LEAD_*, partition 2, as "2:1" or as its context-free number 131329) and
+  // SCP-ECG ("5.6.3-9-1"; DICOM's CID 3001)
+  const BY_CODE = { 1: 'I', 2: 'II', 3: 'V1', 4: 'V2', 5: 'V3', 6: 'V4', 7: 'V5', 8: 'V6', 61: 'III', 62: 'aVR', 63: 'aVL', 64: 'aVF' };
+  /** A lead's standard name from its code ({ value, scheme }), or null. */
+  function leadOfCode(code) {
+    const v = String(code?.value ?? '').trim();
+    const scheme = String(code?.scheme ?? '').trim().toUpperCase();
+    let n = null;
+    if (/^MDC/.test(scheme)) {
+      const m = /^2:(\d+)$/.exec(v);
+      n = m ? +m[1] : /^\d+$/.test(v) && (+v >> 16) === 2 ? (+v & 0xffff) : null;
+    } else if (/^SCPECG/.test(scheme)) {
+      const m = /^5\.6\.3-9-(\d+)$/.exec(v);
+      n = m ? +m[1] : null;
+    }
+    return (n !== null && BY_CODE[n]) || null;
+  }
+  /** A channel's name: the standard lead its code or its label names, else its label. */
+  const leadName = (c) => leadOfCode(c.code) || ECG.standardLead(c.name) || c.name;
+
   /**
    * A DICOM ECG (12-lead, general or ambulatory waveform; read by dicom.js) in the viewer's JSON
    * form: the longest group of channels (the rhythm, not the median beats), its annotations as
@@ -34,7 +55,7 @@
     return {
       name: 'DICOM ECG',
       fs: g.fs,
-      leads: g.channels.map((c) => ({ name: c.name, units: dicomUnits(c.units), samples: Array.from(c.samples) })),
+      leads: g.channels.map((c) => ({ name: leadName(c), units: dicomUnits(c.units), samples: Array.from(c.samples) })),
       meta: {
         fields: [['Acquired', w.acquired], ['Group', g.label]].filter((f) => f[1]),
         measurements,
@@ -56,7 +77,7 @@
     },
   });
 
-  const api = { dicomJson };
+  const api = { dicomJson, leadOfCode };
   if (node) module.exports = api;
   else root.DicomEcg = api;
 })(typeof self !== 'undefined' ? self : this);

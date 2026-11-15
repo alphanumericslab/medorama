@@ -62,7 +62,7 @@ precedence over an adapter that lists the same extensions (\file{.hea}, \file{.e
 An add-on arrives as an archive for one system,
 \file{<name>-adapter-<version>-<os>-<arch>.tar.gz} (Linux, macOS) or \file{.zip} (Windows),
 holding the program, its license and \file{INSTALL.txt}. An administrator installs it on the
-server, never through the page, because an adapter is a program that runs with the catalog's
+server, never through the page, because an adapter is a program that runs with Medorama's
 rights.
 
 \paragraph{1. Unpack it, and allow the system to run it.} Programs downloaded from the internet
@@ -78,8 +78,8 @@ Expand-Archive stp-adapter-0.1.0-windows-amd64.zip .
 Unblock-File stp-adapter-0.1.0-windows-amd64\stp-adapter.exe
 \end{lstlisting}
 
-\paragraph{2. Install it, as the account that runs the catalog} (or with \opt{-{}-home} naming
-the catalog), so that it goes into that catalog's adapter folder (\code{adapters\_dir}). The
+\paragraph{2. Install it, as the account that runs Medorama} (or with \opt{-{}-home} naming
+Medorama's home), so that it goes into that installation's adapter folder (\code{adapters\_dir}). The
 following commands install it and list the installed adapters:
 \begin{lstlisting}[style=shell]
 medorama addons install stp-adapter-0.1.0-linux-x86_64/stp-adapter
@@ -97,14 +97,16 @@ again. Installing and removing are written to the audit log (\code{addon\_instal
 stops the VitalStream viewer it runs, so the next viewer sees the add-on too. \ui{Admin}
 $\rightarrow$ \ui{Add-ons} then lists it.
 
-\paragraph{4. Import again the tables that named such files before.} An import skips a recording
-that no installed reader reads, and that no viewer opens either (\code{line N: FILE: not a
-recording Medorama reads. A format read by an add-on needs it installed ...}), and keeps nothing
-of it. Once the add-on is installed, remove that earlier import (\ui{Import} $\rightarrow$
-\ui{Sources}, or \cmd{medorama imports list} and then \cmd{medorama imports remove ID}) and
-import the table again. The files then come in as recordings, linked to their patients and
-indexed by the workers. Importing the table again without removing the first import makes a
-second copy of the database.
+\paragraph{4. Build again the databases that named such files before.} db-builder finds the
+add-ons in the default adapter folder (\file{\textasciitilde/.local/share/medorama/adapters} of the
+account that runs it; it has no \code{adapters\_dir} setting), and a file that no installed reader
+reads is not a recording to it: \cmd{db-builder recordings} does not find it in a folder, and a
+table's row keeps it as the file of its entry (\cref{sec:importing-files}). Once the add-on is
+installed, run \cmd{db-builder recordings} on the folder again (the recordings it now finds
+replace the folder's earlier source), or, for a table, take its source out (\cmd{db-builder info},
+then \cmd{db-builder remove-source}) and add the table again: an unchanged table added again is
+not added twice. Medorama reads the database again at its next check, and its workers index the
+new recordings (\cref{chap:recordings}).
 
 \paragraph{The viewers on their own.} Without Medorama, copy the program into the viewers'
 adapter folder (by default the same, \file{\textasciitilde/.local/share/medorama/adapters}, or
@@ -134,8 +136,8 @@ unblock it as in step 1, and restart the viewer.
 \cmd{addons list} shows it, but its files are still refused & The server was not restarted
   (step 3), or it runs as another account whose \code{adapters\_dir} is elsewhere. Run
   \cmd{medorama addons list} as that account. \\
-Recordings named by an earlier import are missing & They were skipped before the add-on was
-  installed. Remove that import and import the table again (step 4). \\
+Recordings named by an earlier build are missing & They were not recordings to db-builder before
+  the add-on was installed. Build their source again (step 4). \\
 \end{xltabular}
 
 \section{How the programs use adapters}
@@ -147,23 +149,24 @@ Recordings named by an earlier import are missing & They were skipped before the
   name, the first in name order is used.
 \item \textbf{Browsing.} A file whose extension an adapter lists is a recording of that adapter's
   kind.
-\item \textbf{Indexing.} The program creates a temporary index folder, runs
-  \code{index FILE FOLDER} and shows the progress lines. It then adds the fields it owns
+\item \textbf{Indexing.} The program creates a private temporary folder next to its index store,
+  runs \code{index FILE FOLDER} and shows the progress lines. It then adds the fields it owns
   (\code{path}, \code{name}, \code{key}, \code{index\_version}, \code{engine},
   \code{indexed\_s}, and \code{kind}, \code{format}, \code{adapter}) to the \file{meta.json}
-  that the adapter wrote, and renames the folder into place.
+  that the adapter wrote, packs the folder's files into the store in one transaction, and removes
+  the folder (\cref{sec:formats-reference-writing}). The adapter writes files as before; it never
+  sees the store or its key.
 \item \textbf{Viewing.} Envelopes, markers and vital signs come from the index. Raw samples, when
   a view zooms in close enough, are read from the recording itself through the adapter's
   \code{serve} session. There is one session per adapter, started at the first request and kept
   open, and started again once if it has ended. The sessions of different adapters answer side
   by side; one adapter's requests are answered in turn.
-\item \textbf{Identifiers} (Medorama only). The built-in action \code{identify} asks the adapter
-  for the identifiers the file states (\code{identify FILE}), and keeps them in the catalog's
-  database only (\cref{chap:administration}).
+\item \textbf{Identifiers.} Medorama does not ask an adapter for the identifiers a file states: a
+  recording's patient is the one its database's row names (\cref{chap:recordings}). The
+  protocol's \code{identify} command is there for the tools that build such databases.
 \end{enumerate}
-Indexes written through an adapter are shared like the others: the three viewers and Medorama
-read and write the same index folders, and the three implementations of the stp-adapter write
-the same bytes.
+Indexes written through an adapter are kept like the others, in the program's index store, and
+the three implementations of the stp-adapter write the same bytes.
 
 \section{The protocol}
 \label{sec:addons-protocol}
@@ -220,8 +223,8 @@ Prints one line per path, \code{\{"path": ..., "identifiers": \{...\} or null, "
 \code{full\_name}, \code{last\_name}, \code{first\_name}, \code{patient\_id},
 \code{encounter\_id}, \code{birth\_date} (\code{YYYY-MM-DD}) and \code{sex}, each a string,
 empty when the file does not state it. \code{identifiers} is the first set the file states, and
-\code{others} lists the different sets found after it (at most 10). Only Medorama asks for
-identifiers. The example below is invented:
+\code{others} lists the different sets found after it (at most 10). Neither Medorama nor the
+viewers ask for identifiers. The example below is invented:
 \begin{lstlisting}[language=JSON]
 {"path": "/data/demo/rec_0001.stp", "identifiers": {"full_name": "TEST, PATIENT",
  "last_name": "TEST", "first_name": "PATIENT", "patient_id": "SYN0001", "encounter_id": "",
@@ -238,7 +241,13 @@ line of JSON:
 {"op": "read", "index": "/path/to/the/index/folder", "piece": 3, "a": 1000, "b": 3500}
 \end{lstlisting}
 It asks for the physical samples \code{a} to \code{b - 1} of piece \code{piece} of the recording
-indexed in \code{index}, whose \file{meta.json} now holds the recording's \code{path}. The answer
+indexed in \code{index}, whose \file{meta.json} now holds the recording's \code{path}. Since
+indexes are kept in a store, \code{index} is a private temporary folder that holds only that
+\file{meta.json} (\file{index.tmp/<key>.<process id>.<n>.read}, readable by its owner only, one
+per loaded recording), removed when the recording is closed. Version 2 of the protocol, which
+would send the \file{meta.json} itself in the request (\code{"meta": \{\dots\}}) in place of
+\code{index}, is specified in \file{viewers/vitalstream/docs/index-format.md} but not yet
+implemented by any adapter. The answer
 is one line, \code{\{"n": k\}}, followed at once by \code{k} little-endian 64-bit floats (NaN for
 the samples the recording marks missing), or one line \code{\{"error": "..."\}} with nothing
 after it. An adapter answers requests in order, may keep recordings open between them, and ends
@@ -279,7 +288,7 @@ same.
 \code{index} & 300\,s without a line of output (a progress line resets the time), and 300\,s for
   the adapter to exit once its output ends; lines of at most 1\,MiB. A cancelled index stops the
   adapter within a tenth of a second & The adapter is stopped; the index fails, and nothing is
-  left in the index folder \\
+  left in the store or next to it \\
 \code{serve} & 60\,s without a byte of an answer; an answer line of at most 1\,MiB. The program
   asks for at most $2^{20}$ samples in one request and splits longer reads. The answer's
   \code{n} must be a whole number from 0 to \code{b - a}; fewer samples than asked mean that the
@@ -345,13 +354,13 @@ An adapter must meet these rules:
 
 \begin{itemize}
 \item \textbf{An adapter is code that runs with the rights of the program that calls it} (the
-  catalog's service account, or a viewer's user). Install only adapters from their publisher, and
+  service account of Medorama or db-builder, or a viewer's user). Install only adapters from their publisher, and
   keep the adapter folder writable by its owner only (the default folder is in that user's home).
 \item \textbf{It reads recordings, which may hold identifiers.} It must not send anything over the
-  network, and it writes only into the index folder it is given. The stp-adapter opens no
+  network, and it writes only into the folder it is given to index into. The stp-adapter opens no
   network connection and writes no other file.
-\item \textbf{The identifiers it reads} (\code{identify}) go only to Medorama's database, as other
-  identifiers do (\cref{chap:users-privacy}). The index holds none.
+\item \textbf{The identifiers it reads} (\code{identify}) go only to the program that asked;
+  Medorama and the viewers never ask. The index holds none.
 \item \textbf{A failing adapter} (a crash, or a malformed answer) makes the recording unreadable,
   never the program. The indexing fails with the adapter's message, and a session that ended is
   started again once. An adapter that stops answering is stopped after a time limit

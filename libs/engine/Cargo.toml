@@ -1,6 +1,6 @@
 [package]
 name = "recording-engine"
-version = "0.1.0"
+version = "0.2.0"
 description = "The recording engine of Medorama and VitalStream: read, index and query physiological recordings (WFDB records and folders, EDF, EDF+ and BDF files; other formats through adapters)"
 readme = "README.md"
 edition.workspace = true
@@ -28,6 +28,8 @@ indexmap.workspace = true
 memmap2.workspace = true
 rayon.workspace = true
 sha2.workspace = true
+# the index store (format 3): SQLCipher, OpenSSL built from source (Perl and a C compiler)
+rusqlite = { version = "0.42", features = ["bundled-sqlcipher-vendored-openssl"] }
 
 [dev-dependencies]
 tempfile.workspace = true

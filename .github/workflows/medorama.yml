@@ -1,7 +1,7 @@
-# Medorama (medorama/): the API description; fuzzing; build and test on Linux, macOS and Windows;
-# the coverage floor; the same tests on PostgreSQL (the oldest and newest versions supported);
-# the build with database encryption (SQLCipher) on Linux; the build without WFDB support (no
-# wfdb-x code) on Linux; the installer
+# Medorama (medorama/) and db-builder (db-builder/): the API description; fuzzing; build and test
+# on Linux, macOS and Windows; the coverage floor; the same tests on PostgreSQL (the oldest and
+# newest versions supported); the build without WFDB support (no wfdb-x code) on Linux; the
+# installer
 # tools/install-medorama.sh/.ps1 (Medorama + one VitalStream viewer); the ECG and PACS viewers'
 # tests (it serves them).  It uses the workspace's libraries (libs/), so changes there run it
 # too; format, lint and the dependencies' checks are rust.yml's, for the whole workspace.
@@ -12,12 +12,12 @@ on:
     - cron: "17 5 * * 1"   # Mondays: advisories published since, and fuzzing
   workflow_dispatch:
   push:
-    paths: ["Cargo.toml", "Cargo.lock", "deny.toml", "libs/**", "medorama/**", "viewers/vitalstream/rust/**", "viewers/vitalstream/cpp/**",
-            "viewers/vitalstream/web/**", "viewers/vitalstream/tests/web/**", "viewers/ecg/**", "viewers/pacs/**", "tools/install-medorama.*", "tools/make-demo-data.py",
+    paths: ["Cargo.toml", "Cargo.lock", "deny.toml", "libs/**", "medorama/**", "db-builder/**", "viewers/vitalstream/rust/**", "viewers/vitalstream/cpp/**",
+            "viewers/vitalstream/web/**", "viewers/vitalstream/tests/web/**", "viewers/ecg/**", "viewers/pacs/**", "tools/install-medorama.*", "tools/make-demo-data.py", "tools/demo/**",
             ".github/workflows/medorama.yml"]
   pull_request:
-    paths: ["Cargo.toml", "Cargo.lock", "deny.toml", "libs/**", "medorama/**", "viewers/vitalstream/rust/**", "viewers/vitalstream/cpp/**",
-            "viewers/vitalstream/web/**", "viewers/vitalstream/tests/web/**", "viewers/ecg/**", "viewers/pacs/**", "tools/install-medorama.*", "tools/make-demo-data.py",
+    paths: ["Cargo.toml", "Cargo.lock", "deny.toml", "libs/**", "medorama/**", "db-builder/**", "viewers/vitalstream/rust/**", "viewers/vitalstream/cpp/**",
+            "viewers/vitalstream/web/**", "viewers/vitalstream/tests/web/**", "viewers/ecg/**", "viewers/pacs/**", "tools/install-medorama.*", "tools/make-demo-data.py", "tools/demo/**",
             ".github/workflows/medorama.yml"]
 
 permissions:
@@ -215,7 +215,8 @@ jobs:
         run: cargo build --release --locked -p vitalstream-rs
       - run: cargo test --release --locked -p medorama
 
-  encryption:
+  db-builder:
+    # the tool that makes tables, exports and folders of recordings into databases to connect
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -224,7 +225,8 @@ jobs:
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: cargo test --release --locked -p medorama --features encryption
+      - run: cargo test --release --locked -p db-builder
+      - run: cargo test --release --locked -p db-builder --no-default-features
 
   nowfdb:
     # without the `wfdb` feature (tools/install-medorama.sh --no-wfdb): no wfdb-x code; a WFDB
@@ -247,8 +249,9 @@ jobs:
       - run: cargo test --release --locked -p medorama --no-default-features
 
   installer:
-    # tools/install-medorama.sh / .ps1 as a user runs them: the catalog, one chosen viewer and the
-    # demo (--demo), which `medorama init` loads and `medorama demo remove` removes
+    # tools/install-medorama.sh / .ps1 as a user runs them: Medorama, db-builder, one chosen viewer
+    # and the demo (--demo), whose databases `medorama init --demo` connects and `medorama
+    # databases remove` removes with every trace of them
     strategy:
       fail-fast: false
       matrix:
@@ -265,27 +268,40 @@ jobs:
           python-version: "3.12"
       - name: tools/install-medorama.sh
         if: runner.os != 'Windows'
-        run: tools/install-medorama.sh --viewer ${{ matrix.viewer }} --demo
+        run: tools/install-medorama.sh --viewer ${{ matrix.viewer }} --demo --accept-license
       - name: tools\install-medorama.ps1
         if: runner.os == 'Windows'
-        run: powershell -ExecutionPolicy Bypass -File tools\install-medorama.ps1 -Viewer ${{ matrix.viewer }} -Demo; if ($LASTEXITCODE) { exit 1 }
+        run: powershell -ExecutionPolicy Bypass -File tools\install-medorama.ps1 -Viewer ${{ matrix.viewer }} -Demo -AcceptLicense; if ($LASTEXITCODE) { exit 1 }
       - name: The two programs and the recorded choice
         shell: bash
         run: |
           bin=.venv/bin; [ -d .venv/Scripts ] && bin=.venv/Scripts
           "$bin/medorama" --version
+          "$bin/db-builder" --version
           "$bin/vitalstream-${{ matrix.viewer }}" --version
           test "$(tr -d '\r\n' < $bin/medorama.viewer)" = "${{ matrix.viewer }}"
-      - name: The demo, loaded by init and removed
+      - name: The demo, connected by init and removed
         shell: bash
         run: |
           bin=.venv/bin; [ -d .venv/Scripts ] && bin=.venv/Scripts
           test -s "$bin/medorama.demo"
-          # init remembers the catalog in the home folder: a temporary one
+          # init remembers the home in the user's home folder: a temporary one
           export HOME="$RUNNER_TEMP/home" APPDATA="$RUNNER_TEMP/home" LOCALAPPDATA="$RUNNER_TEMP/home"
           mkdir -p "$HOME"
-          cat="$RUNNER_TEMP/catalog"
-          echo 'a-ci-password-1' | "$bin/medorama" --home "$cat" init --results "$RUNNER_TEMP/results" --password-stdin
-          "$bin/medorama" --home "$cat" sources list | grep '^DEMO '
-          "$bin/medorama" --home "$cat" demo remove
-          if "$bin/medorama" --home "$cat" sources list | grep '^DEMO '; then exit 1; fi
+          h="$RUNNER_TEMP/medorama"
+          echo 'a-ci-password-1' | "$bin/medorama" --home "$h" init --workspace "$RUNNER_TEMP/workspace" --demo --password-stdin
+          # every database of the full demo (tools/make-demo-data.py's demo-databases.json) online
+          for d in demo demo_north demo_omop demo_registry demo_secure; do
+            "$bin/medorama" --home "$h" databases list | grep "^$d .*online"
+          done
+          # patients linked across databases (one of them by an MRN in another letter case), and
+          # the one identity conflict listed
+          "$bin/medorama" --home "$h" list | grep '49 of 49 patient(s)'
+          "$bin/medorama" --home "$h" databases conflicts demo_north | grep 'different patients'
+          # the example plug-in, from the demo's actions folder
+          grep -qE 'demo.{1,2}actions' "$h/medorama.toml"
+          for d in demo demo_north demo_omop demo_registry demo_secure; do
+            "$bin/medorama" --home "$h" databases remove $d --yes
+          done
+          if "$bin/medorama" --home "$h" databases list | grep '^demo'; then exit 1; fi
+          test -z "$(ls "$RUNNER_TEMP/workspace" | grep '^db-')"

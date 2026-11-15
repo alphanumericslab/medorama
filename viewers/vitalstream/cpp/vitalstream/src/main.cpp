@@ -8,12 +8,14 @@
 #include <chrono>
 #include <csignal>
 #include <cstdio>
+#include <iostream>
 #include <thread>
 
 #include "engine/adapters.hpp"
 #include "auth.hpp"
 #include "engine/index.hpp"
 #include "engine/sources.hpp"
+#include "engine/store.hpp"
 #include "server.hpp"
 #include "settings.hpp"
 #include "core/paths.hpp"
@@ -74,7 +76,8 @@ int main(int argc, char** argv) {
   std::optional<std::string> config, host, timezone, cache_dir, adapters_dir, index_path;
   std::optional<int> port;
   std::vector<std::string> roots;
-  bool no_browser = false, set_pw = false, clear_pw = false, no_auth = false, qc_verbose = false;
+  bool no_browser = false, set_pw = false, clear_pw = false, no_auth = false, qc_verbose = false,
+       keys_on_stdin = false;
   cli.add_option("--config", config,
                  "settings file (TOML); default: <viewer>/vitalstream.toml (run from the clone's build folder) "
                  "or ~/.config/vitalstream/vitalstream.toml if present (never one in the working directory); "
@@ -96,7 +99,10 @@ int main(int argc, char** argv) {
   cli.add_flag("--set-password", set_pw, "set (or change) the password the page asks for, then exit");
   cli.add_flag("--clear-password", clear_pw, "remove the password, then exit");
   cli.add_flag("--no-auth", no_auth, "run without asking for the password");
-  cli.add_option("--index", index_path, "index PATH into the cache and exit")->type_name("PATH");
+  cli.add_option("--index", index_path, "index PATH into the index store (cache_dir/index.sqlite) and exit")->type_name("PATH");
+  cli.add_flag("--keys-on-stdin", keys_on_stdin,
+               "the index stores and their keys come on standard input, one JSON line each (Medorama, which "
+               "launches the viewer: viewers/vitalstream/docs/index-format.md, \"The key on a pipe\")");
   CLI11_PARSE(cli, argc, argv);
 
   Settings s;
@@ -167,8 +173,9 @@ int main(int argc, char** argv) {
   if (index_path) {
     try {
       std::string p = absolute(*index_path);
-      std::string key = build_index(vitalstream::core::utf8_path(p), s.cache_dir, [](double) {});
-      std::printf("indexed %s -> %s/%s/\n", index_path->c_str(), vitalstream::core::path_utf8(s.cache_dir).c_str(),
+      auto own = Stores::own_from(s)->own();
+      std::string key = build_into_store(vitalstream::core::utf8_path(p), *own, [](double) {});
+      std::printf("indexed %s -> %s (%s)\n", index_path->c_str(), vitalstream::core::path_utf8(own->path()).c_str(),
                   key.c_str());
       return 0;
     } catch (const std::exception& e) {
@@ -183,13 +190,32 @@ int main(int argc, char** argv) {
                                     : ", and this viewer was built without password support");
     return 1;
   }
+  // launched by Medorama: its stores and their keys arrive on standard input, and are forgotten
+  // when it closes
   std::shared_ptr<App> app;
+  std::shared_ptr<Stores> stores;
   try {
-    app = make_app(s, protected_);
+    stores = keys_on_stdin ? std::make_shared<Stores>() : Stores::own_from(s);
+    app = make_app(s, protected_, stores);
   } catch (const std::exception& e) {
     std::fprintf(stderr, "vitalstream-cpp: %s\n", e.what());
     return 1;
   }
+  if (keys_on_stdin)
+    std::thread([stores] {
+      std::string line;
+      while (std::getline(std::cin, line)) {
+        if (line.empty() || line == "\r") continue;
+        try {
+          stores->apply(line);
+        } catch (const std::exception& e) {
+          // the line is never repeated: it may hold a key
+          std::fprintf(stderr, "vitalstream-cpp: a store from standard input: %s\n", e.what());
+        }
+        std::fill(line.begin(), line.end(), '\0');
+      }
+      stores->forget_all();
+    }).detach();
   httplib::Server svr;
   add_routes(svr, app);
   if (!svr.bind_to_port(s.host, s.port)) {

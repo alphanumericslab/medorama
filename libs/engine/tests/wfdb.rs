@@ -382,3 +382,116 @@ fn a_dotted_record_name_names_its_own_header() {
     assert_eq!(names, ["rec.v1.hea"]);
     assert!(index::build_index(&dir.path().join("rec.v1.hea"), &dir.path().join("cache"), &|_| {}).is_err());
 }
+
+#[test]
+fn a_header_without_a_sample_count_is_read_to_the_end_of_its_data() {
+    // a record line with no number of samples (wfdb-x gives 0): every sample the file holds, as
+    // libwfdb reads it
+    let dir = tempfile::tempdir().unwrap();
+    record(dir.path(), "r", "r 1 250", &[1, 2, 3, 4, 5, 6, 7, 8]);
+    let m = meta_of(&dir.path().join("r.hea"), &dir.path().join("cache"));
+    assert_eq!(list(&m, "pieces")[0].get("n").and_then(Value::as_int), Some(8));
+    let scan = wfdb_folder::scan(&dir.path().join("r.hea"), &Limits::default()).unwrap();
+    assert_eq!(scan.get("duration_s").and_then(Value::as_f64), Some(8.0 / 250.0));
+}
+
+/// A multi-frequency record `mf` in `dir`: signals A (4 samples per frame), B (1) and C (2), 5
+/// frames at 100 Hz; A's sample j is j, B's is 1000 + j, C's is 2000 + 10 (j / 2) + j % 2; a
+/// marker `N` at frame 2 of A.
+fn multi_frequency(dir: &Path) {
+    let (mut v, mut sums) = (vec![], [0i16; 3]);
+    for f in 0..5i16 {
+        let frame: Vec<(usize, i16)> = (0..4)
+            .map(|k| (0, 4 * f + k))
+            .chain([(1, 1000 + f)])
+            .chain((0..2).map(|k| (2, 2000 + 10 * f + k)))
+            .collect();
+        for (s, x) in frame {
+            sums[s] = sums[s].wrapping_add(x);
+            v.push(x);
+        }
+    }
+    let head = format!(
+        "mf 3 100 5\nmf.dat 16x4 1/mV 16 0 0 {} 0 A\nmf.dat 16 1/mV 16 0 0 {} 0 B\nmf.dat 16x2 1/mV 16 0 0 {} 0 C\n",
+        sums[0], sums[1], sums[2]
+    );
+    std::fs::write(dir.join("mf.hea"), head).unwrap();
+    std::fs::write(dir.join("mf.dat"), v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()).unwrap();
+    // MIT format: code 1 (N) 2 frames after 0, then the end
+    std::fs::write(dir.join("mf.mrk"), [2u8, 4, 0, 0]).unwrap();
+}
+
+#[test]
+fn a_multi_frequency_record_keeps_every_sample_of_each_signal() {
+    let dir = tempfile::tempdir().unwrap();
+    multi_frequency(dir.path());
+    let cache = dir.path().join("cache");
+    let key = index::build_index(&dir.path().join("mf.hea"), &cache, &|_| {}).unwrap();
+    let (meta, arrays) = index::load_index(&cache, &key).unwrap();
+    let pieces = list(&meta, "pieces");
+    assert_eq!(pieces.iter().map(|p| f(p, "fs")).collect::<Vec<_>>(), [400.0, 100.0, 200.0]);
+    assert_eq!(pieces.iter().map(|p| f(p, "n")).collect::<Vec<_>>(), [20.0, 5.0, 10.0]);
+    let ds = recording_engine::dataset::Dataset::new(meta, arrays);
+    assert_eq!(ds.samples(0, 0, 20).unwrap(), (0..20).map(f64::from).collect::<Vec<_>>());
+    assert_eq!(ds.samples(0, 7, 13).unwrap(), (7..13).map(f64::from).collect::<Vec<_>>());
+    assert_eq!(ds.samples(1, 1, 4).unwrap(), [1001.0, 1002.0, 1003.0]);
+    assert_eq!(ds.samples(2, 3, 7).unwrap(), [2011.0, 2020.0, 2021.0, 2030.0]);
+    assert_eq!(ds.samples(2, 8, 50).unwrap(), [2040.0, 2041.0]);
+    // the marker at frame 2: sample 8 of A
+    assert_eq!(arrays_of(&cache, &key, "mk_sample.i64"), 8i64.to_le_bytes());
+}
+
+/// The bytes of array `name` of the index `key` in `cache`.
+fn arrays_of(cache: &Path, key: &str, name: &str) -> Vec<u8> {
+    std::fs::read(cache.join(key).join(name)).unwrap()
+}
+
+#[test]
+fn records_without_a_start_before_the_first_with_one_end_where_it_starts() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path().join("f");
+    record(&d, "a", "a 1 250 4", &[1, 2, 3, 4]);
+    record(&d, "b", "b 1 250 4 10:00:00 01/03/2024", &[1, 2, 3, 4]);
+    record(&d, "c", "c 1 250 4", &[1, 2, 3, 4]);
+    let m = meta_of(&d, &dir.path().join("cache"));
+    let p = list(&m, "pieces");
+    assert_eq!(f(&p[1], "t0"), T0);
+    assert_eq!(f(&p[0], "t0"), T0 - 4.0 / 250.0); // not 1970
+    assert_eq!(f(&p[2], "t0"), T0 + 4.0 / 250.0);
+    assert_eq!(p[0].get("timed"), Some(&Value::Bool(false)));
+    assert!(list(&m, "notes")
+        .iter()
+        .any(|n| n.as_str().is_some_and(|n| n.contains("before the first record with one"))));
+    // no record with a start: from 0, as before
+    std::fs::remove_file(d.join("b.hea")).unwrap();
+    let m = meta_of(&d, &dir.path().join("cache2"));
+    assert_eq!(f(&list(&m, "pieces")[0], "t0"), 0.0);
+}
+
+#[test]
+fn a_compressed_record_without_a_sample_count_is_counted() {
+    // FLAC (format 516) cannot be measured from the file's size: its frames are counted
+    let dir = tempfile::tempdir().unwrap();
+    let samples: Vec<i32> = (0..300).collect();
+    let opt = wfdbx::WriteOptions {
+        fmt: 516,
+        gains: vec![1.0],
+        adcres: vec![16],
+        names: vec![b"II".to_vec()],
+        units: vec![Some(b"mV".to_vec())],
+        dir: Some(dir.path().to_path_buf()),
+        ..Default::default()
+    };
+    wfdbx::Wfdb::new().write_record("z", &samples, 1, 250.0, &opt).unwrap();
+    let hea = dir.path().join("z.hea");
+    let text = std::fs::read_to_string(&hea).unwrap();
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+    lines[0] = "z 1 250".into(); // no number of samples
+    std::fs::write(&hea, lines.join("\n") + "\n").unwrap();
+    let cache = dir.path().join("cache");
+    let key = index::build_index(&hea, &cache, &|_| {}).unwrap();
+    let (meta, arrays) = index::load_index(&cache, &key).unwrap();
+    assert_eq!(list(&meta, "pieces")[0].get("n").and_then(Value::as_int), Some(300));
+    let ds = recording_engine::dataset::Dataset::new(meta, arrays);
+    assert_eq!(ds.samples(0, 297, 400).unwrap(), [297.0, 298.0, 299.0]);
+}

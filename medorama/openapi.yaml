@@ -5,18 +5,18 @@ openapi: 3.1.0
 info:
   title: Medorama API
   version: "1"
-  summary: "Patients, cohorts, databases and connected databases, users, jobs and audit."
+  summary: "Connected databases, patients, cohorts, recordings, users, jobs and audit."
   description: |
     JSON in and out, under `/api/v1`. Every request except `login` needs the session
     cookie (`medorama_<port>`, HttpOnly, SameSite=Strict); every request other than GET, `login`
     included, needs the header `X-Medorama: 1` (403 without it). Answers carry
-    `Cache-Control: no-store`: 200, or 202 for an import started in the background. Errors are
+    `Cache-Control: no-store`: 200. Errors are
     `{"detail": "…"}` with 400 (a wrong request), 401 (not signed in), 403 (the role or the PHI
-    permission does not allow it), 404, 413 (a body over 1 GiB for the uploads, 2 MB elsewhere),
-    429 (too many failed sign-ins), 500 (a fault of the server) or 503 (the catalog's one writer
-    is busy saving an import, with `Retry-After: 5`; or the viewer cannot be started). Any route
+    permission or a grant does not allow it), 404, 413 (a body over 2 MB),
+    429 (too many failed sign-ins), 500 (a fault of the server) or 503 (the control store's one
+    writer is busy, with `Retry-After: 5`; or the viewer cannot be started). Any route
     may answer 500 or 503 (`Busy`). A body that is not JSON of the expected shape is refused
-    with a plain-text 400, 415 or 422 (the removals refuse unknown fields).
+    with a plain-text 400, 415 or 422.
 
     In Privacy Mode (users without the PHI permission always; others when they choose) every
     answer passes the privacy gate: identifiers replaced by placeholders and pseudonyms, dates
@@ -33,8 +33,6 @@ tags:
   - name: patients
   - name: cohorts
   - name: databases
-  - name: imports
-  - name: review
   - name: recordings
   - name: work
   - name: admin
@@ -100,13 +98,12 @@ paths:
                   auto_index: { type: boolean, description: "new and changed recordings are indexed while the server runs" }
                   workers: { type: integer, description: "the number of job workers" }
                   user: { type: object }
-                  results_dir: { type: [string, "null"], description: "admins only" }
-                  index_dir: { type: [string, "null"], description: "admins only" }
+                  workspace_dir: { type: [string, "null"], description: "admins only" }
                   viewer: { type: object, description: "the viewer's status: {mode, flavor, running, reason, url}" }
                   deid: { type: [object, "null"], description: "Privacy Mode's settings (as GET deid)" }
                   display: { type: [object, "null"], description: "date and time formats" }
   /deid:
-    get: { tags: [session], summary: "What Privacy Mode withholds and the date offset", responses: { "200": { $ref: "#/components/responses/Json" } } }
+    get: { tags: [admin], summary: "What Privacy Mode withholds and the date offset (admins; other users read what it withholds, without the offset, in GET config)", responses: { "200": { $ref: "#/components/responses/Json" }, "403": { $ref: "#/components/responses/Error" } } }
   /admin/display:
     put:
       tags: [admin]
@@ -121,15 +118,18 @@ paths:
       tags: [admin]
       summary: "Change what Privacy Mode withholds and the date offset (admins)"
       parameters: [{ $ref: "#/components/parameters/Csrf" }]
-      requestBody: { content: { application/json: { schema: { type: object, properties: { fields: { type: array, items: { type: string } }, offset: { type: object, properties: { years: { type: integer }, months: { type: integer }, days: { type: integer }, hours: { type: integer } } }, spread_days: { type: integer, minimum: 0, maximum: 3650, description: "each patient's own days on top of the offset, drawn once per patient (0: one offset for everyone)" } } } } } }
-      responses: { "200": { $ref: "#/components/responses/Json" }, "403": { $ref: "#/components/responses/Error" } }
+      requestBody: { content: { application/json: { schema: { type: object, properties: { fields: { type: array, items: { type: string } }, offset: { type: object, properties: { years: { type: integer }, months: { type: integer }, days: { type: integer }, hours: { type: integer } } }, spread_days: { type: integer, minimum: 30, maximum: 3650, description: "the most days each patient's own dates move on top of the offset, drawn once per patient (from 0 up to it); fewer than 30 are refused" } } } } } }
+      responses: { "200": { $ref: "#/components/responses/Json" }, "400": { $ref: "#/components/responses/Error" }, "403": { $ref: "#/components/responses/Error" } }
+  /health:
+    get: { tags: [session], security: [], summary: "Liveness, without a session: whether the control store answers and the background thread went round in the last two minutes (nothing else)", responses: { "200": { content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, control_store: { type: boolean }, background: { type: boolean } } } } }, description: Alive }, "503": { description: The control store does not answer, or the background thread stopped } } }
+
   /version:
-    get: { tags: [session], summary: "The data's version: moves at every import, removal or change of patients, encounters or recordings", responses: { "200": { content: { application/json: { schema: { type: object, properties: { data: { type: integer } } } } }, description: The version } } }
+    get: { tags: [session], summary: "The data's version: moves when a database is connected, refreshed, removed, or patients are linked", responses: { "200": { content: { application/json: { schema: { type: object, properties: { data: { type: integer } } } } }, description: The version } } }
 
   /patients:
     get:
       tags: [patients]
-      summary: "Patients, latest encounter first"
+      summary: "The patients of the databases the user may view, latest first"
       parameters:
         - { name: q, in: query, schema: { type: string }, description: "Search (docs/user-guide.md, Searching); identifiers with the PHI permission only" }
         - { name: has, in: query, schema: { type: string }, description: "Categories, comma-separated; !icu: without" }
@@ -140,7 +140,7 @@ paths:
       responses:
         "200": { content: { application/json: { schema: { type: object, properties: { total: { type: integer }, items: { type: array, items: { $ref: "#/components/schemas/PatientRow" } }, categories: { type: array } } } } }, description: A page of patients }
   /patients/{id}:
-    get: { tags: [patients], summary: "A patient's summary: identity (PHI), encounters, problems, medications, allergies, connected visits, unavailable sources", parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Json" }, "404": { $ref: "#/components/responses/Error" } } }
+    get: { tags: [patients], summary: "A patient's summary: identity (PHI, of the databases granted with phi), visits, problems, medications, allergies, databases, those not answering", parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Json" }, "404": { $ref: "#/components/responses/Error" } } }
   /patients/{id}/journey:
     get: { tags: [patients], summary: "The Patient Journey: columns, six-hour cells, spans", parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Json" } } }
   /patients/{id}/report:
@@ -174,14 +174,14 @@ paths:
       tags: [cohorts]
       summary: "Make a cohort"
       parameters: [{ $ref: "#/components/parameters/Csrf" }]
-      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string }, description: { type: string }, criteria: { $ref: "#/components/schemas/Criteria" }, source: { $ref: "#/components/schemas/CohortSource" }, patients: { type: array, items: { type: integer } } } } } } }
+      requestBody: { content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string }, description: { type: string }, criteria: { $ref: "#/components/schemas/Criteria" }, databases: { type: array, items: { type: integer } }, source: { $ref: "#/components/schemas/CohortSource" }, patients: { type: array, items: { type: integer } } } } } } }
       responses: { "200": { $ref: "#/components/responses/Json" }, "400": { $ref: "#/components/responses/Error" } }
   /cohorts/search:
     post:
       tags: [cohorts]
-      summary: "The patients meeting the criteria, with why (catalog and connected databases), and the first 50 those excluded take out"
+      summary: "The patients meeting the criteria in the databases ticked (none: every one granted for search), with why, the first 50 those excluded take out, and the databases searched and left out (offline, not ticked)"
       parameters: [{ $ref: "#/components/parameters/Csrf" }]
-      requestBody: { content: { application/json: { schema: { type: object, properties: { criteria: { $ref: "#/components/schemas/Criteria" }, source: { $ref: "#/components/schemas/CohortSource" }, within_source_of: { type: integer }, limit: { type: integer }, offset: { type: integer } } } } } }
+      requestBody: { content: { application/json: { schema: { type: object, properties: { criteria: { $ref: "#/components/schemas/Criteria" }, source: { $ref: "#/components/schemas/CohortSource" }, within_source_of: { type: integer }, databases: { type: array, items: { type: integer }, description: "the databases ticked (none: every one granted for search)" }, limit: { type: integer }, offset: { type: integer } } } } } }
       responses: { "200": { description: The patients found, content: { application/json: { schema: { $ref: "#/components/schemas/Found" } } } }, "400": { $ref: "#/components/responses/Error" } }
   /cohorts/parse:
     post:
@@ -198,9 +198,22 @@ paths:
       tags: [cohorts]
       summary: "Change it (editors): name, description, criteria, add, add_search, remove, shares (its owner)"
       parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }]
-      requestBody: { content: { application/json: { schema: { type: object } } } }
-      responses: { "200": { $ref: "#/components/responses/Json" }, "403": { $ref: "#/components/responses/Error" } }
-    delete: { tags: [cohorts], summary: "Delete it (its owner); cohorts made from it keep its last members. The demo's cohort (any admin): the demo goes with it, and the answer says what was removed", parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }], responses: { "200": { $ref: "#/components/responses/Json" } } }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+                criteria: { type: object, description: "the criteria (as POST cohorts/search): applied at the next refresh" }
+                databases: { type: array, items: { type: integer }, description: "the databases it searches (none: every one)" }
+                add: { type: array, items: { type: integer }, description: "patients to add (those the definition does not select count as added manually)" }
+                add_search: { type: object, properties: { q: { type: string }, has: { type: array, items: { type: string } }, cohort: { type: integer } }, description: "every patient the Patient Catalog's search finds (its words, kinds of data, a cohort's members), added" }
+                remove: { type: array, items: { type: integer }, description: "members removed manually" }
+                shares: { type: array, items: { type: object, required: [user_id], properties: { user_id: { type: integer }, can_edit: { type: boolean } } }, description: "who may see it, and edit it (its owner only)" }
+      responses: { "200": { $ref: "#/components/responses/Json" }, "400": { $ref: "#/components/responses/Error" }, "403": { $ref: "#/components/responses/Error" }, "404": { $ref: "#/components/responses/Error" } }
+    delete: { tags: [cohorts], summary: "Delete it (who manages it): its key destroyed, then its workspace file; cohorts made from it keep their own members", parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }], responses: { "200": { $ref: "#/components/responses/Json" } } }
   /cohorts/{id}/members:
     get: { tags: [cohorts], summary: "Its members", parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }], responses: { "200": { $ref: "#/components/responses/Json" } } }
   /cohorts/{id}/clone:
@@ -230,182 +243,58 @@ paths:
       responses: { "200": { $ref: "#/components/responses/File" } }
 
   /databases:
-    get: { tags: [databases], summary: "The databases in use (imported and connected): rows, patients, categories, held rows, waiting items", responses: { "200": { $ref: "#/components/responses/Json" } } }
-  /databases/{id}/rows:
-    get:
-      tags: [databases]
-      summary: "A database's rows as imported (a page); f<pos>: a column's filter"
-      parameters: [{ $ref: "#/components/parameters/Id" }, { name: q, in: query, schema: { type: string } }, { name: sort, in: query, schema: { type: integer } }, { name: desc, in: query, schema: { type: string } }, { $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
-      responses: { "200": { $ref: "#/components/responses/Json" }, "400": { $ref: "#/components/responses/Error" } }
-  /databases/{id}/export:
-    get: { tags: [databases], summary: "The database as CSV, as imported (admins); in Privacy Mode or with privacy=1 (deid=1, its earlier name) through the gate", parameters: [{ $ref: "#/components/parameters/Id" }, { name: privacy, in: query, schema: { type: boolean } }, { name: deid, in: query, schema: { type: boolean }, description: "the earlier name of privacy" }], responses: { "200": { $ref: "#/components/responses/File" }, "403": { $ref: "#/components/responses/Error" } } }
-  /connections:
-    get: { tags: [databases], summary: "The connected databases (admins; no secrets) with the persons linked", responses: { "200": { $ref: "#/components/responses/Json" }, "403": { $ref: "#/components/responses/Error" } } }
+    get: { tags: [databases], summary: "The connected databases the user is granted (admins: every one, to grant it), online first: status, counts, the user's permission; the URL and settings to who manages one (no secrets)", responses: { "200": { $ref: "#/components/responses/Json" } } }
     post:
       tags: [databases]
-      summary: "Connect a database (admins): checked first. A SQLite file must be inside data_roots; a password is kept in <home>/secrets (0600), never stored in the database nor sent back"
+      summary: "Connect a database (admins): checked first, then kept with its own data key and workspace folder, granted to the admin, its variables read and its persons linked. A SQLite file must be inside data_roots, never in the workspace; a password is kept wrapped by the master key"
       parameters: [{ $ref: "#/components/parameters/Csrf" }]
-      requestBody: { content: { application/json: { schema: { type: object, required: [name, kind, url], properties: { name: { type: string }, kind: { type: string, enum: [omop, sql] }, url: { type: string }, password: { type: string }, settings: { type: object } } } } } }
+      requestBody: { content: { application/json: { schema: { type: object, required: [name, kind, url], properties: { name: { type: string }, kind: { type: string, enum: [omop, views, dbb] }, url: { type: string }, password: { type: string }, ca_file: { type: string }, settings: { type: object } } } } } }
       responses: { "200": { $ref: "#/components/responses/Json" }, "400": { $ref: "#/components/responses/Error" }, "403": { $ref: "#/components/responses/Error" } }
-  /connections/{id}:
-    delete: { tags: [databases], summary: "Disconnect a database (admins): its links and what it added go, and the password file the page made", parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }], responses: { "200": { $ref: "#/components/responses/Json" } } }
-  /connections/{id}/sync:
-    post: { tags: [databases], summary: "Link every person of a connected database to the catalog's patients: {persons, linked} (admins)", parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }], responses: { "200": { $ref: "#/components/responses/Json" } } }
-  /tables/clif:
+  /databases/{id}:
+    delete: { tags: [databases], summary: "Remove a database and every trace of it (who manages it): its key destroyed, then its workspace folder, its rows in every cohort, its links and grants; the database itself is not touched", parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }], responses: { "200": { $ref: "#/components/responses/Json" }, "400": { $ref: "#/components/responses/Error" }, "403": { $ref: "#/components/responses/Error" }, "404": { $ref: "#/components/responses/Error" } } }
+  /databases/{id}/check:
+    post: { tags: [databases], summary: "Check a database now (who may search it): {online, status, version, checked_at}; a changed version reads its variables, persons and recordings again", parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }], responses: { "200": { $ref: "#/components/responses/Json" }, "404": { $ref: "#/components/responses/Error" } } }
+  /databases/{id}/refresh:
+    post: { tags: [databases], summary: "Read everything kept of a database again (who manages it): variables, persons, recordings", parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }], responses: { "200": { $ref: "#/components/responses/Json" }, "400": { $ref: "#/components/responses/Error" }, "403": { $ref: "#/components/responses/Error" }, "404": { $ref: "#/components/responses/Error" } } }
+  /databases/{id}/variables:
+    get: { tags: [databases], summary: "What a database holds (who may search it): its variables, kept per data version", parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Json" }, "404": { $ref: "#/components/responses/Error" } } }
+  /databases/{id}/conflicts:
+    get: { tags: [databases], summary: "A database's identity conflicts (who manages it): persons whose identifiers name two patients, by the database's key", parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Json" }, "403": { $ref: "#/components/responses/Error" } } }
+  /databases/{id}/grants:
+    get: { tags: [databases], summary: "Who may use a database (who manages it): {user_id, username, permission}", parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Json" }, "403": { $ref: "#/components/responses/Error" } } }
     post:
-      tags: [imports]
-      summary: "A CLIF folder on the server (inside data_roots) imported (admins): its tables (CSV, Parquet) recognised, each a database, in order: {tables, skipped}"
-      parameters: [{ $ref: "#/components/parameters/Csrf" }]
-      requestBody: { content: { application/json: { schema: { type: object, required: [dir], properties: { dir: { type: string }, source: { type: string }, dry_run: { type: boolean }, background: { type: boolean } } } } } }
-      responses: { "200": { $ref: "#/components/responses/Json" }, "202": { $ref: "#/components/responses/Task" }, "400": { $ref: "#/components/responses/Error" } }
+      tags: [databases]
+      summary: "Grant a permission on a database (who manages it): search, view, phi, manage; without user_id, to the admin asking (audited: grant_self)"
+      parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }]
+      requestBody: { content: { application/json: { schema: { type: object, required: [permission], properties: { user_id: { type: integer }, permission: { type: string, enum: [search, view, phi, manage] } } } } } }
+      responses: { "200": { $ref: "#/components/responses/Json" }, "403": { $ref: "#/components/responses/Error" } }
+    delete:
+      tags: [databases]
+      summary: "Revoke a permission (and the stronger ones) on a database (who manages it)"
+      parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }]
+      requestBody: { content: { application/json: { schema: { type: object, required: [permission], properties: { user_id: { type: integer }, permission: { type: string } } } } } }
+      responses: { "200": { $ref: "#/components/responses/Json" }, "403": { $ref: "#/components/responses/Error" } }
   /server-files:
     get:
-      tags: [imports]
-      summary: "The folders of a folder on this server and its files of a kind (tables: CSV, spreadsheets, Parquet; databases: SQLite files), inside data_roots (admins; refused in Privacy Mode): {dir, parent, items: [{name, path, dir, size}], truncated}; without dir, the folders data may come from"
-      parameters: [{ name: dir, in: query, schema: { type: string, description: "an absolute folder; empty: the data roots" } }, { name: kind, in: query, schema: { type: string, enum: [tables, databases, folders], description: "the files listed with the folders (default tables)" } }]
+      tags: [databases]
+      summary: "The folders of a folder on this server and its files of a kind (databases: SQLite files), inside data_roots (admins; refused in Privacy Mode): {dir, parent, items: [{name, path, dir, size}], truncated}; without dir, the folders data may come from"
+      parameters: [{ name: dir, in: query, schema: { type: string, description: "an absolute folder; empty: the data roots" } }, { name: kind, in: query, schema: { type: string, enum: [databases, folders], description: "the files listed with the folders (default databases)" } }]
       responses: { "200": { $ref: "#/components/responses/Json" }, "400": { $ref: "#/components/responses/Error" }, "403": { $ref: "#/components/responses/Error" } }
-  /tables/server/inspect:
-    post:
-      tags: [imports]
-      summary: "As POST tables/inspect, a table on this server (inside data_roots), read where it is, row by row (admins)"
-      parameters: [{ $ref: "#/components/parameters/Csrf" }]
-      requestBody: { content: { application/json: { schema: { type: object, required: [path], properties: { path: { type: string }, format: { type: string } } } } } }
-      responses: { "200": { $ref: "#/components/responses/Json" }, "400": { $ref: "#/components/responses/Error" } }
-  /tables/server:
-    post:
-      tags: [imports]
-      summary: "Tables on this server (inside data_roots) imported where they are, of any size, as medorama import-table (admins): one, or several with the same columns as one database named by batch; the other fields as POST tables; a relative file path is read from the first table's folder"
-      parameters: [{ $ref: "#/components/parameters/Csrf" }]
-      requestBody: { content: { application/json: { schema: { type: object, required: [paths], properties: { paths: { type: array, items: { type: string } }, batch: { type: string }, source: { type: string }, category: { type: string }, mapping: { type: string }, format: { type: string }, dry_run: { type: boolean }, background: { type: boolean } } } } } }
-      responses: { "200": { $ref: "#/components/responses/Json" }, "202": { $ref: "#/components/responses/Task" }, "400": { $ref: "#/components/responses/Error" } }
-  /formats:
-    get: { tags: [imports], summary: "The import formats (built in, and described in formats_dirs), the files that could not be read, the categories (admins)", responses: { "200": { $ref: "#/components/responses/Json" } } }
-  /connections/{id}/check:
-    post: { tags: [databases], summary: "Whether a connected database answers: {ok, views, version, ms} or {ok: false, error} (admins)", parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }], responses: { "200": { $ref: "#/components/responses/Json" } } }
-
-  /tables/inspect:
-    post:
-      tags: [imports]
-      summary: "A table's headers, the mapping and category they suggest, the format it is (converted); the first rows for PHI users (admins)"
-      parameters: [{ name: name, in: query, schema: { type: string } }, { name: format, in: query, schema: { type: string, description: "auto (default), none, or a format's key" } }, { $ref: "#/components/parameters/Csrf" }]
-      requestBody: { $ref: "#/components/requestBodies/Upload" }
-      responses: { "200": { $ref: "#/components/responses/Json" }, "413": { $ref: "#/components/responses/TooLarge" } }
-  /tables:
-    post:
-      tags: [imports]
-      summary: "Import a database, one batch (admins); mapping is JSON or TOML; a known export converted (format)"
-      parameters: [{ name: name, in: query, schema: { type: string } }, { name: batch, in: query, schema: { type: string } }, { name: source, in: query, schema: { type: string } }, { name: category, in: query, schema: { type: string } }, { name: mapping, in: query, schema: { type: string } }, { name: format, in: query, schema: { type: string } }, { name: dry_run, in: query, schema: { type: boolean } }, { $ref: "#/components/parameters/Csrf" }]
-      requestBody: { $ref: "#/components/requestBodies/Upload" }
-      responses: { "200": { $ref: "#/components/responses/Json" }, "400": { $ref: "#/components/responses/Error" }, "413": { $ref: "#/components/responses/TooLarge" } }
-  /tables/files:
-    post:
-      tags: [imports]
-      summary: "One database from several files with the same columns (admins): a multipart upload, each part named file; batch names the database; the rest as POST tables"
-      parameters: [{ name: batch, in: query, required: true, schema: { type: string } }, { name: source, in: query, schema: { type: string } }, { name: category, in: query, schema: { type: string } }, { name: mapping, in: query, schema: { type: string } }, { name: format, in: query, schema: { type: string } }, { name: dry_run, in: query, schema: { type: boolean } }, { name: background, in: query, schema: { type: boolean, description: "run in the background: the answer (202) is the import's task (see import-tasks)" } }, { $ref: "#/components/parameters/Csrf" }]
-      requestBody: { content: { multipart/form-data: { schema: { type: object, properties: { file: { type: array, items: { type: string, format: binary } } } } } } }
-      responses: { "200": { $ref: "#/components/responses/Json" }, "202": { $ref: "#/components/responses/Task" }, "400": { $ref: "#/components/responses/Error" }, "413": { $ref: "#/components/responses/TooLarge" } }
-  /imports:
-    get: { tags: [imports], summary: "Batches (admins)", responses: { "200": { $ref: "#/components/responses/Json" } } }
-  /import-tasks:
-    get: { tags: [imports], summary: "Imports running in the background, and those ended within the hour, newest first: {items: [{id, label, state (running, done, cancelled, failed), started (Unix seconds), progress: {phase, rows, done, rate, left_s, elapsed_s, cancelling (a stop was asked and is under way)}, report, error}]} (admins)", responses: { "200": { $ref: "#/components/responses/Json" } } }
-  /import-tasks/{id}:
-    get: { tags: [imports], summary: "One background import: its progress, or its report or error once ended (admins)", parameters: [{ name: id, in: path, required: true, schema: { type: string } }], responses: { "200": { $ref: "#/components/responses/Json" }, "404": { $ref: "#/components/responses/Error" } } }
-  /import-tasks/{id}/cancel:
-    post: { tags: [imports], summary: "Stop a background import at its next chunk of rows; nothing of it is kept (admins)", parameters: [{ name: id, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Csrf" }], responses: { "200": { $ref: "#/components/responses/Json" }, "404": { $ref: "#/components/responses/Error" } } }
-  /imports/{id}/remove:
-    post:
-      tags: [imports]
-      summary: "Remove a batch with what it added (admins)"
-      parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }]
-      requestBody: { content: { application/json: { schema: { type: object, properties: { purge: { type: boolean }, dry_run: { type: boolean } } } } } }
-      responses: { "200": { $ref: "#/components/responses/Json" } }
-  /sources:
-    get: { tags: [imports], summary: "{items, waiting}: the sources with what they contribute, and the number of items waiting for their encounter", responses: { "200": { content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { type: object } }, waiting: { type: integer } } } } }, description: The sources } } }
-  /sources/remove:
-    post:
-      tags: [imports]
-      summary: "Remove everything a source contributed (admins)"
-      parameters: [{ $ref: "#/components/parameters/Csrf" }]
-      requestBody: { content: { application/json: { schema: { type: object, required: [source], properties: { source: { type: string }, purge: { type: boolean }, dry_run: { type: boolean } } } } } }
-      responses: { "200": { $ref: "#/components/responses/Json" } }
-  /demo/removal:
-    get: { tags: [imports], summary: "What deleting the demo's cohort would remove (admins; a dry run)", responses: { "200": { $ref: "#/components/responses/Json" } } }
-  /mappings:
-    get: { tags: [imports], summary: "Saved column mappings (admins)", responses: { "200": { $ref: "#/components/responses/Json" } } }
-    post:
-      tags: [imports]
-      summary: "Save a mapping (admins)"
-      parameters: [{ $ref: "#/components/parameters/Csrf" }]
-      requestBody: { content: { application/json: { schema: { type: object, required: [name, kind, columns], properties: { name: { type: string }, kind: { type: string }, columns: { type: object, additionalProperties: { type: string } } } } } } }
-      responses: { "200": { $ref: "#/components/responses/Json" } }
-  /mappings/{name}:
-    delete: { tags: [imports], summary: "Delete a mapping (admins)", parameters: [{ name: name, in: path, required: true, schema: { type: string } }, { $ref: "#/components/parameters/Csrf" }], responses: { "200": { $ref: "#/components/responses/Json" } } }
-
-  /review:
-    get: { tags: [review], summary: "Held rows, waiting items; for PHI users possible duplicates and recordings whose files disagree (admins)", responses: { "200": { $ref: "#/components/responses/Json" } } }
-  /review/held/{id}:
-    post:
-      tags: [review]
-      summary: "Apply or dismiss a held row (admins)"
-      parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }]
-      requestBody: { content: { application/json: { schema: { type: object, required: [action], properties: { action: { type: string, enum: [apply, dismiss] } } } } } }
-      responses: { "200": { $ref: "#/components/responses/Json" } }
-  /review/merge:
-    post: { tags: [review], summary: "Merge patient a into b (admins with the PHI permission)", parameters: [{ $ref: "#/components/parameters/Csrf" }], requestBody: { $ref: "#/components/requestBodies/Pair" }, responses: { "200": { $ref: "#/components/responses/Json" }, "400": { $ref: "#/components/responses/Error" }, "403": { $ref: "#/components/responses/Error" } } }
-  /review/distinct:
-    post: { tags: [review], summary: "Mark a and b as different people (admins with the PHI permission)", parameters: [{ $ref: "#/components/parameters/Csrf" }], requestBody: { $ref: "#/components/requestBodies/Pair" }, responses: { "200": { $ref: "#/components/responses/Json" }, "400": { $ref: "#/components/responses/Error" }, "403": { $ref: "#/components/responses/Error" } } }
-
-  /encounters:
-    get:
-      tags: [recordings]
-      summary: "Encounter search: {total, items}"
-      parameters: [{ name: q, in: query, schema: { type: string } }, { name: unit, in: query, schema: { type: string } }, { name: from, in: query, schema: { type: string } }, { name: to, in: query, schema: { type: string } }, { name: status, in: query, schema: { type: string } }, { $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
-      responses: { "200": { $ref: "#/components/responses/Json" } }
-  /encounters/{id}:
-    get: { tags: [recordings], summary: "An encounter with bed stays, recordings, EHR counts; added to the history", parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Json" } } }
-  /encounters/{id}/ehr:
-    get:
-      tags: [recordings]
-      summary: "EHR items in time order"
-      parameters: [{ $ref: "#/components/parameters/Id" }, { name: domain, in: query, schema: { type: string } }, { name: patient_level, in: query, schema: { type: boolean } }, { $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
-      responses: { "200": { $ref: "#/components/responses/Json" } }
-  /encounters/remove:
-    post: { tags: [recordings], summary: "Remove encounters with their bed stays and items (admins; recordings stay): {removed, report}; with dry_run, what would go, and nothing changes", parameters: [{ $ref: "#/components/parameters/Csrf" }], requestBody: { $ref: "#/components/requestBodies/EncounterIds" }, responses: { "200": { $ref: "#/components/responses/Json" }, "422": { $ref: "#/components/responses/Refused" } } }
-  /encounters/remove-matching:
-    post: { tags: [recordings], summary: "Remove the encounters a search finds (admins): the report {dry_run, encounters, patients, bed_stays, ehr_items, …}; with dry_run, what would go, and nothing changes", parameters: [{ $ref: "#/components/parameters/Csrf" }], requestBody: { content: { application/json: { schema: { type: object, additionalProperties: false, properties: { search: { type: object, description: "as GET encounters takes it: q, unit, from, to, status" }, dry_run: { type: boolean } } } } } }, responses: { "200": { $ref: "#/components/responses/Json" }, "422": { $ref: "#/components/responses/Refused" } } }
   /recordings:
     get:
       tags: [recordings]
-      summary: "Recordings"
-      parameters: [{ name: q, in: query, schema: { type: string } }, { name: unlinked, in: query, schema: { type: boolean } }, { $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
+      summary: "The recordings of the recording databases the user may view, matching words in their name, format, status or database, newest first"
+      parameters: [{ name: q, in: query, schema: { type: string } }, { $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Offset" }]
       responses: { "200": { $ref: "#/components/responses/Json" } }
   /recordings/{id}:
-    get: { tags: [recordings], summary: "A recording", parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Json" } } }
-  /recordings/remove:
-    post: { tags: [recordings], summary: "Remove recordings (admins; files untouched): {dry_run, removed}; purge also deletes their results; with dry_run, how many would go, and nothing changes", parameters: [{ $ref: "#/components/parameters/Csrf" }], requestBody: { $ref: "#/components/requestBodies/Ids" }, responses: { "200": { $ref: "#/components/responses/Json" }, "422": { $ref: "#/components/responses/Refused" } } }
-  /recordings/remove-matching:
-    post: { tags: [recordings], summary: "Remove the recordings a search finds (admins; files untouched): {dry_run, recordings}; purge also deletes their results; with dry_run, how many would go, and nothing changes", parameters: [{ $ref: "#/components/parameters/Csrf" }], requestBody: { content: { application/json: { schema: { type: object, additionalProperties: false, properties: { q: { type: string, description: "as GET recordings takes it" }, unlinked: { type: boolean }, purge: { type: boolean }, dry_run: { type: boolean } } } } } }, responses: { "200": { $ref: "#/components/responses/Json" }, "422": { $ref: "#/components/responses/Refused" } } }
-  /recordings/{id}/link:
-    post:
-      tags: [recordings]
-      summary: "Link manually (null forgets the manual links) (admins)"
-      parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }]
-      requestBody: { content: { application/json: { schema: { type: object, properties: { encounter: { type: [integer, "null"] } } } } } }
-      responses: { "200": { $ref: "#/components/responses/Json" } }
-  /recordings/{id}/decision:
-    post:
-      tags: [recordings]
-      summary: "link, never, or null (forget the decision) (admins)"
-      parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }]
-      requestBody: { content: { application/json: { schema: { type: object, required: [encounter_id], properties: { encounter_id: { type: string }, decision: { type: [string, "null"], enum: [link, never, null] } } } } } }
-      responses: { "200": { $ref: "#/components/responses/Json" } }
+    get: { tags: [recordings], summary: "A recording (of a database the user may view; its number is database × 1,000,000,000 + its number there) and the results of the actions run on it", parameters: [{ $ref: "#/components/parameters/Id" }], responses: { "200": { $ref: "#/components/responses/Json" }, "404": { $ref: "#/components/responses/Error" } } }
   /check:
     post: { tags: [recordings], summary: "Re-check the recordings (admins)", parameters: [{ $ref: "#/components/parameters/Csrf" }], responses: { "200": { $ref: "#/components/responses/Json" } } }
   /history:
-    get: { tags: [recordings], summary: "My history", responses: { "200": { $ref: "#/components/responses/Json" } } }
-    delete: { tags: [recordings], summary: "Forget my whole history", parameters: [{ $ref: "#/components/parameters/Csrf" }], responses: { "200": { $ref: "#/components/responses/Json" } } }
+    get: { tags: [patients], summary: "My history: the patients whose page I opened, latest first", responses: { "200": { $ref: "#/components/responses/Json" } } }
+    delete: { tags: [patients], summary: "Forget my whole history", parameters: [{ $ref: "#/components/parameters/Csrf" }], responses: { "200": { $ref: "#/components/responses/Json" } } }
   /history/{id}:
-    delete: { tags: [recordings], summary: "Forget one encounter of my history", parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }], responses: { "200": { $ref: "#/components/responses/Json" } } }
+    delete: { tags: [patients], summary: "Forget one patient of my history", parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }], responses: { "200": { $ref: "#/components/responses/Json" } } }
 
   /actions:
     get: { tags: [work], summary: "The actions", responses: { "200": { $ref: "#/components/responses/Json" } } }
@@ -414,7 +303,7 @@ paths:
   /runs:
     post:
       tags: [work]
-      summary: "Queue a run (analysts): actions on a selection (encounters, recordings, search, cohort, all)"
+      summary: "Queue a run (analysts): actions on a selection (recordings, patients, a cohort's members, all), of the databases the user may view"
       parameters: [{ $ref: "#/components/parameters/Csrf" }]
       requestBody: { content: { application/json: { schema: { type: object, required: [actions, selection], properties: { actions: { type: array, items: { type: string } }, params: { type: object }, selection: { type: object }, force: { type: boolean }, priority: { type: integer } } } } } }
       responses: { "200": { $ref: "#/components/responses/Json" } }
@@ -449,8 +338,8 @@ paths:
       tags: [admin]
       summary: "Change a user (admins; giving the PHI permission needs it)"
       parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }]
-      requestBody: { content: { application/json: { schema: { type: object, properties: { display_name: { type: string }, role: { type: string }, phi: { type: boolean }, disabled: { type: boolean }, password: { type: string }, sign_out: { type: boolean, description: "end the user's sessions on every device" } } } } } }
-      responses: { "200": { $ref: "#/components/responses/Json" } }
+      requestBody: { content: { application/json: { schema: { type: object, properties: { display_name: { type: string }, role: { type: string }, phi: { type: boolean }, disabled: { type: boolean }, password: { type: string, minLength: 10 }, sign_out: { type: boolean, description: "end the user's sessions on every device" } } } } } }
+      responses: { "200": { $ref: "#/components/responses/Json" }, "400": { $ref: "#/components/responses/Error" }, "403": { $ref: "#/components/responses/Error" } }
     delete: { tags: [admin], summary: "Delete a user (admins)", parameters: [{ $ref: "#/components/parameters/Id" }, { $ref: "#/components/parameters/Csrf" }], responses: { "200": { $ref: "#/components/responses/Json" } } }
   /audit:
     get:
@@ -476,19 +365,14 @@ components:
     Csrf: { name: X-Medorama, in: header, required: true, schema: { type: string, const: "1" }, description: "Required on every request other than GET (CSRF protection)" }
   requestBodies:
     Login: { required: true, content: { application/json: { schema: { type: object, required: [username, password], properties: { username: { type: string }, password: { type: string } } } } } }
-    Upload: { required: true, content: { application/octet-stream: { schema: { type: string, format: binary } } }, description: "The file: CSV, Excel or OpenDocument (up to 1 GiB)" }
-    Ids: { required: true, content: { application/json: { schema: { type: object, required: [ids], additionalProperties: false, properties: { ids: { type: array, items: { type: integer } }, purge: { type: boolean }, dry_run: { type: boolean } } } } } }
-    EncounterIds: { required: true, content: { application/json: { schema: { type: object, required: [ids], additionalProperties: false, properties: { ids: { type: array, items: { type: integer } }, dry_run: { type: boolean } } } } } }
-    Pair: { required: true, content: { application/json: { schema: { type: object, required: [a, b], properties: { a: { type: string }, b: { type: string } } } } } }
   responses:
     Json: { description: The answer (JSON), content: { application/json: { schema: { type: object } } } }
     File: { description: "A file (its own media type), or JSON", content: { application/octet-stream: { schema: { type: string, format: binary } } } }
     Error: { description: An error, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-    Task: { description: "Accepted: the import runs in the background; the answer is its task (as GET import-tasks/{id})", content: { application/json: { schema: { type: object } } } }
-    TooLarge: { description: "The body is over the limit (1 GiB for the uploads, 2 MB elsewhere)" }
+    TooLarge: { description: "The body is over the limit (2 MB)" }
     Refused: { description: "The body is not of the expected shape: a field missing, of the wrong type, or unknown (plain text)" }
     Internal: { description: "A fault of the server (also written to its standard error)", content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
-    Busy: { description: "The catalog's one writer is busy saving an import (SQLite): try again", headers: { Retry-After: { schema: { type: integer, const: 5 } } }, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
+    Busy: { description: "The control store's one writer is busy (SQLite): try again", headers: { Retry-After: { schema: { type: integer, const: 5 } } }, content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } } }
   schemas:
     Error:
       type: object
@@ -504,12 +388,12 @@ components:
         sex: { type: string }
         age: { type: integer }
         phi: { type: object }
-        encounters: { type: integer }
+        encounters: { type: integer, description: The visits the databases hold }
         latest: { type: [number, "null"], description: Unix seconds }
         latest_where: { type: string }
         kinds: { type: array, items: { type: string } }
         items: { type: integer }
-        sources: { type: array, items: { type: string }, description: The connected databases holding their data }
+        sources: { type: array, items: { type: string }, description: The databases that link them }
     Criteria:
       type: object
       description: "Criteria: {version: 1, include: expr, exclude: [expr]} (docs/user-guide.md, Cohorts). An expr is a Criterion or a group {op: and | or | not, of: [expr]}"
@@ -517,13 +401,13 @@ components:
         version: { type: integer }
         include: { type: object }
         exclude: { type: array, items: { type: object } }
-        written_as: { type: object, description: "How the session that wrote them read the data (set by the server): criteria on notes' text, ages and columns may find other patients for a session that reads them otherwise", properties: { phi: { type: boolean }, privacy: { type: boolean }, notes: { type: boolean } } }
+        written_as: { type: object, description: "How the session that wrote them read the data (set by the server): criteria on notes' text and ages may find other patients for a session that reads them otherwise", properties: { phi: { type: boolean }, privacy: { type: boolean }, notes: { type: boolean } } }
     Criterion:
       type: object
       description: "One criterion; kind says which fields apply (src/cohorts/criteria.rs, docs/user-guide.md)"
       required: [kind]
       properties:
-        kind: { type: string, enum: [age, sex, has, encounter, diagnosis, measurement, column, expression, medication, text, database] }
+        kind: { type: string, enum: [age, sex, has, encounter, diagnosis, measurement, expression, medication, text, database] }
         not: { type: boolean }
         text: { type: string }
         name: { type: string }
@@ -533,7 +417,7 @@ components:
         from: { type: string }
         to: { type: string }
         icu: { type: boolean }
-        import: { type: integer }
+        database: { type: integer, description: "the connected database asked (none: every one of the search's scope)" }
         cmp: { type: string, enum: [">", ">=", "<", "<=", "=", "!="] }
         value: { type: number }
         unit: { type: string }

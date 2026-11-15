@@ -1,11 +1,12 @@
 # The Rust workspace: Medorama, the VitalStream viewer (Rust) and the libraries they share.
 # Each program builds and deploys on its own (`cargo build --release -p medorama`,
-# `-p vitalstream-rs`); see docs/building.md.
+# `-p vitalstream-rs`, `-p db-builder`); see docs/building.md.
 #
 #   libs/signal-core/     values, Python-compatible formatting, text helpers
 #   libs/engine/          the recording engine: readers, the index, the adapter protocol
 #   medorama/             Medorama: the catalog, cohorts, imports, the privacy gate, the web page
 #   viewers/vitalstream/rust/   vitalstream-rs, the Rust waveform viewer
+#   db-builder/           db-builder: tables, exports and folders of recordings made into an open SQLite database
 #
 # WFDB records are read with wfdb-x (crate `wfdbx`, its library under the LGPL v2.1 or later),
 # fetched from GitHub at the commit pinned below.
@@ -16,8 +17,9 @@ members = [
     "libs/engine",
     "medorama",
     "viewers/vitalstream/rust",
+    "db-builder",
 ]
-default-members = ["libs/signal-core", "libs/engine", "medorama", "viewers/vitalstream/rust"]
+default-members = ["libs/signal-core", "libs/engine", "medorama", "viewers/vitalstream/rust", "db-builder"]
 # licensed add-ons, built from their own workspaces (see docs/adapters.md)
 exclude = ["medorama/fuzz"]
 
@@ -31,9 +33,9 @@ repository = "https://github.com/alphanumericslab/medorama"
 [workspace.dependencies]
 # wfdb-x: https://github.com/alphanumericslab/wfdb-x (the WFDB library in Rust, C++ and Python)
 wfdbx = { git = "https://github.com/alphanumericslab/wfdb-x", rev = "4a91916f5282fba44ca3056802fbc7def298af08" }
-signal-core = { path = "libs/signal-core", version = "0.1.0" }
+signal-core = { path = "libs/signal-core", version = "0.2.0" }
 # without its default features: Medorama and vitalstream-rs choose them (their `wfdb` feature)
-recording-engine = { path = "libs/engine", version = "0.1.0", default-features = false }
+recording-engine = { path = "libs/engine", version = "0.2.0", default-features = false }
 anyhow = "1"
 clap = { version = "4.5", features = ["derive"] }
 indexmap = "2"

@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
-pub static INDEX_VERSION_STR: LazyLock<String> = LazyLock::new(|| recording_engine::common::INDEX_VERSION.to_string());
+pub static INDEX_VERSION_STR: LazyLock<String> = LazyLock::new(|| recording_engine::store::STORE_FORMAT.to_string());
 
 /// Largest summary.json kept in the database.
 const MAX_SUMMARY: u64 = 256 * 1024;
@@ -82,20 +82,6 @@ pub fn index_action() -> Action {
         problem: String::new(),
         command: vec![],
         dir: PathBuf::new(),
-    }
-}
-
-/// The built-in action that reads the identifiers a recording holds in its own file
-/// (identify.rs); queued automatically, like indexing.
-pub fn identify_action() -> Action {
-    Action {
-        name: "identify".into(),
-        title: "Read identifiers".into(),
-        version: "1".into(),
-        description: "Read the patient identifiers stored in the recording's own file, to cross-check them against the linkage table (stored in the database only; shown to users with the PHI permission).".into(),
-        builtin: true,
-        default: false,
-        ..index_action()
     }
 }
 
@@ -186,7 +172,7 @@ fn read_manifest(dir: &Path) -> Result<Action, String> {
 impl Registry {
     /// The built-in actions and every plug-in found in the configured folders.
     pub fn load(cfg: &Config) -> Registry {
-        let mut r = Registry { actions: vec![index_action(), identify_action()], problems: vec![] };
+        let mut r = Registry { actions: vec![index_action()], problems: vec![] };
         for d in &cfg.actions_dirs {
             let Ok(it) = std::fs::read_dir(d) else { continue };
             let mut dirs: Vec<PathBuf> =
@@ -238,23 +224,21 @@ pub fn job_description(
     a: &Action,
     params: &serde_json::Value,
     rec: &Recording,
-    index_dir: Option<&Path>,
-    encounters: &[(String, String)],
+    patient: &str,
     output_dir: &Path,
 ) -> serde_json::Value {
     serde_json::json!({
-        "catalog": format!("medorama {}", env!("CARGO_PKG_VERSION")),
+        "medorama": format!("medorama {}", env!("CARGO_PKG_VERSION")),
         "job_id": job_id,
         "action": a.name,
         "version": a.version,
         "params": params,
         "recording": {
-            "id": rec.id, "path": rec.path, "kind": rec.kind, "name": rec.name, "format": rec.format,
+            "id": rec.id, "database": rec.source, "path": rec.path, "kind": rec.kind, "name": rec.name, "format": rec.format,
             "t_start": rec.t_start, "t_end": rec.t_end,
-            "index_dir": index_dir.map(|p| p.to_string_lossy().to_string()),
         },
-        // the encounters' and patients' pseudonyms (never their imported IDs)
-        "encounters": encounters.iter().map(|(e, p)| serde_json::json!({"encounter_id": e, "patient_id": p})).collect::<Vec<_>>(),
+        // the patient's pseudonym (never a database's identifier)
+        "patient": patient,
         "output_dir": output_dir.to_string_lossy(),
     })
 }
@@ -277,17 +261,24 @@ pub struct Outcome {
     pub summary: String,
     /// Series derived from the waveforms (indexing: a Holter's heart rate), for the database.
     pub derived: Vec<crate::derived::Derived>,
+    /// Indexing: the index's `meta.json` (its times and format, for the recording).
+    pub meta: String,
 }
 
-/// Run the built-in index action.
-pub fn run_index(cfg: &Config, rec: &Recording, progress: &Progress) -> Result<Outcome, String> {
-    let key = recording_engine::index::build_index(Path::new(&rec.path), &cfg.index_dir, &|x| progress.set(x))
-        .map_err(|e| e.to_string())?;
-    let dir = cfg.index_dir.join(&key);
-    let meta: serde_json::Value = std::fs::read_to_string(dir.join("meta.json"))
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default();
+/// Run the built-in index action: into the index store of the recording's database (index format
+/// 3, encrypted with its key).
+pub fn run_index(
+    store: &recording_engine::store::Store,
+    rec: &Recording,
+    progress: &Progress,
+    cancel: &AtomicBool,
+) -> Result<Outcome, String> {
+    let key = recording_engine::index::build_into_store(Path::new(&rec.path), store, &|x| progress.set(x), &|| {
+        cancel.load(Ordering::Relaxed)
+    })
+    .map_err(|e| e.to_string())?;
+    let text = store.meta(&key).unwrap_or_default();
+    let meta: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
     let summary = serde_json::json!({
         "key": key,
         "format": meta.get("format"),
@@ -296,8 +287,8 @@ pub fn run_index(cfg: &Config, rec: &Recording, progress: &Progress) -> Result<O
         "indexed_s": meta.get("indexed_s"),
     });
     // a recording without a heart rate of its own (a Holter): find it from the ECG
-    let derived = crate::derived::derive(&cfg.index_dir, &key, &|_| {}).map_err(|e| e.to_string())?;
-    Ok(Outcome { output_dir: dir, summary: summary.to_string(), derived })
+    let derived = crate::derived::derive(store, &key, &|_| {}).map_err(|e| e.to_string())?;
+    Ok(Outcome { output_dir: store.path().to_path_buf(), summary: summary.to_string(), derived, meta: text })
 }
 
 /// The environment variables a plug-in does not get: Medorama's own (`MEDORAMA_…`: the
@@ -501,7 +492,7 @@ pub fn run_external(
         Err(_) => String::new(),
     };
     progress.set(1.0);
-    Ok(Outcome { output_dir: output_dir.to_path_buf(), summary, derived: vec![] })
+    Ok(Outcome { output_dir: output_dir.to_path_buf(), summary, derived: vec![], meta: String::new() })
 }
 
 #[cfg(test)]

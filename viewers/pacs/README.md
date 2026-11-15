@@ -87,14 +87,23 @@ the files come from several studies, the list groups them by study.
 ## Files it reads
 
 The viewer reads DICOM Part 10 files and bare datasets, in the explicit or implicit VR little
-endian transfer syntaxes. Pixel data may be native (8, 16 or 32 bits, signed or unsigned, gray
-or RGB, planar or interleaved), RLE-compressed, or JPEG-compressed:
+endian transfer syntaxes. Pixel data may be native (8, 16 or 32 bits, signed or unsigned, gray;
+RGB or YBR_FULL, planar or interleaved; YBR_FULL_422; YBR is converted to RGB), RLE-compressed,
+or JPEG-compressed:
 
 | JPEG transfer syntax | Decoded by |
 |---|---|
 | Baseline and extended, 8 bits (1.2.840.10008.1.2.4.50 and .51) | The browser. |
 | Extended, 12 bits, as used by CT (1.2.840.10008.1.2.4.51) | `jpeg.js`. |
 | Lossless (process 14, any predictor, 2 to 16 bits; 1.2.840.10008.1.2.4.57 and .70) | `jpeg.js`. |
+
+The frames of compressed pixel data are found from the Extended Offset Table when the file has
+one, else from the Basic Offset Table; when both are empty and a JPEG file has more fragments
+than frames, a frame starts at each fragment that starts a JPEG image (`FF D8`).
+
+Enhanced multi-frame images (enhanced CT, MR, XA …) keep their rescale, window, pixel spacing and
+slice thickness in functional groups: each frame's own (Per-frame Functional Groups) are used
+over the shared ones (Shared Functional Groups), and those over the top level's.
 
 A file has no more frames than its pixel data hold: a `NumberOfFrames` larger than that (a
 damaged or crafted header) is cut to the frames present.
@@ -126,7 +135,8 @@ browser's memory.
 ## Read a study
 
 **Window and zoom.** Rescale slope and intercept are applied (CT values are in Hounsfield
-units), MONOCHROME1 images are inverted, non-square pixels are drawn to scale, and 8-bit images
+units; in an enhanced multi-frame file, each frame's own, and its own window until you set
+one), MONOCHROME1 images are inverted (JPEG frames the browser decodes too), non-square pixels are drawn to scale, and 8-bit images
 (display-ready ultrasound and angiography) show their whole range.
 
 | Control | Effect |
@@ -337,6 +347,7 @@ pytest viewers/pacs/python/dicom/tests
 | Test | Checks |
 |---|---|
 | `dicom.test.js` | Explicit and implicit VR files, signed and RGB pixel data, rescale, window, an ultrasound region, and encapsulated JPEG, in DICOM files made by the tests (`make.js`). |
+| `pixels.test.js` | Enhanced multi-frame functional groups (per-frame over shared over top level), the Extended Offset Table and JPEG frames split at `FF D8`, 32-bit signed pixels, native YBR_FULL and YBR_FULL_422, MONOCHROME1 inversion of browser-decoded JPEG. |
 | `objects.test.js` | RLE images, structured reports, encapsulated documents and waveforms; that `dicom.js` is the same file in both viewers. |
 | `jpeg.test.js` | Lossless JPEG (every predictor, point transforms, restarts, color) and 12-bit DCT, against streams encoded in the test, and damaged streams. |
 | `robustness.test.js` | The readers on damaged and random input: each answers quickly, with a result or an error, and never hangs. |
@@ -348,3 +359,11 @@ The viewer never shows a patient's identity: the corners show the series, frame,
 size only, and reports never show the observer's or the patient's name. The files themselves may
 hold PHI; when the viewer runs alone, keep them on protected storage, and use Medorama's Privacy
 Mode to de-identify them for users who may not see identities.
+
+## License
+
+The PACS viewer is licensed, like the rest of the repository's software, under the PolyForm Noncommercial
+License 1.0.0 ([LICENSE](../../LICENSE)): free for noncommercial use, with commercial licenses by
+agreement ([COMMERCIAL.md](../../COMMERCIAL.md)). Its examples (`examples/`) are under CC BY-NC 4.0. The documentation (the `docs/` folders) is
+under CC BY-NC-ND 4.0 ([docs/LICENSE.md](../../docs/LICENSE.md)); every dependency and its license is
+listed in [THIRD_PARTY_LICENSES.md](../../THIRD_PARTY_LICENSES.md).

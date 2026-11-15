@@ -1,7 +1,9 @@
 // A small DICOM reader for the PACS and ECG viewers: Part 10 files (or bare datasets) in
-// explicit or implicit VR little endian; native pixel data, RLE, and encapsulated JPEG
-// (8-bit baseline, which browsers decode; lossless and 12-bit, which jpeg.js decodes when the
-// page has it); structured reports (their measurements and
+// explicit or implicit VR little endian; native pixel data (grey up to 32 bits, RGB, YBR_FULL,
+// YBR_FULL_422), RLE, and encapsulated JPEG (8-bit baseline, which browsers decode; lossless and
+// 12-bit, which jpeg.js decodes when the page has it), with the extended or basic offset table;
+// enhanced multi-frame images (rescale, window and pixel spacing from the shared and per-frame
+// functional groups); structured reports (their measurements and
 // text), encapsulated documents (PDF), and waveforms (12-lead and other ECGs).  It reads what
 // showing them needs, never shows a patient's identity, and has no dependencies.  A classic
 // script (it works from file://) and a CommonJS module for tests.  viewers/ecg/dicom.js is the
@@ -17,6 +19,7 @@
     '1.2.840.10008.1.2.4.57': 'lossless', '1.2.840.10008.1.2.4.70': 'lossless',
   };
   const RLE = '1.2.840.10008.1.2.5';
+  const YBR = new Set(['YBR_FULL', 'YBR_FULL_422']);
   // what other transfer syntaxes are, for the messages
   const NAMES = {
     '1.2.840.10008.1.2.4.57': 'lossless JPEG', '1.2.840.10008.1.2.4.70': 'lossless JPEG', '1.2.840.10008.1.2.4.80': 'JPEG-LS',
@@ -47,7 +50,9 @@
     '0020000D': 'UI', '0020000E': 'UI', '00200011': 'IS', '00200013': 'IS', '00200032': 'DS', '00200037': 'DS', '00201041': 'DS',
     '00280002': 'US', '00280004': 'CS', '00280006': 'US', '00280008': 'IS', '00280010': 'US', '00280011': 'US',
     '00280030': 'DS', '00280100': 'US', '00280101': 'US', '00280102': 'US', '00280103': 'US',
-    '00281050': 'DS', '00281051': 'DS', '00281052': 'DS', '00281053': 'DS', '7FE00010': 'OW',
+    '00281050': 'DS', '00281051': 'DS', '00281052': 'DS', '00281053': 'DS', '7FE00010': 'OW', '7FE00001': 'OV', '7FE00002': 'OV',
+    // enhanced multi-frame: the shared and per-frame functional groups, and the macros read in them
+    '52009229': 'SQ', '52009230': 'SQ', '00289145': 'SQ', '00289110': 'SQ', '00289132': 'SQ',
     '00080100': 'SH', '00080102': 'SH', '00080104': 'LO', '00081032': 'SQ', '00181164': 'DS', '00181088': 'IS', '00182002': 'SH',
     '00080020': 'DA', '00080030': 'TM', '0008002A': 'DT', '00080021': 'DA', '00080031': 'TM', '00080023': 'DA', '00080033': 'TM',
     // structured reports
@@ -218,6 +223,7 @@
       slope: first(v('00281053')) ?? 1, intercept: first(v('00281052')) ?? 0,
       center: first(v('00281050')) ?? null, width: first(v('00281051')) ?? null,
       spacing: v('00280030') || null, thickness: v('00180050') ?? null,
+      perFrame: null, frameWindows: false,
       // projection images (XA, RF, DX): the spacing at the detector
       imagerSpacing: v('00181164') || null,
       heartRate: v('00181088') ?? null, frameTimes: v('00181065') ?? null,
@@ -229,6 +235,14 @@
         x0: value(view, it['00186018']), y0: value(view, it['0018601A']), x1: value(view, it['0018601C']), y1: value(view, it['0018601E']),
       })),
     };
+    // enhanced multi-frame objects: the shared functional groups over the top level, and each
+    // frame's own groups over both (per frame > shared > top level)
+    Object.assign(info, groupValues(view, tags['52009229']?.items?.[0]));
+    const per = (tags['52009230']?.items || []).map((g) => groupValues(view, g));
+    if (per.some((p) => Object.keys(p).length)) {
+      info.perFrame = per;
+      info.frameWindows = per.some((p) => p.center !== undefined || p.width !== undefined);
+    }
     if (!px) throw new Error('no image in this DICOM file');
     if (!info.rows || !info.cols) throw new Error('DICOM image without size');
     if (px.fragments) {
@@ -243,38 +257,119 @@
       }
       // no more frames than the pixel data holds (the header's count is the file's word)
       info.frames = Math.min(info.frames, Math.max(1, px.fragments.length - 1));
-      info.encapsulated = frameFragments(px.fragments, info.frames, view);
+      info.encapsulated = frameFragments(px.fragments, info.frames, view, !!info.jpeg, tags['7FE00001'], tags['7FE00002']);
+      info.frames = Math.max(1, Math.min(info.frames, info.encapsulated.length));
     } else {
       if (d.transfer !== IMPLICIT && d.transfer !== EXPLICIT && !/^1\.2\.840\.10008\.1\.2(\.1)?$/.test(d.transfer)) {
         throw new Error(`DICOM transfer syntax ${d.transfer} is not read here`);
       }
       info.native = { offset: px.offset, length: px.length };
-      const frameBytes = info.rows * info.cols * info.samples * info.bitsAllocated / 8;
-      info.frames = Math.min(info.frames, Math.max(1, Math.floor(px.length / frameBytes) || 0));
+      info.frames = Math.min(info.frames, Math.max(1, Math.floor(px.length / frameSize(info)) || 0));
     }
     info._view = view;
     return info;
   }
 
-  /** The bytes of each frame of encapsulated pixel data (fragments after the offset table). */
-  function frameFragments(fragments, frames, view) {
-    const [bot, ...rest] = fragments;
-    const offsets = [];
-    for (let i = 0; i + 4 <= bot.length; i += 4) offsets.push(view.getUint32(bot.offset + i, true));
-    if (rest.length === frames || offsets.length < 2) {
-      if (rest.length === frames) return rest.map((f) => [f]);
-      return [rest];   // one frame in several fragments
+  /** A functional groups item's values (Pixel Value Transformation, Pixel Measures, Frame VOI LUT): only those it has. */
+  function groupValues(view, g) {
+    const out = {};
+    if (!g) return out;
+    const num = (it, t) => {
+      const el = it?.[t];
+      if (!el || !el.length) return undefined;
+      const x = value(view, el);
+      const y = Array.isArray(x) ? x[0] : x;
+      return Number.isFinite(y) ? y : undefined;
+    };
+    const set = (k, x) => { if (x !== undefined) out[k] = x; };
+    const pvt = g['00289145']?.items?.[0];
+    set('slope', num(pvt, '00281053'));
+    set('intercept', num(pvt, '00281052'));
+    const pm = g['00289110']?.items?.[0];
+    if (pm?.['00280030']?.length) {
+      const sp = value(view, pm['00280030']);
+      if (Array.isArray(sp) && sp.every(Number.isFinite)) out.spacing = sp;
     }
+    set('thickness', num(pm, '00180050'));
+    const voi = g['00289132']?.items?.[0];
+    set('center', num(voi, '00281050'));
+    set('width', num(voi, '00281051'));
+    return out;
+  }
+
+  /** Frame k's rescale, window, spacing and thickness: its own (per-frame functional groups), else the file's. */
+  function frameAttrs(info, k) {
+    const p = info.perFrame?.[k] || {};
+    const pick = (f) => (p[f] !== undefined ? p[f] : info[f]);
+    return { slope: pick('slope'), intercept: pick('intercept'), center: pick('center'), width: pick('width'), spacing: pick('spacing'), thickness: pick('thickness') };
+  }
+
+  /** The bytes of a native frame (YBR_FULL_422: two bytes a pixel, Y0 Y1 Cb Cr for each pair). */
+  function frameSize(info) {
+    if (info.photometric === 'YBR_FULL_422' && info.samples === 3) return info.rows * info.cols * 2;
+    return info.rows * info.cols * info.samples * info.bitsAllocated / 8;
+  }
+
+  /**
+   * The fragments of each frame of encapsulated pixel data (those after the Basic Offset Table).
+   * The Extended Offset Table (7FE0,0001; lengths in 7FE0,0002), when the file has one, says
+   * where each frame starts; else one fragment per frame when the counts agree; else the Basic
+   * Offset Table; else, for JPEG with more fragments than frames, a frame starts at each
+   * fragment that starts with a JPEG start of image (FF D8); else all fragments are one frame.
+   */
+  function frameFragments(fragments, frames, view, jpeg, eot, eotLengths) {
+    const [bot, ...rest] = fragments;
+    if (!rest.length) return [];
+    const u64 = (el) => {
+      const out = [];
+      for (let i = 0; el && i + 8 <= el.length; i += 8) out.push(view.getUint32(el.offset + i, true) + view.getUint32(el.offset + i + 4, true) * 2 ** 32);
+      return out;
+    };
     // offsets into the fragment items (from the first item after the table)
     const base = rest[0].offset - 8;
-    const out = offsets.map(() => []);
-    for (const f of rest) {
-      const rel = f.offset - 8 - base;
-      let k = 0;
-      while (k + 1 < offsets.length && offsets[k + 1] <= rel) k++;
-      out[k].push(f);
+    const byOffsets = (offsets) => {
+      const out = offsets.map(() => []);
+      for (const f of rest) {
+        const rel = f.offset - 8 - base;
+        let k = 0;
+        while (k + 1 < offsets.length && offsets[k + 1] <= rel) k++;
+        out[k].push(f);
+      }
+      return out;
+    };
+    const ext = u64(eot);
+    if (ext.length && ext[0] === 0 && ext.every((o, k) => k === 0 || o > ext[k - 1])) {
+      const out = byOffsets(ext);
+      const lengths = u64(eotLengths);
+      // each frame's length (its fragments' bytes, without the item headers): the padding after it left out
+      if (lengths.length === ext.length) {
+        return out.map((parts, k) => {
+          let left = lengths[k];
+          const kept = [];
+          for (const f of parts) {
+            if (left <= 0) break;
+            kept.push(f.length > left ? { offset: f.offset, length: left } : f);
+            left -= f.length;
+          }
+          return kept;
+        });
+      }
+      return out;
     }
-    return out;
+    const offsets = [];
+    for (let i = 0; i + 4 <= bot.length; i += 4) offsets.push(view.getUint32(bot.offset + i, true));
+    if (rest.length === frames) return rest.map((f) => [f]);
+    if (offsets.length >= 2) return byOffsets(offsets);
+    if (jpeg && frames > 1 && rest.length > frames) {
+      const soi = (f) => f.length >= 2 && view.getUint8(f.offset) === 0xff && view.getUint8(f.offset + 1) === 0xd8;
+      const out = [];
+      for (const f of rest) {
+        if (!out.length || soi(f)) out.push([f]);
+        else out[out.length - 1].push(f);
+      }
+      return out;
+    }
+    return [rest];   // one frame in several fragments
   }
 
   /** A JPEG frame's bytes (encapsulated pixel data). */
@@ -333,57 +428,84 @@
     return out;
   }
 
-  /** A native frame's stored values as numbers (grey: rows*cols; colour: rows*cols*3, interleaved). */
+  /** Full-range YCbCr (ITU-R BT.601, as JPEG) to RGB, into out at o (a Uint8ClampedArray: rounded, clamped). */
+  function ybrToRgb(out, o, y, cb, cr) {
+    out[o] = y + 1.402 * (cr - 128);
+    out[o + 1] = y - 0.344136 * (cb - 128) - 0.714136 * (cr - 128);
+    out[o + 2] = y + 1.772 * (cb - 128);
+  }
+
+  /** A stored value: its bits, then signed (two's complement) when the file says so. */
+  function stored(x, bits, allocated, signed) {
+    const full = 2 ** bits;
+    if (bits < allocated) x %= full;          // x is never negative here
+    if (signed && x >= full / 2) x -= full;
+    return x;
+  }
+
+  /**
+   * A native frame's values as numbers (grey: rows*cols, rescaled with the frame's slope and
+   * intercept; colour: rows*cols*3 RGB, interleaved; YBR_FULL and YBR_FULL_422 converted).
+   */
   function nativeFrame(info, i) {
     const n = info.rows * info.cols * info.samples;
     const bytes = info.bitsAllocated / 8;
     let start;
     let v;
     let planar = info.planar;
-    if (info.decoded) return fromSamples(info, decodedFrame(info, i));
+    let packed422 = info.photometric === 'YBR_FULL_422';
+    if (info.decoded) return fromSamples(info, decodedFrame(info, i), i);
     if (info.rle) {
       const raw = rleFrame(info, i);
       v = new DataView(raw.buffer);
       start = 0;
       planar = 0;
+      packed422 = false;      // RLE stores three full samples a pixel
     } else {
-      start = info.native.offset + i * n * bytes;
+      start = info.native.offset + i * frameSize(info);
       v = info._view;
     }
     const out = info.samples === 1 ? new Float32Array(n) : new Uint8ClampedArray(n);
     if (info.samples === 1) {
-      const mask = info.bitsStored < 32 ? (1 << info.bitsStored) - 1 : 0xffffffff;
+      const { slope, intercept } = frameAttrs(info, i);
       for (let k = 0; k < n; k++) {
         let x;
         if (bytes === 1) x = v.getUint8(start + k);
         else if (bytes === 2) x = v.getUint16(start + 2 * k, true);
         else x = v.getUint32(start + 4 * k, true);
-        if (info.bitsStored < info.bitsAllocated) x &= mask;
-        if (info.signed && x & (1 << (info.bitsStored - 1))) x -= 1 << info.bitsStored;
-        out[k] = x * info.slope + info.intercept;
+        out[k] = stored(x, info.bitsStored, info.bitsAllocated, info.signed) * slope + intercept;
+      }
+    } else if (packed422) {
+      // YBR_FULL_422: Y0 Y1 Cb Cr for each pair of pixels (of a row: the columns are even)
+      const plane = info.rows * info.cols;
+      for (let k = 0; k < plane; k += 2) {
+        const p = start + 2 * k;
+        const cb = v.getUint8(p + 2);
+        const cr = v.getUint8(p + 3);
+        ybrToRgb(out, 3 * k, v.getUint8(p), cb, cr);
+        if (k + 1 < plane) ybrToRgb(out, 3 * k + 3, v.getUint8(p + 1), cb, cr);
       }
     } else {
-      // RGB, 8 bits; planar configuration 1 stores the planes one after the other
+      // RGB or YBR_FULL, 8 bits; planar configuration 1 stores the planes one after the other
       const plane = info.rows * info.cols;
+      const ybr = YBR.has(info.photometric);
+      const at = (k, c) => v.getUint8(start + (planar ? c * plane + k : 3 * k + c));
       for (let k = 0; k < plane; k++) {
-        for (let c = 0; c < 3; c++) out[3 * k + c] = v.getUint8(start + (planar ? c * plane + k : 3 * k + c));
+        if (ybr) ybrToRgb(out, 3 * k, at(k, 0), at(k, 1), at(k, 2));
+        else for (let c = 0; c < 3; c++) out[3 * k + c] = at(k, c);
       }
     }
     return out;
   }
 
   /** Decoded JPEG samples as nativeFrame's values (grey: rescaled; colour: 8-bit RGB). */
-  function fromSamples(info, j) {
+  function fromSamples(info, j, i = 0) {
     const src = j.data;
     if (info.samples === 1) {
       const out = new Float32Array(src.length);
+      const { slope, intercept } = frameAttrs(info, i);
       const bits = info.bitsStored;
-      const mask = bits < 32 ? (1 << bits) - 1 : 0xffffffff;
-      for (let k = 0; k < src.length; k++) {
-        let x = src[k] & mask;
-        if (info.signed && x & (1 << (bits - 1))) x -= 1 << bits;
-        out[k] = x * info.slope + info.intercept;
-      }
+      for (let k = 0; k < src.length; k++) out[k] = stored(src[k], bits, 32, info.signed) * slope + intercept;
       return out;
     }
     const out = new Uint8ClampedArray(src.length);
@@ -393,20 +515,19 @@
       const a = src[k] >> down;
       const b = src[k + 1] >> down;
       const c = src[k + 2] >> down;
-      if (ybr) {
-        out[k] = a + 1.402 * (c - 128);
-        out[k + 1] = a - 0.344136 * (b - 128) - 0.714136 * (c - 128);
-        out[k + 2] = a + 1.772 * (b - 128);
-      } else { out[k] = a; out[k + 1] = b; out[k + 2] = c; }
+      if (ybr) ybrToRgb(out, k, a, b, c);
+      else { out[k] = a; out[k + 1] = b; out[k + 2] = c; }
     }
     return out;
   }
 
-  /** A window (centre, width) that shows a grey frame: the file's; for 8-bit images (display-ready:
-   * ultrasound, angiography), their whole range; else the frame's 1st–99th percentile. */
-  function autoWindow(info, values) {
-    if (info.center !== null && info.width !== null && info.width > 0) return [info.center, info.width];
-    if (info.bitsStored <= 8 && !info.signed && info.slope === 1 && info.intercept === 0) {
+  /** A window (centre, width) that shows a grey frame (frame k's when given): the file's; for
+   * 8-bit images (display-ready: ultrasound, angiography), their whole range; else the frame's
+   * 1st–99th percentile. */
+  function autoWindow(info, values, k) {
+    const f = k === undefined ? info : frameAttrs(info, k);
+    if (f.center !== null && f.width !== null && f.width > 0) return [f.center, f.width];
+    if (info.bitsStored <= 8 && !info.signed && f.slope === 1 && f.intercept === 0) {
       const n = 2 ** info.bitsStored;
       return [n / 2, n];
     }
@@ -414,6 +535,12 @@
     const lo = s[Math.floor(s.length * 0.01)];
     const hi = s[Math.floor(s.length * 0.99)];
     return [(lo + hi) / 2, Math.max(1, hi - lo)];
+  }
+
+  /** RGBA pixels inverted in place (alpha kept): a MONOCHROME1 frame the browser decoded. */
+  function invertRgba(data) {
+    for (let i = 0; i < data.length; i += 4) { data[i] = 255 - data[i]; data[i + 1] = 255 - data[i + 1]; data[i + 2] = 255 - data[i + 2]; }
+    return data;
   }
 
   /** RGBA pixels of a grey frame through a window (MONOCHROME1 is inverted). */
@@ -523,7 +650,8 @@
   }
 
   /**
-   * The waveforms of a file: [{ label, fs, channels: [{ name, units, samples (Float64Array, in units) }] }],
+   * The waveforms of a file: [{ label, fs, channels: [{ name, units, code ({ value, scheme, meaning } of
+   * the Channel Source, or null), samples (Float64Array, in units) }] }],
    * and its annotations: { measurements: [{ name, value, unit }], text: [line] }.
    */
   function waveforms(buffer) {
@@ -543,6 +671,7 @@
         const num = (t, d) => { const x = value(view, c[t]); return Number.isFinite(+x) && x !== '' && x !== undefined ? +x : d; };
         return {
           name: (src?.meaning || value(view, c['003A0203']) || '').replace(/^Lead\s+/i, '').trim(),
+          code: src || null,
           units: u?.value || u?.meaning || '',
           k: num('003A0210', 1) * num('003A0212', 1),
           base: num('003A0213', 0),
@@ -557,7 +686,7 @@
         const d = defs[ch] || { name: `Channel ${ch + 1}`, units: '', k: 1, base: 0 };
         const samples = new Float64Array(n);
         for (let i = 0; i < n; i++) samples[i] = read(data.offset + (i * nch + ch) * size) * d.k + d.base;
-        channels.push({ name: d.name || `Channel ${ch + 1}`, units: d.units, samples });
+        channels.push({ name: d.name || `Channel ${ch + 1}`, units: d.units, code: d.code || null, samples });
       }
       groups.push({ label: value(view, it['003A0020']) || '', fs, channels });
     }
@@ -578,7 +707,7 @@
     return { groups, annotations: { measurements: ms, text }, acquired, modality: value(view, tags['00080060']) || '' };
   }
 
-  const api = { parse, image, nativeFrame, jpegFrame, autoWindow, toRgba, fps, value, kind, documentOf, report, measurements, waveforms, NAMES };
+  const api = { parse, image, nativeFrame, jpegFrame, frameAttrs, autoWindow, toRgba, invertRgba, fps, value, kind, documentOf, report, measurements, waveforms, NAMES };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Dicom = api;
 })(typeof self !== 'undefined' ? self : this);

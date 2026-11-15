@@ -16,6 +16,8 @@
                    to run where one is required, as under Medorama)
     -NoWfdb        build it without WFDB support: no wfdb-x code in it (a WFDB record or folder
                    is refused; every other format is read; docs\building.md at the repository root)
+    -AcceptLicense accept the license terms without asking (scripts, CI; or
+                   MEDORAMA_ACCEPT_LICENSE=yes); otherwise they are shown and must be accepted
   Licensed recording formats are read through their add-on, an adapter installed into
   %LOCALAPPDATA%\medorama\adapters (docs\adapters.md at the repository root).
 
@@ -27,9 +29,13 @@ param(
   [string]$Prefix = (Join-Path $env:LOCALAPPDATA 'vitalstream'),
   [string]$Root = '~',
   [switch]$NoPassword,
-  [switch]$NoWfdb
+  [switch]$NoWfdb,
+  [switch]$AcceptLicense
 )
 $ErrorActionPreference = 'Stop'
+# the license terms, accepted before anything is built (tools\license-accept.ps1)
+. (Join-Path $PSScriptRoot '..\..\tools\license-accept.ps1')
+Confirm-License -Accepted:$AcceptLicense
 # absolute folders (a root starting with ~ stays as it is: the home folder of whoever runs the
 # viewer); CMake gets the root as it is, its backslashes included (cmake/build_paths.cmake)
 $Resolve = { param($p) $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($p) }

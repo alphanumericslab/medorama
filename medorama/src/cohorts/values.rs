@@ -122,33 +122,6 @@ pub(super) fn test_value(k: &Criterion, v: f64, unit: &str) -> anyhow::Result<bo
     Ok(lo.is_none_or(|m| v >= m) && hi.is_none_or(|m| v <= m))
 }
 
-/// The values in `unit` that may pass [`test_value`]: (at least, at most), each a millionth wider
-/// than the test, which stays the test (for reading only those from the database).  The same
-/// error as the test when the threshold does not compare with the unit.
-pub(super) fn value_bounds(k: &Criterion, unit: &str) -> anyhow::Result<(Option<f64>, Option<f64>)> {
-    let conv = |x: f64| {
-        crate::expr::convert(x, &k.unit, unit).ok_or_else(|| {
-            anyhow::anyhow!("{} is in {unit}: {} {} does not compare with it", k.name, fmt_num(x), k.unit)
-        })
-    };
-    let wide = |x: f64| 1e-6 * x.abs().max(1.0);
-    if let Some(x) = k.value {
-        let x = conv(x)?;
-        let (eps, w) = (1e-9 * x.abs().max(1.0), wide(x));
-        return Ok(match k.cmp.as_str() {
-            ">" => (Some(x + eps - w), None),
-            ">=" => (Some(x - eps - w), None),
-            "<" => (None, Some(x - eps + w)),
-            "<=" => (None, Some(x + eps + w)),
-            "!=" => (None, None),
-            _ => (Some(x - eps - w), Some(x + eps + w)),
-        });
-    }
-    let lo = k.min.map(conv).transpose()?;
-    let hi = k.max.map(conv).transpose()?;
-    Ok((lo.map(|m| m - wide(m)), hi.map(|m| m + wide(m))))
-}
-
 pub(super) fn has_value_test(k: &Criterion) -> bool {
     k.value.is_some() || k.min.is_some() || k.max.is_some()
 }
@@ -202,7 +175,7 @@ impl Skipped {
 
     /// Done: an error when no value compared; else what was left out, in words, for the
     /// search's warnings (none: nothing).
-    pub(super) fn done(&self, k: &Criterion, cache: &Cache) -> anyhow::Result<()> {
+    pub(super) fn done(&self, k: &Criterion, cache: &Cx) -> anyhow::Result<()> {
         if self.by_unit.is_empty() {
             return Ok(());
         }

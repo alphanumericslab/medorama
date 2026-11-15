@@ -4,7 +4,7 @@
 <rect x="0" y="0" width="1000" height="552" rx="14" fill="#FFFFFF"/>
 <g font-family="Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#1F2937">
 <text x="24" y="34" font-size="17" font-weight="700" fill="#1F2937" text-anchor="start">The privacy gate: what leaves in Privacy Mode</text>
-<text x="24" y="54" font-size="12" font-weight="400" fill="#4B5563" text-anchor="start">The catalog keeps every identifier as imported; the gate decides at the moment of sending. Nothing identifying reaches the browser.</text>
+<text x="24" y="54" font-size="12" font-weight="400" fill="#4B5563" text-anchor="start">Identifiers stay in the connected databases and the encrypted workspace; the gate decides, at sending, what leaves.</text>
 <rect x="24" y="84" width="200" height="98" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4"/>
 <text x="36" y="105" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start">Request</text>
 <text x="36" y="124.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">the signed-in user (signin.rs)</text>
@@ -19,10 +19,10 @@
 <text x="272" y="173.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">answered as without PHI</text>
 <rect x="532" y="84" width="200" height="98" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
 <text x="544" y="105" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">Handler</text>
-<text x="544" y="124.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">reads the catalog;</text>
-<text x="544" y="140.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">files named by tokens;</text>
-<text x="544" y="157.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">searches of identifiers</text>
-<text x="544" y="173.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">refused</text>
+<text x="544" y="124.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">reads the databases the</text>
+<text x="544" y="140.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">user is granted; files</text>
+<text x="544" y="157.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">named by tokens; searches</text>
+<text x="544" y="173.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">of identifiers refused</text>
 <rect x="768" y="84" width="208" height="98" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4"/>
 <text x="780" y="105" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start">Browser</text>
 <text x="780" y="124.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">pseudonyms,</text>
@@ -35,7 +35,7 @@
 <text x="36" y="251" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">JSON answers</text>
 <text x="36" y="270.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">1  identifiers replaced (the dictionary):</text>
 <text x="52" y="286.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">patient IDs → MO- pseudonyms</text>
-<text x="52" y="303.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">encounter IDs → MO-E- pseudonyms</text>
+<text x="52" y="303.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">visit IDs → MO-E- pseudonyms</text>
 <text x="52" y="319.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">MRNs, CSNs → [MRN], [CSN]</text>
 <text x="52" y="336.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">recordings’ paths → mo-rec tokens</text>
 <text x="36" y="352.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">2  dates and times moved back (per patient)</text>

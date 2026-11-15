@@ -78,91 +78,112 @@ class Svg:
 
 
 def system_context():
-    s = Svg(1000, 610, 'Medorama: system context and trust boundaries',
-            'People use a browser; the browser reaches the Medorama server over TLS or an SSH tunnel; the server reads the '
-            'data sources, keeps the catalog database, runs the VitalStream viewer and plug-ins on the same host.')
+    s = Svg(1000, 764, 'Medorama: system context and trust boundaries',
+            'People use a browser; the browser reaches the Medorama server over TLS or an SSH tunnel. On the server host, '
+            'the server, its VitalStream viewer and its plug-ins run under one account, with the control store, the '
+            'encrypted workspace and the master key. The connected databases are outside the host and only read; the '
+            'master key may come from a key manager.')
     s.text(24, 34, 'System context and trust boundaries', size=17, weight=700)
-    s.text(24, 54, 'Every request crosses one boundary into the server, where sign-in, roles and the privacy gate decide what leaves.', size=12, fill='#4B5563')
+    s.text(24, 54, 'Every request crosses one boundary into the server, where sign-in, roles, grants and the privacy gate decide what leaves.', size=12, fill='#4B5563')
     # people
-    for i, (who, what) in enumerate([('Researcher', 'cohorts, data, viewers'), ('Clinician', 'a patient’s journey'), ('Data manager (admin)', 'imports, users, review')]):
+    for i, (who, what) in enumerate([('Researcher', 'cohorts, data, viewers'), ('Clinician', 'a patient’s journey'), ('Data manager (admin)', 'databases, users, grants')]):
         s.box(24, 90 + i * 74, 170, 58, 'person', who, [what])
     # browser
     s.zone(214, 76, 220, 240, 'User’s computer (untrusted)')
     s.box(228, 104, 192, 190, 'outside', 'Web browser', ['Medorama page', 'ECG, PACS, VitalStream', 'viewers (static pages)', '', 'stores nothing; shows', 'what the server sends'])
     for i in range(3):
-        s.arrow([(194, 119 + i * 74), (228, 119 + i * 74 + (0 if i == 1 else (35 if i == 0 else -35)) * 0)])
+        s.arrow([(194, 119 + i * 74), (228, 119 + i * 74)])
     # network
     s.arrow([(420, 200), (548, 200)], both=True)
     for i, line in enumerate(['HTTPS through', 'a reverse proxy,', 'or an SSH tunnel']):
         s.text(484, 166 + 14 * i, line, size=11, fill='#4B5563', anchor='middle')
     # host
-    s.zone(540, 76, 440, 496, 'Server host (trusted; the catalog’s OS account)')
+    s.zone(540, 76, 440, 520, 'Server host (trusted; Medorama’s OS account)')
     s.box(556, 104, 408, 150, 'medorama', 'Medorama server  (127.0.0.1:8090 by default)',
-          ['sign-in (Argon2id), sessions, roles, PHI permission', 'API, patient pages, cohorts, databases, imports', 'privacy gate: Privacy Mode answers, files, exports', 'audit log, job queue and workers'])
+          ['sign-in (Argon2id), sessions, roles, grants', 'API, patient pages, cohorts, databases', 'data keys unwrapped only for granted requests', 'privacy gate; audit log, job queue, workers'])
     s.box(556, 270, 196, 110, 'viewer', 'VitalStream viewer', ['127.0.0.1, private port,', 'reached only through', 'Medorama’s gateway;', 'add-ons read other formats'])
-    s.box(768, 270, 196, 110, 'medorama', 'Plug-in actions', ['separate processes', 'own process group,', 'timeout; get pseudonyms', 'and file paths only'])
+    s.box(768, 270, 196, 110, 'medorama', 'Plug-in actions', ['separate processes,', 'own process group,', 'timeout; get pseudonyms', 'and file paths only'])
     s.arrow([(654, 254), (654, 270)])
     s.arrow([(866, 254), (866, 270)])
-    s.box(556, 398, 196, 162, 'phi', 'Catalog database', ['SQLite (owner-only, optional', 'SQLCipher), or PostgreSQL', '(TLS, verified)', 'identifiers (PHI) in their', 'own tables; pseudonyms;', 'users, jobs, audit log'])
-    s.box(768, 398, 196, 74, 'store', 'Index and results folders', ['derived data, pseudonymous'])
-    s.box(768, 486, 196, 74, 'outside', 'Data sources (read only)', ['exports, recordings, ECGs,', 'DICOM; connected databases'], dashed=True)
-    # only the server writes the database; the plug-ins write their results
-    s.arrow([(556, 236), (547, 236), (547, 470), (556, 470)])
-    s.arrow([(866, 380), (866, 398)])
-    s.text(760, 592, 'The server, the viewer and the plug-ins read the data sources; nothing writes to them.', size=11, fill='#4B5563', anchor='middle')
-    s.text(24, 330, 'Inputs', size=13, weight=650)
+    s.box(556, 398, 196, 90, 'store', 'Control store', ['SQLite (owner-only), or', 'PostgreSQL (TLS, verified);', 'no identifiers: keyed hashes'])
+    s.box(556, 500, 196, 84, 'phi', 'Workspace', ['SQLite files, encrypted', '(SQLCipher), a key per', 'database and per cohort'])
+    s.box(768, 398, 196, 90, 'store', 'Index, plug-in output', ['folders, not encrypted yet:', 'waveform indexes, files', 'plug-ins write'])
+    s.box(768, 500, 196, 84, 'store', 'Master key file', ['the default, outside the', 'workspace; or the key', 'from a key manager'])
+    # only the server writes the control store and the workspace
+    s.arrow([(556, 236), (547, 236), (547, 443), (556, 443)])
+    s.arrow([(547, 443), (547, 542), (556, 542)])
+    # outside the host
+    s.box(556, 642, 196, 88, 'outside', 'Connected databases', ['OMOP, SQL views, db-builder', 'SQLite; the recording files', 'they name. Only read.'], dashed=True)
+    s.box(768, 642, 196, 88, 'outside', 'Key manager (optional)', ['keyring, Vault, a cloud', 'KMS: gives the master key', '(master_key_command)'], dashed=True)
+    s.arrow([(654, 642), (654, 624), (760, 624), (760, 254)])
+    s.text(664, 618, 'read only', size=11, fill='#4B5563')
+    s.arrow([(866, 642), (866, 584)])
+    s.text(24, 340, 'Inputs', size=13, weight=650)
     for i, line in enumerate([
-        'Databases (CSV, Excel) imported by an admin,',
-        'or connected and read in place (OMOP, SQL).',
-        'Files enter only with the rows that name their',
-        'patient, read where they are; never written.',
+        'Connected databases, read in place, never',
+        'written: OMOP, any SQL database through views,',
+        'SQLite databases built by db-builder; and the',
+        'recording files they name. Nothing is imported.',
     ]):
-        s.text(24, 352 + 17 * i, line, size=11.5, fill='#374151')
-    s.text(24, 450, 'Outputs to people', size=13, weight=650)
+        s.text(24, 362 + 17 * i, line, size=11.5, fill='#374151')
+    s.text(24, 460, 'Outputs to people', size=13, weight=650)
     for i, line in enumerate([
-        'Identified: users with the PHI permission,',
-        'Privacy Mode off.  Privacy Mode (default for',
-        'everyone but admins): pseudonyms, placeholders,',
-        'dates moved back; files de-identified or marked.',
+        'Identified: users with the PHI permission and',
+        'the phi grant on the database, Privacy Mode off.',
+        'Privacy Mode (default for everyone but admins):',
+        'pseudonyms, placeholders, dates moved back;',
+        'files de-identified or marked.',
     ]):
-        s.text(24, 472 + 17 * i, line, size=11.5, fill='#374151')
+        s.text(24, 482 + 17 * i, line, size=11.5, fill='#374151')
+    s.text(24, 750, 'Dashed: outside the host. The server, the viewer and the plug-ins read the connected databases; nothing writes to them.', size=11.5, fill='#374151')
     s.save('system-context.svg')
 
 
 def components():
-    s = Svg(1000, 640, 'Medorama server: components and request path',
-            'Requests pass the security headers and request check, the privacy layer (session lookup, Privacy Mode decision, '
-            'the gate on the way out), then the handlers, which use the core modules over the catalog database.')
+    s = Svg(1000, 824, 'Medorama server: components and request path',
+            'Requests pass the security headers and request check, the privacy layer (sign-in, Privacy Mode decision, '
+            'the gate on the way out), then the handlers, which check the role and the grants, unwrap the data keys they '
+            'need, and use the core modules over the control store, the workspace and the connected databases.')
     s.text(24, 34, 'Inside the server: one request’s path', size=17, weight=700)
     s.text(24, 54, 'Layers are axum middleware; the privacy layer wraps every route, so every answer passes it on the way out.', size=12, fill='#4B5563')
     s.box(24, 84, 952, 56, 'outside', 'guard  (server.rs)', ['security headers on every answer (CSP, frame rules, nosniff, no-referrer, no-store on the API); X-Medorama: 1 required on every changing API request'])
-    s.box(24, 152, 952, 72, 'gate', 'privacy layer  (server.rs privacy, gate.rs)', ['in: finds the session’s user once; Privacy Mode unless the user has the PHI permission and turned it off (POST privacy)',
-                                                                                      'out, in Privacy Mode: JSON through the gate; files only if the gate cleared them; anything else refused (fail closed)'])
+    s.box(24, 152, 952, 72, 'gate', 'privacy layer  (server.rs privacy, signin.rs, gate.rs)', ['in: signin.rs identify finds the user once; Privacy Mode unless the user has the PHI permission and turned it off (POST privacy)',
+                                                                                                 'out, in Privacy Mode: JSON through the gate; files only if the gate cleared them; anything else refused (fail closed)'])
     cols = [
-        ('API  /api/v1', ['patients, report, detail', 'cohorts, databases', 'imports, review (admins)', 'users, audit (admins)', 'files: patients/{id}/file/…']),
-        ('Gateway  /viewer/', ['allow-list of viewer API v1', 'per-user browse and open', 'rules; Privacy Mode: tokens,', 'times translated, no', 'folders']),
+        ('API  /api/v1', ['patients, report, detail, files', 'cohorts, search across databases', 'databases: connect, check,', '    refresh, grants, remove', 'users, audit (admins)']),
+        ('Gateway  /viewer/', ['allow-list of viewer API v1;', 'only recordings of databases', 'the user may view; Privacy', 'Mode: tokens, times', 'translated, no folders']),
         ('Pages  /, /viewers/', ['the Medorama page and the', 'ECG and PACS viewers:', 'static files, no data,', 'embedded in the binary']),
-        ('Command line  medorama', ['init, import, serve, run,', 'work, users, addons;', 'the local account is the', 'catalog’s owner']),
+        ('Command line  medorama', ['init, serve, databases, keys,', 'run, work, user, audit;', 'the person at the terminal', 'holds every grant']),
     ]
     for i, (t, lines) in enumerate(cols):
         s.box(24 + i * 240, 240, 232, 126, 'medorama', t, lines)
+    for i in range(4):
+        s.arrow([(140 + i * 240, 224), (140 + i * 240, 240)])
+        s.arrow([(140 + i * 240, 366), (140 + i * 240, 382)])
+    s.box(24, 382, 952, 66, 'medorama', 'Every handler  (grants.rs, workspace.rs)', [
+        'checks the role and the grants the request needs (search < view < phi < manage on a database; view < edit < manage on a cohort),',
+        'then unwraps the data key of each database or cohort it reads, only for a user who holds a grant on it'], title_size=13)
     mods = [
-        ('gate.rs', ['dictionary of identifiers', 'placeholders, file tokens', 'table cells, notes']),
-        ('deid.rs', ['dates moved back', '(per patient), ages 90+', 'WFDB, EDF headers; MUSE XML']),
+        ('gate.rs', ['dictionary of identifiers,', 'placeholders, file tokens,', 'table cells, notes']),
+        ('deid.rs', ['dates moved back (per', 'patient), ages 90+; WFDB,', 'EDF headers; MUSE XML']),
         ('dicom.rs', ['DICOM headers (PS3.15', 'Basic Profile), pixels', 'copied byte for byte']),
-        ('pseudonyms.rs', ['MO-XXXX-XXXX, random,', 'stored, check character,', 'aliases on merges']),
-        ('patient/, cohorts/', ['the patient page, search,', 'cohort definitions,', 'exports']),
-        ('tables.rs, imports.rs', ['databases in, columns', 'kept as imported,', 'identity, removal']),
-        ('users.rs', ['Argon2id, sessions', '(SHA-256 of a random', 'token), roles, PHI']),
-        ('jobs.rs, actions.rs', ['queue, workers, indexing,', 'plug-ins as processes', '(pseudonyms only)']),
+        ('pseudonyms.rs', ['MO-XXXX-XXXX, random,', 'with a check character,', 'never derived from an ID']),
+        ('databases.rs, sources/', ['connect, check, refresh,', 'remove; OMOP, views,', 'db-builder: read only']),
+        ('persons.rs, variables.rs', ['exact (issuer, identifier)', 'links, conflicts; what', 'each database holds']),
+        ('patient/, cohorts/', ['the patient page, read live;', 'criteria sent to the', 'databases that may hold them']),
+        ('recordings.rs, jobs.rs', ['recordings’ state, indexing,', 'actions as separate', 'processes (pseudonyms only)']),
+        ('signin.rs, users.rs', ['password or proxy sign-in;', 'Argon2id, sessions, roles,', 'the PHI permission']),
+        ('grants.rs', ['grants per database and', 'per cohort; the admin who', 'connects gets every grant']),
+        ('workspace.rs', ['data keys wrapped by the', 'master key (AES-256-GCM);', 'SQLCipher files']),
+        ('audit.rs', ['who did what, when;', 'sealed every minute by', 'a SHA-256 chain']),
     ]
     for i, (t, lines) in enumerate(mods):
         x = 24 + (i % 4) * 240
-        y = 388 + (i // 4) * 104
-        s.box(x, y, 232, 92, 'gate' if t in ('gate.rs', 'deid.rs', 'dicom.rs', 'pseudonyms.rs') else 'medorama', t, lines)
-    s.box(24, 600 - 4, 952, 30, 'phi', 'catalog database  (db.rs, sql/: SQLite or PostgreSQL, migrations, owner-only files, optional SQLCipher; identifiers only in their tables)', title_size=12)
-    for i in range(4):
-        s.arrow([(140 + i * 240, 224), (140 + i * 240, 240)])
+        y = 464 + (i // 4) * 96
+        s.box(x, y, 232, 84, 'gate' if t in ('gate.rs', 'deid.rs', 'dicom.rs', 'pseudonyms.rs') else 'medorama', t, lines)
+    s.box(24, 756, 300, 52, 'store', 'Control store  (db.rs, sql/, schema/)', ['SQLite or PostgreSQL; no identifiers'], title_size=12.5)
+    s.box(350, 756, 300, 52, 'phi', 'Workspace  (workspace.rs)', ['one folder per database, a file per cohort'], title_size=12.5)
+    s.box(676, 756, 300, 52, 'outside', 'Connected databases  (sources/)', ['read in place, read-only sessions'], title_size=12.5, dashed=True)
     s.save('components.svg')
 
 
@@ -171,15 +192,15 @@ def privacy_gate():
             'The session decides the mode; in Privacy Mode JSON answers have identifiers replaced, dates moved back and '
             'patient names removed from text; files are de-identified by kind, passed with a warning, or refused.')
     s.text(24, 34, 'The privacy gate: what leaves in Privacy Mode', size=17, weight=700)
-    s.text(24, 54, 'The catalog keeps every identifier as imported; the gate decides at the moment of sending. Nothing identifying reaches the browser.', size=12, fill='#4B5563')
+    s.text(24, 54, 'Identifiers stay in the connected databases and the encrypted workspace; the gate decides, at sending, what leaves.', size=12, fill='#4B5563')
     s.box(24, 84, 200, 98, 'outside', 'Request', ['the signed-in user (signin.rs)', '+ Privacy Mode choice', '(set by POST privacy,', 'audited)'])
     s.box(260, 84, 236, 98, 'gate', 'Mode', ['no PHI permission: always on', 'PHI permission: on by default', '(off by default for admins)', 'answered as without PHI'])
-    s.box(532, 84, 200, 98, 'medorama', 'Handler', ['reads the catalog;', 'files named by tokens;', 'searches of identifiers', 'refused'])
+    s.box(532, 84, 200, 98, 'medorama', 'Handler', ['reads the databases the', 'user is granted; files', 'named by tokens; searches', 'of identifiers refused'])
     s.box(768, 84, 208, 98, 'outside', 'Browser', ['pseudonyms,', '[Patient Name], [MRN] …', 'dates moved back'])
     s.arrow([(224, 133), (260, 133)])
     s.arrow([(496, 133), (532, 133)])
     s.text(744, 214, 'the answer, on its way out', size=12, weight=600, fill='#5C3D00', anchor='middle')
-    s.box(24, 230, 300, 186, 'gate', 'JSON answers', ['1  identifiers replaced (the dictionary):', '    patient IDs → MO- pseudonyms', '    encounter IDs → MO-E- pseudonyms', '    MRNs, CSNs → [MRN], [CSN]', '    recordings’ paths → mo-rec tokens', '2  dates and times moved back (per patient)', '3  ages above 89 → 90+; staff → [Staff Name]', '4  the patient’s own names in text → placeholder'])
+    s.box(24, 230, 300, 186, 'gate', 'JSON answers', ['1  identifiers replaced (the dictionary):', '    patient IDs → MO- pseudonyms', '    visit IDs → MO-E- pseudonyms', '    MRNs, CSNs → [MRN], [CSN]', '    recordings’ paths → mo-rec tokens', '2  dates and times moved back (per patient)', '3  ages above 89 → 90+; staff → [Staff Name]', '4  the patient’s own names in text → placeholder'])
     s.box(348, 230, 300, 186, 'gate', 'Files, by kind', ['WFDB header: identifying comments out,', '    dates moved, file names → tokens', 'GE MUSE XML: demographics, staff,', '    order out; dates moved', 'DICOM: header rewritten (PS3.15 Basic', '    Profile), pixels as they are', 'EDF, BDF: header de-identified,', '    annotation texts out', 'WFDB samples: numbers only, as they are'])
     s.box(672, 230, 304, 186, 'gate', 'Passed with a warning, or refused', ['pictures, videos, PDF: as they are,', '    marked x-medorama-may-contain-phi', '    (the page shows an amber warning triangle)', 'DICOM: marked too (burned-in text)', 'any other kind of file: refused', 'notes’ text: through the gate, marked', '    (free text may still identify)'])
     s.box(24, 436, 952, 100, 'gate', 'Last layer: fail closed', ['every answer of a Privacy Mode session passes server.rs privacy: JSON through the gate; a file only if the gate cleared it;',
@@ -191,101 +212,126 @@ def privacy_gate():
     s.save('privacy-gate.svg')
 
 
-def import_flow():
-    s = Svg(1000, 400, 'Importing a database',
-            'A table is inspected, its columns mapped (their names kept), its rows matched to patients and encounters, '
-            'their files linked where they are; unmatched rows wait for review; recordings are indexed by workers.')
-    s.text(24, 34, 'Importing a database: the only way in', size=17, weight=700)
-    s.text(24, 54, 'A file always comes with the row that names its patient. Nothing is written where the data lie.', size=12, fill='#4B5563')
-    steps = [
-        ('outside', 'Table', ['CSV, or a spreadsheet', '(Excel, OpenDocument):', 'an export of a source', '(EHR, ECG, PACS, …)']),
-        ('medorama', 'Inspect', ['columns recognised', '(patient ID, MRN,', 'times, values, file);', 'names kept as imported']),
-        ('medorama', 'Match', ['rows to patients and', 'encounters (ID, MRN,', 'encounter, CSN);', 'duplicates to review']),
-        ('phi', 'Catalog', ['patients, identifiers', '(PHI), encounters,', 'items, the rows as', 'imported, provenance']),
-        ('medorama', 'Index', ['workers index linked', 'recordings, derive', 'series (Holter heart', 'rate); pseudonyms']),
-    ]
-    for i, (k, t, lines) in enumerate(steps):
-        s.box(24 + i * 194, 84, 176, 112, k, t, lines)
-        if i:
-            s.arrow([(24 + i * 194 - 18, 140), (24 + i * 194, 140)])
-    s.box(24 + 2 * 194, 230, 176, 112, 'store', 'Review (admins)', ['rows without a patient', 'wait; possible', 'duplicates merged', 'or kept apart'])
-    s.box(24 + 1 * 194, 230, 176, 112, 'outside', 'Files', ['linked where they are,', 'inside data_roots', '(read only)'], dashed=True)
-    s.arrow([(24 + 2 * 194 + 88, 196), (24 + 2 * 194 + 88, 230)])
-    s.arrow([(24 + 1 * 194 + 88, 196), (24 + 1 * 194 + 88, 230)])
-    s.box(24 + 3 * 194, 230, 370, 112, 'store', 'Removal', ['removing a database takes out everything it added,', 'everywhere: its items, values and notes, the', 'recordings and identifiers that only it brought'])
-    s.text(24, 380, 'Requirements for each table: docs/importing.md. Identifiers stay in the catalog’s identifier tables; every import and removal is audited.', size=11.5, fill='#374151')
-    s.save('import-flow.svg')
+def data_in():
+    s = Svg(1000, 600, 'How data come in: databases, connected',
+            'Medorama imports nothing. Tables, known exports and folders of recordings become a SQLite database with '
+            'db-builder, a separate command; OMOP databases and any SQL database through views are connected directly. '
+            'Medorama reads every connected database in place, read-only, and the recording files it names where they lie.')
+    s.text(24, 34, 'How data come in: databases, connected', size=17, weight=700)
+    s.text(24, 54, 'Medorama imports nothing. A data manager builds a database with db-builder, or a site writes views; an admin connects it.', size=12, fill='#4B5563')
+    for x, label in [(24, 'What a site has'), (276, 'Built by'), (528, 'A database'), (776, 'Medorama')]:
+        s.text(x, 84, label, size=12, weight=650, fill='#6B7280')
+    s.box(24, 96, 220, 80, 'outside', 'Tables', ['CSV, Excel, OpenDocument,', 'Parquet'])
+    s.box(24, 190, 220, 80, 'outside', 'Known exports', ['GE MUSE XML, CLIF folders,', 'a site’s export (TOML)'])
+    s.box(24, 284, 220, 80, 'outside', 'Folders of recordings', ['WFDB, EDF, ECGs, DICOM,', 'pictures, PDF'])
+    s.box(276, 96, 220, 268, 'medorama', 'db-builder', ['a separate command, run', 'by a data manager:', '', 'recognizes the columns', '(docs/importing.md)', 'names each patient by', '    (issuer, identifier)', 'keeps every other column', 'lists every file a row', '    names as a recording', 'writes only its output'])
+    for y in (136, 230, 324):
+        s.arrow([(244, y), (276, y)])
+    s.box(528, 96, 208, 120, 'store', 'A SQLite database', ['persons, visits, entries,', 'recordings, meta (version):', 'an open schema; may be', 'encrypted (--encrypt)'])
+    s.arrow([(496, 156), (528, 156)])
+    s.box(528, 232, 208, 92, 'outside', 'An OMOP database', ['OMOP CDM 5.3 or 5.4,', 'PostgreSQL or SQLite:', 'views built in'], dashed=True)
+    s.box(528, 340, 208, 108, 'outside', 'Any SQL database', ['views written by the site:', 'persons, visits, entries,', 'recordings, version'], dashed=True)
+    s.box(776, 96, 200, 352, 'medorama', 'Connected', ['Databases › Connect a', 'database, or medorama', 'databases connect', '', 'read in place, through', 'read-only sessions;', 'persons linked by exact', '(issuer, identifier) pairs;', 'variables and recordings', 'read; checked every', 'minute, read again when', 'its version changes'])
+    for y in (156, 278, 394):
+        s.arrow([(736, y), (776, y)])
+    s.box(24, 476, 952, 68, 'outside', 'Recording files, ECGs, images, documents',
+          ['stay where they lie, inside data_roots; a database’s recordings rows name them, with their patient. Medorama reads them, never copies or writes them.'], dashed=True)
+    s.arrow([(876, 476), (876, 448)])
+    s.parts.append('<path d="M134 364 L134 476" fill="none" stroke="#9CA3AF" stroke-width="1.4" stroke-dasharray="5 4"/>')
+    s.text(144, 424, 'the same files: listed, never copied', size=11, fill='#4B5563')
+    s.text(24, 572, 'Dashed: kept by the site. No part of Medorama writes into a connected database; requirements on one: docs/databases.md.', size=11.5, fill='#374151')
+    s.save('data-in.svg')
 
 
 def sources():
-    s = Svg(1000, 600, 'Medorama: sources and the control store',
-            'The Medorama servers keep their own data in the control store (SQLite, or PostgreSQL for several servers), read the '
-            'catalog of imported databases and connected databases (OMOP, mapped SQL) in place, link each source\'s persons to one '
-            'patient in the registry, and send every answer through the privacy gate.')
-    s.text(24, 34, 'Sources and the control store', size=17, weight=700)
-    s.text(24, 54, 'One patient, one pseudonym, across every source; every answer through the same gate; connected databases only read.', size=12, fill='#4B5563')
-    s.box(24, 84, 952, 46, 'outside', 'Browser, command line, plug-ins', ['HTTPS to any server: sessions, cohorts and the job queue are in the control store'])
-    s.zone(24, 146, 952, 238, 'Medorama server  (one with SQLite; several identical ones with PostgreSQL)')
-    s.box(40, 174, 920, 40, 'gate', 'privacy gate  (gate.rs): every answer and file leaves through it; only canonical fields reach it', title_size=12.5)
-    s.box(40, 226, 300, 146, 'medorama', 'Features', ['cohorts (criteria across sources)', 'the patient page (every source’s', '    entries in the same columns)', 'databases, exports, jobs, gateway'])
-    s.box(356, 226, 300, 146, 'medorama', 'Query layer', ['planner (cohorts/): each criterion', '    to each source that holds such data,', '    its filters run there', 'registry (sources/link.rs): persons', '    linked to patients, by ID, then MRN'])
-    s.box(672, 226, 288, 146, 'medorama', 'Source layer', ['the catalog: imported databases', 'connected databases (sources/):', '    three views of canonical columns', '    OMOP built in; any SQL mapped', 'sql/: SQLite or PostgreSQL, one API'])
-    s.box(24, 408, 300, 168, 'phi', 'Control store', ['SQLite (one server) or PostgreSQL', 'users, sessions, audit, settings', 'the catalog’s imported databases', 'patients, identifiers (PHI),', '    pseudonyms, the registry', 'cohorts and their sources’ versions', 'the job queue (advisory locks)'])
-    s.box(350, 408, 300, 168, 'outside', 'Connected databases (read only)', ['OMOP CDM 5.3, 5.4 · mapped SQL', 'PostgreSQL: on-site, Amazon RDS', '    and Aurora, Azure; SQLite files', 'read-only sessions; TLS required', '    to another host, verified', 'per-query time limit, row limit', 'password in a file, never stored'], dashed=True)
-    s.box(676, 408, 300, 168, 'outside', 'Files (read only)', ['recordings (WFDB; others by add-ons)', 'ECGs (WFDB, MUSE XML, DICOM)', 'DICOM studies, pictures, PDFs', 'inside data_roots, linked by the', '    rows that name their patient'], dashed=True)
-    s.arrow([(174, 384), (174, 408)], both=True)
-    s.text(184, 400, 'read, write', size=11, fill='#4B5563')
-    s.arrow([(500, 384), (500, 408)])
-    s.text(510, 400, 'read only', size=11, fill='#4B5563')
-    s.arrow([(826, 384), (826, 408)])
-    s.text(836, 400, 'read only', size=11, fill='#4B5563')
-    s.arrow([(500, 130), (500, 146)], both=True)
+    s = Svg(1000, 640, 'Medorama: connected databases, the control store and the workspace',
+            'Medorama reads each connected database in place. The patient index links each database\'s persons to patients '
+            'by exact (issuer, identifier) pairs. The control store keeps patient numbers, pseudonyms and keyed hashes of the '
+            'pairs, never identifiers; each database\'s persons as linked, its variables and recordings are kept in its own '
+            'folder of the workspace, encrypted with its data key, which the master key wraps.')
+    s.text(24, 34, 'Connected databases, the control store and the workspace', size=17, weight=700)
+    s.text(24, 54, 'One patient, one pseudonym, across every database; identifiers only in the databases and the encrypted workspace.', size=12, fill='#4B5563')
+    dbs = [('An OMOP database', 'views built into Medorama'), ('A db-builder database', 'its tables are the views'), ('Any SQL database', 'views written by the site')]
+    for i, (t, line) in enumerate(dbs):
+        s.box(24 + i * 328, 80, 296, 64, 'outside', t, [line + '; only read'], dashed=True)
+    s.zone(24, 164, 952, 172, 'Medorama server')
+    s.arrow([(172, 144), (172, 196)])
+    s.arrow([(500, 144), (500, 196)])
+    s.arrow([(828, 144), (828, 154), (600, 154), (600, 196)])
+    s.box(40, 196, 580, 124, 'medorama', 'Patient index  (persons.rs)', [
+        'each person’s pairs: the patient ID under its issuer (patient_id_issuer, or the',
+        '    database’s issuer setting, else the database itself), the MRN under mrn:<authority>',
+        'a pair equal in two databases: one patient, one pseudonym (exact joins only)',
+        'pairs that name two patients: a conflict, listed, never linked or merged',
+    ])
+    s.box(636, 196, 324, 124, 'medorama', 'Keys  (workspace.rs)', ['a data key per database and per', 'cohort, wrapped by the master key', '(AES-256-GCM); unwrapped only for', 'a request whose user holds a grant'])
+    s.box(24, 384, 300, 184, 'store', 'Control store', ['SQLite (one server) or PostgreSQL', 'patients: number, MO- pseudonym;', '    no identifier', 'patient_keys: a keyed hash of each', '    pair, and its patient', 'databases, grants, wrapped keys,', 'cohort definitions, jobs, audit'])
+    s.box(356, 384, 400, 184, 'phi', 'Workspace  (encrypted, SQLCipher)', ['db-0001/   one folder per connected database', '    persons.sqlite: identifiers, names, birth date, sex', '    variables.sqlite, recordings.sqlite', '    results-<action>.sqlite', 'cohorts/c-0001.sqlite: members, provenance', 'each file with its owner’s data key', 'index/: index format 2, not encrypted yet'])
+    s.box(788, 384, 188, 184, 'outside', 'Master key', ['outside the workspace:', '$MEDORAMA_MASTER_KEY,', 'master_key_command', '(keyring, Vault, KMS),', 'or master_key_file'], dashed=True)
+    s.arrow([(172, 320), (172, 384)])
+    s.text(182, 356, 'keyed hashes, pseudonyms', size=11, fill='#4B5563')
+    s.arrow([(500, 320), (500, 384)])
+    s.text(510, 356, 'identifiers, as linked', size=11, fill='#4B5563')
+    s.arrow([(700, 320), (700, 384)])
+    s.text(694, 356, 'opens', size=11, fill='#4B5563', anchor='end')
+    s.arrow([(882, 384), (882, 320)])
+    s.text(892, 356, 'wraps', size=11, fill='#4B5563')
+    s.text(24, 598, 'Removing a database destroys its data key, deletes its workspace folder, its keyed hashes and every cohort member it put there.', size=11.5, fill='#374151')
+    s.text(24, 616, 'The database itself is never touched. Design: docs/design/databases-only.md and docs/design/sources.md.', size=11.5, fill='#374151')
     s.save('sources.svg')
 
 
 def architecture():
-    s = Svg(1000, 716, 'Medorama: architecture at a glance',
+    s = Svg(1000, 760, 'Medorama: architecture at a glance',
             'People use a browser; requests pass the institution\'s front door (TLS, optionally its single sign-on), then '
-            'Medorama\'s sign-in, roles and handlers; every answer leaves through the privacy gate. Readers turn each file '
-            'format into one of four data models. Identifiers are kept only in the catalog database; data sources are only read.')
+            'Medorama\'s sign-in, roles and grants, and handlers, which unwrap the data keys of the databases they read; every '
+            'answer leaves through the privacy gate. Readers turn each format into one of four data models. Medorama keeps a '
+            'control store with no identifiers and an encrypted workspace, and only reads the connected databases.')
     s.text(24, 34, 'Medorama at a glance', size=17, weight=700)
-    s.text(24, 54, 'One server, one way in, one way out: sign-in decides who is asking, the privacy gate decides what leaves.', size=12, fill='#4B5563')
+    s.text(24, 54, 'One server, one way in, one way out: sign-in and grants decide who may read what, the privacy gate decides what leaves.', size=12, fill='#4B5563')
     s.box(24, 80, 220, 76, 'person', 'People', ['researchers, clinicians,', 'data managers, admins'])
     s.box(276, 80, 220, 76, 'outside', 'Web browser', ['the Medorama page and viewers:', 'static pages; stores no data'])
     s.box(528, 80, 448, 76, 'outside', 'The institution’s front door', ['HTTPS (a reverse proxy), and where required its sign-in:', 'single sign-on, MFA, VPN — the part each institution adapts'], dashed=True)
     s.arrow([(244, 118), (276, 118)])
     s.arrow([(496, 118), (528, 118)], both=True)
     s.zone(24, 178, 952, 346, 'Medorama server')
-    s.box(40, 206, 284, 80, 'medorama', '1  Sign-in  (signin.rs)', ['who is asking: a password, or the', 'name the institution’s proxy sends'])
-    s.box(346, 206, 284, 80, 'medorama', '2  Roles and the PHI permission', ['what that user may do and see', '(users.rs): admin, analyst, viewer'])
-    s.box(652, 206, 308, 80, 'medorama', '3  Handlers', ['the API, the viewer gateway, the pages;', 'imports, cohorts, patient pages, jobs'])
-    s.arrow([(752, 156), (752, 168), (280, 168), (280, 206)])
-    s.arrow([(324, 246), (346, 246)])
-    s.arrow([(630, 246), (652, 246)])
-    s.box(40, 302, 920, 64, 'gate', '4  The privacy gate  (gate.rs, deid.rs, dicom.rs)', ['every answer, file and export of a session in Privacy Mode leaves through it: identifiers replaced, dates moved back,',
+    w = 218
+    boxes = [
+        ('1  Sign-in  (signin.rs)', ['who is asking: a password,', 'or the name the proxy sends']),
+        ('2  Roles and grants', ['role, PHI permission (users.rs);', 'grants per database (grants.rs)']),
+        ('3  Handlers', ['API, viewer gateway, pages:', 'databases, cohorts, patients']),
+        ('4  Data keys  (workspace.rs)', ['a database’s key unwrapped', 'only for a granted request']),
+    ]
+    for i, (t, lines) in enumerate(boxes):
+        s.box(40 + i * (w + 16), 206, w, 80, 'medorama', t, lines, title_size=13)
+        if i:
+            s.arrow([(40 + i * (w + 16) - 16, 246), (40 + i * (w + 16), 246)])
+    s.arrow([(752, 156), (752, 168), (149, 168), (149, 206)])
+    s.box(40, 302, 920, 64, 'gate', '5  The privacy gate  (gate.rs, deid.rs, dicom.rs)', ['every answer, file and export of a session in Privacy Mode leaves through it: identifiers replaced, dates moved back,',
                                                                                          'files de-identified at the source; an answer it did not clear is refused (fail closed)'])
-    s.arrow([(806, 286), (806, 302)], gate=True)
-    s.box(40, 382, 440, 126, 'medorama', 'Readers: one per file format', ['WFDB, EDF, ECG and DICOM files, tables (CSV, Excel, Parquet),', 'known exports (GE MUSE, CLIF), connected databases', '(OMOP, SQL views); licensed formats through add-ons', 'Past the reader, every format is one of four data models:', 'recordings, ECGs, images, tables'])
+    s.arrow([(617, 286), (617, 302)], gate=True)
+    s.box(40, 382, 440, 126, 'medorama', 'Readers: one per format', ['WFDB, EDF, ECG and DICOM files; connected databases', '(OMOP, SQL views, db-builder SQLite); licensed formats', 'through add-ons', 'Past the reader, every format is one of four data models:', 'recordings, ECGs, images, database tables'])
     s.box(496, 382, 220, 126, 'viewer', 'VitalStream viewer', ['waveforms; a private port', 'on 127.0.0.1, reached only', 'through Medorama’s', 'gateway'])
     s.box(732, 382, 228, 126, 'medorama', 'Jobs, plug-ins, add-ons', ['indexing and actions;', 'plug-ins and adapters run as', 'separate programs and', 'get pseudonyms, not PHI'])
-    s.box(24, 548, 300, 104, 'phi', 'Catalog database', ['SQLite or PostgreSQL: users, audit,', 'patients, pseudonyms; the only', 'place identifiers (PHI) are kept'])
-    s.box(350, 548, 300, 104, 'store', 'Indexes and results', ['what Medorama derives', '(waveform indexes, action', 'results): pseudonymous'])
-    s.box(676, 548, 300, 104, 'outside', 'Data sources  (read only)', ['files where they lie, inside the', 'allowed folders; connected', 'databases, through read-only views'], dashed=True)
+    s.box(24, 548, 300, 122, 'store', 'Control store', ['SQLite or PostgreSQL: users, grants,', 'the list of databases, wrapped keys,', 'keyed hashes of identifiers (never', 'identifiers), cohorts, jobs, audit'])
+    s.box(350, 548, 300, 122, 'phi', 'Workspace  (encrypted)', ['one folder per database (its persons', 'as linked, variables, recordings,', 'results), one file per cohort; index', 'folders are not encrypted yet'])
+    s.box(676, 548, 300, 122, 'outside', 'Connected databases  (read only)', ['OMOP, any SQL database through', 'views, db-builder SQLite; the', 'recording files they name, read', 'where they lie'], dashed=True)
     s.arrow([(174, 524), (174, 548)], both=True)
     s.text(184, 540, 'read, write', size=11, fill='#4B5563')
-    s.arrow([(500, 524), (500, 548)])
-    s.text(510, 540, 'write', size=11, fill='#4B5563')
+    s.arrow([(500, 524), (500, 548)], both=True)
+    s.text(510, 540, 'read, write', size=11, fill='#4B5563')
     s.arrow([(826, 548), (826, 524)])
     s.text(836, 540, 'read only', size=11, fill='#4B5563')
-    s.text(24, 680, 'Numbers: a request’s path. Dashed: outside Medorama. The server runs as one operating-system account and listens on 127.0.0.1 by default.', size=11.5, fill='#374151')
-    s.text(24, 698, 'An institution adapts its front door, and at most one module of Medorama (signin.rs).', size=11.5, fill='#374151')
+    s.text(24, 700, 'Numbers: a request’s path. Dashed: outside Medorama. The master key that wraps the data keys is kept outside the workspace', size=11.5, fill='#374151')
+    s.text(24, 718, '(an environment variable, a key file, or a command: a keyring, Vault, a KMS). The server runs as one operating-system account and', size=11.5, fill='#374151')
+    s.text(24, 736, 'listens on 127.0.0.1 by default. An institution adapts its front door, and at most one module of Medorama (signin.rs).', size=11.5, fill='#374151')
     s.save('architecture.svg')
 
 
 def readers():
     s = Svg(1000, 560, 'Readers and data models',
             'Each file format has its own reader. Every reader produces one of four data models: a recording index, an ECG '
-            'record, DICOM objects, or catalog tables; the viewers and Medorama use only the models.')
+            'record, DICOM objects, or the canonical views of a connected database; the viewers and Medorama use only the models.')
     s.text(24, 34, 'Readers: one per format, four data models', size=17, weight=700)
     s.text(24, 54, 'Past its reader, a format is like any other: the viewers, cohorts and the privacy gate know only the data models.', size=12, fill='#4B5563')
     for x, label in [(24, 'Formats'), (296, 'Readers'), (626, 'Data model'), (832, 'Used by')]:
@@ -303,10 +349,10 @@ def readers():
          ['dicom.js and jpeg.js (the', 'browser), dicom-py (Python),', 'dicom.rs (the privacy gate)'],
          'DICOM objects', ['frames, measurements,', 'reports'],
          ['PACS viewer']),
-        (['CSV, Excel, Parquet tables;', 'known exports (GE MUSE, CLIF);', 'OMOP and other SQL databases'],
-         ['tables.rs; formats/ (converters,', 'or a TOML description: no code);', 'sources/ (read-only SQL views)'],
-         'Catalog tables', ['patients, encounters,', 'entries (canonical columns)'],
-         ['patient pages, cohorts,', 'Databases']),
+        (['connected databases: OMOP,', 'any SQL database, db-builder', 'SQLite (built from tables and', 'exports: GE MUSE, CLIF)'],
+         ['sources/: OMOP views built in,', 'views written by the site, or', 'db-builder’s tables (read only);', 'db-builder reads the tables'],
+         'Database views', ['persons, visits, entries,', 'recordings (canonical', 'columns)'],
+         ['patient pages, cohorts,', 'Databases tab']),
     ]
     y = 96
     for fmts, rdrs, model, mlines, users in rows:
@@ -327,7 +373,7 @@ def readers():
         s.arrow([(802, mid), (832, mid)])
         y += h + 14
     s.text(24, y + 16, 'A new format is one new reader. A reader written in another language plugs in through the adapter protocol (recordings),', size=11.5, fill='#374151')
-    s.text(24, y + 34, 'the ECG JSON form, DICOM, or a table with the canonical columns (docs/readers.md).', size=11.5, fill='#374151')
+    s.text(24, y + 34, 'the ECG JSON form, DICOM, or a table or SQL views with the canonical columns (docs/readers.md).', size=11.5, fill='#374151')
     s.save('readers.svg')
 
 
@@ -355,6 +401,7 @@ def sign_in():
     s.save('sign-in.svg')
 
 
+
 if __name__ == '__main__':
     architecture()
     readers()
@@ -362,5 +409,5 @@ if __name__ == '__main__':
     system_context()
     components()
     privacy_gate()
-    import_flow()
+    data_in()
     sources()

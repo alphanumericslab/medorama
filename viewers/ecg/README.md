@@ -34,7 +34,8 @@ you choose inside your browser: they never leave your computer.
 
 - **Standard ECG paper:** 25 or 50 mm/s, 5, 10 or 20 mm/mV, a 1 mm and 5 mm grid and a
   calibration pulse on each row, in the 3 × 4 and 6 × 2 layouts with a lead II rhythm strip, or
-  12 × 1.
+  12 × 1. Each strip is drawn about its median, and an optional 0.5 Hz high-pass and 50 or 60 Hz
+  notch, both with no phase shift, clean the baseline ([Read an ECG](#read-an-ecg)).
 - **The device's report** above the paper: the details of the test, the measurements, the
   computer's statements (for example Marquette 12SL) and the physician's confirmed or edited
   ones.
@@ -75,12 +76,12 @@ records…** and select the `examples/` folder.
 |---|---|
 | A WFDB record: the `.hea` header, then its signal files ([below](#wfdb-records)) | Drawn on paper. Signal formats 8, 16, 24, 32, 61, 80, 160 and 212 are read, and the first 10 seconds are shown (no more than the header states). A signal file may be a MATLAB file (`.mat`, the PhysioNet Challenge files and those `wfdb2mat` writes) that matches its header ([docs/wfdb-collection.md](../../docs/wfdb-collection.md#matlab-signal-files)). A skewed signal (`16:3`) is read that many frames later, as the WFDB library reads it. The header's comments (`# QT: 410 ms`, `# Dx: …`) become the report. Where the header leaves a value out, WFDB's own defaults apply: 250 Hz, a gain of 200 adu/mV (also for a gain of 0), millivolts, and the baseline at the ADC zero. (VitalStream, unlike this viewer, reads only what a header states.) |
 | A WFDB multi-segment record: the master header with its segments' headers and signal files | The same. The segments follow each other from the record's start; a null segment, and a lead that a segment does not hold, are gaps. |
-| GE MUSE XML (resting ECG) | Drawn on paper: the rhythm strip, with leads III, aVR, aVL and aVF derived from I and II. The report holds the test's details, the measurements, the Marquette 12SL statements and the confirmed or edited ones. |
-| A DICOM ECG (a 12-lead, Holter or other waveform object) | Drawn on paper, with its annotations as the report. Any other DICOM file is refused, with a pointer to the [PACS viewer](../pacs/README.md). |
+| GE MUSE XML (resting ECG) | Drawn on paper: the rhythm strip, with leads III, aVR, aVL and aVF derived from I and II. The report holds the test's details, the measurements, the Marquette 12SL statements and the confirmed or edited ones. The text's encoding is that of its byte order mark (UTF-8, UTF-16LE or UTF-16BE, whatever the XML declaration says), else UTF-16 when its zero bytes show it (`3C 00` / `00 3C`), else the one its XML declaration names (UTF-8 by default). |
+| A DICOM ECG (a 12-lead, Holter or other waveform object) | Drawn on paper, with its annotations as the report. A lead is named by its code (MDC, as `2:1` or `131329`, or SCP-ECG, as `5.6.3-9-1`) when there is one, else by its code's meaning or its label, read as a lead's name (`I (Einthoven)`, `aVR, augmented voltage, right`, `Lead V1` are I, aVR and V1), so that a 12-lead ECG is laid out as one. Any other DICOM file is refused, with a pointer to the [PACS viewer](../pacs/README.md). |
 | An EDF, EDF+, BDF or BDF+ file (`.edf`, `.bdf`) | Drawn on paper: the first 10 seconds of the signals at the sampling rate of the first ECG signal (`I` … `V6`, `ECG …`, `EKG …`), or, without one, of the signals at the most common rate. Of an interrupted EDF+D recording, the first uninterrupted part is shown. The annotations within the span shown, and the signals left out, are listed in the report's notes. The rules are those of [docs/edf.md](../../docs/edf.md). |
 | The viewer's [JSON form](#json) | Drawn on paper. |
-| PNG, JPEG (also GIF, WebP) | Shown as it is, as a scanned or exported ECG. Layout, speed, gain and calipers are grayed out. |
-| PDF | Shown as it is, in the browser's PDF viewer. Layout, speed, gain and calipers are grayed out. |
+| PNG, JPEG (also GIF, WebP) | Shown as it is, as a scanned or exported ECG. Layout, speed, gain, filters and calipers are grayed out. |
+| PDF | Shown as it is, in the browser's PDF viewer. Layout, speed, gain, filters and calipers are grayed out. |
 
 The viewer recognizes a file by its extension, and otherwise by its content. A file it does not
 read is refused with a message that lists the formats it reads.
@@ -132,8 +133,20 @@ VitalStream ([docs/wfdb-collection.md](../../docs/wfdb-collection.md#matlab-sign
 are available), with a 1 mm and 5 mm grid, a 1 mV calibration pulse at the start of each row,
 the lead's name at the start of each segment, and a mark where the lead changes. A record with
 the twelve standard leads (I, II, III, aVR, aVL, aVF and V1–V6, by these names or close ones
-such as `ECG II`, `avr` or `MLII`) is laid out 3 × 4 or 6 × 2, each with a lead II rhythm strip,
-or 12 × 1. Any other record shows each lead in full.
+such as `ECG II`, `avr`, `MLII`, `Lead V1` or `I (Einthoven)`) is laid out 3 × 4 or 6 × 2, each
+with a lead II rhythm strip, or 12 × 1. Any other record shows each lead in full.
+
+**The baseline.** Each strip (a lead's segment on the paper, the rhythm strip too) is drawn
+about its own median, so that a lead recorded off zero, or one that wanders, sits on its row;
+this is always on. Two filters are off by default: **High-pass**, a 0.5 Hz high-pass against
+baseline wander (a first-order Butterworth section), and **Notch**, a 50 or 60 Hz notch against
+mains interference (a biquad of bandwidth f0 / 30). Both run forward then backward, so they shift
+no wave in time (zero phase; the high-pass is then −6 dB at 0.5 Hz). They filter the strip's
+signal with 2 s more after it, each end extended by its odd reflection and the filter started in
+its steady state, so that they do not ring at the edges; a gap stays a gap. The filters on are
+named at the paper's foot. The record's samples are never changed: the calipers measure the
+trace as it is drawn, so a voltage difference between two strips includes the difference of
+their medians.
 
 **The report.** Above the paper, the viewer shows what the file says about the ECG:
 - the details: time, device, site, status, age, sex and filters, and a MUSE file's reason for
@@ -154,6 +167,7 @@ without a key and the statements, is shown as written.
 | Control | Effect |
 |---|---|
 | **Layout**, **Speed**, **Gain** | Choose the layout (3 × 4 + rhythm, 6 × 2 + rhythm, 12 × 1), the paper speed and the gain. The choices are remembered. |
+| **High-pass**, **Notch** | Turn on the 0.5 Hz high-pass, and the 50 or 60 Hz notch ([the baseline](#read-an-ecg)). Both are off by default; the choices are remembered. |
 | **−**, **Fit**, **+** | Make the paper smaller, fit it to the window's width, or make it larger. |
 | **Calipers**, then click two points | Each point snaps to the nearest point of the trace. The viewer shows the interval (ms) and the voltage difference (µV) between them. |
 | `Esc` | Clears the calipers. |
@@ -352,7 +366,7 @@ script, so the page works from `file://`, and also a CommonJS module, for the te
 | [`dicom.js`](dicom.js) | The DICOM reader, a byte-identical copy of the [PACS viewer](../pacs/README.md)'s; a test checks that the two are the same. |
 | [`edf.js`](edf.js) | The EDF, EDF+, BDF and BDF+ reader, by the reading rules of [docs/edf.md](../../docs/edf.md). |
 | [`ecg.js`](ecg.js) | The record model and its helpers: units to millivolts, metadata from "key: value" lines, the JSON form, the twelve standard leads, de-identified reports. |
-| [`paper.js`](paper.js) | The paper: SVG drawn in millimeters, and the layouts. |
+| [`paper.js`](paper.js) | The paper: SVG drawn in millimeters, the layouts, and the baseline (each strip's median, the zero-phase high-pass and notch). |
 | [`host.js`](host.js) | A host's context (`who`, `what`, `pos`, `nav`), shown in place of the file's name; the same file in each viewer. |
 | [`app.js`](app.js), [`index.html`](index.html), [`style.css`](style.css) | The page. |
 | [`python/muse/`](python/muse/README.md) | `muse-py`: the MUSE reader in Python (`json`, `wfdb`, `index`) and `serve`. |
@@ -380,8 +394,9 @@ pytest viewers/ecg/python/muse/tests
 | `readers.test.js` | The registry: what a file is, by its extension or its content, and which reader reads it; the file chooser's extensions, and the companions chosen after (WFDB signal files). |
 | `ecg.test.js` | WFDB records (single- and multi-segment), the JSON form, the report read from header comments (never the identity), and the calipers' snapping to the trace. |
 | `wfdb-mat.test.js` | WFDB records with MATLAB signal files: read as the `.dat` file, refused when they do not match their header (the engine's messages), no more samples than the header states, a missing signal file named. |
-| `muse.test.js` | The JavaScript MUSE reader against the Python one, on the same synthetic file. |
-| `dicom.test.js` | A DICOM ECG waveform read into the viewer. |
+| `muse.test.js` | The JavaScript MUSE reader against the Python one, on the same synthetic file; the file in UTF-16 (LE, BE, with and without a byte order mark) and UTF-8 with a mark. |
+| `dicom.test.js` | A DICOM ECG waveform read into the viewer; leads named by their MDC and SCP-ECG codes and by their codes' meanings. |
+| `paper.test.js` | The baseline: each strip's median, the high-pass (DC and drift out), the notch (50 and 60 Hz out), no phase shift, gaps kept. |
 | `edf.test.js` | EDF, EDF+, BDF and BDF+ files as ECG records. |
 | `host.test.js` | A host's context. |
 
@@ -393,3 +408,11 @@ dates of birth into the record, and the report drops fields whose key names the 
 header's patient and recording fields are never read, except for the four-digit year of an EDF+
 start date. The ECG viewer is research software, not a medical device, and is not intended for
 diagnosis.
+
+## License
+
+The ECG viewer is licensed, like the rest of the repository's software, under the PolyForm Noncommercial
+License 1.0.0 ([LICENSE](../../LICENSE)): free for noncommercial use, with commercial licenses by
+agreement ([COMMERCIAL.md](../../COMMERCIAL.md)). Its examples (`examples/`) are under CC BY-NC 4.0. The documentation (the `docs/` folders) is
+under CC BY-NC-ND 4.0 ([docs/LICENSE.md](../../docs/LICENSE.md)); every dependency and its license is
+listed in [THIRD_PARTY_LICENSES.md](../../THIRD_PARTY_LICENSES.md).

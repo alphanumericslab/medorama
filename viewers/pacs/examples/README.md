@@ -3,7 +3,8 @@
 This folder holds synthetic DICOM objects to try the [PACS viewer](../README.md) with. Every
 value and every image is invented, and no file describes a real person. The files are written by
 [`tools/make-viewer-examples.py`](../../../tools/make-viewer-examples.py) with the demo's
-generators.
+generators. They are licensed under CC BY-NC 4.0 ([LICENSES/CC-BY-NC-4.0.txt](../../../LICENSES/CC-BY-NC-4.0.txt)):
+use and share them for noncommercial purposes, with credit.
 
 On the website, each link below opens the file in the live viewer. From a clone of the
 repository, open [`../index.html`](../index.html) in a browser, then either choose one file with

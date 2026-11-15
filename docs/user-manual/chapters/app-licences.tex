@@ -1,5 +1,6 @@
-% Appendix: licenses. The license of Medorama is stated in one paragraph (sec:licences-licence):
-% a change of license edits that paragraph only. Sources: LICENSE, COMMERCIAL.md, CLA.md,
+% Appendix: licenses. The license of Medorama is stated in one section (sec:licences-licence):
+% a change of license edits that section only. Sources: LICENSE, REUSE.toml, docs/LICENSE.md,
+% tools/license-notice.txt, COMMERCIAL.md, CLA.md,
 % THIRD_PARTY_LICENSES.md, README.md ("License" and its trademarks paragraph); CLIF's data
 % dictionary (formats/clif.rs).
 \chapter{Licenses}
@@ -13,9 +14,33 @@ inventory for users and maintainers, not legal advice. The repository's \file{LI
 \section{Medorama's license}
 \label{sec:licences-licence}
 
-Copyright \textcopyright{} 2025--2026 Reza Sameni. Medorama, its viewers and the synthetic data of
-the repository are licensed under the \textbf{PolyForm Noncommercial License 1.0.0}
-(\file{LICENSE}, \url{https://polyformproject.org/licenses/noncommercial/1.0.0}).
+Copyright \textcopyright{} 2025--2026 Reza Sameni. The repository holds three kinds of material,
+each under its own license (\cref{tab:licences-parts}); \file{REUSE.toml} gives the license of
+every file, and \file{LICENSES/} holds the texts. CI checks that no file lacks one
+(\cmd{reuse lint}, \url{https://reuse.software}).
+
+\begin{table}[htbp]
+\caption{The licenses of the repository's own material.}
+\label{tab:licences-parts}
+\begin{tabularx}{\linewidth}{@{}P{5.6cm}L@{}}
+\toprule
+{\tabhead Material} & {\tabhead License} \\
+\midrule
+The software: Medorama, db-builder, the viewers, the libraries, the tools, the tests &
+  \textbf{PolyForm Noncommercial License 1.0.0} (\file{LICENSE},
+  \url{https://polyformproject.org/licenses/noncommercial/1.0.0}) \\
+The documentation (the \file{docs/} folders), this manual, its figures and screenshots &
+  \textbf{CC BY-NC-ND 4.0} (\file{docs/LICENSE.md},
+  \url{https://creativecommons.org/licenses/by-nc-nd/4.0/}): shared unchanged, for
+  noncommercial purposes, with credit. The commands, settings and code it shows are under the
+  software's license. \\
+The demo library and the viewers' examples & \textbf{CC BY-NC 4.0}
+  (\url{https://creativecommons.org/licenses/by-nc/4.0/}); the demo's CT series and radiographs
+  are adapted from images under CC BY 3.0 and 4.0 (\cref{sec:licences-data}) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
 \begin{itemize}
 \item \textbf{Noncommercial use is free.} The license permits any noncommercial purpose. It names
   personal use for research, experiment and testing for the benefit of public knowledge, and use
@@ -29,9 +54,17 @@ the repository are licensed under the \textbf{PolyForm Noncommercial License 1.0
   Medorama, or its inclusion in a commercial product. Commercial licensees may use a build
   without WFDB support, which has no copyleft dependency, or one with it, whose wfdb-x component
   stays under its own license (\cref{sec:installation-no-wfdb}).
+\item \textbf{The documentation and the data.} This manual and the documentation may be copied
+  and shared unchanged, for noncommercial purposes, with credit to the author; changed versions
+  (translations and adapted course material included) need the author's permission. The demo
+  and example data may be used, changed and shared for noncommercial purposes, with credit. A
+  commercial license can cover both.
+\item \textbf{Accepting the terms.} Every installer shows a summary of these terms and goes on
+  only if the user accepts them (\cref{sec:installation-license}); \cmd{medorama init} shows
+  them too. The license applies however Medorama is obtained or built.
 \item \textbf{Contributions} are accepted under the Contributor License Agreement
-  (\file{CLA.md}), which lets the author offer them under both licenses while their authors keep
-  their copyright.
+  (\file{CLA.md}), which lets the author offer them under each of these licenses and under
+  commercial licenses, while their authors keep their copyright.
 \end{itemize}
 
 \section{Programs built with wfdb-x}
@@ -242,7 +275,9 @@ from the DICOM standard.
 \file{medorama/web/}, \file{viewers/vitalstream/web/}, \file{viewers/ecg/} and
 \file{viewers/pacs/} are written for the project. They contain no third-party JavaScript or CSS,
 and the PACS viewer's JPEG decoders are the project's own as well. Medorama's heart-rate detector for Holter recordings follows a
-published method (Pan and Tompkins, 1985), implemented in the repository.
+published method (Pan and Tompkins, 1985), implemented in the repository. The website's page
+layout (\file{\_layouts/default.html}) is adapted from GitHub's Minimal theme
+(\url{https://github.com/pages-themes/minimal}, CC0 1.0), whose stylesheet the site imports.
 
 \subsection{CLIF}
 \label{sec:licences-clif}
@@ -251,6 +286,30 @@ Medorama reads tables in CLIF, the Common Longitudinal ICU data Format
 (\url{https://github.com/Common-Longitudinal-ICU-data-Format}), whose data dictionary is published
 under the Apache License 2.0. Medorama implements the format from that dictionary; it includes
 none of CLIF's files (\cref{chap:clif}).
+
+\subsection{The demo library}
+\label{sec:licences-data}
+
+The demo library's CT series and chest radiographs (\file{tools/demo/library/}) are adapted from
+four collections of The Cancer Imaging Archive, as redistributed by Saga IT from the NCI Imaging
+Data Commons, under Creative Commons Attribution licenses. They were re-sliced, cropped,
+resampled, rotated, elastically deformed, intensity-remapped and noised (the radiographs
+projected from the chest volumes), and every identifier and date was dropped. The adaptations are
+licensed under CC BY-NC 4.0, like the rest of the library, and the source images stay under
+their own licenses; each series the demo writes carries an \file{ATTRIBUTION.txt} with its
+collection and license.
+\begin{itemize}
+\item C4KC-KiTS (Kidney Tumor Segmentation Challenge), CC BY 3.0:
+  \url{https://doi.org/10.7937/TCIA.2019.IX49E8NX}.
+\item LIDC-IDRI (Lung Image Database Consortium), CC BY 3.0:
+  \url{https://doi.org/10.7937/K9/TCIA.2015.LO9QL9SX}.
+\item NLST (National Lung Screening Trial), CC BY 4.0:
+  \url{https://doi.org/10.7937/TCIA.HMQ8-J677}.
+\item Pancreas-CT, CC BY 3.0: \url{https://doi.org/10.7937/K9/TCIA.2016.tNB1kqBU}.
+\end{itemize}
+The full data citations are in \file{THIRD\_PARTY\_LICENSES.md}. The library's heart-beat
+templates are derived from ECGs and transformed beyond recognition (blended across sources and
+with synthetic beats); they carry no third-party license.
 
 \subsection{Add-ons}
 \label{sec:licences-addons}

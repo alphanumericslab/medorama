@@ -63,7 +63,7 @@ Medorama does not depend on the method.
 \section{Settings}
 \label{sec:sign-in-settings}
 
-The settings in \cref{tab:sign-in-settings} are read from \file{medorama.toml} in the catalog's
+The settings in \cref{tab:sign-in-settings} are read from \file{medorama.toml} in Medorama's
 home folder (\file{config.rs}, \code{sign\_in\_method}). Medorama reads them when it starts, so
 restart it after a change. Every setting is also listed in \cref{chap:settings-reference}.
 
@@ -362,7 +362,6 @@ server {
     server_name medorama.hospital.org;
     ssl_certificate     /etc/ssl/certs/medorama.pem;
     ssl_certificate_key /etc/ssl/private/medorama.key;
-    client_max_body_size 1g;               # Medorama accepts imports up to 1 GiB
 
     location / {
         proxy_pass http://127.0.0.1:4180;  # oauth2-proxy
@@ -489,7 +488,7 @@ name the proxy sends; case does not matter.
 medorama user add jdoe@hospital.org --role analyst --phi --display-name "Jane Doe" --no-password
 \end{lstlisting}
   With \opt{-{}-no-password}, the account receives a random password that nobody knows, so it can
-  never sign in with a password, even if the catalog is later switched back to password
+  never sign in with a password, even if Medorama is later switched back to password
   sign-in (an administrator then sets a password with \cmd{medorama user set NAME
   -{}-password}). With proxy sign-in, \ui{Admin} $\rightarrow$ \ui{Users} hides the password
   field of a new account and the \ui{Reset password} button, and \code{POST users} may leave the

@@ -26,6 +26,13 @@ function frameHash(params, ctx) {
 // What a viewer shows as it is, identifiers included: pictures and PDFs of ECGs, DICOM files
 // (their headers, text burned into the pixels), echo loops, the bedside recordings (real times).
 const AS_IS = { ecg: /\.(png|jpe?g|gif|webp|bmp|tiff?|pdf|dcm)$/i, pacs: /./ };
+
+/** Whether an attachment is shown as it is (identifiers it shows included): a picture, a PDF, a
+ * video, or a file its viewer shows as it is. */
+export function mayShowIdentifiers(a) {
+  if (['image', 'pdf', 'video'].includes(a?.kind)) return true;
+  return !!(a?.viewer && AS_IS[a.viewer] && AS_IS[a.viewer].test(a.name || a.src || ''));
+}
 const WARN = 'May show identifiers: what this file shows (its pixels, its pages) is sent as it is; Privacy Mode cannot hide it';
 
 /** The warning triangles (amber: red is for alarms) by the tabs whose file may show identifiers (Privacy Mode only). */
@@ -66,7 +73,7 @@ async function show(app, r) {
 
 /**
  * After the data changed (a database removed): close the viewers whose file is gone, saying
- * why, so that no tab keeps showing what the catalog no longer holds.
+ * why, so that no tab keeps showing what Medorama no longer holds.
  */
 export async function checkApps() {
   for (const app of Object.keys(APPS)) {
@@ -87,7 +94,7 @@ export async function checkApps() {
     frame.classList.add('hidden');
     $(`#nav-${app}`).classList.add('dim');
     if (location.hash.startsWith(`#/${app}`)) {
-      $('#app-msg').textContent = `What this ${APPS[app]} tab showed was removed from the catalog (its database was deleted).`;
+      $('#app-msg').textContent = `What this ${APPS[app]} tab showed was removed (its database was removed).`;
       $('#app-msg').classList.remove('hidden');
     }
   }

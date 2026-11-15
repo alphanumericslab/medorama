@@ -180,6 +180,17 @@ TEST(Edf, DatesAndAnnotations) {
   EXPECT_EQ(edf::start_of("01.03.yy", "13.00.00", nullptr), std::nullopt);
   EXPECT_EQ(edf::start_of("01.03.91", "13.00.00", &plus), std::optional<double>(3823592400.0));
   EXPECT_EQ(edf::start_of("31.02.24", "25.00.00", nullptr), std::nullopt);
+  // a day the month does not have: no start (not the next month's)
+  const std::string plus2100 = "Startdate 29-FEB-2100 X X X";
+  EXPECT_EQ(edf::start_of("31.02.24", "10.00.00", nullptr), std::nullopt);
+  EXPECT_EQ(edf::start_of("30.02.24", "10.00.00", nullptr), std::nullopt);
+  EXPECT_EQ(edf::start_of("31.04.24", "10.00.00", nullptr), std::nullopt);
+  EXPECT_EQ(edf::start_of("00.03.24", "10.00.00", nullptr), std::nullopt);
+  EXPECT_EQ(edf::start_of("29.02.24", "00.00.00", nullptr), std::optional<double>(1709164800.0));
+  EXPECT_EQ(edf::start_of("29.02.23", "00.00.00", nullptr), std::nullopt);
+  EXPECT_EQ(edf::start_of("29.02.00", "00.00.00", nullptr), std::optional<double>(951782400.0));
+  EXPECT_EQ(edf::start_of("29.02.yy", "00.00.00", &plus2100), std::nullopt);
+  EXPECT_EQ(edf::start_of("31.12.24", "23.59.59", nullptr), std::optional<double>(1735689599.0));
   using namespace std::string_view_literals;
   auto t = edf::tals("+0.25\x14\x14\x00+1.5\x15" "2\x14" "Arousal\x14 two  words \x14\x00\x00\x00"sv);
   ASSERT_EQ(t.size(), 2u);

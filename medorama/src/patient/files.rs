@@ -45,46 +45,6 @@ pub fn viewer_src(url: &str, kind: &str, name: &str) -> String {
     }
 }
 
-/// What a viewer needs that a picture or video does not say, from the columns of the row the
-/// item came from: its scale (`mm` per pixel; from `pixel spacing (mm)`, `mm per pixel`,
-/// `pixel size (cm)` …) and frame rate (`fps`; from `fps`, `frame rate (fps)`, `frame rate (Hz)`).
-pub fn viewer_hints(c: &Connection, item: i64) -> anyhow::Result<std::collections::BTreeMap<String, String>> {
-    let mut out = std::collections::BTreeMap::new();
-    let row: Option<(i64, String)> = c
-        .query_row("SELECT import_id, cells FROM import_rows WHERE item = ?1 ORDER BY id LIMIT 1", [item], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
-        .optional()?;
-    let Some((import, cells)) = row else { return Ok(out) };
-    let cells: Vec<String> = serde_json::from_str(&cells).unwrap_or_default();
-    let mut st = c.prepare("SELECT pos, header FROM import_columns WHERE import_id = ?1")?;
-    let cols: Vec<(usize, String)> =
-        st.query_map([import], |r| Ok((r.get::<_, i64>(0)? as usize, r.get(1)?)))?.collect::<Result<_, _>>()?;
-    for (pos, header) in cols {
-        let Some(v) = cells.get(pos).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| *v > 0.0) else { continue };
-        let (name, unit) = crate::tables::measure_column(&header).unwrap_or((header.clone(), String::new()));
-        let n: String = name.to_lowercase().chars().filter(|c| c.is_ascii_alphanumeric()).collect();
-        let u = unit.to_lowercase();
-        let hint = match n.as_str() {
-            "pixelspacing" | "pixelsize" | "spacing" | "mmperpixel" | "mmpixel" | "resolution" => match u.as_str() {
-                "mm" | "mm/px" | "mm/pixel" | "" => Some(("mm", v)),
-                "cm" | "cm/px" | "cm/pixel" => Some(("mm", v * 10.0)),
-                "um" | "µm" => Some(("mm", v / 1000.0)),
-                _ => None,
-            },
-            "fps" | "framerate" | "framespersecond" => match u.as_str() {
-                "" | "fps" | "hz" | "/s" | "1/s" => Some(("fps", v)),
-                _ => None,
-            },
-            _ => None,
-        };
-        if let Some((k, v)) = hint {
-            out.entry(k.to_string()).or_insert_with(|| format!("{v}"));
-        }
-    }
-    Ok(out)
-}
-
 /// The viewer of a category's files, if one shows that kind of file.
 pub fn viewer_for(category: &str, kind: &str) -> Option<&'static str> {
     match (category, kind) {
@@ -94,19 +54,16 @@ pub fn viewer_for(category: &str, kind: &str) -> Option<&'static str> {
     }
 }
 
-/// The path of an item's attached file or folder, if it may be read: the patient's, and inside
-/// the data roots.
-pub fn item_file(c: &Connection, cfg: &Config, patient: i64, item: i64) -> anyhow::Result<PathBuf> {
-    let path: String = c
-        .query_row(
-            &format!("SELECT file_path FROM ehr_items WHERE id = ?1 AND patient = ?2 AND {}", super::item_shown("")),
-            [item, patient],
-            |r| r.get(0),
-        )
-        .optional()?
-        .ok_or_else(|| anyhow::anyhow!("no such file"))?;
-    let p = PathBuf::from(&path);
-    if path.is_empty() || !p.exists() || !cfg.import_allowed(&p) {
+/// The path of a recording's file or folder, if it may be read: a recording of the patient's,
+/// in a database `user` may view, present, inside the data roots.
+pub fn item_file(c: &Connection, cfg: &Config, user: &User, patient: i64, recording: i64) -> anyhow::Result<PathBuf> {
+    let r = crate::recordings::get(cfg, c, recording)?.ok_or_else(|| anyhow::anyhow!("no such file"))?;
+    if r.patient != Some(patient) || !r.present || !crate::grants::can(c, user, &format!("db:{}", r.database), "view")?
+    {
+        anyhow::bail!("no such file");
+    }
+    let p = PathBuf::from(&r.path);
+    if !p.exists() || !cfg.in_data_roots(&p) {
         anyhow::bail!("no such file");
     }
     Ok(p)
@@ -134,14 +91,14 @@ pub(super) fn mime_of(p: &Path) -> Option<&'static str> {
     })
 }
 
-/// An item's attached file, or a folder's listing.
+/// A recording's file, or a folder's listing (the viewers of ECGs and images read them).
 pub enum Attached {
     File(PathBuf, &'static str),
     Listing(Vec<String>),
 }
 
-pub fn attachment(c: &Connection, cfg: &Config, patient: i64, item: i64) -> anyhow::Result<Attached> {
-    let p = item_file(c, cfg, patient, item)?;
+pub fn attachment(c: &Connection, cfg: &Config, user: &User, patient: i64, item: i64) -> anyhow::Result<Attached> {
+    let p = item_file(c, cfg, user, patient, item)?;
     if p.is_dir() {
         return Ok(Attached::Listing(folder_files(&p)));
     }
@@ -151,8 +108,14 @@ pub fn attachment(c: &Connection, cfg: &Config, patient: i64, item: i64) -> anyh
 
 /// The files of an item's attachment, in the order Privacy Mode numbers them (gate.rs
 /// `file_token`): a folder's files; else the file itself, then a WFDB header's signal files.
-pub fn attachment_names(c: &Connection, cfg: &Config, patient: i64, item: i64) -> anyhow::Result<Vec<String>> {
-    let p = item_file(c, cfg, patient, item)?;
+pub fn attachment_names(
+    c: &Connection,
+    cfg: &Config,
+    user: &User,
+    patient: i64,
+    item: i64,
+) -> anyhow::Result<Vec<String>> {
+    let p = item_file(c, cfg, user, patient, item)?;
     if p.is_dir() {
         return Ok(folder_files(&p));
     }
@@ -188,6 +151,7 @@ pub(super) fn folder_files(dir: &Path) -> Vec<String> {
 pub fn attachment_part(
     c: &Connection,
     cfg: &Config,
+    user: &User,
     patient: i64,
     item: i64,
     name: &str,
@@ -195,7 +159,7 @@ pub fn attachment_part(
     if name.is_empty() || name.contains(['/', '\\']) || name.starts_with('.') {
         anyhow::bail!("no such file");
     }
-    let p = item_file(c, cfg, patient, item)?;
+    let p = item_file(c, cfg, user, patient, item)?;
     let allowed = if p.is_dir() {
         folder_files(&p).iter().any(|n| n == name)
     } else if p.file_name().is_some_and(|n| n.to_string_lossy() == name) {
@@ -206,7 +170,7 @@ pub fn attachment_part(
         false
     };
     let file = if p.is_dir() { p.join(name) } else { p.with_file_name(name) };
-    if !allowed || !file.is_file() || !cfg.import_allowed(&file) {
+    if !allowed || !file.is_file() || !cfg.in_data_roots(&file) {
         anyhow::bail!("no such file");
     }
     // a part lies, really, in the attachment's folder (a symbolic link may point anywhere)

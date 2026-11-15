@@ -458,13 +458,14 @@ files under the root (\cref{chap:viewers-alone}).
 \section{dicom-py: databases of DICOM studies}
 \label{sec:pacs-viewer-dicom-py}
 
-\cmd{dicom-py} also builds a database to import into Medorama from a folder of DICOM files, and
+\cmd{dicom-py} also builds a table of a folder of DICOM files, which db-builder adds to a
+database that Medorama connects (\cref{chap:importing}), and
 converts DICOM ECGs to WFDB records. It uses pydicom and NumPy, which \cmd{pip} installs with it.
 
 \begin{lstlisting}[style=shell]
 dicom-py index /path/to/dicom -o imaging.csv   # a database: a row per loop, series, report
 dicom-py wfdb ECG.dcm out/                     # a DICOM ECG (12-lead or Holter) as a WFDB record
-medorama import-table imaging.csv              # then: the rows reach their patients
+db-builder add study.sqlite imaging.csv       # then: a database Medorama connects
 dicom-py --version
 \end{lstlisting}
 

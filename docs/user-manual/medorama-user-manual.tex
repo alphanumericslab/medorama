@@ -9,8 +9,9 @@
 %   Part II   page (chap:page), patients (chap:patients), cohorts (chap:cohorts),
 %             databases-tab (chap:databases-tab), viewers-in-medorama (chap:viewers-in-medorama),
 %             actions (chap:actions)
-%   Part III  importing (chap:importing), connecting (chap:connecting), clif (chap:clif),
-%             recordings (chap:recordings), ecg-imaging (chap:ecg-imaging)
+%   Part III  connecting (chap:connecting), importing (chap:importing: building a database
+%             with db-builder), clif (chap:clif), recordings (chap:recordings),
+%             ecg-imaging (chap:ecg-imaging)
 %   Part IV   viewers-alone (chap:viewers-alone), vitalstream (chap:vitalstream),
 %             ecg-viewer (chap:ecg-viewer), pacs-viewer (chap:pacs-viewer)
 %   Part V    administration (chap:administration), users-privacy (chap:users-privacy),
@@ -51,7 +52,13 @@
   {\small\color{mutedtext}
   Medorama is research software, not a medical device: it is not cleared for diagnosis or
   treatment and must not be used to make clinical decisions. Every patient, value, signal and
-  image in this manual is synthetic. Licenses: \cref{chap:licences}.\par}
+  image in this manual is synthetic.\par
+  \vspace{0.6em}
+  Copyright \textcopyright{} 2025--2026 Reza Sameni. This manual is licensed under the Creative
+  Commons Attribution-NonCommercial-NoDerivatives 4.0 International License (CC BY-NC-ND 4.0,
+  \url{https://creativecommons.org/licenses/by-nc-nd/4.0/}); the commands, settings and code it
+  shows are under Medorama's software license, the PolyForm Noncommercial License 1.0.0.
+  Licenses: \cref{chap:licences}.\par}
 \end{titlepage}
 
 \frontmatter
@@ -78,10 +85,10 @@
 \input{chapters/actions}
 
 % ---- Part III ----------------------------------------------------------------------------
-\part{Bringing data in}
+\part{Connecting data}
 \label{part:data}
-\input{chapters/importing}
 \input{chapters/connecting}
+\input{chapters/importing}
 \input{chapters/clif}
 \input{chapters/recordings}
 \input{chapters/ecg-imaging}

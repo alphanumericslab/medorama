@@ -19,10 +19,10 @@ pub fn describe(k: &Criterion) -> String {
         "has" => categories::named(&k.category).map(categories::label).unwrap_or(&k.category).to_string(),
         "encounter" => format!("encounter{}", if k.icu == Some(true) { " with ICU stay" } else { "" }),
         "diagnosis" => format!("diagnosis {}", k.text),
-        "measurement" | "column" => format!(
+        "measurement" => format!(
             "{}{}{}",
             if k.latest { "latest " } else { "" },
-            crate::tables::measure_column(&k.name).map(|(n, _)| n).unwrap_or(k.name.clone()),
+            k.name,
             match (&k.value, k.text.trim()) {
                 (Some(v), _) => format!(
                     " {} {}{}",
@@ -37,7 +37,7 @@ pub fn describe(k: &Criterion) -> String {
         "expression" => k.text.trim().to_string(),
         "medication" => format!("medication {}", k.text),
         "text" => format!("“{}”", k.text),
-        "database" => "data in that database".into(),
+        "database" => "in that database".into(),
         x => x.into(),
     }
 }
@@ -71,7 +71,7 @@ mod tests {
     fn criteria_round_trip() {
         // groups and exclusions
         let q: Criteria = serde_json::from_str(
-            r#"{"version":1,"include":{"op":"or","of":[{"kind":"sex","text":"F"},{"op":"and","of":[{"kind":"age","cmp":">","value":18},{"kind":"column","import":3,"name":"QT (ms)","cmp":">","value":400,"unit":"ms","latest":true}]}]},"exclude":[{"kind":"diagnosis","text":"I21"}]}"#,
+            r#"{"version":1,"include":{"op":"or","of":[{"kind":"sex","text":"F"},{"op":"and","of":[{"kind":"age","cmp":">","value":18},{"kind":"measurement","database":3,"name":"QT","cmp":">","value":400,"unit":"ms","latest":true}]}]},"exclude":[{"kind":"diagnosis","text":"I21"}]}"#,
         )
         .unwrap();
         let Some(Expr::Group(g)) = &q.include else { panic!("{q:?}") };

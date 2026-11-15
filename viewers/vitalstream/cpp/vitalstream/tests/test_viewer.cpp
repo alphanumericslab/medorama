@@ -19,6 +19,7 @@
 #include "engine/common.hpp"
 #include "engine/dataset.hpp"
 #include "engine/index.hpp"
+#include "engine/store.hpp"
 #include "settings.hpp"
 #include "engine/sources.hpp"
 #include "core/text.hpp"
@@ -531,6 +532,23 @@ TEST(Adapters, EndToEnd) {
   EXPECT_EQ(ds.samples(0, 490, 500), std::vector<double>(samples.begin() + 490, samples.end()));
   std::string w = Value::from_json(ds.window_json({0}, 1700000000.0, 1700000001.0, 400)).py_str();
   EXPECT_NE(w.find("'raw'"), std::string::npos) << w;
+
+  // the same through an index store (format 3): the adapter reads its samples from a private
+  // folder holding only the index's meta.json, removed once the index is dropped
+  Store store(dir / "ws" / "index.sqlite", StoreKey{3});
+  std::string key3 = build_into_store(rec, store, [](double) {});
+  auto loaded3 = store.load(key3);
+  ASSERT_TRUE(loaded3);
+  fs::path reading = loaded3->second.dir;
+  EXPECT_TRUE(fs::is_regular_file(reading / "meta.json"));
+  EXPECT_EQ(std::distance(fs::directory_iterator(reading), fs::directory_iterator()), 1);
+  EXPECT_EQ(fs::status(reading).permissions() & (fs::perms::group_all | fs::perms::others_all), fs::perms::none);
+  {
+    Dataset ds3(std::move(loaded3->first), std::move(loaded3->second));
+    loaded3.reset();
+    EXPECT_EQ(ds3.samples(0, 10, 20), std::vector<double>(samples.begin() + 10, samples.begin() + 20));
+  }
+  EXPECT_FALSE(fs::exists(reading));
   fs::remove_all(dir);
 }
 #endif

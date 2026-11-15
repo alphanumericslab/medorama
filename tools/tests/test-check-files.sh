@@ -95,6 +95,16 @@ refused "MUSE XML" "GE MUSE XML ECG"
 add ecg2.txt '<RestingECG>\n';                    refused "MUSE XML named txt" "GE MUSE XML ECG"
 add parse.js 'const root = "<RestingECG>";\n';    accepted "code naming the element"
 add viewers/ecg/examples/e.xml '<RestingECG/>\n'; accepted "an example MUSE XML"
+# the demo library: its raw arrays and manifest, never a DICOM or MUSE file, and its arrays
+# nowhere else
+add tools/demo/library/ecg12/ecg12-01.i16 '\001\000\377\377'; accepted "a library array"
+add tools/demo/library/manifest.json '{"items": []}\n'; accepted "the library's manifest"
+add beats.i16 'x';                                 refused "an array outside the library" "data file type"
+add scan.U16 'x';                                  refused "an array outside the library, upper case" "data file type"
+{ head -c 128 /dev/zero; printf 'DICM'; } > tools/demo/library/ct.u16; git add tools/demo/library/ct.u16
+refused "DICOM in the library" "a DICOM file"
+add tools/demo/library/e.json '<RestingECG/>\n';  refused "MUSE XML in the library" "GE MUSE XML ECG"
+add tools/demo/library/n.json "$NAME\\n";         refused "a recording name in the library" "contains a recording name"
 
 # notebooks
 add n.ipynb '{"cells":[{"cell_type":"code","outputs":[1]}],\n'; refused "malformed notebook" "not a readable notebook"

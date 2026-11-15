@@ -1,20 +1,13 @@
-//! A criterion in a connected database (docs/design/sources.md, "Cohorts across sources").
+//! A criterion in a connected database (docs/design/databases-only.md, "Searching").
 
 use super::*;
 
-/// The patients a connected database's data say meet a criterion (docs/design/sources.md,
-/// "Cohorts across sources").  Its filters are run there; values, units, `latest` and dates are
-/// tested here.  Sex, age and "data in that database" are the registry's: the catalog answers
-/// them for every linked person.
-pub(super) fn meets_source(
-    c: &Connection,
-    user: &User,
-    timezone: &str,
-    k: &Criterion,
-    s: &crate::sources::Source,
-    cache: &Cache,
-) -> anyhow::Result<HashMap<i64, String>> {
+/// The patients a connected database's data say meet a criterion.  Its filters are run there;
+/// values, units, `latest` and dates are tested here.  Sex, age and "data in that database" are
+/// the registry's (evaluate.rs): they are answered from the persons Medorama keeps.
+pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &crate::sources::Source) -> anyhow::Result<HashMap<i64, String>> {
     use crate::sources::Find;
+    let (c, user, timezone) = (cx.c, cx.user, cx.timezone);
     let (czone, zone) = (tz(timezone), s.zone(timezone));
     // the bounds on real times (widened for dates as shown, which each patient's own offset
     // moves: tested exactly once the persons are linked, below)
@@ -27,13 +20,18 @@ pub(super) fn meets_source(
     let on = |t: Option<f64>| {
         t.map(|t| format!(" on {}", crate::util::fmt_local(t, czone).get(..10).unwrap_or(""))).unwrap_or_default()
     };
-    let exact = k.import == Some(s.import_id);
+    let exact = k.database == Some(s.id);
     let mut found: Vec<(String, String)> = vec![];
+    // the database's data are shown de-identified (Privacy Mode, or granted without `phi`):
+    // what a criterion finds in text is tested in the text as shown, and its reasons are as shown
+    let deid = user.privacy || !crate::grants::can(c, user, &format!("db:{}", s.id), "phi")?;
+    // (found row → its name and texts, for a text criterion)
+    let mut texts: HashMap<usize, (String, String, String)> = HashMap::new();
     match k.kind.as_str() {
         "has" => {
             let cat = categories::named(&k.category).ok_or_else(|| anyhow::anyhow!("no category {:?}", k.category))?;
             let why = format!("has {}", categories::label(cat));
-            let keys = match cat {
+            let mut keys = match cat {
                 "icu" => s.visit_persons(true)?,
                 "enc" => s.visit_persons(false)?,
                 // vital signs and lab results are told apart by their names: read the rows
@@ -45,11 +43,36 @@ pub(super) fn meets_source(
                     s.find_persons(&Find { categories: vec![cat.into()], notes: cat == "note", ..Default::default() })?
                 }
             };
+            // … and the persons with a recording of that category, in a recording database
+            if s.has_recordings() {
+                keys.extend(
+                    crate::recordings::of_database(cx.cfg, c, s)?
+                        .into_iter()
+                        .filter(|r| r.category == cat && r.present)
+                        .map(|r| r.person_key),
+                );
+            }
+            keys.sort();
+            keys.dedup();
             found.extend(keys.into_iter().map(|p| (p, why.clone())));
         }
         "encounter" => {
             let t = k.text.trim().to_lowercase();
-            for v in s.all_visits(zone)? {
+            let visits = s.all_visits(zone)?;
+            // the visits with an intensive-care stay (a bed stay in an ICU), as `has icu` counts them
+            let with_icu_stay: HashSet<(String, String)> = if k.icu.is_some() {
+                let mut persons: Vec<String> = visits.iter().map(|v| v.person.clone()).collect();
+                persons.sort();
+                persons.dedup();
+                s.stays(&persons, zone)?
+                    .into_iter()
+                    .filter(|st| st.icu || categories::is_icu_unit(&st.unit))
+                    .map(|st| (st.person, st.visit))
+                    .collect()
+            } else {
+                HashSet::new()
+            };
+            for v in visits {
                 // a visit without an end goes on: until now
                 let (a, b) = (
                     v.start.unwrap_or(f64::NEG_INFINITY),
@@ -61,7 +84,9 @@ pub(super) fn meets_source(
                 if !t.is_empty() && !v.unit.to_lowercase().contains(&t) {
                     continue;
                 }
-                let icu = v.icu || categories::is_icu_unit(&v.unit);
+                let icu = v.icu
+                    || categories::is_icu_unit(&v.unit)
+                    || with_icu_stay.contains(&(v.person.clone(), v.key.clone()));
                 if k.icu.is_some_and(|want| want != icu) {
                     continue;
                 }
@@ -87,10 +112,11 @@ pub(super) fn meets_source(
             };
             let mut rows: Vec<crate::sources::Entry> =
                 s.find(&f, zone)?.into_iter().filter(|e| in_range(e.time)).collect();
+            rows.extend(result_entries(cx, s, k, exact)?.into_iter().filter(|e| in_range(e.time)));
             if dates.per_patient() {
                 // each patient's own bounds: their persons linked first
                 let keys: Vec<String> = rows.iter().map(|e| e.person.clone()).collect();
-                let linked = crate::sources::link::patients(c, s, &keys, zone, Some(user))?;
+                let linked = crate::persons::patients(cx.cfg, c, s, &keys, Some(user))?;
                 rows.retain(|e| linked.get(&e.person).is_some_and(|p| dates.holds(*p, e.time)));
             }
             let units: Vec<String> = rows.iter().map(|e| e.unit.clone()).collect();
@@ -107,7 +133,7 @@ pub(super) fn meets_source(
                 found
                     .push((e.person, format!("{} {} {}{}", e.name, fmt_num(v), e.unit, on(e.time)).replace("  ", " ")));
             }
-            skipped.done(k, cache)?;
+            skipped.done(k, cx)?;
         }
         "medication" => {
             let f = Find {
@@ -133,27 +159,49 @@ pub(super) fn meets_source(
             }
             let f = Find { text: Some(t.into()), notes: user.reads_notes(), ..Default::default() };
             for e in s.find(&f, zone)? {
+                if deid {
+                    texts.insert(found.len(), (e.name.clone(), e.text.clone(), e.value_text.clone()));
+                }
                 found.push((
                     e.person,
                     format!("“{t}” in {} ({})", categories::label(&e.category).to_lowercase(), e.name),
                 ));
             }
         }
-        "column" if exact => anyhow::bail!("{} is a connected database: it has no columns", s.name),
         _ => {}
     }
     if found.is_empty() {
         return Ok(HashMap::new());
     }
     let keys: Vec<String> = found.iter().map(|f| f.0.clone()).collect();
-    let patients = crate::sources::link::patients(c, s, &keys, zone, Some(user))?;
+    let patients = crate::persons::patients(cx.cfg, c, s, &keys, Some(user))?;
     let mut out = HashMap::new();
     spans.resize(found.len(), None);
-    for ((key, why), span) in found.into_iter().zip(spans) {
+    let gate =
+        if deid && (!texts.is_empty() || !user.privacy) { Some(crate::search::build_gate(c, cx.cfg)?) } else { None };
+    let wanted = k.text.trim().to_lowercase();
+    for (n, ((key, why), span)) in found.into_iter().zip(spans).enumerate() {
         if let Some(p) = patients.get(&key) {
             if let (true, Some((a, b))) = (dates.per_patient(), span) {
                 if !(dates.after(*p, b) && dates.before(*p, a)) {
                     continue;
+                }
+            }
+            let mut why = why;
+            if let Some(g) = &gate {
+                let g = g.for_patient(*p);
+                let (names, birth) = crate::gate::Restricted::identity_words(c, cx.cfg, *p);
+                // found in the text as shown: not by a name, an identifier or a date it withholds
+                if let Some((name, text, value)) = texts.get(&n) {
+                    let shown = shown_text(&g, name, text, value, &names, &birth, user);
+                    if !shown.to_lowercase().contains(&wanted) {
+                        continue;
+                    }
+                }
+                if !user.privacy {
+                    // (in Privacy Mode the answer's gate does this)
+                    let w = g.note(&why, &names, &birth);
+                    why = g.dict.scrub_any_names(&w).unwrap_or(w);
                 }
             }
             out.entry(*p).or_insert(why);
@@ -162,23 +210,45 @@ pub(super) fn meets_source(
     Ok(out)
 }
 
+/// An entry's name and texts as a de-identified session is shown them (its free text withheld
+/// when Privacy Mode withholds it), as one text.
+fn shown_text(
+    g: &crate::gate::Restricted,
+    name: &str,
+    text: &str,
+    value: &str,
+    names: &[String],
+    birth: &str,
+    user: &User,
+) -> String {
+    let free = |t: &str| {
+        if user.privacy && !user.reads_notes() && !t.trim().is_empty() {
+            crate::gate::WITHHELD.to_string()
+        } else {
+            g.entry_text(t, names, birth)
+        }
+    };
+    let value = if crate::cohorts::is_long_text(value) { free(value) } else { g.note(value, names, birth) };
+    [g.note(name, names, birth), value, free(text)].join(" ")
+}
+
 /// A measurement's values in a connected database, each (patient, name, value, unit, time),
 /// of the name written in full, in the criterion's dates: their persons linked (for `latest`
 /// across databases: evaluate.rs).
 pub(super) fn source_measurement_rows(
-    c: &Connection,
-    user: &User,
-    timezone: &str,
+    cx: &Cx,
     k: &Criterion,
     s: &crate::sources::Source,
 ) -> anyhow::Result<Vec<(i64, String, f64, String, Option<f64>)>> {
     use crate::sources::Find;
+    let (c, user, timezone) = (cx.c, cx.user, cx.timezone);
     let (czone, zone) = (tz(timezone), s.zone(timezone));
     let dates = Dates::of(c, k, czone)?;
     let (from, to) = dates.wide();
     let f = Find { name: Some(k.name.trim().to_string()), numeric: true, ..Default::default() };
-    let rows: Vec<crate::sources::Entry> = s
-        .find(&f, zone)?
+    let mut found = s.find(&f, zone)?;
+    found.extend(result_entries(cx, s, k, true)?);
+    let rows: Vec<crate::sources::Entry> = found
         .into_iter()
         .filter(|e| {
             from.is_none_or(|f| e.time.is_some_and(|t| t >= f)) && to.is_none_or(|x| e.time.is_some_and(|t| t < x))
@@ -189,12 +259,33 @@ pub(super) fn source_measurement_rows(
         return Ok(vec![]);
     }
     let keys: Vec<String> = rows.iter().map(|e| e.person.clone()).collect();
-    let linked = crate::sources::link::patients(c, s, &keys, zone, Some(user))?;
+    let linked = crate::persons::patients(cx.cfg, c, s, &keys, Some(user))?;
     Ok(rows
         .into_iter()
         .filter_map(|e| {
             let p = *linked.get(&e.person)?;
             dates.holds(p, e.time).then(|| (p, e.name, e.value_num.unwrap_or_default(), e.unit, e.time))
+        })
+        .collect())
+}
+
+/// The results of actions run on a database's recordings, named like a criterion's measurement,
+/// as its entries (derived.rs).
+fn result_entries(
+    cx: &Cx,
+    s: &crate::sources::Source,
+    k: &Criterion,
+    exact: bool,
+) -> anyhow::Result<Vec<crate::sources::Entry>> {
+    Ok(crate::derived::results_like(cx.cfg, cx.c, s.id, &k.name, exact)?
+        .into_iter()
+        .map(|(person, name, v, at)| crate::sources::Entry {
+            person,
+            name,
+            category: "result".into(),
+            value_num: Some(v),
+            time: at,
+            ..Default::default()
         })
         .collect())
 }

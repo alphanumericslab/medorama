@@ -4,8 +4,9 @@
 //! must keep what is typed); on each, an accessibility check in both themes (tests/a11y.js:
 //! names of controls, alt texts, unique ids, WCAG AA contrast).  Synthetic data only.
 //!
-//! Also what people do on the page (a cohort, an import, a user, Privacy Mode's settings) by its
-//! controls, and the page by the keyboard only (the focus never lost, always shown).
+//! Also what people do on the page (a cohort, a database connected, granted and removed, a
+//! user, Privacy Mode's settings) by its controls, and the page by the keyboard only (the focus
+//! never lost, always shown).
 //!
 //! It needs Chrome or Chromium: `$MEDORAMA_TEST_CHROME`, else the usual places; without one it
 //! says so and passes (as the gateway test does without a viewer), unless
@@ -13,10 +14,8 @@
 
 mod common;
 use medorama::db::Db;
-use medorama::imports::Opts;
-use medorama::users::{Role, User};
+use medorama::users::Role;
 use serde_json::{json, Value};
-use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::time::{Duration, Instant};
@@ -322,16 +321,6 @@ impl Browser {
         ));
     }
 
-    /// Files chosen in a file input, as the file dialog chooses them.
-    fn choose_files(&mut self, selector: &str, files: &[&std::path::Path]) {
-        let doc = self.call("DOM.getDocument", json!({}));
-        let root = doc["result"]["root"]["nodeId"].clone();
-        let node = self.call("DOM.querySelector", json!({"nodeId": root, "selector": selector}));
-        let files: Vec<String> = files.iter().map(|f| f.display().to_string()).collect();
-        let r = self.call("DOM.setFileInputFiles", json!({"nodeId": node["result"]["nodeId"], "files": files}));
-        assert!(r.get("error").is_none(), "{selector}: {r}");
-    }
-
     /// The element that has the focus, described (`tag#id.class "text"`), or `lost: …` when the
     /// focus is on nothing a user can see or act on (the page's body, a removed or hidden
     /// element).
@@ -435,73 +424,45 @@ impl Drop for Browser {
     }
 }
 
-/// A catalog with synthetic patients, labs and a note, and a connected OMOP database.
+/// Medorama with synthetic patients, labs and a note, and a connected OMOP database.
 fn fixture() -> (tempfile::TempDir, medorama::config::Config) {
     let tmp = tempfile::tempdir().unwrap();
     let root = medorama::config::real(tmp.path());
-    let mut cfg = common::config(&root.join("home"), &root.join("results"));
+    let mut cfg = common::config(&root.join("home"), &root.join("ws"));
     cfg.timezone = "UTC".into();
     // a recording (synthetic WFDB), and the VitalStream viewer when one is built
     let data = root.join("data");
+    std::fs::create_dir_all(&data).unwrap();
     cfg.data_roots = vec![data.to_string_lossy().to_string()];
     if let Some(v) = viewer() {
         cfg.viewer = v.to_string_lossy().to_string();
     }
-    let rec = data.join("icu").join(common::bed_name("ICU7", "12", common::T0 + 86_400));
+    let rec = data.join("icu").join(format!("ICU7_12-{}", common::T0 + 86_400));
     common::wfdb_record(&rec, 86_400);
     let db = Db::open(&cfg, true).unwrap();
-    let mut c = db.get().unwrap();
-    let admin = User::local();
-    let import = |c: &mut medorama::sql::Connection, name: &str, text: &str, category: &str| {
-        medorama::tables::import(
-            c,
-            &cfg,
-            &admin,
-            name,
-            text.as_bytes(),
-            &HashMap::new(),
-            category,
-            Some(&data),
-            &Opts::new(name, "", false),
-        )
-        .unwrap_or_else(|e| panic!("{name}: {e}"));
-    };
-    import(
-        &mut c,
-        "patients.csv",
-        "MRN,Last Name,First Name,DOB,Sex,Patient ID\nSYN4400001,Wexlorne,Thandiwe,1952-02-03,F,P440001\nSYN4400002,Quarrel,Bram,1964-05-06,M,P440002\n",
-        "",
-    );
-    import(
-        &mut c,
-        "encounters.csv",
-        "Encounter ID,Patient ID,Admit Time,Discharge Time,Admit Unit\nE4400001,P440001,2024-01-02 08:00,2024-01-09 12:00,Cardiology\n",
-        "",
-    );
-    import(
-        &mut c,
-        "labs.csv",
-        "Patient ID,Encounter ID,Test Name,Result,Units,Ref Low,Ref High,Collected\nP440001,E4400001,Lactate,4.6,mmol/L,0.5,2,2024-01-03 06:00\nP440001,E4400001,Creatinine,1.9,mg/dL,0.6,1.2,2024-01-03 06:00\nP440002,,Lactate,1.1,mmol/L,0.5,2,2024-01-04 06:00\n",
-        "lab",
-    );
-    import(
-        &mut c,
-        "notes.csv",
-        "Patient ID,Encounter ID,Note Type,Time,Text\nP440001,E4400001,Progress note,2024-01-04 10:00,Thandiwe Wexlorne is improving.\n",
-        "note",
-    );
-    let rel = rec.strip_prefix(&data).unwrap().to_string_lossy().to_string();
-    import(&mut c, "icu_index.csv", &format!("patient_id,encounter_id,file\nP440001,E4400001,{rel}\n"), "");
-    // a row held back for review: an MRN another patient has
-    import(
-        &mut c,
-        "late.csv",
-        "MRN,Last Name,First Name,DOB,Sex,Patient ID\nSYN4400001,Quill,Ann,1970-01-01,F,P440009\n",
-        "",
-    );
+    let c = db.get().unwrap();
     medorama::users::add(&c, "boss", "", Role::Admin, true, "0123456789ab").unwrap();
+    let boss = medorama::users::get_by_name(&c, "boss").unwrap().unwrap();
+    // the hospital's database, as db-builder makes it
+    let d = common::Dbb::new(&data.join("hospital.sqlite"));
+    d.person("h1", "P440001", "HOSP-ID", "SYN4400001", "HOSP", "Wexlorne", "Thandiwe", "1952-02-03", "F")
+        .person("h2", "P440002", "HOSP-ID", "SYN4400002", "HOSP", "Quarrel", "Bram", "1964-05-06", "M")
+        .visit("E4400001", "h1", "2024-01-02 08:00", "2024-01-09 12:00", "Cardiology", false)
+        .entry("l1", "h1", "E4400001", "lab", "2024-01-03 06:00", "Lactate", Some(4.6), "mmol/L")
+        .entry("l2", "h1", "E4400001", "lab", "2024-01-03 06:00", "Creatinine", Some(1.9), "mg/dL")
+        .entry("l3", "h2", "", "lab", "2024-01-04 06:00", "Lactate", Some(1.1), "mmol/L")
+        .note("n1", "h1", "2024-01-04 10:00", "Progress note", "Thandiwe Wexlorne is improving.")
+        .recording("r1", "h1", &rec.join("rec.hea").strip_prefix(&data).unwrap().to_string_lossy(), "icu");
+    d.exec("UPDATE entries SET ref_low = 0.5, ref_high = 2 WHERE name = 'Lactate'; UPDATE entries SET ref_low = 0.6, ref_high = 1.2 WHERE name = 'Creatinine'");
+    let n = medorama::sources::NewSource {
+        name: "hospital".into(),
+        kind: "dbb".into(),
+        url: d.url(),
+        ..Default::default()
+    };
+    medorama::databases::connect(&cfg, &c, &boss, &n, "").unwrap();
     // a connected OMOP database: one person, the second patient (the same MRN)
-    let omop = root.join("omop.sqlite");
+    let omop = data.join("omop.sqlite");
     let o = rusqlite::Connection::open(&omop).unwrap();
     o.execute_batch(
         "CREATE TABLE person (person_id INTEGER, gender_concept_id INTEGER, year_of_birth INTEGER, month_of_birth INTEGER,
@@ -512,7 +473,8 @@ fn fixture() -> (tempfile::TempDir, medorama::config::Config) {
          CREATE TABLE visit_detail (visit_detail_id INTEGER, person_id INTEGER, visit_detail_concept_id INTEGER, visit_occurrence_id INTEGER);
          CREATE TABLE measurement (measurement_id INTEGER, person_id INTEGER, measurement_concept_id INTEGER, measurement_date TEXT,
              measurement_datetime TEXT, value_as_number REAL, value_as_concept_id INTEGER, unit_concept_id INTEGER, range_low REAL,
-             range_high REAL, visit_occurrence_id INTEGER, measurement_source_value TEXT, unit_source_value TEXT, value_source_value TEXT);
+             range_high REAL, visit_occurrence_id INTEGER, measurement_source_value TEXT, unit_source_value TEXT, value_source_value TEXT,
+             operator_concept_id INTEGER);
          CREATE TABLE observation (observation_id INTEGER, person_id INTEGER, observation_concept_id INTEGER, observation_date TEXT,
              observation_datetime TEXT, value_as_number REAL, value_as_string TEXT, value_as_concept_id INTEGER, unit_concept_id INTEGER,
              visit_occurrence_id INTEGER, observation_source_value TEXT, unit_source_value TEXT);
@@ -531,7 +493,7 @@ fn fixture() -> (tempfile::TempDir, medorama::config::Config) {
          CREATE TABLE cdm_source (cdm_source_name TEXT, source_release_date TEXT, cdm_release_date TEXT);
          INSERT INTO concept VALUES (3019550, 'Troponin T.cardiac [Mass/volume] in Serum or Plasma', 'LOINC', '6598-7'), (8842, 'nanogram per liter', 'UCUM', 'ng/L');
          INSERT INTO person VALUES (1, 8507, 1964, 5, 6, NULL, 'SYN4400002');
-         INSERT INTO measurement VALUES (1, 1, 3019550, '2023-11-02', '2023-11-02 09:00:00', 212, NULL, 8842, 0, 14, NULL, 'TNT', 'ng/L', '212');
+         INSERT INTO measurement VALUES (1, 1, 3019550, '2023-11-02', '2023-11-02 09:00:00', 212, NULL, 8842, 0, 14, NULL, 'TNT', 'ng/L', '212', NULL);
          INSERT INTO cdm_source VALUES ('Synthetic', '2024-01-01', '2024-01-02');",
     )
     .unwrap();
@@ -540,10 +502,14 @@ fn fixture() -> (tempfile::TempDir, medorama::config::Config) {
         name: "omop".into(),
         kind: "omop".into(),
         url: format!("sqlite:{}", omop.display()),
-        settings: medorama::sources::Settings { timezone: "UTC".into(), ..Default::default() },
+        settings: medorama::sources::Settings {
+            timezone: "UTC".into(),
+            mrn_authority: "HOSP".into(),
+            ..Default::default()
+        },
         ..Default::default()
     };
-    medorama::sources::add(&c, &admin, &n).unwrap();
+    medorama::databases::connect(&cfg, &c, &boss, &n, "").unwrap();
     drop(c);
     (tmp, cfg)
 }
@@ -620,8 +586,7 @@ fn the_page_in_a_browser() {
         ("#/cohorts", "cohorts"),
         ("#/patients", "patients"),
         ("#/databases", "databases"),
-        ("#/import", "sources"),
-        ("#/review", "review"),
+        ("#/recordings", "recordings"),
         ("#/jobs", "jobs"),
         ("#/actions", "actions"),
         ("#/history", "history"),
@@ -634,16 +599,17 @@ fn the_page_in_a_browser() {
         problems.extend(b.accessibility(hash));
     }
 
-    // the Patient Catalog lists the patients; the connected database is named
+    // the Patient Catalog lists the patients; the databases are listed, online
     b.eval("location.hash = '#/patients'; true");
     b.until("document.querySelector('#view-patients').innerText.includes('P440001')", "the list");
     b.eval("location.hash = '#/databases'; true");
-    b.until("document.querySelector('#db-list').innerText.includes('connected')", "the connected database");
+    b.until("document.querySelector('#db-list').innerText.includes('omop') && document.querySelector('#db-list').innerText.includes('online')", "the databases");
+    b.screenshot("databases");
 
-    // a cohort search across the catalog and OMOP (its patient linked as found)
+    // a cohort search across both databases: the patient OMOP shares by MRN is one patient
     let found = b.eval(&format!(
         "fetch('{base}api/v1/cohorts/search', {{method: 'POST', headers: {{'X-Medorama': '1', 'Content-Type': 'application/json'}},
-           body: JSON.stringify({{criteria: {{version: 1, include: {{kind: 'expression', text: 'labs.lactate > 4 OR omop.troponin > 100'}}}}}})}})
+           body: JSON.stringify({{criteria: {{version: 1, include: {{kind: 'expression', text: 'hospital.lactate > 4 OR omop.troponin > 100'}}}}}})}})
          .then(r => r.json()).then(d => d.items.map(i => i.patient_id).sort().join(','))"
     ));
     assert_eq!(found, json!("P440001,P440002"));
@@ -751,7 +717,7 @@ fn the_next_user_sees_nothing_of_the_last() {
 }
 
 /// What people do on the page, by its controls (the mouse, the keyboard's letters, the file
-/// dialog, the confirmations): make a cohort, import a table, add and edit a user, change what
+/// dialog, the confirmations): make a cohort, add and edit a user, change what
 /// Privacy Mode does.  Each checked through the API afterwards.
 #[test]
 fn the_pages_workflows() {
@@ -765,54 +731,45 @@ fn the_pages_workflows() {
     b.until("!!document.querySelector('#co-criteria input[data-k=\"text\"]')", "the expression's field");
     b.fill("#co-criteria input[data-k=\"text\"]", "female");
     b.until("document.querySelector('#co-count').innerText.startsWith('1 patient')", "one patient found");
-    b.fill("#co-name", "Women in the catalog");
+    b.fill("#co-name", "Women of the databases");
     b.click("#co-create");
     b.until("/^#\\/cohorts\\/\\d+/.test(location.hash)", "the new cohort's page");
     let cohorts = api(&mut b, "cohorts");
-    let made = cohorts["items"].as_array().unwrap().iter().find(|c| c["name"] == "Women in the catalog").cloned();
+    let made = cohorts["items"].as_array().unwrap().iter().find(|c| c["name"] == "Women of the databases").cloned();
     assert_eq!(made.map(|c| c["members"].clone()), Some(json!(1)), "{cohorts}");
 
-    // a table, chosen in the file dialog, previewed, imported
-    let file = cfg.home.join("troponin.csv");
-    std::fs::write(&file, "Patient ID,Test Name,Result,Units,Collected\nP440002,Troponin T,35,ng/L,2024-02-01 09:00\n")
-        .unwrap();
-    b.eval("location.hash = '#/import'; true");
-    b.until("!document.querySelector('#view-sources').classList.contains('hidden')", "the import page");
-    b.choose_files("#tb-files", &[&file]);
-    b.until("document.querySelector('#tb-list').innerText.includes('1 rows')", "the file's columns");
-    b.click("#tb-preview");
-    b.until("document.querySelector('#tb-list').innerText.includes('Preview:')", "the preview");
-    b.click("#tb-import");
-    b.until("document.querySelector('#imports-table').innerText.includes('troponin.csv')", "the import listed");
-    let id = api(&mut b, "patients?q=P440002")["items"][0]["id"].clone();
-    let report = api(&mut b, &format!("patients/{id}/report")).to_string();
-    assert!(report.contains("Troponin T"), "the imported result on the patient's page: {report}");
-
-    // a table on the server, chosen in the page's own dialog (the server lists its folders),
-    // imported where it is
-    let served = std::path::Path::new(&cfg.data_roots[0]).join("creatinine.csv");
-    std::fs::write(
-        &served,
-        "Patient ID,Test Name,Result,Units,Collected\nP440002,Creatinine,80,umol/L,2024-02-01 09:00\n",
-    )
-    .unwrap();
-    let pick = "#sf-list input[data-path$=\"creatinine.csv\"]";
-    b.click("#tb-server");
+    // a database: its file chosen in the page's own dialog (the server lists its folders),
+    // connected, listed online, its variables shown
+    let lab = common::Dbb::new(&std::path::Path::new(&cfg.data_roots[0]).join("labs2.sqlite"));
+    lab.person("x1", "P440002", "HOSP-ID", "", "", "", "", "", "M").entry(
+        "t1",
+        "x1",
+        "",
+        "lab",
+        "2024-02-01 09:00",
+        "Troponin T",
+        Some(35.0),
+        "ng/L",
+    );
+    b.eval("location.hash = '#/databases'; true");
+    b.until("!document.querySelector('#view-databases').classList.contains('hidden')", "the databases");
+    b.fill("#cn-name", "labs2");
+    let pick = "#sf-list input[data-path$=\"labs2.sqlite\"]";
+    b.click("#cn-path-pick");
     b.until("document.querySelector('#sf').open && !!document.querySelector('#sf-list [data-dir]')", "the data roots");
     b.click("#sf-list [data-dir]");
-    b.until(&format!("!!document.querySelector({pick:?})"), "the table on the server");
+    b.until(&format!("!!document.querySelector({pick:?})"), "the database file on the server");
     let problems = b.accessibility("Choose on the server");
     assert!(problems.is_empty(), "{problems:#?}");
     b.click(pick);
     b.click("#sf-ok");
-    b.until("document.querySelector('#tb-list').innerText.includes('1 rows')", "the server table's columns");
-    b.click("#tb-import");
-    b.until(
-        "document.querySelector('#imports-table').innerText.includes('creatinine.csv')",
-        "the server table imported",
-    );
+    b.until("document.querySelector('#cn-path').value.endsWith('labs2.sqlite')", "the file chosen");
+    b.screenshot("connect");
+    b.click("#db-connect button.primary");
+    b.until("/^#\\/databases\\/\\d+/.test(location.hash) && document.querySelector('#db-one').innerText.includes('Troponin T')", "connected, its variables shown");
+    let id = api(&mut b, "patients?q=P440002")["items"][0]["id"].clone();
     let report = api(&mut b, &format!("patients/{id}/report")).to_string();
-    assert!(report.contains("Creatinine"), "the result imported from the server: {report}");
+    assert!(report.contains("Troponin T"), "its result on the patient's page, the same patient: {report}");
 
     // a user: added, their role and PHI permission changed, their password reset, deleted
     b.eval("location.hash = '#/admin'; true");
@@ -842,8 +799,13 @@ fn the_pages_workflows() {
         "fetch('/api/v1/users').then(r => r.json()).then(d => d.items.some(u => u.username === 'carol' && u.phi))",
         "the PHI permission given",
     );
-    b.prompt = "carolnewpass12".into();
+    // the new password typed in the page's dialog (password fields, never prompt())
     b.click(&format!("[data-user-pass=\"{uid}\"]"));
+    b.until("!!document.querySelector('dialog.pw[open] #pw-new')", "the password dialog");
+    assert_eq!(b.eval("document.querySelector('#pw-new').type"), json!("password"));
+    b.fill("#pw-new", "carolnewpass12");
+    b.fill("#pw-again", "carolnewpass12");
+    b.key("Enter");
     let login = |b: &mut Browser, pw: &str| {
         b.eval(&format!(
             "fetch('/api/v1/login', {{method: 'POST', credentials: 'omit', headers: {{'X-Medorama': '1', 'Content-Type': 'application/json'}},
@@ -961,23 +923,14 @@ fn the_page_by_keyboard_only() {
     assert!(b.errors.is_empty(), "{:?}", b.errors);
 }
 
-/// The other screens, by their controls: the Review queue (a held-back row dismissed), Actions
-/// (the index action run on every recording) and Jobs (the job done), and the VitalStream viewer
+/// The other screens, by their controls: Actions (the index action run on every recording) and
+/// Jobs (the job done), and the VitalStream viewer
 /// in its tab (the recording opened from the patient's page), when a viewer is built.
 #[test]
 #[cfg_attr(not(feature = "wfdb"), ignore = "WFDB recordings: a build without the `wfdb` feature refuses them")]
 fn the_other_screens() {
     let Some(Run { mut b, cfg, _rt, _tmp, .. }) = start() else { return };
     sign_in(&mut b);
-
-    // Review: the held-back row, dismissed (its confirmation accepted)
-    b.eval("location.hash = '#/review'; true");
-    b.until("document.querySelector('#view-review').innerText.includes('P440009')", "the held-back row");
-    b.click("[data-held][data-act='dismiss']");
-    b.until("!document.querySelector('#view-review').innerText.includes('P440009')", "the row dismissed");
-    assert!(b.dialogs.iter().any(|d| d.contains("Dismiss this row")), "{:?}", b.dialogs);
-    let review = api(&mut b, "review");
-    assert!(review["held"].as_array().is_some_and(|h| h.is_empty()), "{review}");
 
     // Actions: the index action on every recording; the worker runs it; Jobs shows it done
     b.eval("location.hash = '#/actions'; true");
@@ -1025,108 +978,68 @@ fn the_other_screens() {
     assert!(b.errors.is_empty(), "{:?}", b.errors);
 }
 
-/// Add a database, each kind by the page: several files as one database; a known export
-/// recognised (GE MUSE) and a site's own format listed; a database file connected (one outside
-/// the folders data may come from refused), its persons linked, then disconnected.
+/// A database by the page: refused outside the folders data may come from; connected; granted
+/// to another user; offline when its file goes, greyed and left out of searches; removed, its
+/// name typed to confirm.
 #[test]
-fn the_database_kinds() {
+fn a_database_by_the_page() {
     let Some(Run { mut b, cfg, _rt, _tmp, .. }) = start() else { return };
-    // a site's format, described in a file
-    std::fs::create_dir_all(cfg.home.join("formats")).unwrap();
-    std::fs::write(
-        cfg.home.join("formats/acme-lab.toml"),
-        "key = \"acme-lab\"\nlabel = \"ACME lab export\"\ncategory = \"lab\"\ndetect = [\"PatNo\", \"Analyte\"]\n\
-         [[column]]\nname = \"patient_id\"\nfrom = \"PatNo\"\n[[column]]\nname = \"name\"\nfrom = \"Analyte\"\n\
-         [[column]]\nname = \"value\"\nfrom = \"Res\"\nnumber = true\n[[column]]\nname = \"time\"\nfrom = \"When\"\ndate = \"%d.%m.%Y %H:%M\"\n",
-    )
-    .unwrap();
     sign_in(&mut b);
-    b.eval("location.hash = '#/import'; true");
-    b.until("!document.querySelector('#view-sources').classList.contains('hidden')", "the import page");
-    b.until("document.querySelector('#fmt-table').innerText.includes('ACME lab export')", "the site's format listed");
-    b.screenshot("import");
-    assert!(b.text().contains("GE MUSE ECG metadata"), "the built-in format listed");
-
-    // two files, one database (the site's format recognised in both)
-    let dir = cfg.home.join("up");
-    std::fs::create_dir_all(&dir).unwrap();
-    let a = dir.join("acme_1.csv");
-    let c2 = dir.join("acme_2.csv");
-    std::fs::write(&a, "PatNo,Analyte,Res,When,Lab Tech\nP440001,Sodium,140,02.01.2024 08:00,Zorbluff\n").unwrap();
-    std::fs::write(&c2, "PatNo,Analyte,Res,When,Lab Tech\nP440002,Sodium,133,03.01.2024 09:30,Zorbluff\n").unwrap();
-    b.choose_files("#tb-files", &[&a, &c2]);
-    b.until("document.querySelectorAll('#tb-list .tbl').length === 2", "both files read");
-    assert!(b.eval("document.querySelector('#tb-list').innerText.includes('ACME lab export')") == json!(true));
-    b.click("input[name='tb-mode'][value='one']");
-    b.until("!document.querySelector('#tb-dbname').classList.contains('hidden')", "the database's name");
-    b.fill("#tb-dbname", "acme_labs");
-    b.click("#tb-preview");
-    b.until("document.querySelector('#tb-list').innerText.includes('Preview: 2 rows')", "the preview of both files");
-    b.click("#tb-import");
-    b.until("document.querySelector('#imports-table').innerText.includes('acme_labs')", "one database imported");
-    let dbs = api(&mut b, "databases");
-    let d = dbs["items"].as_array().unwrap().iter().find(|d| d["name"] == "acme_labs").cloned().expect("acme_labs");
-    assert_eq!((d["rows"].clone(), d["categories"].clone()), (json!(2), json!(["lab"])), "{d}");
-    let id = d["id"].as_i64().unwrap();
-    let rows = api(&mut b, &format!("databases/{id}/rows?limit=10")).to_string();
-    assert!(
-        rows.contains("2024-01-02 08:00:00") && !rows.contains("Zorbluff"),
-        "converted, the undescribed column left out: {rows}"
+    let outside = cfg.home.parent().unwrap().join("away.sqlite");
+    let d = common::Dbb::new(&outside);
+    d.person("a1", "Q1", "AWAY", "", "", "", "", "", "F").entry(
+        "e1",
+        "a1",
+        "",
+        "lab",
+        "2024-03-01 10:00",
+        "Sodium",
+        Some(140.0),
+        "mmol/L",
     );
-
-    // a CLIF folder on the server (inside data_roots): previewed, imported, each table a database
-    let clif = cfg.home.parent().unwrap().join("data/clif");
-    std::fs::create_dir_all(&clif).unwrap();
-    std::fs::write(clif.join("patient.csv"), "patient_id,sex_category,birth_date\nCL01,Female,1960-01-01\n").unwrap();
-    std::fs::write(
-        clif.join("hospitalization.csv"),
-        "patient_id,hospitalization_id,admission_dttm,discharge_dttm\nCL01,CLH01,2024-02-01 08:00:00+00:00,2024-02-05 08:00:00+00:00\n",
-    )
-    .unwrap();
-    std::fs::write(
-        clif.join("vitals.csv"),
-        "hospitalization_id,recorded_dttm,vital_name,vital_category,vital_value\nCLH01,2024-02-01 09:00:00+00:00,HR,heart_rate,101\n",
-    )
-    .unwrap();
-    b.eval("document.querySelector('.clifbox').open = true; true");
-    b.fill("#clif-dir", &clif.to_string_lossy());
-    b.click("#clif-preview");
-    b.until("document.querySelector('#clif-report').innerText.includes('clif_vitals')", "the CLIF preview");
-    b.click("#clif-import");
-    b.until("document.querySelector('#imports-table').innerText.includes('clif_vitals')", "the CLIF tables imported");
-    let names: Vec<String> = api(&mut b, "databases")["items"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter_map(|d| d["name"].as_str().map(String::from))
-        .collect();
-    for n in ["clif_patient", "clif_hospitalization", "clif_vitals"] {
-        assert!(names.iter().any(|x| x == n), "{n} not among {names:?}");
-    }
-
-    // a database file: refused outside data_roots, connected inside, its persons linked, disconnected
-    b.click("input[name='db-kind'][value='file']");
-    b.until("!document.querySelector('#db-connect').classList.contains('hidden')", "the connection form");
-    b.screenshot("connect");
-    let outside = cfg.home.parent().unwrap().join("omop.sqlite");
-    b.fill("#cn-name", "omop2");
+    b.eval("location.hash = '#/databases'; true");
+    b.until("!document.querySelector('#view-databases').classList.contains('hidden')", "the databases");
+    b.fill("#cn-name", "away");
     b.fill("#cn-path", &outside.to_string_lossy());
     b.click("#db-connect button.primary");
-    b.until("document.querySelector('#toast').innerText.includes('outside the folders')", "refused outside data_roots");
-    let inside = cfg.home.parent().unwrap().join("data/omop2.sqlite");
+    b.until("document.querySelector('#toast').innerText.includes('data_roots')", "refused outside data_roots");
+    let inside = std::path::Path::new(&cfg.data_roots[0]).join("away.sqlite");
     std::fs::copy(&outside, &inside).unwrap();
     b.fill("#cn-path", &inside.to_string_lossy());
     b.click("#db-connect button.primary");
-    b.until("document.querySelector('#cn-table').innerText.includes('omop2')", "connected and listed");
-    assert!(b.eval("document.querySelector('#cn-result').innerText.startsWith('Connected')") == json!(true));
-    let cid = api(&mut b, "connections")["items"].as_array().unwrap().iter().find(|c| c["name"] == "omop2").unwrap()
-        ["id"]
-        .clone();
-    b.click(&format!("[data-cn-sync=\"{cid}\"]"));
-    b.until("document.querySelector('#toast').innerText.includes('linked')", "its persons linked");
-    b.click(&format!("[data-cn-rm=\"{cid}\"]"));
-    b.until("!document.querySelector('#cn-table').innerText.includes('omop2')", "disconnected");
-    assert!(b.dialogs.iter().any(|d| d.contains("Disconnect omop2")), "{:?}", b.dialogs);
+    b.until(
+        "/^#\\/databases\\/\\d+/.test(location.hash) && document.querySelector('#db-one').innerText.includes('Sodium')",
+        "connected",
+    );
+    let dbid = b.eval("Number(document.querySelector('#db-one').dataset.id)");
+    // granted to another user, by the page
+    b.eval("fetch('/api/v1/users', {method: 'POST', headers: {'X-Medorama': '1', 'Content-Type': 'application/json'}, body: JSON.stringify({username: 'dana', role: 'analyst', phi: false, password: '0123456789ab'})}).then(r => r.status)");
+    b.eval("location.reload(); true");
+    b.until("!!document.querySelector('#db-grant-user') && document.querySelector('#db-grant-user').innerText.includes('dana')", "the grant form");
+    b.choose("#db-grant-perm", "view");
+    b.click("#db-grant button");
+    b.until("document.querySelector('#db-grants').innerText.includes('dana')", "granted");
+    let problems = b.accessibility("a database's page");
+    assert!(problems.is_empty(), "accessibility:\n{}", problems.join("\n"));
+    // its file gone: offline, greyed on the list, left out of the Cohort tab's search
+    std::fs::rename(&inside, inside.with_extension("moved")).unwrap();
+    b.click("[data-act=check]");
+    b.until("document.querySelector('#toast').innerText.includes('does not answer')", "offline");
+    b.eval("location.hash = '#/cohorts'; true");
+    b.until("!!document.querySelector('#co-dbs .dbtick.off input[disabled]')", "the offline database greyed");
+    b.screenshot("cohort-databases");
+    std::fs::rename(inside.with_extension("moved"), &inside).unwrap();
+    // removed, its name typed
+    b.eval(&format!("location.hash = '#/databases/{dbid}'; true"));
+    b.until("!!document.querySelector('[data-act=remove]')", "the remove button");
+    b.prompt = "away".into();
+    b.click("[data-act=remove]");
+    b.until(
+        "location.hash === '#/databases' && !document.querySelector('#db-list').innerText.includes('away')",
+        "removed",
+    );
+    assert!(b.dialogs.iter().any(|d| d.contains("every trace")), "{:?}", b.dialogs);
+    assert!(inside.is_file(), "the database itself is untouched");
     assert!(b.errors.is_empty(), "{:?}", b.errors);
 }
 
@@ -1134,7 +1047,7 @@ fn the_database_kinds() {
 /// those still ticked are added, and nobody leaves.
 #[test]
 fn a_cohort_takes_its_new_patients() {
-    let Some(Run { mut b, _rt, _tmp, .. }) = start() else { return };
+    let Some(Run { mut b, cfg, _rt, _tmp, .. }) = start() else { return };
     sign_in(&mut b);
     let post = |b: &mut Browser, path: &str, body: &str, kind: &str| {
         b.eval(&format!(
@@ -1149,9 +1062,20 @@ fn a_cohort_takes_its_new_patients() {
     );
     let id = co["id"].as_i64().unwrap_or_else(|| panic!("{co}"));
     let before = api(&mut b, &format!("cohorts/{id}"))["members"].as_i64().unwrap();
-    let rows: String = (0..14).map(|i| format!("\\nPN{i},Newmark,Person{i},F")).collect();
-    let r = post(&mut b, "tables?name=new.csv", &format!("'Patient ID,Last Name,First Name,Sex{rows}'"), "text/csv");
-    assert_eq!(r["patients_added"], 14, "{r}");
+    // 14 new women in the hospital's database, read at its next check
+    let d = rusqlite::Connection::open(std::path::Path::new(&cfg.data_roots[0]).join("hospital.sqlite")).unwrap();
+    for i in 0..14 {
+        d.execute(
+            "INSERT INTO persons (person_key, patient_id, patient_id_issuer, sex) VALUES (?1, ?2, 'HOSP-ID', 'F')",
+            [format!("n{i}"), format!("PN{i}")],
+        )
+        .unwrap();
+    }
+    d.execute("UPDATE meta SET value = 'v2' WHERE key = 'version'", []).unwrap();
+    let dbs = api(&mut b, "databases");
+    let hid = dbs["items"].as_array().unwrap().iter().find(|d| d["name"] == "hospital").unwrap()["id"].clone();
+    let r = post(&mut b, &format!("databases/{hid}/check"), "JSON.stringify({})", "application/json");
+    assert_eq!(r["online"], true, "{r}");
     b.eval(&format!("location.hash = '#/cohorts/{id}'; true"));
     b.until("!!document.querySelector('#co-one .notice')", "the cohort says there are new data");
     b.screenshot("cohort-new-data");
@@ -1172,54 +1096,5 @@ fn a_cohort_takes_its_new_patients() {
     // the one left out is still offered
     let r = post(&mut b, &format!("cohorts/{id}/refresh"), "JSON.stringify({dry_run: true})", "application/json");
     assert_eq!(r["added"].as_array().map(Vec::len), Some(1), "{r}");
-    assert!(b.errors.is_empty(), "{:?}", b.errors);
-}
-
-#[test]
-fn the_demo_and_its_cohort() {
-    let Some(Run { mut b, cfg, _rt, _tmp, .. }) = start() else { return };
-    sign_in(&mut b);
-    // a small demo, as tools/make-demo-data.py lays it out, inside the catalog's data_roots
-    let dir = std::path::Path::new(&cfg.data_roots[0]).join("demo");
-    std::fs::create_dir_all(dir.join("databases")).unwrap();
-    std::fs::write(dir.join("README.txt"), "Make a synthetic demo data set for Medorama: fake patients.\n").unwrap();
-    std::fs::write(
-        dir.join("databases").join("patients.csv"),
-        "MRN,Last Name,First Name,DOB,Sex,Patient ID\nP900001,Demoe,Ada,1950-01-02,F,DEMO-1\nP900002,Demoe,Ben,1960-03-04,M,DEMO-2\n",
-    )
-    .unwrap();
-    let db = Db::open(&cfg, false).unwrap();
-    let mut c = db.get().unwrap();
-    let boss = medorama::users::get_by_name(&c, "boss").unwrap().unwrap();
-    let d = medorama::demo::add(&mut c, &cfg, &boss, &dir).unwrap();
-    drop(c);
-    let id = d.cohort;
-    // its patients' pages say DEMO
-    let members = api(&mut b, &format!("cohorts/{id}/members"));
-    let pid = members["items"][0]["id"].as_i64().unwrap_or_else(|| panic!("{members}"));
-    b.eval(&format!("location.hash = '#/patient/{pid}'; true"));
-    b.until(
-        "document.querySelector('#pp-bar') && document.querySelector('#pp-bar').innerText.includes('DEMO')",
-        "the demo patient's banner",
-    );
-    // the cohort: the demo's, for every user; no sharing; an admin deletes it, which says what goes
-    b.eval(&format!("location.hash = '#/cohorts/{id}'; true"));
-    b.until(
-        "document.querySelector('#co-head') && document.querySelector('#co-head').innerText.includes('the demo, for every user')",
-        "the demo's cohort",
-    );
-    assert!(b.eval("document.querySelector('#co-list').innerText.includes('the demo')").as_bool().unwrap());
-    assert!(b.eval("!document.querySelector('.coacts [data-act=share]')").as_bool().unwrap());
-    b.click(".coacts [data-act=delete]");
-    b.until("!!document.querySelector('#co-delete-go')", "the demo's delete panel");
-    let text = b.eval("document.querySelector('#co-panel').innerText").as_str().unwrap_or_default().to_string();
-    assert!(text.contains("Delete the demo") && text.contains("2 patients"), "{text}");
-    b.screenshot("demo-delete");
-    let problems = b.accessibility("deleting the demo");
-    assert!(problems.is_empty(), "accessibility:\n{}", problems.join("\n"));
-    b.click("#co-delete-go");
-    b.until("location.hash === '#/cohorts'", "back to the cohorts");
-    assert!(api(&mut b, "cohorts")["items"].as_array().unwrap().iter().all(|c| c["name"] != "DEMO"));
-    assert!(!medorama::demo::present(&db.get().unwrap()).unwrap());
     assert!(b.errors.is_empty(), "{:?}", b.errors);
 }

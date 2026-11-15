@@ -1,4 +1,4 @@
-//! The gateway: the viewer under `/viewer/`, behind the catalog's sign-in and rules
+//! The gateway: the viewer under `/viewer/`, behind Medorama's sign-in and rules
 //! (docs/architecture.md, "The gateway"; docs/administration.md, "The waveform viewer").
 //!
 //! Default deny: only these requests of viewer API v1 pass, each with its rule.
@@ -6,17 +6,17 @@
 //! | Request | Rule |
 //! |---|---|
 //! | `GET /`, `GET /static/…` | the page (signed-in users) |
-//! | `GET api/v1/config` | passes; for non-admins, `places`, `start` and `home` point into the catalog's recordings |
-//! | `GET api/v1/browse`, `GET api/v1/complete` | admins: inside `data_roots` (anywhere when empty); others: only folders that lead to recordings in the catalog, showing only those recordings |
+//! | `GET api/v1/config` | passes; for non-admins, `places`, `start` and `home` point into Medorama's recordings |
+//! | `GET api/v1/browse`, `GET api/v1/complete` | admins: inside `data_roots` (anywhere when empty); others: only folders that lead to recordings of the connected databases, showing only those recordings |
 //! | `GET api/v1/scan` | what opening a folder of records (or a record) would read: as `open`; refused in Privacy Mode |
-//! | `POST api/v1/open` | admins: inside `data_roots`; others: only recordings in the catalog. Audited |
+//! | `POST api/v1/open` | admins: inside `data_roots`; others: only recordings of the connected databases. Audited |
 //! | `POST api/v1/cancel` | only indexes of datasets the user opened through the gateway |
 //! | `GET api/v1/datasets/{key}…` | only datasets the user opened through the gateway |
 //!
 //! Requests that change something (`POST`) must be JSON (`Content-Type: application/json`), as
-//! the catalog's own API requires (another site's page cannot send one unasked).  The viewer's
+//! Medorama's own API requires (another site's page cannot send one unasked).  The viewer's
 //! own sign-in (`login`, `logout`) and anything else are refused.  Each passed
-//! request carries the viewer's sign-in cookie, made by the supervisor; the user's catalog
+//! request carries the viewer's sign-in cookie, made by the supervisor; the user's Medorama
 //! cookie is never passed on.
 //!
 //! **In Privacy Mode** (docs/security.md, "The privacy gate"), the gateway is the gate's part for
@@ -48,7 +48,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// Recordings in the catalog, as real paths, and every folder above them (for browsing).
+/// Recordings of the connected databases, as real paths, and every folder above them (for browsing).
 struct Scope {
     built: Instant,
     recordings: HashSet<PathBuf>,
@@ -60,18 +60,20 @@ struct Scope {
 /// Gateway state kept by the server.
 pub struct Gateway {
     client: Client<hyper_util::client::legacy::connect::HttpConnector, Body>,
-    scope: Mutex<Option<Scope>>,
+    /// What each user may open: the recordings of the databases they may view.
+    scope: Mutex<HashMap<i64, Scope>>,
     /// Dataset keys each user has opened through the gateway.
     opened: Mutex<HashMap<i64, HashSet<String>>>,
-    /// The token of the recording each dataset key was opened from (Privacy Mode).
-    tokens: Mutex<HashMap<String, String>>,
+    /// The token of the recording each user opened a dataset key from, when it was opened
+    /// de-identified (Privacy Mode, or a database the user holds without `phi`).
+    tokens: Mutex<HashMap<(i64, String), String>>,
 }
 
 impl Default for Gateway {
     fn default() -> Self {
         Gateway {
             client: Client::builder(TokioExecutor::new()).build_http(),
-            scope: Mutex::new(None),
+            scope: Mutex::new(HashMap::new()),
             opened: Mutex::new(HashMap::new()),
             tokens: Mutex::new(HashMap::new()),
         }
@@ -124,17 +126,22 @@ fn real(p: &str) -> PathBuf {
 }
 
 impl Gateway {
-    fn scope<'a>(&self, app: &Shared, guard: &'a mut Option<Scope>) -> &'a Scope {
-        let fresh = guard.as_ref().is_some_and(|s| s.built.elapsed() < Duration::from_secs(10));
+    fn scope<'a>(&self, app: &Shared, user: &User, guard: &'a mut HashMap<i64, Scope>) -> &'a Scope {
+        let fresh = guard.get(&user.id).is_some_and(|s| s.built.elapsed() < Duration::from_secs(10));
         if !fresh {
             let paths: Vec<String> = app
                 .db
                 .get()
                 .ok()
                 .and_then(|c| {
-                    let mut st = c.prepare("SELECT path FROM recordings WHERE present = 1").ok()?;
-                    let v = st.query_map([], |r| r.get::<_, String>(0)).ok()?.filter_map(Result::ok).collect();
-                    Some(v)
+                    let viewable = crate::databases::granted(&c, user, "view").ok()?;
+                    let all = crate::recordings::all(&app.cfg, &c).ok()?;
+                    Some(
+                        all.into_iter()
+                            .filter(|r| r.present && viewable.contains(&r.database))
+                            .map(|r| r.path)
+                            .collect(),
+                    )
                 })
                 .unwrap_or_default();
             let mut recordings = HashSet::new();
@@ -152,14 +159,17 @@ impl Gateway {
             }
             let mut places: Vec<(PathBuf, usize)> = counts.into_iter().collect();
             places.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-            *guard = Some(Scope {
-                built: Instant::now(),
-                recordings,
-                folders,
-                places: places.into_iter().take(20).map(|p| p.0).collect(),
-            });
+            guard.insert(
+                user.id,
+                Scope {
+                    built: Instant::now(),
+                    recordings,
+                    folders,
+                    places: places.into_iter().take(20).map(|p| p.0).collect(),
+                },
+            );
         }
-        guard.as_ref().unwrap()
+        &guard[&user.id]
     }
 
     /// May `user` see this path (a folder to browse, or a recording to open)?
@@ -173,13 +183,13 @@ impl Gateway {
                 });
         }
         let mut g = self.scope.lock().unwrap();
-        let s = self.scope(app, &mut g);
+        let s = self.scope(app, user, &mut g);
         s.recordings.contains(path) || (!open && s.folders.contains(path))
     }
 
-    fn places(&self, app: &Shared) -> Vec<PathBuf> {
+    fn places(&self, app: &Shared, user: &User) -> Vec<PathBuf> {
         let mut g = self.scope.lock().unwrap();
-        self.scope(app, &mut g).places.clone()
+        self.scope(app, user, &mut g).places.clone()
     }
 }
 
@@ -245,7 +255,10 @@ async fn forward(
                 | "transfer-encoding"
                 | "x-frame-options"
                 | "content-security-policy"
-        ) {
+        ) || k == crate::gate::CLEARED
+            || k == crate::gate::MAY_HOLD_PHI
+        {
+            // the gate's own marks: only Medorama sets them (an upstream's would pass the last layer)
             continue;
         }
         out = out.header(k, v);
@@ -331,7 +344,7 @@ pub async fn handle(State(app): State<Shared>, req: Request) -> Response {
     let rest = path.strip_prefix("/viewer/").unwrap_or("").to_string();
     let query = parts.uri.query().map(str::to_string);
     let is_page = rest.is_empty() || rest.starts_with("static/");
-    // the catalog's sign-in
+    // Medorama's sign-in
     let mut p2 = parts.clone();
     let user = match <Auth as axum::extract::FromRequestParts<Shared>>::from_request_parts(&mut p2, &app).await {
         Ok(Auth(u)) => u,
@@ -345,10 +358,19 @@ pub async fn handle(State(app): State<Shared>, req: Request) -> Response {
         Err(e) => return e.into_response(),
     };
     if !app.viewer.available() {
-        return deny(StatusCode::NOT_FOUND, "no viewer runs under this catalog");
+        return deny(StatusCode::NOT_FOUND, "no viewer runs under this Medorama");
     }
-    // Privacy Mode: the gate's settings and dictionary (recording tokens)
-    let gate = if user.privacy {
+    // Privacy Mode, or a user without `phi` on some database they view (decided per recording
+    // below): the gate's settings and dictionary (recording tokens)
+    let mixed = !user.privacy && {
+        let (a, u) = (app.clone(), user.clone());
+        tokio::task::spawn_blocking(move || {
+            a.db.get().ok().and_then(|c| crate::patient::without_phi(&c, &u).ok()).is_none_or(|w| !w.is_empty())
+        })
+        .await
+        .unwrap_or(true)
+    };
+    let gate = if user.privacy || mixed {
         let a = app.clone();
         match tokio::task::spawn_blocking(move || {
             let c = a.db.get().map_err(|_| ())?;
@@ -365,7 +387,7 @@ pub async fn handle(State(app): State<Shared>, req: Request) -> Response {
     let method = parts.method.clone();
     let ctype = parts.headers.get(header::CONTENT_TYPE).cloned();
     // a request that changes something is JSON, which another site's page cannot send without
-    // the browser asking first (and the catalog never allows it)
+    // the browser asking first (and Medorama never allows it)
     let json = ctype.as_ref().and_then(|c| c.to_str().ok()).is_some_and(|c| c.starts_with("application/json"));
     if method != Method::GET && method != Method::HEAD && !json {
         return deny(StatusCode::UNSUPPORTED_MEDIA_TYPE, "JSON expected");
@@ -392,7 +414,7 @@ pub async fn handle(State(app): State<Shared>, req: Request) -> Response {
                     v["start"] = json!("");
                     v["home"] = json!("");
                 } else if !user.is_admin() && status.is_success() {
-                    let places = g.places(&app);
+                    let places = g.places(&app, &user);
                     let start = common_ancestor(&places).or_else(|| places.first().cloned());
                     let name = |p: &Path| {
                         p.file_name()
@@ -484,13 +506,15 @@ pub async fn handle(State(app): State<Shared>, req: Request) -> Response {
                     .map_err(|e| deny(StatusCode::BAD_REQUEST, &format!("bad request body: {e}")))?;
                 let mut req = req;
                 let asked = req.get("path").and_then(Value::as_str).unwrap_or("").to_string();
-                // in Privacy Mode, a recording's token, never a path
-                let p = match &gate {
+                // in Privacy Mode, a recording's token, never a path; a user without `phi` on some
+                // database: a token, or the path of a recording of a database they hold `phi` on
+                let (p, by_token) = match &gate {
                     Some(g) => match crate::gate::recording_path(&g.dict, &asked) {
-                        Some(path) => path,
+                        Some(path) => (path, true),
+                        None if !user.privacy && phi_recording(&app, &user, &asked).await => (asked.clone(), false),
                         None => return Err(deny(StatusCode::FORBIDDEN, "in Privacy Mode a recording is opened from a patient's page")),
                     },
-                    None => asked.clone(),
+                    None => (asked.clone(), false),
                 };
                 req["path"] = json!(p);
                 let body = Bytes::from(serde_json::to_vec(&req).unwrap_or_default());
@@ -498,16 +522,19 @@ pub async fn handle(State(app): State<Shared>, req: Request) -> Response {
                 if !g.allowed(&app, &user, &rp, true) {
                     return Err(deny(StatusCode::FORBIDDEN, "not a recording you may open"));
                 }
-                let resp = forward(&app, gate.is_some(), method, "api/v1/open", None, body.clone(), ctype.clone()).await?;
+                let resp = forward(&app, by_token, method, "api/v1/open", None, body.clone(), ctype.clone()).await?;
                 let (status, mut v) = json_of(resp).await?;
-                if gate.is_some() {
+                if by_token {
                     private_answer(status, &mut v);
                 }
                 if status.is_success() {
                     if let Some(key) = v.get("key").and_then(Value::as_str) {
                         g.opened.lock().unwrap().entry(user.id).or_default().insert(key.to_string());
-                        if gate.is_some() {
-                            g.tokens.lock().unwrap().insert(key.to_string(), asked.clone());
+                        let mut tokens = g.tokens.lock().unwrap();
+                        if by_token {
+                            tokens.insert((user.id, key.to_string()), asked.clone());
+                        } else {
+                            tokens.remove(&(user.id, key.to_string()));
                         }
                     }
                     if let Ok(c) = app.db.get() {
@@ -522,18 +549,18 @@ pub async fn handle(State(app): State<Shared>, req: Request) -> Response {
                 if !ok {
                     return Err(deny(StatusCode::FORBIDDEN, "open the recording first"));
                 }
-                let Some(gt) = &gate else {
-                    return forward(&app, gate.is_some(), method, r, query.as_deref(), Bytes::new(), None).await;
+                // de-identified when this user opened it by its token
+                let token = g.tokens.lock().unwrap().get(&(user.id, key.to_string())).cloned();
+                let (Some(gt), Some(token)) = (&gate, token) else {
+                    return forward(&app, false, method, r, query.as_deref(), Bytes::new(), None).await;
                 };
-                // the recording's times move by its patient's own offset
-                let token = g.tokens.lock().unwrap().get(key).cloned().unwrap_or_default();
+                // the recording's times move by its patient's own offset, the whole answer
                 let gt = &gt.for_recording(&token);
                 let offset = if gt.settings.hides("dates") { gt.settings.offset_seconds() } else { 0 };
                 let q = shift_query(query.as_deref(), offset);
                 let resp = forward(&app, gate.is_some(), method, r, q.as_deref(), Bytes::new(), None).await?;
                 let (status, mut v) = json_of(resp).await?;
                 if status.is_success() {
-                    let token = g.tokens.lock().unwrap().get(key).cloned().unwrap_or_default();
                     if let Some(d) = v.get_mut("dataset") {
                         d["path"] = json!(token);
                         d["name"] = json!(crate::gate::RECORDING);
@@ -554,6 +581,10 @@ pub async fn handle(State(app): State<Shared>, req: Request) -> Response {
                         gate_annotations(d, gt.settings.hides("notes"), &names, &birth);
                     }
                     private_answer(status, &mut v);
+                    // a plug-in's or a reader's own time keys, moved first; then the answer's
+                    // times by this patient's offset (not the last layer's base offset alone)
+                    crate::deid::shift_unknown_times(&mut v, &gt.settings);
+                    gt.json(&mut v);
                     // markers: [channel, time, name index]
                     if r.ends_with("/markers") {
                         if let Some(Value::Array(items)) = v.get_mut("items") {
@@ -567,9 +598,12 @@ pub async fn handle(State(app): State<Shared>, req: Request) -> Response {
                         }
                     }
                 }
-                Ok(json_response(status, &v))
+                // gated here, whole (the last layer would move its times a second time)
+                let mut out = json_response(status, &v);
+                out.headers_mut().insert(crate::gate::CLEARED, HeaderValue::from_static("1"));
+                Ok(out)
             }
-            _ => Err(deny(StatusCode::NOT_FOUND, "not available through the catalog")),
+            _ => Err(deny(StatusCode::NOT_FOUND, "not available through Medorama")),
         }
     }
     .await;
@@ -593,17 +627,34 @@ fn gate_annotations(dataset: &mut Value, hide: bool, names: &[String], birth: &s
 }
 
 /// The names and date of birth of the patient a recording (its token, `mo-rec:<id>`) belongs to.
+/// Whether `path` is a recording of a database `user` holds `phi` on (a user without `phi` on
+/// another database opens such a recording by its path, identified).
+async fn phi_recording(app: &Shared, user: &crate::users::User, path: &str) -> bool {
+    let (a, u, rp) = (app.clone(), user.clone(), real(path));
+    tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let c = a.db.get()?;
+        let phi = crate::databases::granted(&c, &u, "phi")?;
+        for s in crate::sources::list(&c)? {
+            if phi.contains(&s.id)
+                && s.has_recordings()
+                && crate::recordings::of_database(&a.cfg, &c, &s)?.iter().any(|r| real(&r.path) == rp)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    })
+    .await
+    .ok()
+    .and_then(Result::ok)
+    .unwrap_or(false)
+}
+
 fn recording_patient_words(app: &Shared, token: &str) -> (Vec<String>, String) {
     let Some(id) = token.strip_prefix("mo-rec:").and_then(|i| i.parse::<i64>().ok()) else { return Default::default() };
     let Ok(c) = app.db.get() else { return Default::default() };
-    let patient: Option<i64> = c
-        .query_row(
-            "SELECT e.patient FROM recording_links l JOIN encounters e ON e.id = l.encounter WHERE l.recording = ?1 ORDER BY e.id LIMIT 1",
-            [id],
-            |r| r.get(0),
-        )
-        .ok();
-    patient.map(|p| crate::gate::Restricted::identity_words(&c, p)).unwrap_or_default()
+    let patient = crate::recordings::get(&app.cfg, &c, id).ok().flatten().and_then(|r| r.patient);
+    patient.map(|p| crate::gate::Restricted::identity_words(&c, &app.cfg, p)).unwrap_or_default()
 }
 
 #[cfg(test)]

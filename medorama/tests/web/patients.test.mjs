@@ -14,6 +14,7 @@ const el = (sel) => {
       sel, innerHTML: '', textContent: '', value: '', placeholder: '', disabled: false, hidden: false, on,
       classList: { contains: (c) => classes.has(c), add: (c) => classes.add(c), remove: (c) => classes.delete(c), toggle: (c, f) => (f ?? !classes.has(c) ? classes.add(c) : classes.delete(c)) },
       addEventListener: (k, f) => { on[k] = f; },
+      setAttribute: () => {}, removeAttribute: () => {},
     });
   }
   return els.get(sel);
@@ -32,7 +33,7 @@ globalThis.fetch = async (url, init) => {
   if (u.pathname.endsWith('/patients')) {
     const q = u.searchParams.get('q') || '';
     return new Promise((resolve) => pending.push({ q, go: () => resolve(answer({
-      total: 1, categories: [], items: [{ id: q === 'old' ? 1 : 2, patient_id: `MO-${q}`, sex: 'F', encounters: 1, latest: null, latest_where: '', kinds: [], items: 0 }],
+      total: 1, categories: [], items: [{ id: q === 'old' ? 1 : 2, patient_id: '', pseudonym: `MO-${q}`, sex: 'F', encounters: 1, latest: null, latest_where: '', kinds: [], items: 0, sources: ['hosp'] }],
     })) }));
   }
   if (u.pathname.endsWith('/cohorts')) return answer({ items: [{ id: 5, name: 'c', members: 0, can_edit: true }] });

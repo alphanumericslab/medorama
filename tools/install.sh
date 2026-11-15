@@ -7,9 +7,11 @@
 #   tools/install.sh --rs            Python + Rust
 #   tools/install.sh --cpp           Python + C++
 # Other options:
-#   --demo         also make the demo: invented patients that `medorama init` loads into a cohort
-#                  DEMO, for trying Medorama (off by default; docs/administration.md, "The demo")
+#   --demo         also make the demo: invented patients' databases that `medorama init --demo` connects
+#                  (off by default; docs/administration.md, "The demo")
 #   --no-rustup    fail rather than install Rust if cargo is missing
+#   --accept-license  accept the license terms without being asked (scripts, CI; or
+#                  MEDORAMA_ACCEPT_LICENSE=yes); otherwise they are shown and must be accepted
 #
 # What it does:
 #   1. .venv/ with the Python packages, editable: the Python viewer vitalstream_py and the
@@ -26,7 +28,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
-RS=0 CPP=0 ANY=0 RUSTUP=1 DEMO=0
+RS=0 CPP=0 ANY=0 RUSTUP=1 DEMO=0 ACCEPT_LICENSE=0
 for a in "$@"; do
   case "$a" in
     --py) ANY=1 ;;
@@ -34,12 +36,17 @@ for a in "$@"; do
     --cpp) CPP=1 ANY=1 ;;
     --no-rustup) RUSTUP=0 ;;
     --demo) DEMO=1 ;;
-    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    --accept-license) ACCEPT_LICENSE=1 ;;
+    -h|--help) sed -n '2,/^# Afterwards/p' "$0"; exit 0 ;;
     *) echo "unknown option $a (see --help)"; exit 2 ;;
   esac
 done
 if [ "$ANY" = 0 ]; then RS=1 CPP=1; fi
 step() { printf '\n==> %s\n' "$*"; }
+
+# the license terms, accepted before anything is built (tools/license-accept.sh)
+. "$ROOT/tools/license-accept.sh"
+accept_license
 
 # macOS: Xcode installed but its license not accepted makes cc fail: use the Command Line Tools.
 if [ "$(uname)" = Darwin ] && [ -z "${DEVELOPER_DIR:-}" ] && [ -d /Library/Developer/CommandLineTools ] \
@@ -89,10 +96,10 @@ if [ "$RS" = 1 ]; then
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path
   fi
   need_compiler "${CC:-cc}"
-  step "Building the Rust workspace (medorama, vitalstream-rs)"
+  step "Building the Rust workspace (medorama, db-builder, vitalstream-rs)"
   cargo build --release --locked
-  for b in medorama vitalstream-rs; do ln -sf "$ROOT/target/release/$b" ".venv/bin/$b"; done
-  COMMANDS="$COMMANDS medorama vitalstream-rs"
+  for b in medorama db-builder vitalstream-rs; do ln -sf "$ROOT/target/release/$b" ".venv/bin/$b"; done
+  COMMANDS="$COMMANDS medorama db-builder vitalstream-rs"
 fi
 
 # --- C++ --------------------------------------------------------------------------------
@@ -121,7 +128,7 @@ if [ "$CPP" = 1 ]; then
   COMMANDS="$COMMANDS vitalstream-cpp"
 fi
 
-# --- the demo (--demo): invented patients, loaded by `medorama init` (docs/administration.md) --
+# --- the demo (--demo): invented patients' databases, connected by `medorama init --demo` ---------
 DEMO_DIR="$ROOT/.venv/share/medorama/demo"
 if [ "$DEMO" = 1 ]; then
   step "The demo: invented patients and their files, in .venv/share/medorama/demo"
@@ -131,11 +138,18 @@ if [ "$DEMO" = 1 ]; then
     wfdbx=$(sed -n 's/^ *"\(wfdb-x @ [^"]*\)",*$/\1/p' viewers/vitalstream/python/vitalstream/pyproject.toml)
     .venv/bin/pip install --quiet numpy "$wfdbx"
   fi
-  .venv/bin/python tools/make-demo-data.py "$DEMO_DIR" | tail -1
-  # `medorama init` loads the demo from the folder named here (next to the programs)
+  # the full demo (its parts: tools/README.md, "The demo's features"), and its db-builder
+  # databases built as a site would build them (the steps in its demo-databases.json); without
+  # db-builder, its files and tables alone
+  if [ -x .venv/bin/db-builder ]; then
+    .venv/bin/python tools/make-demo-data.py "$DEMO_DIR" --db-builder .venv/bin/db-builder | grep -v '^  '
+  else
+    .venv/bin/python tools/make-demo-data.py "$DEMO_DIR" | tail -1
+  fi
+  # `medorama init --demo` connects the demo's databases from the folder named here (next to the programs)
   echo "$DEMO_DIR" > .venv/bin/medorama.demo
 else
-  # without --demo, new catalogs start empty (a catalog that holds the demo keeps it)
+  # without --demo, `init --demo` has nothing to connect
   rm -f .venv/bin/medorama.demo
 fi
 
@@ -166,5 +180,5 @@ echo "Commands in .venv/bin: $COMMANDS"
 echo "Activate with:  source .venv/bin/activate"
 echo "Check with:     make test"
 if [ "$DEMO" = 1 ]; then
-  echo "Then:           medorama init --results DIR   (loads the demo: the cohort DEMO), medorama serve"
+  echo "Then:           medorama init --workspace DIR --demo   (connects the demo's databases), medorama serve"
 fi

@@ -11,12 +11,11 @@ use super::*;
 /// | `has` | `category` | they have data of that category (`icu`, `holter`, `ecg`, …) |
 /// | `encounter` | `from`, `to`, `text` (unit), `icu` | an encounter overlaps the dates, in a unit containing `text`, with (or without) an ICU stay |
 /// | `diagnosis` | `text` | a condition's code starts with `text` or its name contains it |
-/// | `measurement` | `name`, the value, `from`, `to`, `import` | a result or vital sign named like `name` (in that database) has the value, in the dates |
-/// | `column` | `import`, `name` (the column), the value or `text` | a row of that database, for the patient, has the value in that column (or text in it) |
+/// | `measurement` | `name`, the value, `from`, `to`, `database` | a result or vital sign named like `name` (in that database) has the value, in the dates |
 /// | `expression` | `text` | the criteria written as text (expr.rs) |
 /// | `medication` | `text`, `from`, `to` | a drug's name contains `text` |
 /// | `text` | `text` | any item's text contains `text` (notes only with the PHI permission) |
-/// | `database` | `import` | a database (an import) holds data about them |
+/// | `database` | `database` | that connected database links them |
 ///
 /// The value: `cmp` (`>`, `>=`, `<`, `<=`, `=`, `!=`) and `value` in `unit` (converted to the
 /// data's unit: ms and s, µV and mV …), or the range `min`–`max` (inclusive).  `latest`: only
@@ -25,7 +24,7 @@ use super::*;
 /// `from` and `to` written in Privacy Mode (`privacy_dates`) are dates as the session was shown
 /// them: each patient's times are moved back by their own offset before they are compared
 /// (search.rs `Offsets`), whoever evaluates the criterion.  They are stored moved forward by
-/// the catalog's offset, so that the gate shows them back as they were typed
+/// Medorama's offset, so that the gate shows them back as they were typed
 /// ([`Criteria::as_written_by`]).
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
@@ -49,8 +48,10 @@ pub struct Criterion {
     pub to: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icu: Option<bool>,
+    /// The connected database a criterion is asked of (`omop.lactate`); none: every one of the
+    /// search's scope.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub import: Option<i64>,
+    pub database: Option<i64>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub cmp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -62,8 +63,8 @@ pub struct Criterion {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub privacy_dates: bool,
     /// Of an `expression`: what its text meant when the criteria were saved (the names it uses
-    /// bound to their databases), evaluated as such; a later import that makes a name mean
-    /// something else does not change a saved cohort (the search says so).
+    /// bound to their databases), evaluated as such; a database connected later that makes a
+    /// name mean something else does not change a saved cohort (the search says so).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resolved: Option<Box<Expr>>,
 }
@@ -137,29 +138,29 @@ impl Criteria {
     /// The criteria as `user` wrote them, to search or store: how the session reads the data
     /// (`written_as`), criteria written as text bound to what their names mean now
     /// (`resolved`); in Privacy Mode, their dates are dates as shown (`privacy_dates`), stored
-    /// moved forward by the catalog's offset (whole days for a date alone, so that it shows
+    /// moved forward by Medorama's offset (whole days for a date alone, so that it shows
     /// back as typed).
-    pub fn as_written_by(&self, c: &Connection, user: &User) -> anyhow::Result<Criteria> {
+    pub fn as_written_by(&self, c: &Connection, cfg: &Config, user: &User) -> anyhow::Result<Criteria> {
         let mut q = self.clone();
         q.written_as = Some(Reader::of(user));
         // criteria written as text: bound to what their names mean now, unless sent bound
-        fn resolve(e: &mut Expr, c: &Connection, user: &User) -> anyhow::Result<()> {
+        fn resolve(e: &mut Expr, c: &Connection, cfg: &Config, user: &User) -> anyhow::Result<()> {
             match e {
                 // (as sent: a saved meaning kept; else what the text means now)
                 Expr::Leaf(k) if k.kind == "expression" && k.resolved.is_none() => {
-                    k.resolved = Some(Box::new(parse_text(c, user, &k.text)?));
+                    k.resolved = Some(Box::new(parse_text(c, cfg, user, &k.text)?));
                 }
                 Expr::Leaf(_) => {}
                 Expr::Group(g) => {
                     for x in g.of.iter_mut() {
-                        resolve(x, c, user)?;
+                        resolve(x, c, cfg, user)?;
                     }
                 }
             }
             Ok(())
         }
         for e in q.include.iter_mut().chain(q.exclude.iter_mut()) {
-            resolve(e, c, user)?;
+            resolve(e, c, cfg, user)?;
         }
         if !user.privacy {
             return Ok(q);
@@ -196,7 +197,7 @@ impl Criteria {
     pub fn check_reader(&self, user: &User) -> anyhow::Result<()> {
         let Some(w) = self.written_as else { return Ok(()) };
         let now = Reader::of(user);
-        let depends = self.leaves().iter().any(|k| matches!(k.kind.as_str(), "text" | "age" | "column" | "expression"));
+        let depends = self.leaves().iter().any(|k| matches!(k.kind.as_str(), "text" | "age" | "expression"));
         if depends && w != now {
             anyhow::bail!(
                 "these criteria were written {}; read {} they would select by other values (notes' text, ages, \

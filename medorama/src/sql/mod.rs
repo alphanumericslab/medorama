@@ -905,8 +905,18 @@ impl Connection {
     /// A transaction begun through a shared reference (rusqlite's name): the caller makes sure
     /// none is open already.
     pub fn unchecked_transaction(&self) -> Result<Transaction<'_>> {
+        self.unchecked_transaction_with_behavior(TransactionBehavior::Deferred)
+    }
+
+    /// [`Self::unchecked_transaction`] with the behaviour of [`Self::transaction_with_behavior`]:
+    /// `Immediate` for a transaction that reads, decides and writes (SQLite would otherwise
+    /// refuse the write of the second of two such transactions, after waiting).
+    pub fn unchecked_transaction_with_behavior(&self, b: TransactionBehavior) -> Result<Transaction<'_>> {
         match &self.b {
-            Backend::Sqlite(c) => c.execute_batch("BEGIN DEFERRED")?,
+            Backend::Sqlite(c) => c.execute_batch(match b {
+                TransactionBehavior::Deferred => "BEGIN DEFERRED",
+                TransactionBehavior::Immediate => "BEGIN IMMEDIATE",
+            })?,
             Backend::Postgres(c) => {
                 c.batch("BEGIN")?;
                 c.in_transaction.set(true);

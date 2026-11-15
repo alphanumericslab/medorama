@@ -1,5 +1,6 @@
 //! Contract tests of the gateway with a real viewer behind it (docs/architecture.md, "The
-//! gateway"): the catalog starts the viewer, passes allowed requests on and refuses the rest.
+//! gateway"): Medorama starts the viewer, passes allowed requests on and refuses the rest: a
+//! non-admin opens only the recordings of the databases granted to them.
 //!
 //! The viewer: `$MEDORAMA_TEST_VIEWER`, else the first built of `target/release/vitalstream-rs`,
 //! `viewers/vitalstream/cpp/build/viewer/bin/vitalstream-cpp` and
@@ -9,13 +10,17 @@
 mod common;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use common::opts;
-use common::{bed_name, wfdb_record, T0};
+use common::{wfdb_record, Dbb, T0};
 use http_body_util::BodyExt;
 use medorama::db::Db;
-use medorama::recordings;
 use medorama::server;
-use medorama::users::{self, Role, User};
+use medorama::users::{self, Role};
+
+/// A bedside-monitor recording's folder name, UNIT_BED-<time> (built here: such names are kept
+/// out of the sources).
+fn bed_name(unit: &str, bed: &str, t: i64) -> String {
+    format!("{unit}_{bed}-{t}")
+}
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -93,33 +98,44 @@ async fn viewer_behind_the_gateway() {
     let tmp = tempfile::tempdir().unwrap();
     let root = medorama::config::real(tmp.path());
     let data = root.join("data");
-    let in_catalog = data.join("ward").join(bed_name("ICU7", "12", T0));
-    let not_in_catalog = data.join("other").join(bed_name("ICU8", "1", T0));
+    let listed = data.join("ward").join(bed_name("ICU7", "12", T0));
+    let not_listed = data.join("other").join(bed_name("ICU8", "1", T0));
     let outside = root.join("elsewhere").join(bed_name("ICU9", "2", T0));
-    wfdb_record(&in_catalog, 0);
-    wfdb_record(&not_in_catalog, 0);
+    wfdb_record(&listed, 0);
+    wfdb_record(&not_listed, 0);
     wfdb_record(&outside, 0);
 
-    let mut cfg = common::config(&root.join("home"), &root.join("results"));
+    let mut cfg = common::config(&root.join("home"), &root.join("ws"));
     cfg.timezone = "UTC".into();
     cfg.data_roots = vec![data.to_string_lossy().to_string()];
     cfg.viewer = viewer.to_string_lossy().to_string();
     let db = Db::open(&cfg, true).unwrap();
     {
-        let mut c = db.get().unwrap();
+        let c = db.get().unwrap();
         users::add(&c, "boss", "", Role::Admin, true, "0123456789ab").unwrap();
         // a non-admin with the PHI permission (Privacy Mode off, below), and one without it
         users::add(&c, "vic", "", Role::Viewer, true, "0123456789ab").unwrap();
         users::add(&c, "pat", "", Role::Viewer, false, "0123456789ab").unwrap();
-        recordings::import(
-            &mut c,
-            &cfg,
-            &User::local(),
-            &[in_catalog.to_string_lossy().to_string()],
-            false,
-            &opts("test"),
-        )
-        .unwrap();
+        // a recording database listing one of the two recordings, granted to both
+        let d = Dbb::new(&data.join("ward.sqlite"));
+        d.person("p1", "W1", "WARD", "", "", "", "", "", "F").recording(
+            "r1",
+            "p1",
+            &listed.strip_prefix(&data).unwrap().to_string_lossy(),
+            "icu",
+        );
+        let boss = users::get_by_name(&c, "boss").unwrap().unwrap();
+        let n = medorama::sources::NewSource {
+            name: "ward".into(),
+            kind: "dbb".into(),
+            url: d.url(),
+            ..Default::default()
+        };
+        let id = medorama::databases::connect(&cfg, &c, &boss, &n, "").unwrap();
+        for u in ["vic", "pat"] {
+            let u = users::get_by_name(&c, u).unwrap().unwrap();
+            medorama::grants::grant(&c, &boss, u.id, &format!("db:{id}"), "phi").unwrap();
+        }
     }
     let app = Arc::new(server::App::new(Arc::new(cfg.clone()), Arc::new(db)));
     let router = server::router(app.clone());
@@ -131,7 +147,7 @@ async fn viewer_behind_the_gateway() {
     let pat = call(&router, "POST", "/api/v1/login", None, Some(login("pat"))).await.cookie.unwrap();
     let boss = call(&router, "POST", "/api/v1/login", None, Some(login("boss"))).await.cookie.unwrap();
 
-    // signed out: the page sends to the catalog's sign-in, the API refuses
+    // signed out: the page sends to the sign-in, the API refuses
     let r = call(&router, "GET", "/viewer/", None, None).await;
     assert_eq!((r.status, r.location.as_deref()), (StatusCode::SEE_OTHER, Some("../")));
     assert_eq!(call(&router, "GET", "/viewer/api/v1/config", None, None).await.status, StatusCode::UNAUTHORIZED);
@@ -146,15 +162,15 @@ async fn viewer_behind_the_gateway() {
     assert!(call(&router, "GET", "/api/v1/viewer", Some(&vic), None).await.json["running"].as_bool().unwrap());
     assert_eq!(call(&router, "GET", "/viewer/static/style.css", Some(&vic), None).await.status, StatusCode::OK);
 
-    // a non-admin's Open dialog shows only the catalog's recordings
+    // a non-admin's Open dialog shows only the recordings of the databases granted to them
     let cfgv = call(&router, "GET", "/viewer/api/v1/config", Some(&vic), None).await.json;
-    assert_eq!(cfgv["places"][0]["path"], in_catalog.parent().unwrap().to_string_lossy().as_ref());
+    assert_eq!(cfgv["places"][0]["path"], listed.parent().unwrap().to_string_lossy().as_ref());
     let b =
         call(&router, "GET", &format!("/viewer/api/v1/browse?path={}", q(&data.to_string_lossy())), Some(&vic), None)
             .await;
     assert_eq!(b.status, StatusCode::OK, "{}", b.text);
     let names: Vec<&str> = b.json["entries"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect();
-    assert_eq!(names, ["ward"], "only the folder leading to a catalog recording");
+    assert_eq!(names, ["ward"], "only the folder leading to a recording of theirs");
     let other = data.join("other");
     assert_eq!(
         call(&router, "GET", &format!("/viewer/api/v1/browse?path={}", q(&other.to_string_lossy())), Some(&vic), None)
@@ -174,13 +190,13 @@ async fn viewer_behind_the_gateway() {
         comp.json["items"].as_array().unwrap().iter().map(|i| i["path"].as_str().unwrap().to_string()).collect();
     assert!(items.iter().all(|p| p.contains("ward")), "{items:?}");
 
-    // opening: catalog recordings only, for a non-admin
+    // opening: their databases' recordings only, for a non-admin
     let open = |p: &Path| serde_json::json!({"path": p.to_string_lossy()});
     assert_eq!(
-        call(&router, "POST", "/viewer/api/v1/open", Some(&vic), Some(open(&not_in_catalog))).await.status,
+        call(&router, "POST", "/viewer/api/v1/open", Some(&vic), Some(open(&not_listed))).await.status,
         StatusCode::FORBIDDEN
     );
-    let o = call(&router, "POST", "/viewer/api/v1/open", Some(&vic), Some(open(&in_catalog))).await;
+    let o = call(&router, "POST", "/viewer/api/v1/open", Some(&vic), Some(open(&listed))).await;
     assert_eq!(o.status, StatusCode::OK, "{}", o.text);
     let key = o.json["key"].as_str().unwrap().to_string();
     let mut described = serde_json::Value::Null;
@@ -192,10 +208,17 @@ async fn viewer_behind_the_gateway() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     assert_eq!(described["state"], "ready", "{described:?}");
-    // the same index the catalog would use (docs/index-format.md; not the Python viewer)
-    if !viewer.to_string_lossy().contains("vitalstream-py") {
-        assert_eq!(key, recording_engine::index::cache_key(&in_catalog));
-        assert!(cfg.index_dir.join(&key).join("meta.json").is_file());
+    // the key Medorama would use (index format 3), and the index in the viewer's own store,
+    // encrypted with the key Medorama gave it on its standard input
+    assert_eq!(key, recording_engine::index::cache_key_of(&listed, recording_engine::store::STORE_FORMAT));
+    {
+        let c = app.db.get().unwrap();
+        let (own, k) = medorama::workspace::viewer_store(&cfg, &c).unwrap();
+        let hex = medorama::workspace::key_hex(&k);
+        let raw: Vec<u8> = (0..32).map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap()).collect();
+        let store = recording_engine::store::Store::open(&own, Some(&raw.try_into().unwrap())).unwrap();
+        assert!(store.keys().contains(&key));
+        assert!(recording_engine::store::Store::open(&own, None).is_err());
     }
     let w = call(
         &router,
@@ -225,11 +248,11 @@ async fn viewer_behind_the_gateway() {
             .await;
     assert_eq!(b.status, StatusCode::FORBIDDEN);
     assert_eq!(
-        call(&router, "POST", "/viewer/api/v1/open", Some(&pat), Some(open(&in_catalog))).await.status,
+        call(&router, "POST", "/viewer/api/v1/open", Some(&pat), Some(open(&listed))).await.status,
         StatusCode::FORBIDDEN,
         "a path, in Privacy Mode"
     );
-    let rec: i64 = app.db.get().unwrap().query_row("SELECT id FROM recordings", [], |r| r.get(0)).unwrap();
+    let rec = medorama::recordings::all(&cfg, &app.db.get().unwrap()).unwrap()[0].id;
     let o = call(
         &router,
         "POST",
@@ -250,7 +273,7 @@ async fn viewer_behind_the_gateway() {
     }
     let ds = &d["dataset"];
     assert_eq!(ds["path"], format!("mo-rec:{rec}"));
-    assert!(!d.to_string().contains(&in_catalog.to_string_lossy().to_string()), "{d}");
+    assert!(!d.to_string().contains(&listed.to_string_lossy().to_string()), "{d}");
     let shown_t0 = ds["t_range"][0].as_f64().unwrap();
     assert!(shown_t0 < T0 as f64 - 3.0e9, "moved back: {shown_t0}");
     let w = call(
@@ -267,10 +290,31 @@ async fn viewer_behind_the_gateway() {
         "the samples, at the moved times: {}",
         w.text
     );
+    // every block's start lies in the window asked for, in shown times (the patient's own offset,
+    // not the base offset alone)
+    fn starts(v: &serde_json::Value, out: &mut Vec<f64>) {
+        match v {
+            serde_json::Value::Object(m) => {
+                if let Some(t) = m.get("t0").and_then(|t| t.as_f64()) {
+                    out.push(t);
+                }
+                m.values().for_each(|x| starts(x, out));
+            }
+            serde_json::Value::Array(a) => a.iter().for_each(|x| starts(x, out)),
+            _ => {}
+        }
+    }
+    let mut t0s = vec![];
+    starts(&serde_json::from_str(&w.text).unwrap(), &mut t0s);
+    assert!(!t0s.is_empty(), "{}", w.text);
+    assert!(
+        t0s.iter().all(|t| *t >= shown_t0 - 60.0 && *t <= shown_t0 + 70.0),
+        "blocks at {t0s:?}, the window asked from {shown_t0}"
+    );
 
     // admins: anything inside data_roots, nothing outside
     assert_eq!(
-        call(&router, "POST", "/viewer/api/v1/open", Some(&boss), Some(open(&not_in_catalog))).await.status,
+        call(&router, "POST", "/viewer/api/v1/open", Some(&boss), Some(open(&not_listed))).await.status,
         StatusCode::OK
     );
     assert_eq!(
@@ -294,7 +338,7 @@ async fn viewer_behind_the_gateway() {
         .header("Cookie", &vic)
         .header("X-Medorama", "1")
         .header("Content-Type", "text/plain")
-        .body(Body::from(open(&in_catalog).to_string()))
+        .body(Body::from(open(&listed).to_string()))
         .unwrap();
     assert_eq!(router.clone().oneshot(plain).await.unwrap().status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
     // a change through the gateway carries X-Medorama, as every changing API request does
@@ -303,11 +347,11 @@ async fn viewer_behind_the_gateway() {
         .uri("/viewer/api/v1/open")
         .header("Cookie", &vic)
         .header("Content-Type", "application/json")
-        .body(Body::from(open(&in_catalog).to_string()))
+        .body(Body::from(open(&listed).to_string()))
         .unwrap();
     assert_eq!(router.clone().oneshot(bare).await.unwrap().status(), StatusCode::FORBIDDEN);
 
-    // framing by the catalog only
+    // framing by Medorama only
     let r = router
         .clone()
         .oneshot(Request::builder().uri("/viewer/").header("Cookie", &vic).body(Body::empty()).unwrap())
@@ -320,7 +364,7 @@ async fn viewer_behind_the_gateway() {
         app.db.get().unwrap().query_row("SELECT COUNT(*) FROM audit WHERE event = 'view'", [], |r| r.get(0)).unwrap();
     assert_eq!(views, 3);
 
-    // the viewer stops with the catalog
+    // the viewer stops with Medorama
     app.viewer.stop();
     assert!(!app.viewer.status().running);
 }

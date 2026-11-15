@@ -10,8 +10,8 @@ sample_data/
 ├── README.md          (the only tracked file)
 ├── <recordings>       put recordings here (any sub-folders)
 └── outputs/
-    └── index/         the viewers' shared index folder, when they run from this clone
-                       (safe to delete: rebuilt on demand)
+    └── index/         the viewers' shared cache folder, when they run from this clone:
+                       their index store, index.sqlite (safe to delete: rebuilt on demand)
 ```
 
 Who uses it:

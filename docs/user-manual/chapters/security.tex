@@ -4,7 +4,8 @@
 % web application security, untrusted input, audit logging, background jobs and plug-ins, supply
 % chain, regulatory mapping, the deployment checklist, limitations, verification.
 % The code is the authority (medorama/src/server.rs, signin.rs, users.rs, gate.rs, deid.rs,
-% dicom.rs, pseudonyms.rs, gateway.rs, audit.rs, actions.rs, db.rs, sql/pg.rs, config.rs).
+% dicom.rs, pseudonyms.rs, gateway.rs, audit.rs, actions.rs, db.rs, sql/pg.rs, config.rs,
+% grants.rs, workspace.rs, persons.rs, databases.rs, sources/).
 \chapter{Security and privacy review}
 \label{chap:security}
 
@@ -15,7 +16,7 @@ institution. Each control names the code that implements it and the test that ch
 every claim can be verified rather than taken on trust. It follows the repository's
 \file{docs/security.md}.
 
-The chapter describes Medorama \mdversion{} (unreleased). Medorama is research software, not a
+The chapter describes Medorama \mdversion{} (a pre-release). Medorama is research software, not a
 medical device, and it holds no certification. To report a vulnerability, follow the
 repository's \file{SECURITY.md}. The system's parts are described in \cref{chap:architecture}, a
 plain-language explanation of how identifiers are hidden is \cref{chap:protecting}, and sign-in
@@ -25,8 +26,9 @@ is described in \cref{chap:sign-in}.
 \label{sec:security-summary}
 
 Medorama is a single server program, written in Rust, that an institution runs on its own hosts.
-It serves a web page and three viewers to the institution's users, and reads patient data from
-imported tables, files and connected databases. It sends nothing to any third party: no
+It serves a web page and three viewers to the institution's users, and reads patient data only
+from the databases an administrator connects (and the recording files they name), in place and
+read-only: it imports nothing. It sends nothing to any third party: no
 telemetry, no external services, and no scripts or fonts from other sites.
 \begin{itemize}
 \item \textbf{One way in.} Every request passes Medorama's sign-in. Users sign in either with
@@ -34,9 +36,15 @@ telemetry, no external services, and no scripts or fonts from other sites.
   through the institution's authenticating reverse proxy, which brings single sign-on and
   multi-factor authentication. The sign-in method is one module (\file{signin.rs}); roles and
   permissions are decided in Medorama, on the server, for every request.
-\item \textbf{Identifiers in one place.} Names, medical record numbers, dates of birth, account
-  numbers and imported IDs are kept only in the catalog database, in their own tables. The
-  viewers, indexes, results and plug-ins receive pseudonyms only.
+\item \textbf{Grants per database.} A user sees, searches and opens only the databases and
+  cohorts granted to them (\code{search}, \code{view}, \code{phi}, \code{manage}); being an
+  administrator grants no database. Identifiers need both the PHI permission and the \code{phi}
+  grant on their database.
+\item \textbf{No identifier in Medorama's own database.} The control store holds patients as
+  numbers and pseudonyms, and each (issuer, identifier) pair only as a keyed hash. What Medorama
+  keeps of each database's persons is in its workspace, encrypted with that database's own data
+  key, which is wrapped by a master key kept outside it. Removing a database destroys its key
+  first. The viewers, indexes, results and plug-ins receive pseudonyms only.
 \item \textbf{Privacy Mode by default.} Users without the PHI permission are always in Privacy
   Mode, and users with it start in Privacy Mode unless they are administrators. In Privacy Mode,
   the privacy gate de-identifies every answer as it is sent: identifiers become placeholders and
@@ -48,8 +56,8 @@ telemetry, no external services, and no scripts or fonts from other sites.
   session through the gate and refuses any other answer that the gate did not clear, so a new
   endpoint that forgets the gate cannot leak identifiers. An end-to-end test seeds identifiers in
   every format and checks that no byte of any answer, file or export contains them.
-\item \textbf{Read-only sources, sealed audit log.} Data folders and connected databases are only
-  read. Sign-ins, identifier searches and views, exports and administrative changes are written to
+\item \textbf{Read-only sources, sealed audit log.} Connected databases and recording files are
+  only read. Sign-ins, identifier searches and views, exports and administrative changes are written to
   an audit log that is sealed every minute with a hash chain and can be copied to storage out of
   the database administrators' reach.
 \item \textbf{Conservative network posture.} Medorama listens on 127.0.0.1 by default and relies
@@ -72,21 +80,25 @@ every database, and opens recordings and images in its own viewers.
 \begin{itemize}
 \item \textbf{Research use.} Medorama is research software. It is not a medical device, is not
   cleared for diagnosis or treatment, and must not be used to make clinical decisions.
-\item \textbf{One institution.} It runs on hosts that the institution controls: one server with a
-  SQLite catalog, or several servers sharing a PostgreSQL catalog. It serves that institution's
-  users through a browser. It is not a multi-tenant cloud service.
-\item \textbf{Data enter as databases.} An administrator imports tables (CSV, Excel, Parquet)
-  exported from the institution's systems. Files (recordings, ECGs, DICOM studies, documents)
-  enter only as rows of such tables, which name their patient; they are read where they lie and
-  never written (\cref{chap:importing}).
-\item \textbf{Or they are read in place.} An administrator may connect databases (an OMOP CDM
-  instance, a warehouse), which Medorama reads read-only at each request through views of fixed
-  columns (\cref{chap:connecting}). Only the identifiers of their persons are copied, when the
-  persons are linked to patients.
+\item \textbf{One institution.} It runs on a host that the institution controls: one server, its
+  control store in SQLite or PostgreSQL. It serves that institution's users through a browser. It
+  is not a multi-tenant cloud service.
+\item \textbf{Data are connected, not imported.} An administrator connects databases (an OMOP CDM
+  instance, a warehouse read through SQL views, a SQLite database made by db-builder), which
+  Medorama reads read-only at each request through views of fixed columns
+  (\cref{chap:connecting}). Files (recordings, ECGs, DICOM studies, documents) reach Medorama only
+  as rows of a recording database, which name their patient; they are read where they lie and
+  never written (\cref{chap:recordings}). Tables and folders are turned into such a database by
+  db-builder, a separate tool (\cref{chap:importing}).
+\item \textbf{What Medorama keeps} of a database (its persons as linked, its variables, its
+  recordings' list, actions' results) is in its workspace, encrypted
+  (\cref{sec:protecting-workspace}).
 \end{itemize}
 What Medorama does \textbf{not} provide, and a deployment must: TLS termination, the identity
-provider for single sign-on or multi-factor authentication, host hardening, backups and their
-encryption, network policy, and a retention policy (\cref{sec:security-checklist}).
+provider for single sign-on or multi-factor authentication, host hardening, the master key's
+keeping, backups and their encryption, network policy, a retention policy, and the connected
+databases' own identity, encryption and backups
+(\cref{sec:security-checklist,sec:connecting-requirements}).
 
 \section{Architecture and trust boundaries}
 \label{sec:security-boundaries}
@@ -117,17 +129,21 @@ Authenticating proxy (optional) & The institution's sign-in in front of Medorama
   (\code{sign\_in = "proxy"}) & \textbf{Trusted to name the user}, on connections from
   \code{proxy\_addresses} only (\cref{sec:security-proxy}). \\
 Server host & The \cmd{medorama} process; its VitalStream viewer (a child process on a private
-  loopback port); plug-in actions (child processes); the catalog database; the index and results
-  folders & \textbf{Trusted.} One operating-system account, the catalog's owner, runs
-  everything. \\
-Data sources & Exported tables, recordings, ECGs, DICOM studies, documents & Read only, inside
-  the configured \code{data\_roots}. \\
-Database server (optional) & The catalog in PostgreSQL, when \code{database\_url} is set &
-  \textbf{Trusted like the host}: it holds every identifier. It is reached over TLS with a
-  verified certificate, by an account with rights on that database only. \\
-Connected databases (optional) & OMOP instances, warehouses & \textbf{Read only, enforced}
-  (read-only sessions, read-only SQLite files). What they return is data, never instructions:
-  only the canonical columns are read. \\
+  loopback port); plug-in actions (child processes); the control store when it is SQLite; the
+  workspace, with the index stores; the master key file, when one is used & \textbf{Trusted.} One
+  operating-system account, Medorama's, runs everything. \\
+Key manager (optional) & The keyring, Vault or key service that \code{master\_key\_command} asks
+  for the master key & \textbf{Trusted} with the master key \\
+Recording files & Recordings, ECGs, DICOM studies, documents that recording databases name & Read
+  only, inside the configured \code{data\_roots}. \\
+Database server (optional) & The control store in PostgreSQL, when \code{database\_url} is set &
+  \textbf{Trusted like the host}: it holds the wrapped keys, the keyed hashes of identifiers and
+  the audit log. It is reached over TLS with a verified certificate, by an account with rights on
+  that database only. \\
+Connected databases & OMOP instances, warehouses, db-builder SQLite files & \textbf{Read only,
+  enforced} (read-only sessions, \code{query\_only} SQLite connections). What they return is data,
+  never instructions: only the canonical columns are read. Their identity, encryption and backups
+  are their owners'. \\
 \end{xltabular}
 
 Every HTTP request passes the same layers before and after its handler (\file{server.rs},
@@ -138,11 +154,11 @@ Every HTTP request passes the same layers before and after its handler (\file{se
 \item \textbf{the privacy layer} (\code{privacy}) identifies the user once per request through
   \code{signin::identify}, decides whether the session is in Privacy Mode, and on the way out
   applies the privacy gate to every answer of such a session (\cref{sec:security-privacy});
-\item \textbf{the handler} receives the user as \code{Auth(User)} and checks the role and the PHI
-  permission it needs.
+\item \textbf{the handler} receives the user as \code{Auth(User)} and checks the role, the PHI
+  permission and the grants it needs.
 \end{enumerate}
-The deployment topologies (one server, several servers on PostgreSQL, behind a TLS proxy or an
-institution's sign-in, viewers alone) are described in \cref{sec:architecture-topologies}. Every
+The deployment topologies (one server, behind a TLS proxy or an institution's sign-in, viewers
+alone) are described in \cref{sec:architecture-topologies}. Every
 setting and endpoint is specified in \cref{chap:settings-reference} and \cref{chap:http-api}.
 
 \section{Assets and data classification}
@@ -161,35 +177,45 @@ setting and endpoint is specified in \cref{chap:settings-reference} and \cref{ch
 \endhead
 \bottomrule
 \endfoot
-Direct identifiers: names, MRNs, dates of birth, account numbers (CSN), imported patient and
-  encounter IDs & \textbf{PHI} & The catalog's identifier tables (\code{patient\_identifiers},
-  \code{patient\_mrns}, \code{encounter\_identifiers}) and the rows of imported databases
-  (\code{import\_rows}) \\
-Clinical data: results, vital signs, medications, conditions, notes, with their real dates &
-  \textbf{PHI} (dates and free text identify; HIPAA counts them) & The catalog
-  (\code{ehr\_items}, \code{import\_rows}) \\
+Patients' data: identifiers, clinical data, notes, with their real dates & \textbf{PHI} & The
+  connected databases, read in place; their owners' to protect \\
+What Medorama keeps of each database's persons: their identifiers, names, birth dates and sex &
+  \textbf{PHI} & The database's \file{persons.sqlite} in the workspace, encrypted with its data
+  key \\
+Other workspace files: variables, recordings' list, actions' results, cohorts' members &
+  Sensitive (dated, linkable; paths may identify) & The workspace, each file encrypted with its
+  owner's data key \\
 Files: recordings, ECGs, DICOM studies, PDFs, pictures, videos & \textbf{PHI} (headers, file
-  names, burned-in text) & The data sources (read only) \\
-Derived data: recording indexes, derived series, plug-ins' results & Sensitive (dated,
-  linkable) & The index and results folders \\
+  names, burned-in text) & Where the recording databases name them (read only) \\
+Derived data: recording indexes & Sensitive (dated, linkable) & Each database's index store in
+  the workspace (\file{db-NNNN/index.sqlite}), encrypted with its data key; the viewer's own
+  store (\file{viewer/index.sqlite}), with a key of its own \\
+Derived data: plug-ins' output folders & Sensitive (dated, linkable) & The workspace
+  (\file{db-NNNN/results/<action>/}); \textbf{not encrypted} by Medorama \\
+Patient links: a keyed hash (HMAC) of each (issuer, identifier) pair, and the patient number it
+  leads to & Pseudonymous; no pair can be read back & The control store (\code{patient\_keys}) \\
 Pseudonyms (\code{MO-XXXX-XXXX}, \code{MO-E-XXXX-XXXX}) & Pseudonymous; the link to identity
-  exists only in the catalog & The catalog \\
-Credentials: password hashes, session token hashes & Secret & The catalog (\code{users},
+  exists only through the encrypted persons files & The control store (\code{patients},
+  \code{visit\_pseudonyms}) \\
+Data keys & Secret & Only wrapped by the master key, in the control store (\code{keys}) \\
+The master key & Secret: with the control store, it opens the whole workspace &
+  \code{MEDORAMA\_MASTER\_KEY}, the key manager behind \code{master\_key\_command}, or
+  \code{master\_key\_file} (mode 0600, outside the workspace) \\
+Credentials: password hashes, session token hashes & Secret & The control store (\code{users},
   \code{sessions}) \\
-Database passwords: the PostgreSQL catalog's, each connected database's & Secret & Files
-  readable by the catalog's account (\code{database\_password\_file}, a connection's
-  \code{password\_file}) or the environment; never in the database, a settings file, a URL or
-  the audit log \\
-Connected persons: each connected database's own key for a linked person & \textbf{PHI} (a
-  source's key may identify) & \code{source\_persons}; never sent: persons leave as pseudonyms,
-  entries as tokens \\
-Secrets: the catalog's secret (it keys the replacement of DICOM UIDs and the tokens of connected
-  entries); the internal viewer's password file and signing key; the database key (encrypted
-  builds) & Secret & The database (\code{settings}), \file{<home>/viewer/auth.json} (mode 0600),
-  the environment or a key file \\
-The audit log: who signed in, imported, searched identifiers, viewed, exported & Sensitive
-  (searches may name patients) & The catalog (\code{audit}, \code{audit\_seals}), and optionally
-  \code{audit\_export} \\
+Database passwords: the PostgreSQL control store's, each connected database's & Secret & A
+  connected database's password given to Medorama, sealed by the master key
+  (\code{password\_wrapped}); or files readable by Medorama's account
+  (\code{database\_password\_file}, a database's \code{password\_file}) or the environment; never
+  in plain text in the database, a settings file, a URL or the audit log \\
+Secrets: the gate's secret (it keys the patient links' hashes, the replacement of DICOM UIDs and
+  the tokens of entries); the internal viewer's password file and signing key; the control
+  store's key (SQLite) & Secret & The control store (\code{keys}, owner \code{gate}, wrapped by the
+  master key),
+  \file{<home>/viewer/auth.json} (mode 0600), the environment or a key file \\
+The audit log: who signed in, connected, granted, removed, searched identifiers, viewed, exported
+  & Sensitive (searches may name patients) & The control store (\code{audit},
+  \code{audit\_seals}), and optionally \code{audit\_export} \\
 \end{xltabular}
 
 \section{Threat model}
@@ -217,13 +243,17 @@ Network attacker & Reaches the server's port & Loopback by default; TLS at a rev
 Someone who can reach Medorama's port in proxy mode & Sends a forged user header & The header is
   believed only from \code{proxy\_addresses}; Medorama stays on 127.0.0.1 or behind a firewall
   (\cref{sec:security-proxy}) \\
+Signed-in user & Uses the databases and cohorts granted to them & Every request checked against
+  their grants; databases not granted are neither searched nor opened, and their keys are not
+  unwrapped for them \\
 Signed-in user without the PHI permission & Any role & Always in Privacy Mode: answers pass
   through the gate; identifier searches refused; files the gate cannot de-identify refused \\
-User with the PHI permission & Sees identifiers when they choose & Privacy Mode on by default
-  for non-administrators; switching it off is audited; identifier searches, views and exports are
-  audited \\
-Administrator & Manages users, imports and settings & Trusted by design; actions audited; the
-  audit log sealed and exportable \\
+User with the PHI permission & Sees identifiers when they choose, of the databases granted
+  \code{phi} & Privacy Mode on by default for non-administrators; switching it off is audited;
+  identifier searches, views and exports are audited \\
+Administrator & Manages users, settings and grants; connects databases & Trusted by design; not
+  granted databases by the role (a grant to oneself is audited, \code{grant\_self}); actions
+  audited; the audit log sealed and exportable \\
 Malicious or malformed file & In a data source & Parsers check every length; failures are
   errors, not crashes; active content sandboxed \\
 Malicious web content & A crafted SVG, PDF or note & A strict Content Security Policy, no inline
@@ -231,8 +261,9 @@ Malicious web content & A crafted SVG, PDF or note & A strict Content Security P
 Other users of the host & Local accounts & Owner-only database and secret files; the internal
   viewer requires a password only Medorama knows. In proxy mode, local accounts must be trusted
   (\cref{sec:security-limitations}) \\
-Lost or stolen storage & A disk, a backup & Optional database encryption (SQLCipher); full-disk
-  encryption and encrypted backups are the deployment's responsibility \\
+Lost or stolen storage & A disk, a backup & The workspace encrypted (SQLCipher) with data keys
+  wrapped by a master key kept apart; the control store optionally encrypted (SQLite); full-disk
+  encryption (for the plug-ins' output folders) and encrypted backups are the deployment's responsibility \\
 A connected database returning crafted data & Values meant to break parsing, the page or the
   gate & Only the canonical columns are read, as values; at most \code{max\_rows} rows per
   criterion, each query time-limited; everything shown is escaped and passes the gate \\
@@ -261,22 +292,23 @@ Spoofing & Guessing a password, stealing a session, forging the proxy's header &
   (use proxy mode where it is required). Proxy mode is as strong as the proxy and the network
   path to Medorama \\
 Tampering & Changing data through forged requests & Changing requests need \code{X-Medorama: 1}
-  (CSRF) and, in password mode, a \code{SameSite=Strict} cookie; roles checked on the server &
+  (CSRF) and, in password mode, a \code{SameSite=Strict} cookie; roles and grants checked on the
+  server; connected databases never written &
   An administrator can change anything, by design; audited \\
-Repudiation & Denying a search or an export & An audit log of sign-ins, imports, removals,
-  identifier searches and views, exports and Privacy Mode switches, sealed every minute with a
+Repudiation & Denying a search or an export & An audit log of sign-ins, connections, grants,
+  removals, identifier searches and views, exports and Privacy Mode switches, sealed every minute with a
   hash chain and exportable to a file out of the database's reach & Changing the database and
   the export file together \\
-Information disclosure & A user without the PHI permission reading identifiers & The privacy
-  gate on every answer, failing closed; identifier searches refused; pseudonyms not derivable
-  from identifiers & Pixels, PDFs, videos and free text may still show identity: they are marked,
+Information disclosure & A user without the PHI permission reading identifiers; a user reading a
+  database not granted to them; a stolen disk & The privacy gate on every answer, failing closed;
+  identifier searches refused; pseudonyms not derivable from identifiers; grants on every
+  request; the workspace encrypted & Plug-ins' output folders are not encrypted. Pixels, PDFs, videos and free text may still show identity: they are marked,
   not removed \\
-Denial of service & Huge uploads, expensive searches & Uploads capped at 1\,GiB; imports for
-  administrators only; a worker pool; time and row limits on connected databases & Not hardened
-  against hostile signed-in users \\
+Denial of service & Expensive searches & A worker pool; time and row limits on connected
+  databases; connecting for administrators only & Not hardened against hostile signed-in users \\
 Elevation of privilege & A viewer reaching outside its files; path traversal & File access only
   through an item's own files inside \code{data\_roots}; the gateway's allow-list; \code{..}
-  refused & Plug-ins run with the catalog's rights (administrator-installed code is trusted) \\
+  refused & Plug-ins run with Medorama's rights (administrator-installed code is trusted) \\
 \end{xltabular}
 
 \section{Authentication}
@@ -373,8 +405,9 @@ one audit entry is written per visit; \code{proxy\_headers\_and\_addresses};
 \label{sec:security-other-access}
 
 \begin{itemize}
-\item \textbf{The command line} (\cmd{medorama \dots} on the host) acts as the catalog's owner.
-  Whoever can run it under the catalog's operating-system account can read the database directly
+\item \textbf{The command line} (\cmd{medorama \dots} on the host) acts as the owner of the
+  control store, with every grant (\code{local:<user>} in the audit log). Whoever can run it under
+  Medorama's operating-system account can read the control store and the master key directly
   anyway.
 \item \textbf{The internal VitalStream viewer} listens on 127.0.0.1 on a private port, with a
   password file (\file{<home>/viewer/auth.json}, mode 0600) whose signing key only Medorama knows.
@@ -403,12 +436,21 @@ through the proxy), password expiry, or group and role mapping from an identity 
 \endhead
 \bottomrule
 \endfoot
-\code{viewer} & Look at patients, encounters, recordings and databases; build and keep cohorts;
-  keep a history. \\
+\code{viewer} & Look at the patients and recordings of the databases granted to them; build and
+  keep cohorts; keep a history. \\
 \code{analyst} & Everything a viewer may do, and run actions (indexing, plug-ins). \\
-\code{admin} & Everything, including importing and removing databases, managing users and
-  settings, reviewing identities and reading the audit log. \\
+\code{admin} & Also connect databases, grant them (themselves included, audited), manage users
+  and settings, and read the audit log. \\
 \end{xltabular}
+
+\textbf{Grants} decide which databases and cohorts each user may use (\file{grants.rs};
+\cref{sec:users-privacy-grants}): on a database \code{search} < \code{view} < \code{phi} <
+\code{manage}, on a cohort \code{view} < \code{edit} < \code{manage}, each implying the weaker.
+The administrator who connects a database, and the user who makes a cohort, hold every
+permission on it; other administrators hold none until granted, and may grant themselves (audited
+\code{grant\_self}). The server unwraps a database's data key only for a request whose user holds
+a grant on it. Tested in \file{medorama/tests/databases.rs}
+(\code{grants\_decide\_what\_a\_user\_sees}).
 
 Separately from the role, the \textbf{PHI permission} decides whether a user may leave Privacy
 Mode, that is, see and search identifiers. An administrator sets it when creating the account or
@@ -419,9 +461,15 @@ later.
 \item \textbf{A session in Privacy Mode has no PHI permission.} The server replaces its user with
   a copy without the permission (\code{User::in\_privacy\_mode}), so any check that depends on
   the permission fails closed for that session.
-\item \textbf{Cohorts} are private to their owner unless shared, to read or to edit, with chosen
-  users; only the owner shares or deletes a cohort (\cref{chap:cohorts}).
-\item \textbf{Files} are served one item at a time (\code{patients/\{id\}/file/\{item\}}) and, by
+\item \textbf{Cohorts} are private to their owner unless granted, to view, edit or manage, to
+  chosen users; whoever manages a cohort shares or deletes it (\cref{sec:cohorts-sharing}).
+\item \textbf{Databases} not granted to a user are neither searched for them, nor shown on their
+  patient pages, nor opened in their viewers; a search names the databases it left out
+  (\code{a\_search\_names\_the\_databases\_it\_left\_out}).
+\item \textbf{Identifiers} of a database are shown only to a user with the PHI permission, outside
+  Privacy Mode, who holds the \code{phi} grant on it (\file{patient/identity.rs},
+  \file{patient/list.rs}).
+\item \textbf{Files} are served one item at a time, from the databases the user may view, (\code{patients/\{id\}/file/\{item\}}) and, by
   name, only the files that belong to that item (a WFDB record's signal files, an attached
   folder's files), inside \code{data\_roots}; never other files of the folders they lie in. Paths
   are compared with \code{data\_roots} by their real paths (symbolic links resolved); an attached
@@ -430,11 +478,12 @@ later.
 \item \textbf{The PHI permission} is given (to a new account or an existing one, the
   administrator's own included) only by an administrator who has it.
 \item \textbf{The VitalStream gateway} passes only the listed requests of the viewer's API, each
-  checked against the user's rights: default deny (\cref{sec:architecture-gateway}). It is tested
-  in \file{medorama/tests/gateway.rs}.
-\item \textbf{Not provided:} per-patient or per-study access lists. Every signed-in user may see
-  every patient in the catalog, as Privacy Mode and their permission allow. Separate catalogs
-  serve separate studies.
+  checked against the user's rights: default deny; a user who is not an administrator opens only
+  the recordings of databases granted to them for \code{view} (\cref{sec:architecture-gateway}).
+  It is tested in \file{medorama/tests/gateway.rs}.
+\item \textbf{Not provided:} per-patient access lists. Grants are per database and per cohort: a
+  user granted a database may see every patient of it, as Privacy Mode and their permission
+  allow.
 \end{itemize}
 
 \section{Privacy Mode and the privacy gate}
@@ -446,16 +495,16 @@ The design is explained in full, for every audience, in \cref{chap:protecting}, 
 \subsection{The rule}
 \label{sec:security-rule}
 
-\textbf{The catalog keeps every identifier as imported, and the server decides, at the moment of
-sending, what leaves. In Privacy Mode, no identifier reaches the browser.} The page never
+\textbf{Identifiers stay in the connected databases and in Medorama's encrypted workspace, and
+the server decides, at the moment of sending, what leaves. In Privacy Mode, no identifier reaches
+the browser.} The page never
 receives what it must not show and does no masking of its own. Users without the PHI permission
 are always in Privacy Mode; users with it start in Privacy Mode and may leave it, except
 administrators, who start outside it and may switch it on (\cref{tab:protecting-who}). The switch
 calls \code{POST privacy}, which is audited (\code{privacy\_on}, \code{privacy\_off}). The choice
 is the session's and is kept by the server, never by the browser: in password mode in the
 session's row, until the session ends; in proxy mode for the user's visit (until an idle time
-passes without a request, or \code{session\_hours}), in the memory of the server that was asked
-(with several servers, another one answers in the user's default mode). Every sign-in starts in
+passes without a request, or \code{session\_hours}), in the server's memory. Every sign-in starts in
 the user's default mode, so no cookie, left by an earlier user of the browser or made by hand, can
 take a session out of Privacy Mode. A user without the permission who asks to leave Privacy Mode
 is refused (HTTP 403).
@@ -478,19 +527,18 @@ is refused (HTTP 403).
 \endfoot
 Mode decision & Privacy Mode unless the user has the PHI permission and switched it off &
   \file{server.rs} \code{in\_privacy}, \code{session\_user} & \file{tests/privacy.rs} \\
-Identifier dictionary & Imported patient and encounter IDs become pseudonyms; MRNs and CSNs
-  placeholders; recordings' paths tokens and the folders they lie in \code{[Folder]}, in every
-  string of an answer (paths inside text too: an error that names a file). Rebuilt whenever an
-  identifier changes (triggers on every table it is built from move
-  \code{data\_version.identifiers}) & \file{gate.rs} \code{Dict}, \code{Restricted::json};
+Identifier dictionary & The databases' patient IDs become pseudonyms; MRNs placeholders;
+  recordings' paths tokens and the folders they lie in \code{[Folder]}, in every string of an
+  answer (paths inside text too: an error that names a file). Built from each database's persons
+  and recordings as kept in the workspace, and rebuilt whenever they change
+  (\code{data\_version.identifiers}) & \file{gate.rs} \code{Dict}, \code{Restricted::json};
   \file{server.rs} \code{restricted} & \file{gate.rs} unit tests; \file{tests/privacy.rs}
   (\code{the\_dictionary\_follows\_the\_identifiers}) \\
-Placeholders & Names, dates of birth, staff names, withheld and unrecognized columns become fixed
-  text & \file{gate.rs} \code{column\_placeholder}, \code{column\_mask}, \code{cell} &
+Placeholders & Names, dates of birth and staff names become fixed text & \file{gate.rs} &
   \file{tests/privacy.rs} \\
 Pseudonyms & Random, stored, with a check character; never derived from an identifier &
   \file{pseudonyms.rs} & \file{pseudonyms.rs} unit tests \\
-Dates and ages & Every date moved back by the catalog's offset and the patient's own days; ages
+Dates and ages & Every date moved back by the offset and the patient's own days; ages
   above 89 as \code{90+} & \file{deid.rs} \code{Settings}, \code{answer\_with},
   \code{shift\_text} & \file{deid.rs} unit tests; \file{tests/privacy.rs} (no JSON number is a
   real time) \\
@@ -507,8 +555,8 @@ EDF+ annotations in VitalStream & Treated like notes: \code{[Annotation]} when n
   withheld, otherwise the patient's names and date of birth replaced & \file{gateway.rs}
   \code{gate\_annotations} & \file{gateway.rs} unit test \\
 Searches & Searches of identifiers refused; patients found by pseudonym; every search, filter
-  and sort uses only what the session is shown & \file{search.rs}, \file{query.rs},
-  \file{patient/list.rs} & \file{tests/privacy.rs}; \file{tests/privacy\_search.rs} \\
+  and sort uses only what the session is shown & \file{search.rs}, \file{patient/list.rs},
+  \file{cohorts/} & \file{tests/privacy.rs} \\
 Files & De-identified by kind, passed with a warning, or refused (\cref{sec:security-files}) &
   \file{gate.rs} \code{file\_kind}; \file{server.rs} \code{attachment\_response} &
   \file{tests/privacy.rs}; \file{tests/dicom\_samples.rs} \\
@@ -518,20 +566,23 @@ Every route & Every GET route of the API, and the POST routes that answer with d
   Privacy Mode; a new GET route fails the test until it has a case & & \file{tests/privacy.rs}
   (\code{every\_route\_in\_privacy\_mode}) \\
 Exports and plug-ins & Exports pass the same gate; plug-ins get pseudonyms only &
-  \file{cohorts/export.rs}, \file{databases.rs}; \file{jobs.rs} & \file{tests/privacy.rs} \\
-Connected databases & Only canonical columns, each with a privacy class; persons as pseudonyms;
-  entries as keyed tokens & \file{sources/}, \file{patient/items.rs} \code{live\_items} &
-  \file{tests/connections.rs} \\
+  \file{cohorts/export.rs}; \file{actions.rs}, \file{jobs.rs} & \file{tests/privacy.rs} \\
+Connected databases & Read-only sessions; only canonical columns; persons linked by exact (issuer,
+  identifier) pairs, kept as keyed hashes; persons as pseudonyms; entries as keyed tokens &
+  \file{sources/}, \file{persons.rs}, \file{patient/items.rs} & \file{tests/databases.rs},
+  \file{tests/privacy.rs} \\
+Grants & Each database and cohort used only by users granted it; keys unwrapped only for them &
+  \file{grants.rs} & \file{tests/databases.rs} \\
 Fail closed & The last layer gates every JSON answer and refuses any other uncleared answer &
   \file{server.rs} \code{privacy} & \file{tests/privacy.rs} \\
 \end{xltabular}
 
-Administrators choose what Privacy Mode withholds, the catalog's date offset and the spread of
+Administrators choose what Privacy Mode withholds, the date offset and the spread of
 per-patient days in \ui{Admin} $\rightarrow$ \ui{Privacy Mode}, and each change is audited
-(\code{deid\_settings}). The defaults follow the Safe Harbor identifiers that the catalog holds,
+(\code{deid\_settings}). The defaults follow the Safe Harbor identifiers that the databases hold,
 except the text of notes, which is shown with protections and a warning unless the administrator
-withholds it. Pseudonyms, file tokens, staff placeholders, the withholding of unrecognized columns
-and the refusal of unknown files always apply.
+withholds it. Pseudonyms, file tokens, staff placeholders and the refusal of unknown files always
+apply.
 
 \subsection{The gate's file rules}
 \label{sec:security-files}
@@ -567,7 +618,7 @@ GE MUSE XML & Demographics removed except age and sex (their tags found with att
 DICOM & Header rewritten with the actions of PS3.15 Table E.1-1 (the Basic Application Level
   Confidentiality Profile) for the attributes \file{dicom.rs} lists, with Retain Longitudinal
   Temporal Information with Modified Dates; the free text left (and, in implicit-VR files, text
-  of unknown VR) without the patient's names, date of birth and the catalog's identifiers; pixel
+  of unknown VR) without the patient's names, date of birth and the identifiers Medorama knows; pixel
   data copied byte for byte; marked as possibly identifying. Not a certified implementation of
   the profile (\cref{sec:protecting-dicom}). Deflated and big-endian files, and sequences nested
   more than 32 deep, refused \\
@@ -613,48 +664,65 @@ offset, and every other patient's to within \code{spread\_days}.
 \subsection{How it is verified}
 \label{sec:security-privacy-verified}
 
-\file{medorama/tests/privacy.rs} seeds a catalog with identifiers that cannot appear by chance (a
-name, an MRN, patient, encounter and account numbers, a date of birth, staff names, an
-institution, and real dates in the forms that tables, DICOM, MUSE, WFDB, EDF and EDF+ write them)
-in every format the catalog serves: tables, notes, a WFDB record, GE MUSE XML, DICOM, an EDF+
-file, a picture, a text file and an ICU recording. It requests every page's answers, every
-entry's detail, every file and its parts, and every cohort and database export, as a user without
+\file{medorama/tests/privacy.rs} seeds a connected database (as db-builder makes it) and its
+files with identifiers that cannot appear by chance (a name, an MRN, a patient ID, a visit key, a
+date of birth, staff names, an institution, and real dates in the forms that tables, DICOM, MUSE,
+WFDB, EDF and EDF+ write them) in every format Medorama serves: results, notes, a WFDB record, GE
+MUSE XML, DICOM, an EDF+ file, a picture, a text file and an ICU recording. It requests every
+page's answers, every entry's detail, every file and its parts, and every cohort export, as a user without
 the PHI permission and as an administrator in Privacy Mode. It asserts that \textbf{no byte of any
 answer holds any of them}, that no JSON number is a real time, that identifier searches are
 refused or find nobody, that placeholders and pseudonyms appear, that unknown files are refused
 and that pictures and DICOM files are marked. \file{tests/gateway.rs} checks the VitalStream
-gateway with a real viewer, and \file{tests/connections.rs} repeats the check over a synthetic
-OMOP database. Unit tests cover each de-identifier (\file{gate.rs}, \file{deid.rs},
+gateway with a real viewer, and \code{every\_route\_in\_privacy\_mode} asks every GET route of
+the API in Privacy Mode. Unit tests cover each de-identifier (\file{gate.rs}, \file{deid.rs},
 \file{dicom.rs}, \file{pseudonyms.rs}, \file{gateway.rs}).
 
 \section{Data at rest}
 \label{sec:security-data}
 
 \begin{itemize}
-\item \textbf{The database} (SQLite, in WAL mode) lives in the catalog's home folder, outside the
-  repository. The database and its \file{-wal} and \file{-shm} files are set to mode 0600, and
-  the home folder to 0700 (\file{db.rs}).
-\item \textbf{Encryption.} Builds with the \code{encryption} feature use SQLCipher (AES-256); the
-  key comes from \code{\$MEDORAMA\_KEY} or from the file named by \code{key\_file}. Without it,
-  rely on full-disk encryption.
-\item \textbf{On PostgreSQL}, the database server encrypts at rest (an encrypted disk or volume;
-  managed services such as Amazon RDS and Azure encrypt storage with their key services), and
-  \code{key\_file} is refused. Medorama's account needs rights on its own database only.
-\item \textbf{Identifiers} live in their own tables, so a dump of the clinical tables carries
-  pseudonymous IDs only.
-\item \textbf{Data sources are never written.} No part of Medorama writes into a data folder;
-  indexes, results and converted files go to their own folders. \textbf{Connected databases are
-  never written either}: Medorama's sessions there are read-only, whatever the account may do,
-  and their data are not copied, apart from linked persons' identifiers.
-\item \textbf{Index and results folders} hold derived data with real dates: protect them like the
-  recordings.
-\item \textbf{Secrets.} The catalog's secret (32 random bytes) is created once in the database's
-  settings. The internal viewer's password file is mode 0600. Connection passwords entered in the
-  page are written to \file{<home>/secrets/<name>.password} (mode 0600, in a folder of mode 0700),
-  never to the database, and deleted when the database is disconnected. No secret is in the
-  repository or the binary.
-\item \textbf{Backups} of the database hold identifiers, the pseudonym mapping and the audit log:
-  encrypt them, and restrict who may restore them.
+\item \textbf{The control store} (SQLite, in WAL mode) lives in Medorama's home folder, outside
+  the repository. The database and its \file{-wal} and \file{-shm} files are set to mode 0600,
+  and the home folder to 0700 (\file{db.rs}). It holds no identifier: patients are numbers and
+  pseudonyms, and identifier pairs keyed hashes.
+\item \textbf{Its encryption.} SQLCipher is always built in. The SQLite control store is encrypted
+  (AES-256) when a key is given, from \code{\$MEDORAMA\_KEY} or from the file named by
+  \code{key\_file}; without one, rely on full-disk encryption. On PostgreSQL, the database server
+  encrypts at rest (an encrypted disk or volume; managed services such as Amazon RDS and Azure
+  encrypt storage with their key services), and \code{key\_file} is refused. Medorama's account
+  needs rights on its own database only.
+\item \textbf{The workspace} is always encrypted: each SQLite file with SQLCipher (AES-256) and its
+  owner's data key, wrapped by the master key (AES-256-GCM) in the control store; folders 0700,
+  files 0600 (\file{workspace.rs}; \cref{sec:protecting-workspace,sec:protecting-keys}).
+  The recordings' indexes are in each database's index store, \file{db-NNNN/index.sqlite},
+  encrypted with that database's key (index format 3, \file{libs/engine/src/store.rs}); the key
+  of a store reaches the viewer Medorama runs only on its standard input, never on a command
+  line, in the environment, in a file or a log. \textbf{Not encrypted:} the plug-ins' output
+  folders, which hold derived data with real times: protect them with disk encryption.
+\item \textbf{The master key} comes from \code{\$MEDORAMA\_MASTER\_KEY}, from
+  \code{master\_key\_command} (a keyring, Vault, a key service's tool), or from
+  \code{master\_key\_file} (mode 0600, outside the workspace). With the control store, it opens
+  the whole workspace: keep it apart from both, and from their backups.
+\item \textbf{Connected databases are never written}: Medorama's sessions there are read-only,
+  whatever the account may do, and their data are not copied, apart from what the workspace keeps
+  of their persons. Their encryption at rest is their owners' (a db-builder database may be
+  written encrypted, \opt{-{}-encrypt}).
+\item \textbf{Recording files are never written.} No part of Medorama writes into a folder that a
+  recording database names.
+\item \textbf{Removal destroys the key first} (\cref{sec:protecting-removal}): a removed database's
+  workspace files are unreadable at once, then deleted.
+\item \textbf{Secrets.} The gate's secret (32 random bytes) is created once and kept wrapped by
+  the master key, like a data key (owner \code{gate}); one an earlier version kept in plain text
+  is wrapped at its first use. Without the master key, a copy of the control store cannot test
+  MRNs, which are few, against the patient index's hashes. Key material in memory is wiped when
+  dropped. The internal viewer's password file is mode 0600. A connected database's password
+  given to Medorama is sealed by the master key in the control store (\code{password\_wrapped}),
+  never written in plain text, never shown. No secret is in the repository or the binary.
+\item \textbf{Backups} of the control store hold the wrapped keys, the pseudonyms and the audit
+  log, and backups of the workspace its encrypted files: encrypt them, restrict who may restore
+  them, and keep the master key apart. Old backups of both bring back a removed database's files
+  until they expire (\cref{sec:protecting-backups}).
 \end{itemize}
 
 \section{Data in transit}
@@ -670,7 +738,7 @@ OMOP database. Unit tests cover each de-identifier (\file{gate.rs}, \file{deid.r
   proxy terminates TLS.
 \item The internal VitalStream viewer is reached over loopback only, with requests signed by its
   private key.
-\item \textbf{PostgreSQL} (the catalog and connected databases) is reached over TLS through rustls
+\item \textbf{PostgreSQL} (the control store and connected databases) is reached over TLS through rustls
   with the system's certificate authorities (and \code{database\_ca\_file}, or a connection's
   \opt{-{}-ca-file}); the server's certificate and name are always verified. A server on another
   host must offer TLS unless its URL says \code{sslmode=disable}: libpq's default,
@@ -714,7 +782,7 @@ OMOP database. Unit tests cover each de-identifier (\file{gate.rs}, \file{deid.r
 
 Every file and table is treated as untrusted.
 \begin{itemize}
-\item \textbf{Parsers} for tables, WFDB records, spreadsheets, GE MUSE XML, DICOM and EDF check
+\item \textbf{Parsers} for WFDB records, GE MUSE XML, DICOM and EDF check
   every length against the data and never read out of bounds; a malformed file ends in an error,
   not a crash. The DICOM rewriter's tests truncate a file at every seventh byte and require an
   error or a result, never a panic.
@@ -723,10 +791,8 @@ Every file and table is treated as untrusted.
   durations are refused; and the number of data records is taken from the file's size, never
   beyond it, whatever the header declares. Tests in \file{libs/engine/tests/edf.rs} include files
   that are not EDF. The Privacy Mode rewrite holds at most 64\,MB in memory.
-\item \textbf{Fuzz-style tests} (\file{medorama/tests/robustness.rs}) feed the expression parser
-  and the table importers broken and adversarial input.
 \item \textbf{Coverage-guided fuzzing} (\file{medorama/fuzz/}, cargo-fuzz with libFuzzer) covers
-  tables (CSV, spreadsheets), WFDB headers, GE MUSE XML, DICOM, EDF and BDF files (their header,
+  WFDB headers, GE MUSE XML, DICOM, EDF and BDF files (their header,
   their index, their identifiers and Privacy Mode's copy) and what users type (cohort
   expressions, searches, dates, numbers, units). CI builds every target on each change and runs
   each for 5 minutes every week (\cmd{make fuzz} locally).
@@ -736,7 +802,12 @@ Every file and table is treated as untrusted.
   nor sent.
 \item \textbf{DICOM sequences} nested more than 32 deep are refused (the rewrite would otherwise
   recurse without bound on a crafted file).
-\item \textbf{Uploads} (imports) are limited to 1\,GiB and to administrators.
+\item \textbf{Connected databases' answers} are read as values of the canonical columns only,
+  at most \code{max\_rows} rows per criterion and within \code{timeout\_s}; a SQLite database file
+  must lie inside \code{data\_roots}, and is refused inside the workspace or when it is the
+  control store itself (\file{sources/mod.rs}, \code{checked\_url}).
+\item \textbf{Tables and folders} are read by db-builder, a separate program run by the site, not
+  by the server (\cref{chap:importing}).
 \item \textbf{The VitalStream viewers} read WFDB records with wfdb-x, a reimplementation of the
   WFDB C library that finds files only where they are named, keeps a header's signal files inside
   its folder, and has network access off. Medorama's fuzzing does not cover it: open WFDB records
@@ -788,27 +859,28 @@ output says so.
 
 \begin{itemize}
 \item \textbf{Jobs} (indexing, derived series, plug-ins) run in worker threads of the server, or
-  in \cmd{medorama work} processes, from a queue in the database (\file{jobs.rs}).
+  in \cmd{medorama work} processes, from a queue in the control store (\file{jobs.rs}).
 \item \textbf{Plug-ins} are programs that an administrator installs (a folder with
   \file{action.toml}; \cref{chap:actions}). Each run is a child process in its own process group,
   with a timeout; cancelling or timing out kills the whole group. It receives a job description:
-  the recording's path, its index folder, the encounters' and patients' \textbf{pseudonyms}
-  (never their imported IDs), and an output folder.
+  the recording's path, its number, database and format, its patient's \textbf{pseudonym} (never a database's
+  identifier), and an output folder in the workspace.
 \item \textbf{Not the server's secrets.} A plug-in does not inherit Medorama's own environment
   variables (\code{MEDORAMA\_\dots}: the database's URL and password, the encryption key), nor any
   whose name marks it as secret (containing \code{PASSWORD}, \code{SECRET}, \code{TOKEN},
-  \code{PASSPHRASE} or \code{CREDENTIAL}, ending in \code{\_KEY}, PostgreSQL's
+  \code{PASSPHRASE} or \code{CREDENTIAL}, ending in \code{\_KEY} (the master key's
+  \code{MEDORAMA\_MASTER\_KEY} among them), PostgreSQL's
   \code{PGPASS\dots}, \code{DATABASE\_URL}). The rest stays, so that the plug-in finds its
   interpreter and libraries (\file{actions.rs}, \code{secret\_env}). It receives
   \code{MEDORAMA\_JOB}, its job's description.
-\item \textbf{Trust.} A plug-in runs with the catalog's operating-system rights: it is trusted
+\item \textbf{Trust.} A plug-in runs with Medorama's operating-system rights: it is trusted
   code, like the server. Install only plug-ins you have reviewed. Isolation is by process, not a
-  sandbox: a plug-in can still read what the catalog's account can, including the database file.
+  sandbox: a plug-in can still read what Medorama's account can, including the control store and
+  a \code{master\_key\_file}.
 \item \textbf{Adapters} (add-on readers of licensed formats; \cref{chap:addons}) are installed by
   an administrator. Their environment is cleared except for a short allow-list (\code{PATH},
   \code{HOME}, the temporary folders, the locale), every command has a time limit, and their
-  standard error never reaches the program's log (\cref{sec:addons-limits}). They return
-  identifiers only to Medorama, in answer to \code{identify}.
+  standard error never reaches the program's log (\cref{sec:addons-limits}).
 \end{itemize}
 
 \section{Supply chain, build and repository}
@@ -822,8 +894,8 @@ output says so.
   embedded in the binary: there is no package manager, no build step, and nothing fetched at run
   time.
 \item \textbf{CI} runs formatting, lints (\cmd{clippy}) and every test on Linux, macOS and
-  Windows, the same tests on PostgreSQL 14 and 17, a browser test of the page (headless Chrome),
-  the encrypted build and the installers. Every workflow reads the repository only, its actions
+  Windows, the same tests on PostgreSQL 14 and 17, a browser test of the page (headless Chrome)
+  and the installers. Every workflow reads the repository only, its actions
   are pinned by commit, and every job has a time limit.
 \item \textbf{Releases} are built by \file{.github/workflows/release.yml} on a version tag. The
   workflow runs the tests and \cmd{cargo deny} first, builds with a pinned Rust, packs
@@ -876,18 +948,21 @@ Access control, unique user identification (\S164.312(a)(2)(i)) & Personal accou
 Access control, automatic logoff (\S164.312(a)(2)(iii)) & \code{session\_idle\_minutes},
   \code{session\_hours} (password mode) & The proxy's or identity provider's session limits
   (proxy mode) \\
-Access control, encryption and decryption (\S164.312(a)(2)(iv)) & Optional SQLCipher encryption
-  of the SQLite catalog & Full-disk and backup encryption; PostgreSQL storage encryption \\
+Access control, encryption and decryption (\S164.312(a)(2)(iv)) & The workspace encrypted
+  (SQLCipher, data keys wrapped by a master key); optional SQLCipher encryption of the SQLite
+  control store & The master key's keeping; full-disk encryption (for the plug-ins' output folders) and backup
+  encryption; PostgreSQL storage encryption; the connected databases' encryption \\
 Audit controls (\S164.312(b)) & The audit log, sealed every minute, exportable
   (\cref{sec:security-audit}) & Regular review; storage for \code{audit\_export} \\
-Integrity (\S164.312(c)(1)) & Data sources and connected databases are only read; audit seals
+Integrity (\S164.312(c)(1)) & Connected databases and recording files are only read; audit seals
   detect changes to the log & Backups and their integrity \\
 Person or entity authentication (\S164.312(d)) & Argon2id passwords with throttling; proxy
   sign-in for SSO and MFA & The identity provider and MFA policy \\
 Transmission security (\S164.312(e)(1)) & Loopback by default; verified TLS to PostgreSQL & TLS
   termination at a reverse proxy, network policy \\
-Information access management (\S164.308(a)(4)) & Roles, the PHI permission, Privacy Mode by
-  default & Deciding who receives the PHI permission \\
+Information access management (\S164.308(a)(4)) & Roles, grants per database and cohort, the
+  PHI permission and the \code{phi} grant, Privacy Mode by default & Deciding who receives which
+  grants and the PHI permission \\
 Log-in monitoring (\S164.308(a)(5)(ii)(C)) & \code{login} and \code{login\_failed} entries &
   Monitoring them \\
 Risk analysis, contingency plan, physical safeguards (\S164.308, \S164.310) & This chapter, as
@@ -912,21 +987,19 @@ each.
 \bottomrule
 \endfoot
 Names & \code{[Patient Name]}; staff \code{[Staff Name]} \\
-Geographic subdivisions smaller than a state & Not a catalog field: a column holding addresses
-  is unrecognized, and Privacy Mode withholds it (\code{[Withheld]}) \\
+Geographic subdivisions smaller than a state & Not read: no canonical column holds them \\
 All elements of dates (except year) related to an individual & \textbf{Moved back, not removed}
   (see below) \\
-Telephone and fax numbers, e-mail addresses & Likewise unrecognized columns, withheld \\
-Social security numbers & Not held by design; an unrecognized column holding them is withheld
-  (only measurement columns of unrecognized data are shown) \\
+Telephone and fax numbers, e-mail addresses & Not read: no canonical column holds them \\
+Social security numbers & Not read: no canonical column holds them \\
 Medical record numbers & \code{[MRN]} \\
-Health plan beneficiary numbers, account numbers & \code{[CSN]} \\
+Health plan beneficiary numbers, account numbers & Not read: no canonical column holds them \\
 Certificate or license numbers, vehicle and device identifiers & DICOM device serial numbers
-  removed; other such columns unrecognized, so withheld \\
+  removed; no canonical column holds the others \\
 Web addresses, IP addresses & Not held \\
 Biometric identifiers, full-face photographs & \textbf{Not removed}: pictures and images are sent
   as they are, marked \\
-Any other unique identifying number or code & Imported patient and encounter IDs replaced by
+Any other unique identifying number or code & The databases' patient IDs and visits replaced by
   pseudonyms; DICOM UIDs replaced \\
 Ages over 89 & \code{90+} \\
 \end{xltabular}
@@ -942,9 +1015,10 @@ still identify.
 \paragraph{GDPR.} Data shown or exported in Privacy Mode are pseudonymized data (Art.~4(5)) and
 remain personal data. Medorama is designed to support data protection by design and by default
 (Art.~25: Privacy Mode is the default for every user but administrators) and the security of
-processing (Art.~32: pseudonymization, access control, optional encryption, audit logging). The
-pseudonym mapping and the identifiers are kept separately, in the catalog's own tables, under the
-catalog's access controls. The controller's other duties (lawful basis, records of processing,
+processing (Art.~32: pseudonymization, access control, encryption, audit logging). The pseudonyms are kept
+in the control store, and the identifiers only in the connected databases and in the workspace's
+encrypted persons files, under grants. Removing a database removes Medorama's copy of its
+persons, its patients' links and their pseudonyms (\cref{sec:protecting-removal}). The controller's other duties (lawful basis, records of processing,
 data subjects' rights, retention) remain with the institution.
 
 \section{Deployment checklist}
@@ -953,11 +1027,17 @@ data subjects' rights, retention) remain with the institution.
 Go through this list before real data come in. How to carry out each step is described in
 \cref{chap:deployment} and \cref{chap:sign-in}.
 \begin{enumerate}
-\item A dedicated host or virtual machine, an operating-system account for the catalog, full-disk
-  encryption, and the operating system kept up to date. No untrusted local accounts on the host.
-\item The catalog's home folder on a local disk (SQLite's locking is unreliable on network file
-  systems), owned by the catalog's account.
-\item Build with \code{encryption} and keep the key outside the home folder
+\item A dedicated host or virtual machine, an operating-system account for Medorama, full-disk
+  encryption (it covers the plug-ins' output folders, which Medorama does not encrypt), and
+  the operating system kept up to date. No untrusted local accounts on the host.
+\item Medorama's home folder and workspace on a local disk (SQLite's locking is unreliable on
+  network file systems), owned by Medorama's account; the workspace apart from every connected
+  database's folder.
+\item Keep the master key out of the workspace and out of its backups: from a key manager through
+  \code{master\_key\_command}, from \code{\$MEDORAMA\_MASTER\_KEY} set by the service manager, or
+  in a \code{master\_key\_file} readable only by Medorama's account. Record how it is kept, and
+  rotate it with \cmd{medorama keys rotate} when needed.
+\item Encrypt the SQLite control store with a key kept outside the home folder
   (\code{\$MEDORAMA\_KEY} from the service manager, or a \code{key\_file} readable only by the
   account), or rely on disk encryption.
 \item Keep \code{host = "127.0.0.1"}. Put a reverse proxy with TLS in front, and set
@@ -973,17 +1053,20 @@ Go through this list before real data come in. How to carry out each step is des
     -{}-no-password}), and set \code{proxy\_logout\_url};
   \item set session lifetime and idle timeout at the proxy or the identity provider.
   \end{itemize}
-\item Set \code{data\_roots} to the folders that hold the data, and nothing more; mount them
-  read-only for the catalog's account where possible.
-\item Grant the PHI permission only to the people who need identifiers; everyone else works in
-  Privacy Mode. Review the list of users regularly, and disable accounts promptly when people
+\item Set \code{data\_roots} to the folders that hold the connected SQLite databases and the
+  recording files, and nothing more; mount them read-only for Medorama's account where possible.
+\item Grant each database and cohort only to the people who need it, and the \code{phi} grant and
+  the PHI permission only to those who need identifiers; everyone else works in Privacy Mode.
+  Review the grants and the list of users regularly, and disable accounts promptly when people
   leave.
 \item In \ui{Admin} $\rightarrow$ \ui{Privacy Mode}, review what is withheld and choose the date
   offset and each patient's days; record them under your governance, and do not disclose the
   offset.
 \item Install only reviewed plug-ins and add-ons.
-\item Back up the database (it holds identifiers, the pseudonym mapping and the audit log),
-  encrypt the backups, and test restoring them.
+\item Back up the control store and the workspace together (they hold the wrapped keys, the
+  pseudonyms, the audit log and the encrypted workspace files), encrypt the backups, keep the
+  master key apart, and test restoring them. Set their retention knowing that old backups bring
+  back removed databases until they expire (\cref{sec:protecting-backups}).
 \item Set \code{audit\_export} to a file on write-once storage, or one that your log management
   collects; run \cmd{medorama audit -{}-verify} regularly (it fails when the log was altered).
 \item Run Medorama as a service: a systemd user service, a launchd agent, or on Windows a script
@@ -991,13 +1074,15 @@ Go through this list before real data come in. How to carry out each step is des
 \item \textbf{On PostgreSQL:} a database and an account for Medorama alone; TLS on the server
   (Medorama requires it, and verifies the certificate and the name); the password in a 0600 file
   or the service's environment; the server's storage encrypted; \cmd{pg\_dump} backups encrypted.
-\item \textbf{Connected databases:} an account that can only read, on the views' tables only; the
-  network path allowed from Medorama's hosts only; TLS; a time limit and a row limit suited to the
-  database (\opt{-{}-timeout-s}, \opt{-{}-max-rows}).
+\item \textbf{Connected databases:} each meets the requirements on identity (identifiers unique
+  within their issuer, the issuer named), access, columns and versions
+  (\cref{sec:connecting-requirements}); an account that can only read, on the views' tables only;
+  the network path allowed from Medorama's host only; TLS; a time limit and a row limit suited to
+  the database (\opt{-{}-timeout-s}, \opt{-{}-max-rows}); its own encryption and backups.
 \item \textbf{No demo with real patients:} install without \opt{-{}-demo} (the default), so that
-  \cmd{init} creates an empty catalog. If a catalog holds the demo (a cohort named DEMO), an
-  administrator deletes that cohort before real data arrive; its invented patients then leave the
-  catalog.
+  \cmd{init} connects no database. If Medorama has the demo's databases connected (\code{demo} and
+  \code{demo\_omop}), an administrator removes them before real data arrive; their invented
+  patients then leave Medorama.
 \end{enumerate}
 
 \section{Known limitations and residual risks}
@@ -1011,15 +1096,26 @@ The work planned against these limitations is listed in the repository's \file{d
   scope for now.
 \item \textbf{EDF+ annotations in VitalStream} are free text. In Privacy Mode they are treated
   like notes: withheld when the administrator withholds notes, otherwise shown with the patient's
-  own names and date of birth replaced and the identifiers the catalog knows replaced. Other
+  own names and date of birth replaced and the identifiers Medorama knows replaced. Other
   names in them are not removed. In files sent to the ECG viewer, annotation texts are always
   removed.
 \item \textbf{Quasi-identifiers.} Sex, a capped age, rare diagnoses, units and beds, small cohorts
   and exact intervals can single out a person when combined with outside knowledge.
 \item \textbf{Date offsets.} Learning one real date of a patient reveals that patient's offset,
   and every other patient's to within \code{spread\_days}.
-\item \textbf{Every user sees every patient} of a catalog, as their mode allows: there are no
-  per-patient or per-study access lists.
+\item \textbf{Grants are per database}, not per patient: a user granted a database sees every
+  patient of it, as their mode allows.
+\item \textbf{Not everything is encrypted.} The plug-ins' output folders
+  (\file{db-NNNN/results/<action>/}) are not encrypted by Medorama; they need disk encryption.
+  The recordings' indexes are encrypted, in each database's index store.
+\item \textbf{Keys protect files at rest, not from the server.} Data keys are wrapped for the
+  server, not for each user: whoever holds the master key and the control store (the host's
+  administrators, a backup of both) can read the whole workspace.
+\item \textbf{Backups undo removals} until they expire (\cref{sec:protecting-backups}).
+\item \textbf{Identity is the databases'.} Medorama links persons only on exact (issuer,
+  identifier) pairs. Two patients given one identifier by one issuer are taken as one patient, and
+  one patient with two identifiers as two; Medorama lists the conflicts it notices but cannot
+  detect every error (\cref{sec:connecting-identity}).
 \item \textbf{Proxy sign-in trusts the proxy and the host.} Anyone who can connect to Medorama's
   port from an address in \code{proxy\_addresses}, including any process on the host with the
   default addresses, can name any user. Roles and the PHI permission are not taken from the
@@ -1030,13 +1126,14 @@ The work planned against these limitations is listed in the repository's \file{d
   show a change after the fact, and its export (\code{audit\_export}) keeps a copy out of the
   database's reach, but a host administrator who changes both the database and the export file at
   once is not detected.
-\item \textbf{Plug-ins and add-ons} run with the catalog's rights, without its secrets in their
+\item \textbf{Plug-ins and add-ons} run with Medorama's rights, without its secrets in their
   environment.
-\item \textbf{Connected databases' own access rules} are not Medorama's: every Medorama user sees
-  the data of linked persons, as their mode allows. Connect only databases that all Medorama
-  users may use.
-\item \textbf{A connected database that does not answer} leaves patient pages without its data
-  (the banner names it) and makes cohort searches fail rather than silently miss it.
+\item \textbf{Connected databases' own access rules} are not Medorama's: a user granted a database
+  in Medorama sees its data as their grants and mode allow, whatever the database's own rules for
+  that person. Grant each database only to those its owner allows.
+\item \textbf{A connected database that does not answer} is offline: it is left out of searches,
+  and every search result names it among the databases left out; patient pages list it as not
+  available.
 \item \textbf{Unsupported encodings are refused, not converted.} Deflated or big-endian DICOM, XML
   that is not GE MUSE, text attachments, and EDF+ files with annotations larger than 64\,MB are
   refused in Privacy Mode.
@@ -1050,16 +1147,15 @@ above. In \file{medorama/}:
 \begin{lstlisting}[style=shell]
 cargo test --locked                # every test, including those below
 cargo test --test privacy          # Privacy Mode end to end: no identifier in any answer
-cargo test --test privacy_search   # searches, filters and sorts in Privacy Mode: shown values only
+cargo test --test databases        # linking, conflicts, status, grants, searches, removal
 cargo test --test signin           # password and proxy sign-in
 cargo test --test gateway          # the VitalStream gateway with a real viewer
-cargo test --test connections      # a connected OMOP database, Privacy Mode included
 cargo test --test browser          # the page in headless Chrome, Privacy Mode on screen
 cargo test --test openapi          # the API's description names every route
-cargo test --lib -- gate:: deid:: dicom:: pseudonyms:: config::   # each de-identifier
+cargo test --lib -- gate:: deid:: dicom:: pseudonyms:: config:: workspace:: grants::
 cargo clippy --all-targets         # lints
-MEDORAMA_TEST_POSTGRES=postgres://user@host/db cargo test   # again, the catalog in PostgreSQL
-medorama audit --verify            # the audit log's seals hold (on a deployed catalog)
+MEDORAMA_TEST_POSTGRES=postgres://user@host/db cargo test   # again, the control store in PostgreSQL
+medorama audit --verify            # the audit log's seals hold (on a deployed server)
 \end{lstlisting}
 At the repository's root:
 \begin{lstlisting}[style=shell]
@@ -1094,15 +1190,24 @@ EDF+ annotations in VitalStream & \file{medorama/src/gateway.rs}: \code{gate\_an
 DICOM & \file{medorama/src/dicom.rs} \\
 Files in Privacy Mode & \file{medorama/src/server.rs}: \code{attachment\_response},
   \code{edf\_deidentified}, \code{file\_response} \\
-Pseudonyms & \file{medorama/src/pseudonyms.rs}; the \code{pseudonym} column of \code{patients}
-  and \code{encounters}, \code{pseudonym\_aliases} (\file{medorama/src/schema/}) \\
+Pseudonyms & \file{medorama/src/pseudonyms.rs}; the \code{pseudonym} column of \code{patients},
+  and \code{visit\_pseudonyms} (\file{medorama/src/schema/}) \\
+Grants & \file{medorama/src/grants.rs}; the table \code{grants} \\
+The workspace, data keys, the master key, rotation & \file{medorama/src/workspace.rs}; the table
+  \code{keys} \\
+The index stores (index format 3, SQLCipher with a raw key) & \file{libs/engine/src/store.rs},
+  \file{libs/engine/src/index.rs} (\code{build\_into\_store}); the viewer's keys on its standard
+  input: \file{medorama/src/viewer.rs} (\code{store\_lines}, \code{forget\_line}) \\
+The patient index: exact links, keyed hashes, conflicts & \file{medorama/src/persons.rs}; the
+  table \code{patient\_keys} \\
+Connecting, status, refreshing and removing a database & \file{medorama/src/databases.rs} \\
 Accounts and sessions & \file{medorama/src/users.rs} \\
 The VitalStream gateway and the viewer's supervisor & \file{medorama/src/gateway.rs},
   \file{medorama/src/viewer.rs} \\
-The database, migrations, file permissions, encryption key & \file{medorama/src/db.rs},
+The control store, its schema, file permissions, encryption key & \file{medorama/src/db.rs},
   \file{medorama/src/schema/} \\
 SQLite and PostgreSQL behind one interface, TLS & \file{medorama/src/sql/} \\
-Connected databases: read-only access, views, the registry & \file{medorama/src/sources/} \\
+Connected databases: read-only access, views, OMOP & \file{medorama/src/sources/} \\
 The audit log's seals & \file{medorama/src/audit.rs}; the tables \code{audit} and
   \code{audit\_seals} \\
 Plug-ins' environment & \file{medorama/src/actions.rs} (\code{secret\_env}),

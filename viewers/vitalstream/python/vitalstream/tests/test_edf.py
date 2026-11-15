@@ -103,6 +103,13 @@ def test_dates_and_annotations():
     assert edf.start_of('01.03.yy', '13.00.00') is None
     assert edf.start_of('01.03.91', '13.00.00', plus) == 3823592400.0
     assert edf.start_of('31.02.24', '25.00.00') is None
+    # a day the month does not have: no start (not the next month's)
+    for date in ('31.02.24', '30.02.24', '31.04.24', '00.03.24', '29.02.23'):
+        assert edf.start_of(date, '10.00.00') is None, date
+    assert edf.start_of('29.02.24', '00.00.00') == 1709164800.0        # 2024 is a leap year
+    assert edf.start_of('29.02.00', '00.00.00') == 951782400.0         # 2000 is one too
+    assert edf.start_of('29.02.yy', '00.00.00', 'Startdate 29-FEB-2100 X X X') is None
+    assert edf.start_of('31.12.24', '23.59.59') == 1735689599.0
     t = edf.tals(b'+0.25\x14\x14\x00+1.5\x152\x14Arousal\x14 two  words \x14\x00\x00\x00')
     assert t == [(0.25, None, ['', '']), (1.5, 2.0, ['Arousal', 'two words', ''])]
     # invalid UTF-8: one replacement character per maximal subpart; an onset that is not a

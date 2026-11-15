@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 560" width="1000" height="560" role="img" aria-labelledby="t d">
-<title id="t">Readers and data models</title><desc id="d">Each file format has its own reader. Every reader produces one of four data models: a recording index, an ECG record, DICOM objects, or catalog tables; the viewers and Medorama use only the models.</desc>
+<title id="t">Readers and data models</title><desc id="d">Each file format has its own reader. Every reader produces one of four data models: a recording index, an ECG record, DICOM objects, or the canonical views of a connected database; the viewers and Medorama use only the models.</desc>
 <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#4B5563"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#B97A00"/></marker></defs>
 <rect x="0" y="0" width="1000" height="560" rx="14" fill="#FFFFFF"/>
 <g font-family="Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#1F2937">
@@ -73,27 +73,30 @@
 <path d="M264 344.25 L296 344.25" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
 <path d="M596 344.25 L626 344.25" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
 <path d="M802 344.25 L832 344.25" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
-<rect x="24" y="399.0" width="240" height="81.5" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4"/>
+<rect x="24" y="399.0" width="240" height="98.0" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4"/>
 <text x="36" y="420.0" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start"></text>
-<text x="36" y="421.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">CSV, Excel, Parquet tables;</text>
-<text x="36" y="437.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">known exports (GE MUSE, CLIF);</text>
-<text x="36" y="454.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">OMOP and other SQL databases</text>
-<rect x="296" y="399.0" width="300" height="81.5" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="36" y="421.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">connected databases: OMOP,</text>
+<text x="36" y="437.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">any SQL database, db-builder</text>
+<text x="36" y="454.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">SQLite (built from tables and</text>
+<text x="36" y="470.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">exports: GE MUSE, CLIF)</text>
+<rect x="296" y="399.0" width="300" height="98.0" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
 <text x="308" y="420.0" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start"></text>
-<text x="308" y="421.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">tables.rs; formats/ (converters,</text>
-<text x="308" y="437.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">or a TOML description: no code);</text>
-<text x="308" y="454.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">sources/ (read-only SQL views)</text>
-<rect x="626" y="399.0" width="176" height="81.5" rx="9" fill="#E4F4EE" stroke="#009E73" stroke-width="1.4"/>
-<text x="638" y="420.0" font-size="12.5" font-weight="650" fill="#0B4A38" text-anchor="start">Catalog tables</text>
-<text x="638" y="439.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">patients, encounters,</text>
-<text x="638" y="455.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">entries (canonical columns)</text>
-<rect x="832" y="399.0" width="144" height="81.5" rx="9" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.4"/>
+<text x="308" y="421.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">sources/: OMOP views built in,</text>
+<text x="308" y="437.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">views written by the site, or</text>
+<text x="308" y="454.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">db-builder’s tables (read only);</text>
+<text x="308" y="470.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">db-builder reads the tables</text>
+<rect x="626" y="399.0" width="176" height="98.0" rx="9" fill="#E4F4EE" stroke="#009E73" stroke-width="1.4"/>
+<text x="638" y="420.0" font-size="12.5" font-weight="650" fill="#0B4A38" text-anchor="start">Database views</text>
+<text x="638" y="439.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">persons, visits, entries,</text>
+<text x="638" y="455.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">recordings (canonical</text>
+<text x="638" y="472.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">columns)</text>
+<rect x="832" y="399.0" width="144" height="98.0" rx="9" fill="#FFFFFF" stroke="#6B7280" stroke-width="1.4"/>
 <text x="844" y="420.0" font-size="13.5" font-weight="650" fill="#1F2937" text-anchor="start"></text>
 <text x="844" y="421.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">patient pages, cohorts,</text>
-<text x="844" y="437.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Databases</text>
-<path d="M264 439.75 L296 439.75" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
-<path d="M596 439.75 L626 439.75" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
-<path d="M802 439.75 L832 439.75" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
-<text x="24" y="510.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">A new format is one new reader. A reader written in another language plugs in through the adapter protocol (recordings),</text>
-<text x="24" y="528.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">the ECG JSON form, DICOM, or a table with the canonical columns (docs/readers.md).</text>
+<text x="844" y="437.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Databases tab</text>
+<path d="M264 448.0 L296 448.0" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M596 448.0 L626 448.0" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M802 448.0 L832 448.0" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<text x="24" y="527.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">A new format is one new reader. A reader written in another language plugs in through the adapter protocol (recordings),</text>
+<text x="24" y="545.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">the ECG JSON form, DICOM, or a table or SQL views with the canonical columns (docs/readers.md).</text>
 </g></svg>

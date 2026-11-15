@@ -282,6 +282,10 @@ Settings load_settings(const std::optional<std::string>& path) {
       } else if (key == "cache_dir") {
         if (!v.is_string()) throw bad();
         s.cache_dir = core::utf8_path(relative_to(base, *v.value<std::string>()));
+      } else if (key == "index_key_file") {
+        if (!v.is_string()) throw bad();
+        std::string k = *v.value<std::string>();
+        s.index_key_file = k.empty() ? fs::path() : core::utf8_path(relative_to(base, k));
       } else if (key == "auth_file") {
         if (!v.is_string()) throw bad();
         s.auth_file = core::utf8_path(relative_to(base, *v.value<std::string>()));

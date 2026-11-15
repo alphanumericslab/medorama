@@ -2,7 +2,7 @@
 // of the selected entry.  Its address holds the selection (#/patient/12?item=…&enc=…&q=…), so
 // that back and forward, reloading and sharing keep it.
 
-import { $, api, esc, fail, fmtDate, fmtHM, fmtShort, fmtYear, privacy, qs, store } from '../core.js';
+import { $, api, daysBetween, esc, fail, fmtDate, fmtHM, fmtShort, fmtYear, privacy, qs, store } from '../core.js';
 import { focusLost, go, href, navigation, setParams, superseded } from '../router.js';
 import { drawJourney, hitAt } from '../patient/journey.js';
 import { context, renderList } from '../patient/report.js';
@@ -26,7 +26,7 @@ const entryOf = (key) => pp.entries.find((x) => x.key === key);
 
 function name(sum) {
   if (sum.phi && (sum.phi.last_name || sum.phi.first_name)) return [sum.phi.last_name, sum.phi.first_name].filter(Boolean).join(', ');
-  return sum.patient_id;
+  return sum.patient_id || sum.pseudonym;
 }
 
 // ------------------------------------------------------------ identity and summary
@@ -40,44 +40,37 @@ function renderBar() {
   // in Privacy Mode the patient is named by their pseudonym; otherwise both, for talking with
   // those who only see pseudonyms
   if (privacy.on) meta.push([s.pseudonym || s.patient_id, 'pseudonym']);
-  else if (s.phi) meta.push([s.patient_id, 'patient ID'], [s.pseudonym, 'pseudonym']);
+  else if (s.phi && s.patient_id) meta.push([s.patient_id, 'patient ID'], [s.pseudonym, 'pseudonym']);
+  else meta.push([s.pseudonym, 'pseudonym']);
   const mrns = s.phi?.mrns || [];
   if (mrns.length) meta.push([mrns.map((m) => m[1]).join(' · '), mrns.some((m) => m[0]) ? `MRN · ${mrns.map((m) => m[0] || 'default').join(', ')}` : 'MRN']);
-  const stays = s.encounters.length + (s.visits || []).length;
-  if (s.first) meta.push([`${fmtDate(s.first)} – ${fmtDate(s.last)}`, `${stays} encounter${stays === 1 ? '' : 's'}`]);
+  const stays = s.encounters.length;
+  if (s.first) meta.push([`${fmtDate(s.first)} – ${fmtDate(s.last)}`, `${stays} visit${stays === 1 ? '' : 's'}`]);
+  if ((s.sources || []).length) meta.push([s.sources.join(', '), s.sources.length === 1 ? 'database' : 'databases']);
   let allergy;
   if (s.allergies === null) allergy = '<span class="allergy none">Allergies: not recorded</span>';
   else if (!s.allergies.length) allergy = '<span class="allergy none">No allergy recorded</span>';
-  else allergy = `<span class="allergy">⚠ Allergy: ${esc(s.allergies.join(', '))}</span>`;
+  else allergy = `<span class="allergy"><span aria-hidden="true">▲</span> Allergy: ${esc(s.allergies.join(', '))}</span>`;
   // a connected database that did not answer: what it holds is missing from the page
   const missing = (s.unavailable || []).length
     ? `<span class="pill" title="This patient's data in ${esc(s.unavailable.join(', '))} could not be read now: the page shows the other sources">${esc(s.unavailable.join(', '))}: not available</span>`
     : '';
-  const demo = s.demo ? '<span class="pill" title="An invented patient of the demo: deleting the cohort DEMO removes them">DEMO</span>' : '';
-  $('#pp-bar').innerHTML = `<div class="nm">${esc(name(s))}</div>${demo}<div class="meta">${meta.map(([a, b]) => `<div>${esc(a)}<small>${esc(b)}</small></div>`).join('')}</div>${missing}${allergy}`;
+  $('#pp-bar').innerHTML = `<div class="nm">${esc(name(s))}</div><div class="meta">${meta.map(([a, b]) => `<div>${esc(a)}<small>${esc(b)}</small></div>`).join('')}</div>${missing}${allergy}`;
 }
 
 function renderInfo() {
   const s = pp.sum;
-  const visits = s.visits || [];
-  let h = `<div><div class="label">Encounters <span>${s.encounters.length + visits.length}</span></div>`;
-  if (!s.encounters.length && !visits.length) h += '<p class="muted">No encounter in the databases loaded.</p>';
+  let h = `<div><div class="label">Visits <span>${s.encounters.length}</span></div>`;
+  if (!s.encounters.length) h += '<p class="muted">No visit in the databases connected.</p>';
+  // each database's visits and stays, latest first; one chosen shows only its data
   for (const e of s.encounters) {
-    const kind = e.inpatient ? 'Inpatient' : 'Outpatient';
-    const units = [...new Set((e.stays || []).map((x) => x.unit).filter(Boolean))];
-    const where = [e.admit_unit, ...units.filter((u) => u !== e.admit_unit)].filter(Boolean).join(' → ');
-    const span = e.discharge && e.admit && dayDiff(e.admit, e.discharge) >= 1
+    const { long, days: n } = stayDays(e);
+    const span = long
       ? `${fmtShort(e.admit)} – ${fmtShort(e.discharge)}${fmtYear(e.discharge) !== fmtYear(e.admit) ? '' : `, ${fmtYear(e.admit)}`}`
       : fmtDate(e.admit);
-    const days = e.inpatient && e.admit && e.discharge ? ` · ${Math.max(1, Math.round((e.discharge - e.admit) / 86400))} day${Math.round((e.discharge - e.admit) / 86400) > 1 ? 's' : ''}` : '';
-    h += `<div class="enc${pp.enc === e.id ? ' on' : ''}" data-enc="${e.id}" tabindex="0" role="button" aria-pressed="${pp.enc === e.id}"><div>${pp.enc === e.id ? '<b>' : ''}${esc(kind)}${where ? ` · ${esc(where)}` : ''}${pp.enc === e.id ? '</b>' : ''}<small>${esc(e.encounter_id)}${days}</small></div><span class="d">${esc(span)}</span></div>`;
-  }
-  // the stays and visits of the connected databases (their data are in the journey and the
-  // report; the encounters above are the catalog's)
-  for (const v of visits) {
-    const long = v.admit && v.discharge && dayDiff(v.admit, v.discharge) >= 1;
-    const span = long ? `${fmtShort(v.admit)} – ${fmtShort(v.discharge)}, ${fmtYear(v.discharge)}` : fmtDate(v.admit);
-    h += `<div class="enc live" title="In the connected database ${esc(v.source)}"><div>${long ? 'Stay' : 'Visit'}${v.unit ? ` · ${esc(v.unit)}` : ''}${v.icu ? ' · ICU' : ''}<small>${esc(v.source)}</small></div><span class="d">${esc(span || '')}</span></div>`;
+    const days = long ? ` · ${n} day${n > 1 ? 's' : ''}` : '';
+    const what = `${long ? 'Stay' : 'Visit'}${e.unit ? ` · ${esc(e.unit)}` : ''}${e.icu ? ' · ICU' : ''}`;
+    h += `<div class="enc${pp.enc === e.id ? ' on' : ''}" data-enc="${e.id}" tabindex="0" role="button" aria-pressed="${pp.enc === e.id}" title="In the database ${esc(e.source)}"><div>${pp.enc === e.id ? `<b>${what}</b>` : what}<small>${esc(e.source)}${days}</small></div><span class="d">${esc(span || '')}</span></div>`;
   }
   h += '</div>';
   if (s.medications.length) {
@@ -89,7 +82,12 @@ function renderInfo() {
   $('#pp-info').innerHTML = h;
 }
 
-function dayDiff(a, b) { return Math.floor(b / 86400) - Math.floor(a / 86400); }
+/** A visit over more than one day (a stay), and its days: calendar days in Medorama's time
+ * zone, as the report counts its hospital days (report.js). */
+export function stayDays(e) {
+  const d = e.admit && e.discharge ? daysBetween(e.admit, e.discharge) : 0;
+  return { long: d >= 1, days: Math.max(1, d) };
+}
 
 // ------------------------------------------------------------ the journey
 function selectedSpan() {
@@ -119,10 +117,35 @@ function drawJ() {
     if (y < el.scrollTop + r.top + 10 || y > el.scrollTop + el.clientHeight - 10) el.scrollTop = Math.max(0, y - (el.clientHeight + r.top) / 2);
   }
   pp.drawnSel = pp.selected;
-  // what the journey shows: every encounter, or the one chosen on the left (✕ shows them all again)
+  drawCols();
+  // what the journey shows: every visit, or the one chosen on the left (✕ shows them all again)
   $('#pp-encs').innerHTML = e
-    ? `<button class="f on" data-enc-filter="" title="Show all encounters">${esc(e.encounter_id)} ✕</button>`
-    : '<span class="jscope" title="Click an encounter on the left to show only it">All encounters</span>';
+    ? `<button class="f on" data-enc-filter="" title="Show all visits">${esc(e.pseudonym || fmtDate(e.admit))} ✕</button>`
+    : '<span class="jscope" title="Click a visit on the left to show only it">All visits</span>';
+}
+
+/** "Columns…": a box per column of the journey, ticked while it is shown. */
+function drawCols() {
+  const box = $('#pp-cols-list');
+  const lanes = pp.jour?.lanes || [];
+  const keys = lanes.map((l) => l.key).join(' ');
+  if (box.dataset.keys !== keys) {
+    box.dataset.keys = keys;
+    box.innerHTML = lanes.map((l) => `<label><input type="checkbox" data-col="${esc(l.key)}"><span class="sw c-${esc(l.key)}" aria-hidden="true"></span>${esc(l.label)}</label>`).join('')
+      || '<span class="muted small">No column.</span>';
+  }
+  for (const c of box.querySelectorAll('[data-col]')) c.checked = !pp.hidden.has(c.dataset.col);
+}
+
+/** Show or hide a column of the journey (and its entries in the report). */
+function toggleLane(key) {
+  if (pp.hidden.has(key)) pp.hidden.delete(key); else pp.hidden.add(key);
+  store.set('hidden', [...pp.hidden]);
+  const had = document.activeElement?.dataset?.laneKey;
+  drawJ();
+  list();
+  // the column's name, drawn again, keeps the focus
+  if (had && focusLost()) document.querySelector(`#pp-journey [data-lane-key="${CSS.escape(had)}"]`)?.focus();
 }
 
 function tipFor(k) {
@@ -144,13 +167,7 @@ const jy = (el, y) => (y < (pp.jtop ?? 0) ? y : y + el.scrollTop);
 function clickHit(k) {
   if (!k) return;
   const lane = pp.jour.lanes[k.lane];
-  if (k.kind === 'head') {
-    if (pp.hidden.has(lane.key)) pp.hidden.delete(lane.key); else pp.hidden.add(lane.key);
-    store.set('hidden', [...pp.hidden]);
-    drawJ();
-    list();
-    return;
-  }
+  if (k.kind === 'head') return toggleLane(lane.key);
   if (k.kind === 'span' && k.key.startsWith('enc:')) return setEnc(+k.key.slice(4));
   if (k.kind === 'span' && entryOf(k.key)) return select(k.key, { scrollList: true });
   // a cell: the newest entry of this column in that time
@@ -233,6 +250,14 @@ function setEnc(id) {
   list();
 }
 
+/** The report's mode: its button on, and said to be pressed. */
+function showMode() {
+  document.querySelectorAll('#pp-mode button').forEach((b) => {
+    b.classList.toggle('on', b.dataset.mode === pp.mode);
+    b.setAttribute('aria-pressed', String(b.dataset.mode === pp.mode));
+  });
+}
+
 // ------------------------------------------------------------ loading
 async function open(id) {
   pp.id = id;
@@ -262,12 +287,19 @@ async function open(id) {
   renderBar();
 }
 
+/** The suggestions closed (and said to be closed). */
+function hideSug() {
+  $('#pp-suggest').classList.add('hidden');
+  $('#pp-find').setAttribute('aria-expanded', 'false');
+  $('#pp-find').removeAttribute('aria-activedescendant');
+}
+
 export default {
   /** The data changed: load the patient again at the next show. */
   invalidate() { pp.id = null; pp.q = null; },
   async show(r) {
     $('#pp-find').placeholder = privacy.on
-      ? 'Search another patient: pseudonym (MO-…), encounter, unit…'
+      ? 'Search another patient: pseudonym (MO-…), sex, database…'
       : 'Search another patient: name, MRN, ID, date of birth…';
     const id = +r.parts[0];
     if (!id) return go('#/patients', { replace: true });
@@ -282,7 +314,7 @@ export default {
     pp.mode = r.params.get('mode') || 'timeline';
     pp.enc = r.params.get('enc') ? +r.params.get('enc') : null;
     const q = r.params.get('q') || '';
-    document.querySelectorAll('#pp-mode button').forEach((b) => b.classList.toggle('on', b.dataset.mode === pp.mode));
+    showMode();
     $('#pp-q').value = q;
     $('#pp-qx').classList.toggle('hidden', !q);
     if (fresh || q !== pp.q) {
@@ -300,7 +332,7 @@ export default {
     if (item && entryOf(item)) await select(item, { scrollList: true });
     else { emptyDetail(); drawJ(); }
   },
-  hide() { $('#pp-suggest').classList.add('hidden'); $('#pp-tip').classList.add('hidden'); },
+  hide() { hideSug(); $('#pp-tip').classList.add('hidden'); $('#pp-cols').open = false; },
   wire() {
     const jel = $('#pp-journey');
     const tip = $('#pp-tip');
@@ -318,9 +350,17 @@ export default {
     });
     jel.addEventListener('mouseleave', () => tip.classList.add('hidden'));
     jel.addEventListener('click', (e) => {
+      // a column's name (also from the keyboard: Enter or Space)
+      const head = e.target.closest?.('[data-lane-key]');
+      if (head) { toggleLane(head.dataset.laneKey); return; }
       const box = jel.getBoundingClientRect();
       clickHit(hitAt(pp.hits, e.clientX - box.left, jy(jel, e.clientY - box.top)));
     });
+    $('#pp-cols-list').addEventListener('change', (e) => {
+      const c = e.target.closest('[data-col]');
+      if (c && c.checked === pp.hidden.has(c.dataset.col)) toggleLane(c.dataset.col);
+    });
+    document.addEventListener('click', (e) => { if (!e.target.closest('#pp-cols')) $('#pp-cols').open = false; });
     $('#pp-zin').addEventListener('click', () => { pp.zoom = Math.min(8, pp.zoom * 1.6); drawJ(); });
     $('#pp-zout').addEventListener('click', () => { pp.zoom = Math.max(1, pp.zoom / 1.6); drawJ(); });
     $('#pp-encs').addEventListener('click', (e) => {
@@ -376,7 +416,7 @@ export default {
       const b = e.target.closest('[data-mode]');
       if (!b) return;
       pp.mode = b.dataset.mode;
-      document.querySelectorAll('#pp-mode button').forEach((x) => x.classList.toggle('on', x === b));
+      showMode();
       setParams({ mode: pp.mode === 'timeline' ? '' : pp.mode });
       if (pp.mode === 'trends' && !pp.trends) {
         list();
@@ -387,18 +427,22 @@ export default {
     // another patient: suggestions while typing
     const find = $('#pp-find');
     const sug = $('#pp-suggest');
+    // a list box of the patients found: the arrow keys move in it (aria-activedescendant), the
+    // focus stays in the box being typed in
     const showSug = () => {
       sug.innerHTML = pp.suggest.map((p, i) => {
-        const nm = p.phi ? [p.phi.last_name, p.phi.first_name].filter(Boolean).join(', ') || p.patient_id : p.patient_id;
-        const sub = [p.patient_id, p.sex, p.age !== undefined ? `${p.age} y` : '', p.phi?.birth_date, (p.phi?.mrns || []).map((m) => m[1]).join(', ')].filter(Boolean).join(' · ');
-        return `<a href="${esc(href('patient', [String(p.id)]))}" class="${i === pp.sugIdx ? 'on' : ''}"><b>${esc(nm)}</b><span class="muted">${p.encounters} enc.</span><small>${esc(sub)}</small></a>`;
-      }).join('') || '<div class="muted placeholder">No patient matches.</div>';
+        const nm = (p.phi ? [p.phi.last_name, p.phi.first_name].filter(Boolean).join(', ') : '') || p.patient_id || p.pseudonym;
+        const sub = [p.patient_id || p.pseudonym, p.sex, p.age !== undefined ? `${p.age} y` : '', p.phi?.birth_date, (p.phi?.mrns || []).map((m) => m[1]).join(', ')].filter(Boolean).join(' · ');
+        return `<a href="${esc(href('patient', [String(p.id)]))}" id="pp-sug-${i}" role="option" aria-selected="${i === pp.sugIdx}" tabindex="-1" class="${i === pp.sugIdx ? 'on' : ''}"><b>${esc(nm)}</b><span class="muted">${p.encounters} visits</span><small>${esc(sub)}</small></a>`;
+      }).join('') || '<div class="muted placeholder" role="option" aria-disabled="true" aria-selected="false">No patient matches.</div>';
       sug.classList.remove('hidden');
+      find.setAttribute('aria-expanded', 'true');
+      if (pp.sugIdx >= 0) find.setAttribute('aria-activedescendant', `pp-sug-${pp.sugIdx}`); else find.removeAttribute('aria-activedescendant');
     };
     find.addEventListener('input', () => {
       clearTimeout(pp.ftimer);
       const q = find.value.trim();
-      if (!q) { sug.classList.add('hidden'); return; }
+      if (!q) { hideSug(); return; }
       pp.ftimer = setTimeout(async () => {
         const seq = ++pp.findSeq;
         const d = await api(`patients?${qs({ q, limit: 8 })}`).catch(() => ({ items: [] }));
@@ -410,20 +454,20 @@ export default {
       }, 200);
     });
     find.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { sug.classList.add('hidden'); find.blur(); }
+      if (e.key === 'Escape') { hideSug(); find.blur(); }
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         pp.sugIdx = Math.max(0, Math.min(pp.suggest.length - 1, pp.sugIdx + (e.key === 'ArrowDown' ? 1 : -1)));
         showSug();
       }
       if (e.key === 'Enter' && pp.suggest[pp.sugIdx]) {
-        sug.classList.add('hidden');
+        hideSug();
         find.value = '';
         go(href('patient', [String(pp.suggest[pp.sugIdx].id)])).catch(fail);
       }
     });
-    sug.addEventListener('click', () => { sug.classList.add('hidden'); find.value = ''; });
-    document.addEventListener('click', (e) => { if (!e.target.closest('#view-patient .sline')) sug.classList.add('hidden'); });
+    sug.addEventListener('click', () => { hideSug(); find.value = ''; });
+    document.addEventListener('click', (e) => { if (!e.target.closest('#view-patient .sline')) hideSug(); });
     $('#pp-chip').addEventListener('click', (e) => { if (e.target.closest('[data-close]')) go('#/patients').catch(fail); });
     // redraw on resize and theme change
     let rt = null;

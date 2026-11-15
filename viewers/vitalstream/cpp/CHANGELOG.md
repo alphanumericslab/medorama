@@ -1,6 +1,63 @@
 # Changelog: vitalstream-cpp
 
-## Unreleased
+## 0.2.0 (2026-11-15, pre-release)
+
+- `viewers/vitalstream/install.sh` and `install.ps1` show the license terms and go on only if
+  they are accepted (`y` or `yes`; `--accept-license`, `-AcceptLicense` or
+  `MEDORAMA_ACCEPT_LICENSE=yes` in scripts). The documentation (`docs/`) is now under
+  CC BY-NC-ND 4.0; the software's license is unchanged.
+- **The page** (shared `web/`): a channel's unit as the engine states it: `adu` only for an
+  uncalibrated signal, nothing when no unit is stated.
+- **Review fixes (index content changes within version 3, noted in index-format.md's Versions
+  table; the three engines write the same bytes, checked by `tests/parity/index_parity.py`, which
+  now also makes these recordings):**
+  - a WFDB header whose record line states no number of samples (or 0) is read to the end of its
+    data, as libwfdb reads it (it gave no samples); a compressed file's frames are counted by
+    decoding them;
+  - a signal of several samples per frame is a piece at its own rate (frame rate times its samples
+    per frame) with every sample, read in WFDB's high-resolution mode (it was averaged to the frame
+    rate); its markers are at the first sample of their frame; samples are read again by range of
+    the signal's own samples;
+  - records without a start time before the first record with one end where it starts, with a
+    note (they started at 0, 1970-01-01);
+  - an EDF/BDF date with a day its month does not have (`31.02.24`) states no start (it became
+    March 2).
+- **Windows:** with more pieces of a channel than pixel columns, each column keeps the piece that
+  ends latest and every piece that reaches past it (it kept the first to start, and could drop a
+  long piece) (viewer-api.md).
+- **Store:** the envelopes' chunks are read on a connection of their own (read-only), so that
+  windows are not held up while an index is packed. `core::wfdbc::read_physical` returns every
+  sample of each signal. Tests: `test_limits.cpp`, `test_edf.cpp`, `test_store.cpp`.
+- **Index format 3, the index store** (viewers/vitalstream/docs/index-format.md, "Version 3: the
+  index store"), as the Rust engine's `store.rs`: `engine/store.hpp` and `engine/src/store.cpp`
+  (`Store`: open, with a raw SQLCipher key or plain; `pack` in one transaction, keeping an index of
+  the same engine and replacing any other; `load`, `meta`, `keys`, `remove`, `engine_of`; the
+  `arrays` table of each array's length; chunks of 4096 values by default, the store's own size
+  read from its `store` table; envelopes read by range with a cache of 16 chunks per array, a
+  chunk of another length than its array implies refused; markers and vital signs loaded whole;
+  entries of `index.tmp/` untouched for a day removed on opening) and `build_into_store` (the
+  version 2 files built in `index.tmp/<key>.<pid>.<n>.tmp/`, private, removed on every way out,
+  then packed). The key of format 3: `cache_key_of(path, 3)`. `Loaded` now holds `Values<T>` (a
+  file mapped, or values held; was `Mapped<T>`) and `Env` (a file, or a store's chunks); an
+  adapter's recording loaded from a store reads its samples from a private folder
+  `index.tmp/<key>.<pid>.<n>.read/` holding only its `meta.json`, removed with the dataset.
+  `build_files` writes the files of one index (formats 2 and 3); the index folders of format 2
+  stay for the tests and the benchmark.
+- The viewer uses index stores only: its own, `cache_dir/index.sqlite`, encrypted with the key
+  in the new setting `index_key_file` (a file of 64 hex digits; empty: plain), and, with
+  `--keys-on-stdin` (Medorama), the stores and keys given as JSON lines on standard input
+  (`{"store", "key", "own"}`, `{"forget"}`; keys kept in memory only, never logged, all forgotten
+  when standard input closes), looked in first (`Stores` in `server.hpp`). `--index PATH`
+  indexes into the own store and prints its path and the key.
+- New dependency: SQLCipher 4.20.0 (SQLite 3.54.1) with libtomcrypt 1.18.2 as its crypto
+  provider, from the crates.io package `sqlcipher-src` 420.0.0 (pinned with its SHA-256 in
+  `cmake/deps.cmake`, `deps/sqlcipher-src-420.0.0.tar.gz` for offline builds), built from source
+  as `vs_sqlite`: no OpenSSL, no system library.
+- Tests: `test_store.cpp` (`Store.*`: round trips plain and encrypted in small chunks, wrong or
+  missing key, no plaintext in the file, keep/replace/remove, cancellation, chunk boundaries and
+  inconsistent rows, the stale `index.tmp/` entries, the pipe, `index_key_file`, and a store the
+  Rust viewer wrote compared row by row, both ways); `Adapters.EndToEnd` through a store;
+  `Server.ARecordingThatCannotBeIndexedIsAnError` checks the store.
 
 - Documentation: the speed of the three viewers, measured on WFDB (with `.dat` and `.mat`
   files), EDF, BDF and `.Stp` recordings, indexing and reading, in place of the estimates ("about

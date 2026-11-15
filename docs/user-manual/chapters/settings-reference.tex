@@ -18,45 +18,56 @@ them are described in \cref{chap:cli}.
 \section{medorama.toml}
 \label{sec:settings-reference-medorama}
 
-\paragraph{The file.} The settings live in \file{<home>/medorama.toml}, in the catalog's home
+\paragraph{The file.} The settings live in \file{<home>/medorama.toml}, in Medorama's home
 folder (\cref{chap:administration}). \cmd{medorama init} writes the file with a comment above
 each key. Medorama reads it when a command or the server starts, so restart the server after a
 change.
 \begin{itemize}
 \item \textbf{Paths} are strings. A \code{\textasciitilde} at the start of a path stands for
-  the home folder of the account; a relative path is relative to the catalog's home folder.
+  the home folder of the account; a relative path is relative to Medorama's home folder.
 \item \textbf{Numbers} are TOML integers, 0 or more. \textbf{Switches} are \code{true} or
   \code{false}. \textbf{Lists} are TOML arrays of strings.
 \item \textbf{Every key is checked.} A key that the program does not know is an error
-  (\code{medorama.toml: unknown settings: ...}). So are a value of the wrong type
-  (\code{medorama.toml: bad value for KEY}), an unknown time zone, a \code{database\_url} that is
-  not a PostgreSQL URL or that holds a password, and inconsistent sign-in settings
+  (\code{medorama.toml: unknown settings: ...}); \code{results\_dir} and \code{formats\_dirs},
+  settings of earlier versions, are unknown now. So are a value of the wrong type
+  (\code{medorama.toml: bad value for KEY}), a missing \code{workspace\_dir}
+  (\code{workspace\_dir is required}), an unknown time zone, a \code{database\_url} that is not a
+  PostgreSQL URL or that holds a password, and inconsistent sign-in settings
   (\cref{tab:settings-reference-signin-errors}).
-\item \textbf{The environment} overrides three settings: \code{MEDORAMA\_DATABASE\_URL} (a
+\item \textbf{The environment} overrides four settings: \code{MEDORAMA\_DATABASE\_URL} (a
   non-empty value) overrides \code{database\_url}, \code{MEDORAMA\_DATABASE\_PASSWORD} overrides
-  \code{database\_password\_file}, and \code{MEDORAMA\_KEY} overrides \code{key\_file}.
+  \code{database\_password\_file}, \code{MEDORAMA\_KEY} overrides \code{key\_file}, and
+  \code{MEDORAMA\_MASTER\_KEY} overrides \code{master\_key\_command} and
+  \code{master\_key\_file}.
 \end{itemize}
+
+The settings of each connected database (its schema, its time zone, the issuer of its patient
+IDs, \dots) are not in this file: they are kept with the database in the control store, and
+listed in \cref{sec:settings-reference-databases}.
 
 \subsection{Folders}
 \label{sec:settings-reference-folders}
 
-\apientry{results\_dir}{The results folder}
+\apientry{workspace\_dir}{The workspace}
 \begin{lstlisting}[style=signature,language=TOML]
-results_dir = "PATH"
+workspace_dir = "PATH"
 \end{lstlisting}
-A path. \textbf{Required}; \cmd{init -{}-results} sets it. This is the folder the catalog
-writes to: the actions' results go to \file{actions/<action>/r<recording>/j<job>/}, and, unless
-\code{index\_dir} names another folder, the recordings' indexes go to \file{index/}. Never choose
-a folder that holds recordings.
+A path. \textbf{Required}; \cmd{init -{}-workspace} sets it. This is the folder where Medorama
+keeps what it generates (\cref{sec:protecting-workspace}): one folder per connected database,
+\file{db-NNNN/}, with that database's persons as linked, its variables, the state of its
+recordings, their indexes (its index store, \file{index.sqlite}) and the results of the actions
+run on them; one file per cohort, in \file{cohorts/}; and the index store of the viewer Medorama
+runs, in \file{viewer/}. Every SQLite file of the workspace is encrypted with its owner's data key, and
+its folders and files are readable by Medorama's account only. The output folders that action
+plug-ins write (\file{db-NNNN/results/<action>/r<n>/j<job>/}) are not encrypted; the numbers of
+their summaries go into the encrypted \file{results-<action>.sqlite}. Never choose a folder that holds
+recordings or a connected database: a database file inside the workspace is refused when it is
+connected.
 
-\apientry{index\_dir}{The index folder}
-\begin{lstlisting}[style=signature,language=TOML]
-index_dir = "PATH"
-\end{lstlisting}
-A path. Default: \file{<results\_dir>/index}. This folder holds the recordings' indexes, one
-folder per index key (\cref{chap:formats-reference}). A standalone viewer whose \code{cache\_dir}
-is this folder opens the recordings that the catalog indexed without indexing them again. The
-viewer that the catalog runs always uses it.
+There is no setting for the indexes: each recording database's indexes are kept in its workspace
+folder, encrypted with its key (\cref{sec:formats-reference-folder}). A \file{medorama.toml} that
+still has the former setting \code{index\_dir} is refused, with a message saying to remove the
+line.
 
 \apientry{adapters\_dir}{The adapter folder}
 \begin{lstlisting}[style=signature,language=TOML]
@@ -68,14 +79,15 @@ default out in full. This folder holds the adapters, the programs that read reco
 that Medorama does not read itself (\cref{chap:addons}). \cmd{medorama addons install} installs
 adapters into it.
 
-\apientry{data\_roots}{Where files may be imported from}
+\apientry{data\_roots}{Where the files Medorama reads may lie}
 \begin{lstlisting}[style=signature,language=TOML]
 data_roots = ["PATH", ...]
 \end{lstlisting}
-A list of paths. Default: \code{[]}, which allows any folder. The files that imported rows name
-must lie inside these folders, after symbolic links are resolved; an import refuses a file that
-lies elsewhere. Administrators browse only inside these folders in the viewers, and a database
-file connected from the page must lie inside one of them.
+A list of paths. Default: \code{[]}, which allows any folder. The files that Medorama reads must
+lie inside these folders, after symbolic links are resolved: the SQLite database files it
+connects, and the recordings' files that recording databases name (a recording outside them is
+reported as such and not opened). Administrators browse only inside these folders, in the
+\ui{Choose\dots} dialog of the connect form and in the viewers.
 
 \apientry{actions\_dirs}{The folders of action plug-ins}
 \begin{lstlisting}[style=signature,language=TOML]
@@ -84,30 +96,27 @@ actions_dirs = ["PATH", ...]
 A list of paths. Default: \code{["actions"]}, the folder \file{actions/} of the home folder.
 Each plug-in action is a subfolder that holds an \file{action.toml} (\cref{chap:actions}).
 
-\apientry{formats\_dirs}{The folders of import formats}
-\begin{lstlisting}[style=signature,language=TOML]
-formats_dirs = ["PATH", ...]
-\end{lstlisting}
-A list of paths. Default: \code{["formats"]}, the folder \file{formats/} of the home folder.
-Each import format described in TOML is a file \file{<key>.toml}; these formats come in addition
-to the built-in ones (\cref{chap:importing}).
-
-\subsection{The database}
+\subsection{The control store and the keys}
 \label{sec:settings-reference-database}
 
-\apientry{database}{The SQLite database}
+The control store is Medorama's own database: users, grants, the audit log, the list of
+connected databases, cohort definitions and the wrapped data keys. It holds no patient data
+(\cref{chap:architecture}).
+
+\apientry{database}{The SQLite control store}
 \begin{lstlisting}[style=signature,language=TOML]
 database = "PATH"
 \end{lstlisting}
-A path. Default: \file{medorama.sqlite}, in the home folder. This is the SQLite database file,
-used when \code{database\_url} is empty. It holds identifiers, so keep it private.
+A path. Default: \file{medorama.sqlite}, in the home folder. This is the SQLite file of the
+control store, used when \code{database\_url} is empty. Keep it private: it holds the wrapped
+data keys, the grants and the audit log.
 
-\apientry{database\_url}{A PostgreSQL database instead}
+\apientry{database\_url}{A PostgreSQL control store instead}
 \begin{lstlisting}[style=signature,language=TOML]
 database_url = "postgres://USER@HOST[:PORT]/DATABASE[?sslmode=MODE]"
 \end{lstlisting}
-A string. Default: empty, which selects the SQLite \code{database}. When it is set, the catalog
-lives in a PostgreSQL database (version 14 or later), named by a URL that begins with
+A string. Default: empty, which selects the SQLite \code{database}. When it is set, the control
+store lives in a PostgreSQL database (version 14 or later), named by a URL that begins with
 \code{postgres://} or \code{postgresql://}. The URL must not hold the password: a URL with one is
 refused, whether before the host (\code{user:password@}) or as a parameter
 (\code{?password=}). A server on another host must offer TLS unless the URL says
@@ -116,14 +125,15 @@ opens at most 32 connections to the database (a request waits for one beyond tha
 connection that was idle before using it again, and, unless the URL sets them, gives each
 connection 10 seconds to connect, TCP keepalives, and 5 minutes for a statement
 (\code{?connect\_timeout=\dots}, \code{keepalives=0}, \code{options=-c statement\_timeout=\dots}
-in the URL change them). \code{MEDORAMA\_DATABASE\_URL} overrides this setting.
+in the URL change them). \code{MEDORAMA\_DATABASE\_URL} overrides this setting. This version
+runs one server per control store.
 
 \apientry{database\_password\_file}{The PostgreSQL password}
 \begin{lstlisting}[style=signature,language=TOML]
 database_password_file = "PATH"
 \end{lstlisting}
 A path. Default: none. This file holds the password of \code{database\_url}'s account; its
-content is read with surrounding whitespace removed. Make it readable by the catalog's account
+content is read with surrounding whitespace removed. Make it readable by Medorama's account
 only. \code{MEDORAMA\_DATABASE\_PASSWORD} overrides this setting.
 
 \apientry{database\_ca\_file}{Trusted certificate authorities}
@@ -134,15 +144,45 @@ A path. Default: none. This file holds certificate authorities (in PEM form) tha
 trusts for the database server's certificate, in addition to the system's: for example a private
 authority, or a cloud provider's bundle.
 
-\apientry{key\_file}{The database key}
+\apientry{key\_file}{The SQLite control store's key}
 \begin{lstlisting}[style=signature,language=TOML]
 key_file = "PATH"
 \end{lstlisting}
-A path. Default: none. This file holds the key of an encrypted SQLite database, for builds
-with the feature \code{encryption}; its content is read with surrounding whitespace removed. The
-key must be set before \cmd{init} (\cref{chap:deployment}). \code{MEDORAMA\_KEY} overrides this
-setting. A build without encryption refuses to start when a key is configured, and a PostgreSQL
-catalog refuses \code{key\_file}.
+A path. Default: none. This file holds the key with which SQLCipher encrypts the SQLite control
+store; its content is read with surrounding whitespace removed. The key must be set before
+\cmd{init} (\cref{chap:deployment}). \code{MEDORAMA\_KEY} overrides this setting. A PostgreSQL
+control store refuses \code{key\_file}: its server encrypts it. This key is not the master key:
+the workspace is encrypted in any case, with data keys that the master key wraps.
+
+\apientry{master\_key\_file}{The master key's file}
+\begin{lstlisting}[style=signature,language=TOML]
+master_key_file = "PATH"
+\end{lstlisting}
+A path. Default: \file{master.key}, in the home folder, which \cmd{init} makes (64 random
+hexadecimal digits, readable by Medorama's account only) unless the master key comes from
+elsewhere. The master key wraps every data key (\cref{sec:protecting-keys}). It is read from the
+first of: the environment variable \code{MEDORAMA\_MASTER\_KEY}, \code{master\_key\_command},
+and this file; each must give 64 hexadecimal digits (256 bits). Keep the file outside the
+workspace and out of the workspace's backups: a backup that holds both can be read. Without a
+master key, no command and no server starts (\code{no master key: set MEDORAMA\_MASTER\_KEY,
+master\_key\_command or master\_key\_file}). \cmd{medorama keys rotate} wraps every data key
+again with a new one (\cref{chap:cli}).
+
+\apientry{master\_key\_command}{A command that prints the master key}
+\begin{lstlisting}[style=signature,language=TOML]
+master_key_command = "COMMAND"
+\end{lstlisting}
+A string. Default: empty. When it is set (and \code{MEDORAMA\_MASTER\_KEY} is not), Medorama runs
+this command through the system's shell (\cmd{sh -c}, on Windows \cmd{cmd /C}) when a command or
+the server starts, and reads the master key from what it prints: 64 hexadecimal digits. A
+command that fails stops the start, with its message. Medorama has no keyring, Vault or KMS
+client of its own: this command is how it reaches one, for example
+\cmd{security find-generic-password -s medorama -w} (the macOS keychain), \cmd{secret-tool lookup}
+with the attributes the key was stored under (the Secret Service on Linux), or the command-line client of HashiCorp Vault or
+of a cloud key service.
+\begin{lstlisting}[language=TOML]
+master_key_command = "security find-generic-password -s medorama -w"
+\end{lstlisting}
 
 \subsection{The server}
 \label{sec:settings-reference-server}
@@ -187,25 +227,28 @@ An integer. Default: 900. The server checks every recording this often, to find 
 that are missing, changed or have lost their index. With 0, it never does; \cmd{medorama check}
 still does it on demand.
 
-\apientry{timezone}{The catalog's time zone}
+\apientry{timezone}{Medorama's time zone}
 \begin{lstlisting}[style=signature,language=TOML]
 timezone = "ZONE"
 \end{lstlisting}
 An IANA time-zone name. Default: \code{"America/New\_York"}; \cmd{init -{}-timezone} writes
-another. Medorama reads the times that imported tables write without an offset in this zone, and
-shows times in it; the viewer that the catalog runs uses it too. Times are stored in UTC.
+another. Medorama reads the times that a connected database writes without an offset in this
+zone, unless that database's own \code{timezone} says otherwise
+(\cref{sec:settings-reference-databases}), and shows times in it; the viewer that Medorama runs
+uses it too. A database connected without a time zone of its own is given this one when it is
+connected, and keeps it.
 
 \subsection{The waveform viewer}
 \label{sec:settings-reference-viewer}
 
-\apientry{viewer}{The viewer the catalog runs}
+\apientry{viewer}{The viewer Medorama runs}
 \begin{lstlisting}[style=signature,language=TOML]
 viewer = "auto" | "cpp" | "rs" | "py" | "none" | "PATH"
 \end{lstlisting}
 A string. Default: \code{"auto"}, which selects the viewer that \cmd{tools/install-medorama.sh}
 recorded in \file{medorama.viewer} next to Medorama's program, or else the first one found of
 \cmd{vitalstream-cpp}, \cmd{vitalstream-rs} and \cmd{vitalstream-py}. The values \code{"cpp"},
-\code{"rs"} and \code{"py"} select that viewer. With \code{"none"}, the catalog runs no viewer:
+\code{"rs"} and \code{"py"} select that viewer. With \code{"none"}, Medorama runs no viewer:
 \ui{View} and the \ui{VitalStream} tab are grayed out, with the reason. Any other value is the
 path of a viewer program.
 
@@ -214,13 +257,42 @@ path of a viewer program.
 viewer_url = "URL"
 \end{lstlisting}
 A string. Default: empty. When it is set, for example to \code{"http://host:8060/"}, the
-catalog runs no viewer of its own, and \ui{View} opens that viewer in a new browser tab.
+Medorama runs no viewer of its own, and \ui{View} opens that viewer in a new browser tab.
+
+\apientry{db\_builder\_root}{db-builder's folder}
+\begin{lstlisting}[style=signature,language=TOML]
+db_builder_root = "PATH"
+\end{lstlisting}
+A path. Default: empty, and Medorama runs no db-builder. When it is set, Medorama runs
+db-builder's web interface (\cref{sec:importing-web}) from its start to its end:
+\cmd{db-builder serve -{}-root PATH -{}-host 127.0.0.1 -{}-port N -{}-home <home>/db-builder},
+started again if it stops (after 5 seconds, longer if it keeps stopping), and stopped with
+Medorama. It finds the \cmd{db-builder} program where it finds the viewer. db-builder builds
+databases in this folder and reads and writes nothing above it; put it inside \code{data\_roots},
+so that what it builds can be connected (\cmd{medorama serve} warns when it is not). db-builder
+has its own sign-in: set its password once with \cmd{db-builder serve -{}-set-password -{}-home
+<home>/db-builder}; until then it is not started, and the page says why. The \ui{Databases}
+tab's \ui{Create a database...} opens its page (\cref{chap:databases-tab}).
+\cmd{medorama serve -{}-db-builder-root DIR} overrides the setting.
+
+\apientry{db\_builder\_port}{db-builder's port}
+\begin{lstlisting}[style=signature,language=TOML]
+db_builder_port = N
+\end{lstlisting}
+A port. Default: 8091. The port of the db-builder that Medorama runs, on 127.0.0.1.
+
+\apientry{db\_builder\_url}{A db-builder running elsewhere}
+\begin{lstlisting}[style=signature,language=TOML]
+db_builder_url = "URL"
+\end{lstlisting}
+A string. Default: empty. When it is set, for example to \code{"http://host:8091/"}, Medorama
+runs no db-builder, and \ui{Create a database...} opens that address.
 
 \apientry{qc\_verbose}{Mark repaired data}
 \begin{lstlisting}[style=signature,language=TOML]
 qc_verbose = true | false
 \end{lstlisting}
-A switch. Default: \code{false}. When it is \code{true}, the viewer that the catalog runs also
+A switch. Default: \code{false}. When it is \code{true}, the viewer that Medorama runs also
 outlines, with a dashed line, the data that a reader repaired, such as data blocks that a file
 stored out of order and that the reader put back in order. Breaks are shaded either way.
 
@@ -336,11 +408,55 @@ database cannot take at once is appended to it at once, as a line with \code{"pe
 \code{GET audit/verify} and \cmd{medorama audit -{}-verify} compare the database's seals with
 this file.
 
+\subsection{The settings of a connected database}
+\label{sec:settings-reference-databases}
+
+Each connected database has its own settings, given when it is connected (the page's
+\ui{Connect a database} form, \cmd{medorama databases connect}, or \code{POST databases}) and
+kept with it in the control store (\cref{chap:connecting}). Its password is not among them: it is
+kept sealed by the master key, or read from a password file or from
+\code{MEDORAMA\_SOURCE\_PASSWORD\_}\textit{NAME} (\cref{sec:cli-environment}).
+
+\begin{xltabular}{\linewidth}{@{}P{3.4cm}P{2.6cm}L@{}}
+\caption{The settings of a connected database.}
+\label{tab:settings-reference-databases}\\
+\toprule
+\tabhead Setting & \tabhead Kinds & \tabhead Meaning \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Setting & \tabhead Kinds & \tabhead Meaning \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\code{schema} & \code{omop} & The schema of the CDM's tables. Default: the database's default.
+  Letters, digits and \code{\_} only \\
+\code{vocabulary\_schema} & \code{omop} & The schema of OMOP's vocabulary (\code{concept}), when
+  it is apart from the CDM's \\
+\code{identifier} & \code{omop} & What \code{person\_source\_value} holds: \code{mrn} (the
+  default), \code{patient\_id} or \code{none} \\
+\code{issuer} & every kind & Who issued the database's patient IDs, for the rows whose
+  \code{patient\_id\_issuer} is empty. Default: the database itself, so that its patient IDs link
+  only its own persons (\cref{sec:connecting-identity}) \\
+\code{mrn\_authority} & every kind & The authority of the database's MRNs, for the rows that name
+  none \\
+\code{timezone} & every kind & The time zone of the times it writes without an offset. Default:
+  Medorama's \code{timezone}, written into the database's settings when it is connected \\
+\code{files\_root} & every kind & The folder from which a recording's relative \code{file} is
+  read. Default: the folder of a SQLite database's file \\
+\code{timeout\_s} & every kind & Each query's time limit, in seconds (PostgreSQL). 0: 60 \\
+\code{max\_rows} & every kind & The rows a criterion may read. 0: 1\,000\,000 \\
+\code{persons}, \code{visits}, \code{entries}, \code{recordings}, \code{version} & \code{views} &
+  The views, as SQL (\cref{sec:connecting-views}); \code{persons} and \code{entries} are
+  required, \code{version} is a query whose one value names the data's version \\
+\end{xltabular}
+
 \subsection{Settings kept in the database}
 \label{sec:settings-reference-db}
 
-Administrators make some settings in the page. Medorama keeps them in the database (the table
-\code{settings}), not in \file{medorama.toml}, and writes each change to the audit log.
+Administrators make some settings in the page. Medorama keeps them in the control store (the
+table \code{settings}), not in \file{medorama.toml}, and writes each change to the audit log.
 \begin{xltabular}{\linewidth}{@{}P{3.0cm}P{4.0cm}L@{}}
 \caption{The settings made in the Admin tab.}
 \label{tab:settings-reference-admin}\\
@@ -357,7 +473,7 @@ Administrators make some settings in the page. Medorama keeps them in the databa
 What Privacy Mode withholds & Names, dates of birth, dates (moved back), ages above 89, MRNs,
   account numbers; the text of notes and reports is shown, marked & \ui{Admin} $\rightarrow$
   \ui{Privacy Mode} (\cref{chap:users-privacy}) \\
-The catalog's date offset & 0 years, 0 months, 36\,570 days, 0 hours & \ui{Admin} $\rightarrow$
+The date offset & 0 years, 0 months, 36\,570 days, 0 hours & \ui{Admin} $\rightarrow$
   \ui{Privacy Mode}: each value 0 or more \\
 Each patient's own days (\code{spread\_days}) & 365 & \ui{Admin} $\rightarrow$ \ui{Privacy
   Mode}: 30 to 3650 \\
@@ -473,14 +589,23 @@ index_workers = N
 An integer, 0 or more. Default: 2. This is the number of recordings that the viewer indexes at
 the same time.
 
-\apientry{cache\_dir}{The index folder}
+\apientry{cache\_dir}{The folder of the index store}
 \begin{lstlisting}[style=signature,language=TOML]
 cache_dir = "PATH"
 \end{lstlisting}
 A path. Default: \file{\textasciitilde/.cache/vitalstream}; when the viewer runs from a clone,
 \file{viewers/vitalstream/sample\_data/outputs/index}. Option: \opt{-{}-cache-dir}. This is the
-index folder. The three viewers share it, since they write the same index, and they share it with
-Medorama when it is set to the catalog's \code{index\_dir}.
+folder of the viewer's own index store, \file{index.sqlite} (index format 3,
+\cref{sec:formats-reference-folder}). The three viewers can share it, since they write the same
+rows. The viewer Medorama runs has its own store in Medorama's workspace instead.
+
+\apientry{index\_key\_file}{The key of the index store}
+\begin{lstlisting}[style=signature,language=TOML]
+index_key_file = "PATH"
+\end{lstlisting}
+A path. Default: empty. A file holding 64 hex digits: the key the viewer's own store is encrypted
+with (SQLCipher 4, a raw 256-bit key). Empty: a plain store. A store made with a key opens only
+with it, so keep the key file readable by its owner only, and apart from the store's backups.
 
 \apientry{adapters\_dir}{The adapter folder}
 \begin{lstlisting}[style=signature,language=TOML]
@@ -535,20 +660,23 @@ port = 8075
 \subsection{The settings Medorama writes for its viewer}
 \label{sec:settings-reference-medorama-viewer}
 
-The viewer that the catalog runs reads \file{<home>/viewer/vitalstream.toml}, which Medorama
+The viewer that Medorama runs reads \file{<home>/viewer/vitalstream.toml}, which Medorama
 rewrites every time it starts the viewer. The file sets \code{host = "127.0.0.1"}, a free
-\code{port}, \code{cache\_dir} to the catalog's \code{index\_dir}, \code{adapters\_dir} to the
-catalog's, \code{auth\_file} to \file{<home>/viewer/auth.json}, the catalog's \code{timezone},
-\code{data\_roots} to the catalog's (the whole file system when the catalog has none),
-\code{require\_password = true}, and \code{qc\_verbose = true} when the catalog's
+\code{port}, \code{cache\_dir} to \file{<workspace>/viewer} (the folder of its own index store), \code{adapters\_dir} to
+Medorama's, \code{auth\_file} to \file{<home>/viewer/auth.json}, Medorama's \code{timezone},
+\code{data\_roots} to Medorama's (the whole file system when it has none),
+\code{require\_password = true}, and \code{qc\_verbose = true} when Medorama's
 \code{qc\_verbose} is. It sets no folder limits, so the viewer keeps their defaults. Do not edit
-this file: the next start replaces it.
+this file: the next start replaces it. It names no key: the keys of the stores reach the viewer on
+its standard input only (\opt{-{}-keys-on-stdin}; \cref{sec:viewers-in-medorama-vitalstream}).
 
 \section{Options fixed when a program is built}
 \label{sec:settings-reference-build}
 
 A few options are not settings: they are fixed in the program when it is built, so that no
-setting can widen them. The installers pass them (\cref{chap:installation}); a build by hand sets
+setting can widen them. SQLCipher is not one of them: \cmd{medorama} is always built with it
+(OpenSSL is built from source, which needs Perl and a C compiler), since the workspace is always
+encrypted. The installers pass them (\cref{chap:installation}); a build by hand sets
 them as \cref{tab:settings-reference-build} shows.
 
 \begin{xltabular}{\linewidth}{@{}P{2.9cm}P{5.4cm}L@{}}
@@ -564,10 +692,9 @@ them as \cref{tab:settings-reference-build} shows.
 \endhead
 \bottomrule
 \endfoot
-\cmd{medorama} & Cargo feature \code{encryption}
-  (\cmd{cargo build -{}-release -{}-locked -p medorama -{}-features encryption}) & Encrypts the
-  database with SQLCipher (OpenSSL is built from source, which needs Perl and \cmd{make}). Off by
-  default \\
+\cmd{medorama} & Cargo feature \code{wfdb} (on by default; off with
+  \opt{-{}-no-default-features}) & WFDB records and folders, read through wfdb-x. Without it,
+  Medorama holds no wfdb-x code, and a WFDB recording is refused; every other format works \\
 \cmd{vitalstream-rs} & \code{VITALSTREAM\_ROOT=DIR} in the environment of \cmd{cargo build} &
   The viewer's root: it never opens anything outside \code{DIR} (\code{\textasciitilde} is the
   home folder of whoever runs it). Unset: the whole file system \\

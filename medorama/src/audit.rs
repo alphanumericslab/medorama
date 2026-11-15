@@ -241,6 +241,7 @@ pub fn verify_with_export(c: &Connection, export: Option<&std::path::Path>) -> a
     let held: std::collections::HashMap<i64, (i64, String)> =
         st.query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))?.collect::<Result<_, _>>()?;
     let mut n = 0;
+    let mut exported: std::collections::BTreeSet<i64> = Default::default();
     for line in text.lines().filter(|l| !l.trim().is_empty()) {
         let Ok(j) = serde_json::from_str::<serde_json::Value>(line) else {
             v.broken.get_or_insert_with(|| format!("{}: a line is not JSON", path.display()));
@@ -248,6 +249,7 @@ pub fn verify_with_export(c: &Connection, export: Option<&std::path::Path>) -> a
         };
         let (Some(seal), Some(hash)) = (j["seal"].as_i64(), j["hash"].as_str()) else { continue };
         n += 1;
+        exported.insert(seal);
         let entries = j["entries"].as_i64().unwrap_or(-1);
         match held.get(&seal) {
             Some((e, h)) if *h == hash && *e == entries => {}
@@ -261,6 +263,13 @@ pub fn verify_with_export(c: &Connection, export: Option<&std::path::Path>) -> a
             }
         }
     }
+    // the other way too: a seal the database holds that never reached the export (an export
+    // that failed once, or a tail cut off) is reported, the first one named
+    if let Some(missing) = held.keys().filter(|k| !exported.contains(k)).min() {
+        v.broken.get_or_insert_with(|| {
+            format!("seal {missing} is in the database but not in the export ({}): it was not written there, or was removed", path.display())
+        });
+    }
     v.exported_seals = Some(n);
     Ok(v)
 }
@@ -269,7 +278,7 @@ pub fn verify_with_export(c: &Connection, export: Option<&std::path::Path>) -> a
 mod tests {
     use super::*;
 
-    fn catalog() -> (tempfile::TempDir, crate::db::Db) {
+    fn store() -> (tempfile::TempDir, crate::db::Db) {
         let tmp = tempfile::tempdir().unwrap();
         let cfg = crate::config::Config::new(&tmp.path().join("home"), &tmp.path().join("results"));
         let db = crate::db::Db::open(&cfg, true).unwrap();
@@ -278,7 +287,7 @@ mod tests {
 
     #[test]
     fn sealed_entries_cannot_change() {
-        let (tmp, db) = catalog();
+        let (tmp, db) = store();
         let c = db.get().unwrap();
         let export = tmp.path().join("audit.jsonl");
         for i in 0..5 {
@@ -303,8 +312,27 @@ mod tests {
     }
 
     #[test]
+    fn a_seal_the_export_lacks_is_reported() {
+        let (tmp, db) = store();
+        let c = db.get().unwrap();
+        let export = tmp.path().join("audit.jsonl");
+        crate::db::audit(&c, None, "test", "t0", "");
+        seal(&c, Some(&export)).unwrap().unwrap();
+        // a seal written while the export could not be (sealed without it)
+        crate::db::audit(&c, None, "test", "t1", "");
+        seal(&c, None).unwrap().unwrap();
+        crate::db::audit(&c, None, "test", "t2", "");
+        seal(&c, Some(&export)).unwrap().unwrap();
+        let v = verify_with_export(&c, Some(&export)).unwrap();
+        assert!(
+            v.broken.as_deref().is_some_and(|b| b.contains("seal 2 is in the database but not in the export")),
+            "{v:?}"
+        );
+    }
+
+    #[test]
     fn the_end_of_the_log_cannot_be_cut() {
-        let (tmp, db) = catalog();
+        let (tmp, db) = store();
         let c = db.get().unwrap();
         let export = tmp.path().join("audit.jsonl");
         crate::db::audit(&c, None, "test", "t0", "");
@@ -324,7 +352,7 @@ mod tests {
         assert!(verify(&c).unwrap().broken.is_none(), "the database alone cannot tell");
         assert!(verify_with_export(&c, Some(&export)).unwrap().broken.unwrap().contains("not in the database"));
         // entries not sealed yet, deleted
-        let (_tmp2, db2) = catalog();
+        let (_tmp2, db2) = store();
         let c2 = db2.get().unwrap();
         crate::db::audit(&c2, None, "test", "t0", "");
         seal(&c2, None).unwrap();

@@ -1,82 +1,88 @@
 #!/usr/bin/env python3
-"""Make a synthetic demo data set for Medorama: fake patients, their databases and files.
+"""Make Medorama's demo: invented patients, their databases and files, for trying every feature.
 
-    .venv/bin/python tools/make-demo-data.py [OUT]     # default: sample_data/demo (not in git)
+    .venv/bin/python tools/make-demo-data.py [OUT]                 # the full demo (default OUT: sample_data/demo)
+    .venv/bin/python tools/make-demo-data.py OUT --db-builder .venv/bin/db-builder   # and build its databases
+    .venv/bin/python tools/make-demo-data.py OUT --small           # the first six patients only (two databases)
 
-WFDB records are written with wfdb-x (the Python package wfdbx, which Medorama's environment has:
-docs/building.md).
+Needs NumPy and wfdb-x (the version the Python viewer pins; docs/building.md).  The same seed
+makes the same demo, byte for byte (--seed N; default 20240101).
 
-Writes, under OUT:
+The demo is made from two things: models (patients, stays, results, notes, vital signs, sleep
+and EEG signals, echo, angiography and synthetic images) and the demo library in
+tools/demo/library: short pieces of real ECGs and CT series, transformed so that they represent
+no one (heart beats re-timed, blended, their leads mixed; CT slices re-sliced, deformed,
+re-mapped; chest radiographs projected from them), made by a maintainer-only tool and checked
+against re-identification (tools/demo/README.md).  Without the library (--no-library, or a
+clone without it) everything is made from models.
 
-  icu/        short synthetic ICU recordings (WFDB collections, 10 minutes each: ECG, arterial
-              pressure, SpO2 pleth, respiration, vital signs, alarms, R-wave markers), named as
-              bedside-monitor systems name their recordings (UNIT_BED-<Unix time>)
-  holter/     a 24-hour, 2-lead Holter ECG (a WFDB record, 128 Hz)
-  sleep/      an overnight sleep study (polysomnography: two hours, an EDF+ file): EEG, EOG, ECG,
-              airflow, thoracic effort and SpO2, with its scoring as annotations (sleep stages,
-              apneas, desaturations, arousals)
-  ecg/        12-lead ECGs: WFDB records (500 Hz, the report in the header), GE MUSE XML, a DICOM
-              ECG, one PDF and one PNG printout
-  imaging/    DICOM: chest X-rays, CT series (a folder each)
-  echo/       echo loops (DICOM multi-frame, 30 frames/s; one as PNG frames) and structured reports
-  cath/       a coronary angiography run (DICOM XA, 15 frames/s)
-  databases/  the tables to import, each a database of its own:
-              patients.csv        who the patients are (MRN, name, date of birth, sex)
-              encounters.xlsx     admissions, visits and bed stays (an Excel sheet)
-              labs.csv            laboratory results with reference ranges and flags
-              vitals.csv          vital signs charted on the ward and in the ICU
-              medications.csv     drugs with start and stop times
-              diagnoses.csv       ICD-10 codes
-              microbiology.csv    cultures
-              notes.csv           clinical notes (plain text)
-              allergies.csv       allergies
-              ecg_index.csv       links to the ECGs, with their measurements and interpretation
-              icu_index.csv       links to the ICU recordings
-              holter_index.csv    links to the Holter recordings
-              sleep_index.csv     links to the sleep studies
-              imaging_index.csv   links to the imaging studies, with their reports
-              echo_index.csv      echo loops and reports, their measurements as columns
-              cath_index.csv      the cath lab's angiography, its findings as columns
-  omop/       omop.sqlite: another hospital's OMOP CDM database, to connect rather than import
-              (docs/design/sources.md): two of the patients above (by their MRNs) and two of
-              its own, with their stays, results, vital signs, conditions, drugs and notes.
-              medorama connections add omop --kind omop --url sqlite:OUT/omop/omop.sqlite
+Every person is invented: names, MRNs (SYN…), patient IDs, dates of birth, every date (in an
+invented period), every text.  No identifier of any real person or recording is in the demo.
 
-Everything is invented: names, numbers, signals and pictures.  Nothing comes from a patient.
+Writes, under OUT (README.txt repeats this text; demo.json says what went in):
 
-    .venv/bin/python tools/make-demo-data.py [OUT] --examples sample_data/sample-ecg
+  databases/  the main hospital's tables (db-builder makes them into demo.sqlite): patients,
+              encounters (an Excel sheet), labs, vitals, medications, diagnoses (ICD-10),
+              microbiology, procedures, transfusions, life support, assessments, pathology,
+              allergies, notes, and the indexes of the files below
+  icu/        ICU recordings: WFDB collections (ECG I, II, III; arterial pressure; pleth;
+              respiration; vital signs; alarms; R-wave and PVC markers; a break; a stretch
+              without stated time), named UNIT_BED-<Unix time> as bedside monitors name them
+  holter/     Holter ECGs (WFDB, 128 Hz)
+  sleep/      an overnight sleep study (EDF+, scored)
+  sleeplab/   more sleep studies, and eeglab/ routine EEGs (BDF+): folders of recordings that
+              db-builder adds by a file-name pattern ({patient}_*.edf, {patient}_*.bdf)
+  ecg/        12-lead ECGs: WFDB records, GE MUSE XML, DICOM ECGs, PDF and PNG printouts
+  imaging/    DICOM: chest radiographs, CT series (a folder each, with the attribution of the
+              public collection a library series came from)
+  echo/       echo loops (DICOM cine; one as PNG frames) and structured reports
+  cath/       coronary angiography runs (DICOM XA)
+  north/      a second hospital's tables (db-builder: north/north.sqlite): some of the same
+              patients by the same MRN authority, one MRN in lower case (matched ignoring case),
+              one identity conflict, patient IDs written PT_123 (rules.toml makes them PT123),
+              files under a folder that moves after the database is built (moved.toml, for
+              db-builder rewrite)
+  omop/       omop.sqlite: a third hospital's OMOP CDM database
+  registry/   registry.sqlite: a research registry's own tables, connected through SQL views
+              (kind views; its views in demo-databases.json and registry/views.toml)
+  secure/     a db-builder database encrypted with SQLCipher (secure/secure.sqlite); its key
+              in keys/demo_secure.key (a demo key, published with the demo: never do this
+              with a real database)
+  actions/    the example plug-in (recording-summary), for the Actions tab
+  demo-databases.json   what `medorama init --demo` connects: each database's name, kind, file,
+              settings and key file
+  demo.json   what went in: "invented" (models only), "library" (the demo library), "examples"
+              and "dicom" (local files given with --examples and --dicom)
 
-also adds local examples of real ECGs (never in git) to some demo patients: MUSE XML files are
-de-identified on the way (a demo patient's identity, no other identifier, a synthetic
-overreader, site and location, dates moved to that patient's encounter); WFDB records,
-pictures and PDFs, already de-identified, are copied as they are.
+With --db-builder, the databases are built (the installers' --demo does it):
 
-    .venv/bin/python tools/make-demo-data.py [OUT] --dicom sample_data/sample-dicom
+  db-builder new OUT/demo.sqlite; db-builder add … --issuer DEMO --mrn-authority DEMO
+  db-builder recordings OUT/demo.sqlite OUT/sleeplab --pattern '{patient}_*.edf' --category sleep …
+  db-builder add OUT/north/north.sqlite … --rules OUT/north/rules.toml; the folder moved;
+  db-builder rewrite OUT/north/north.sqlite --rules OUT/north/moved.toml
+  db-builder --encrypt new/add OUT/secure/secure.sqlite (DB_BUILDER_KEY from keys/demo_secure.key)
 
-also gives local DICOM studies (public sample collections, never in git: see DICOM_EXAMPLES)
-to the demo patients whose stories they fit, in place of the synthetic CT series.  They are
-de-identified on the way (pydicom): the demo patient's identity, no other person's name and no
-other identifier, private elements removed, new UIDs, dates moved to the demo encounter.  The
-pixels are kept.  A collection's CITATION.txt (its licence) is copied beside it.
+and `medorama init --workspace DIR --demo` connects them all (docs/administration.md, "The
+demo"; Medorama's data_roots, if set, must include OUT).  The first line of this text, which
+README.txt repeats, tells such a folder from others.
 
-Load it into a catalog as the demo: its tables as the source DEMO, its OMOP database, and a
-cohort DEMO that every user sees; deleting that cohort removes it all (docs/administration.md,
-"The demo").  The installers' --demo option does this for `medorama init`.
+    .venv/bin/python tools/make-demo-data.py OUT --examples sample_data/sample-ecg
+    .venv/bin/python tools/make-demo-data.py OUT --dicom sample_data/sample-dicom
 
-    medorama demo add OUT
-
-(the catalog's data_roots, if set, must include OUT).  The first line of this text, which
-README.txt repeats, is how `medorama demo add` recognises such a folder.  demo.json says whether
-the folder holds invented data alone or also local files (--examples, --dicom):
-tools/screenshots.py takes pictures only of a demo of invented data alone.
+also give some of the first six patients local examples of real ECGs or DICOM studies (never
+in git), de-identified on the way (a demo patient's identity, dates moved to the demo's).
+demo.json then says so, and tools/screenshots.py refuses to take published pictures of it.
 """
 
 import csv
 import json
+import os
+import shutil
 import sqlite3
 import math
 import random
 import struct
+import subprocess
 from array import array
 import sys
 import zipfile
@@ -85,9 +91,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-ROOT = Path(__file__).resolve().parent.parent
+try:
+    import numpy as np
+except ImportError:          # the tests of the Excel writer need none; making the demo does
+    np = None
 
-R = random.Random(20240101)
+ROOT = Path(__file__).resolve().parent.parent
+LIBRARY = ROOT / 'tools' / 'demo' / 'library'
+SEED = 20240101
+
+R = random.Random(SEED)
 UTC = timezone.utc
 
 
@@ -97,6 +110,102 @@ def t(s):
 
 def fmt(d):
     return d.strftime('%Y-%m-%d %H:%M')
+
+
+# ------------------------------------------------------------------ the features it shows
+#
+# Every feature of Medorama the demo shows is listed here, with where the demo shows it and a
+# check that the demo made holds it.  tools/README.md ("The demo's features") lists the same
+# keys in a table, and tools/tests/test_make_demo_data.py checks that both agree and that every
+# check passes.  A new feature of Medorama adds its part to the demo (a function below) and its
+# row here and in that table.
+
+FEATURES = {}
+
+
+def feature(key, title, where):
+    """Registers the check of a feature: a function of the demo folder, true when the demo holds it."""
+    def wrap(check):
+        FEATURES[key] = {'title': title, 'where': where, 'check': check}
+        return check
+    return wrap
+
+
+def _rows(out, rel):
+    p = Path(out) / rel
+    if not p.is_file():
+        return []
+    with open(p, newline='', encoding='utf-8') as f:
+        return list(csv.DictReader(f))
+
+
+def _manifest(out):
+    p = Path(out) / 'demo-databases.json'
+    return json.loads(p.read_text(encoding='utf-8')) if p.is_file() else {'databases': []}
+
+
+def _db(out, name):
+    return next((d for d in _manifest(out)['databases'] if d['name'] == name), None)
+
+
+feature('patients', 'About 40 invented patients (pseudo names, SYN MRNs, shifted dates of birth)', 'databases/patients.csv')(
+    lambda out: len(_rows(out, 'databases/patients.csv')) >= 36 and all(r['MRN'].startswith('SYN') for r in _rows(out, 'databases/patients.csv')))
+feature('age-90', 'A patient over 89 (shown as 90+ in Privacy Mode)', 'databases/patients.csv')(
+    lambda out: any(r['DOB'] < '1934' for r in _rows(out, 'databases/patients.csv')))
+feature('visits', 'Several visits per patient: admissions, clinic visits, ICU and bed stays', 'databases/encounters.xlsx')(
+    lambda out: (Path(out) / 'databases/encounters.xlsx').is_file())
+feature('labs', 'Laboratory results with reference ranges and flags (LOINC)', 'databases/labs.csv')(
+    lambda out: any(r['Abnormal Flag'] == 'H' for r in _rows(out, 'databases/labs.csv')) and any(r['Abnormal Flag'] == 'L' for r in _rows(out, 'databases/labs.csv')))
+feature('vitals', 'Charted vital signs', 'databases/vitals.csv')(lambda out: len(_rows(out, 'databases/vitals.csv')) > 500)
+feature('micro', 'Microbiology cultures', 'databases/microbiology.csv')(lambda out: len(_rows(out, 'databases/microbiology.csv')) >= 5)
+feature('meds', 'Medications with start and stop times', 'databases/medications.csv')(lambda out: len(_rows(out, 'databases/medications.csv')) >= 20)
+feature('blood', 'Transfusions', 'databases/transfusions.csv')(lambda out: len(_rows(out, 'databases/transfusions.csv')) >= 2)
+feature('support', 'Life support: ventilation, dialysis', 'databases/life_support.csv')(lambda out: len(_rows(out, 'databases/life_support.csv')) >= 2)
+feature('procedures', 'Procedures', 'databases/procedures.csv')(lambda out: len(_rows(out, 'databases/procedures.csv')) >= 3)
+feature('diagnoses', 'Diagnoses with ICD-10 codes', 'databases/diagnoses.csv')(lambda out: len(_rows(out, 'databases/diagnoses.csv')) >= 20)
+feature('observations', 'Assessments and scores (GCS, SOFA, pain, NYHA)', 'databases/assessments.csv')(lambda out: len(_rows(out, 'databases/assessments.csv')) >= 10)
+feature('pathology', 'Pathology reports', 'databases/pathology.csv')(lambda out: len(_rows(out, 'databases/pathology.csv')) >= 1)
+feature('allergies', 'Allergies', 'databases/allergies.csv')(lambda out: len(_rows(out, 'databases/allergies.csv')) >= 3)
+feature('notes-privacy', "Notes that name the patient and give the date of birth (replaced in Privacy Mode)", 'databases/notes.csv')(
+    lambda out: any('DOB' in r['note_text'] for r in _rows(out, 'databases/notes.csv')))
+feature('reports', 'Imaging, echo and cath reports with measurement columns', 'databases/imaging_index.csv, echo_index.csv, cath_index.csv')(
+    lambda out: all(_rows(out, f'databases/{n}_index.csv') for n in ('imaging', 'echo', 'cath')))
+feature('icu-collection', 'ICU recordings: WFDB collections with vital signs, alarms, markers', 'icu/')(
+    lambda out: len(list(Path(out).glob('icu/*/index.csv'))) >= 10 and all((p.parent / 'events.csv').is_file() for p in Path(out).glob('icu/*/index.csv')))
+feature('icu-gaps', 'A break in a recording, and a stretch without stated time', 'icu/*/gaps.csv')(
+    lambda out: any(r.get('start_unix') == '' for p in Path(out).glob('icu/*/index.csv') for r in _rows(p.parent, 'index.csv'))
+    and any(_rows(p.parent, 'gaps.csv') for p in Path(out).glob('icu/*/index.csv')))
+feature('holter', 'Holter ECGs (heart rate derived by the index action)', 'holter/')(lambda out: len(list(Path(out).glob('holter/*/*.hea'))) >= 2)
+feature('sleep-edf', 'Sleep studies as EDF+ with scoring annotations', 'sleep/, sleeplab/')(
+    lambda out: len(list(Path(out).glob('sleep/*.edf'))) + len(list(Path(out).glob('sleeplab/*.edf'))) >= 2)
+feature('eeg-bdf', 'Routine EEGs as BDF+ (24-bit)', 'eeglab/')(lambda out: any(p.read_bytes()[:8] == b'\xffBIOSEMI' for p in Path(out).glob('eeglab/*.bdf')))
+feature('recordings-pattern', 'Folders of recordings added by a file-name pattern (db-builder recordings)', 'sleeplab/, eeglab/')(
+    lambda out: any(s[0] == 'recordings' for d in _manifest(out)['databases'] for s in d.get('build', [])))
+feature('ecg-formats', '12-lead ECGs as WFDB, MUSE XML, DICOM, PDF and PNG', 'ecg/')(
+    lambda out: all(list(Path(out).glob(f'ecg/*.{x}')) for x in ('hea', 'xml', 'dcm', 'pdf', 'png')))
+feature('echo', 'Echo loops (DICOM cine, PNG frames) and structured reports', 'echo/')(lambda out: len(list(Path(out).glob('echo/*_a4c.dcm'))) >= 3)
+feature('ct', 'CT series', 'imaging/ct_*')(lambda out: len([p for p in Path(out).glob('imaging/ct_*') if p.is_dir()]) >= 4)
+feature('xray', 'Chest radiographs', 'imaging/cxr_*')(lambda out: len(list(Path(out).glob('imaging/cxr_*.dcm'))) >= 3)
+feature('cath', 'Coronary angiography runs', 'cath/')(lambda out: len(list(Path(out).glob('cath/*.dcm'))) >= 2)
+feature('library', 'Real signals and pixels, transformed (the demo library), when present', 'demo.json')(
+    lambda out: json.loads((Path(out) / 'demo.json').read_text())['library'] == (LIBRARY / 'manifest.json').is_file())
+feature('second-hospital', 'A second hospital sharing patients by MRN authority', 'north/')(lambda out: _db(out, 'demo_north') is not None)
+feature('mrn-case', 'An MRN differing only in letter case, linked ignoring case', 'north/patients.csv')(
+    lambda out: any(r['MRN'] != r['MRN'].upper() for r in _rows(out, 'north/patients.csv')))
+feature('identity-conflict', 'An identity conflict (an MRN of one patient, the ID of another)', 'north/patients.csv')(
+    lambda out: any(r.get('Issuer') == 'DEMO' for r in _rows(out, 'north/patients.csv')))
+feature('rules', 'Rewrite rules: identifiers normalised (PT_123 to PT123), paths rewritten', 'north/rules.toml')(
+    lambda out: (Path(out) / 'north/rules.toml').is_file() and any(r['Patient ID'].startswith('PT_') for r in _rows(out, 'north/patients.csv')))
+feature('rewrite', 'A moved folder, repointed with db-builder rewrite', 'north/moved.toml')(lambda out: (Path(out) / 'north/moved.toml').is_file())
+feature('omop', 'An OMOP CDM database', 'omop/omop.sqlite')(lambda out: (Path(out) / 'omop/omop.sqlite').is_file() and _db(out, 'demo_omop') is not None)
+feature('views', 'A SQL database connected through canonical views', 'registry/')(
+    lambda out: (_db(out, 'demo_registry') or {}).get('kind') == 'views')
+feature('encrypted', 'An encrypted db-builder database, its key in a file', 'secure/, keys/')(
+    lambda out: (_db(out, 'demo_secure') or {}).get('key_file') and (Path(out) / 'keys/demo_secure.key').is_file())
+feature('actions', 'The example action plug-in, for the Actions tab', 'actions/')(
+    lambda out: (Path(out) / 'actions/recording-summary/action.toml').is_file())
+feature('cohorts', 'Enough patients and values for cohort criteria (creatinine, lactate, troponin, ICU, sex, age)', 'databases/labs.csv')(
+    lambda out: len({r['MRN'] for r in _rows(out, 'databases/labs.csv') if r['Test Name'] == 'Creatinine' and float(r['Result']) > 1.5}) >= 4)
 
 
 # ------------------------------------------------------------------ the patients (invented)
@@ -110,7 +219,6 @@ PATIENTS = [
     ('P900005', 'SYN0000005', 'Lindqvist', 'Eva', '1966-06-14', 'F'),
     ('P900006', 'SYN0000006', 'Tanaka', 'Hiro', '1971-02-25', 'M'),
 ]
-MRN = {p[0]: p[1] for p in PATIENTS}
 
 # encounter_id, patient, csn, kind, admit, discharge, unit, disposition, icu (unit, bed, start, end)
 ENCOUNTERS = [
@@ -130,32 +238,146 @@ ENCOUNTERS = [
 ]
 # P900006 has laboratory results only (no encounter in any database)
 
+# each core encounter's story (STORIES below)
+CORE_STORIES = {'E9100001': 'diabetes', 'E9100002': 'nstemi_sepsis', 'E9100003': 'followup', 'E9100004': 'pneumonia',
+                'E9100005': 'abdominal_pain', 'E9100006': 'appendicitis', 'E9100007': 'hypertension', 'E9100008': 'palpitations',
+                'E9100010': 'sleep', 'E9100009': 'af'}
+
+# invented names for the generated patients: common given names and family names from many
+# places, put together at random (with an apostrophe, a hyphen and accents, for the pages' sake)
+FIRST_F = ['Maria', 'Amara', 'Sofia', 'Leila', 'Grace', 'Ingrid', 'Mei', 'Priya', 'Olga', 'Fatima', 'Chloé', 'Nadia',
+           'Rosa', 'Hana', 'Zoe', 'Elena', 'Aisha', 'Lucía']
+FIRST_M = ['John', 'Kwame', 'Luca', 'Omar', 'Pavel', 'Kenji', 'Arjun', 'Diego', 'Lars', 'Samuel', 'Théo', 'Ivan',
+           'Malik', 'Tomás', 'Felix', 'Rahul', 'Noah', 'Jorge']
+LAST = ['Smith-Doe', 'Moreau', 'Novak', 'Haddad', 'Kowalski', 'Silva', 'Nakamura', 'Mensah', 'Ivanova', "O'Neill",
+        'García', 'Nguyen', 'Rossi', 'Schmidt', 'Dubois', 'Petrov', 'Kim', 'Singh', 'Cohen', 'Larsen', 'Moyo', 'Fischer',
+        'Ali', 'Santos', 'Berg', 'Popescu', 'Yilmaz', 'Costa', 'Hughes', 'Sato', 'Okoye', 'Lund', 'Wójcik', 'Reyes']
+
+# the stories of the generated patients' stays, in turn (each one at least once)
+ROTATION = ['sepsis', 'nstemi', 'af', 'pneumonia', 'hf', 'ckd', 'diabetes', 'surgery', 'checkup', 'palpitations',
+            'seizure', 'sleep', 'copd', 'stroke', 'gi_bleed', 'hf', 'sepsis', 'diabetes', 'checkup', 'nstemi', 'pneumonia',
+            'ckd', 'af', 'surgery', 'copd', 'checkup', 'hf', 'gi_bleed', 'sepsis', 'seizure', 'sleep', 'diabetes', 'stroke', 'checkup']
+
+PERIOD = (t('2023-09-01 00:00'), t('2024-05-31 00:00'))      # the invented period of every stay
+
+
+def generated(seed=SEED, n=34):
+    """The generated patients and their encounters (the same for the same seed):
+    ([patient tuples], [encounter tuples], {encounter: story})."""
+    rng = random.Random(seed * 7 + 1)
+    pats, encs, stories = [], [], {}
+    used = set()
+    for i in range(n):
+        pid, mrn = f'P9{i + 7:05d}', f'SYN{i + 7:07d}'
+        sex = 'F' if i % 2 == 0 else 'M'
+        while True:
+            first = rng.choice(FIRST_F if sex == 'F' else FIRST_M)
+            last = rng.choice(LAST)
+            if (first, last) not in used:
+                used.add((first, last))
+                break
+        story = ROTATION[i % len(ROTATION)]
+        age = {'checkup': rng.randint(25, 60), 'sleep': rng.randint(35, 65), 'seizure': rng.randint(19, 45)}.get(story, rng.randint(45, 85))
+        if i == 8:
+            age = 93          # over 89: shown as 90+ in Privacy Mode
+        born = datetime(2024 - age, rng.randint(1, 12), rng.randint(1, 28))
+        pats.append((pid, mrn, last, first, f'{born:%Y-%m-%d}', sex))
+        start = PERIOD[0] + timedelta(days=rng.randint(0, 200), hours=rng.randint(7, 20), minutes=rng.choice([0, 10, 20, 30, 40, 50]))
+        plan = STORY_PLANS.get(story, [story])
+        for k, st in enumerate(plan):
+            kind, days, unit, icu_days = STORY_SHAPE[st]
+            eid, csn = f'E92{i + 7:03d}{k + 1:02d}', f'91{i + 7:04d}{k + 1:04d}'
+            a = start
+            if kind == 'out':
+                b = a + timedelta(minutes=60 if st != 'sleep' else 570)
+                if st == 'sleep':
+                    a = a.replace(hour=21, minute=30)
+                    b = a + timedelta(hours=9, minutes=30)
+                icu = None
+            else:
+                b = a + timedelta(days=days, hours=rng.randint(0, 8))
+                icu = None
+                if icu_days:
+                    s = a + timedelta(hours=rng.randint(2, 6))
+                    unit_name = {'nstemi': 'CCU', 'stroke': 'NICU'}.get(st, rng.choice(['ICU7', 'ICU8', 'MICU']))
+                    icu = (unit_name, str(rng.randint(1, 16)), fmt(s), fmt(s + timedelta(days=icu_days, hours=rng.randint(0, 10))))
+            encs.append((eid, pid, csn, kind, fmt(a), fmt(b), unit, 'Home' if st != 'sepsis' or k else 'Rehabilitation', icu))
+            stories[eid] = st
+            start = b + timedelta(days=rng.randint(20, 70), hours=rng.randint(-3, 3))
+    return pats, encs, stories
+
+
+# kind, length (days), admitting unit, ICU days
+STORY_SHAPE = {
+    'sepsis': ('in', 9, 'Emergency', 3), 'nstemi': ('in', 5, 'Cardiology', 2), 'af': ('in', 3, 'Medicine', 0),
+    'pneumonia': ('in', 6, 'Medicine', 0), 'hf': ('in', 6, 'Cardiology', 0), 'ckd': ('out', 0, 'Nephrology clinic', 0),
+    'diabetes': ('out', 0, 'Endocrinology clinic', 0), 'surgery': ('in', 4, 'Surgery', 0), 'checkup': ('out', 0, 'Primary care', 0),
+    'palpitations': ('out', 0, 'Cardiology clinic', 0), 'seizure': ('in', 2, 'Neurology', 0), 'sleep': ('out', 0, 'Sleep laboratory', 0),
+    'copd': ('in', 5, 'Pulmonology', 0), 'stroke': ('in', 7, 'Neurology', 2), 'gi_bleed': ('in', 4, 'Gastroenterology', 1),
+    'followup': ('out', 0, 'Cardiology clinic', 0), 'ckd_dialysis': ('in', 4, 'Nephrology', 0),
+}
+# a story told over several stays
+STORY_PLANS = {'ckd': ['ckd', 'ckd', 'ckd_dialysis'], 'diabetes': ['diabetes', 'diabetes'], 'hf': ['hf', 'followup'],
+               'nstemi': ['nstemi', 'followup'], 'sepsis': ['sepsis', 'followup'], 'sleep': ['checkup', 'sleep']}
+
+
+def all_people(full=True, seed=SEED):
+    """The main hospital's patients and encounters, and each encounter's story."""
+    if not full:
+        return list(PATIENTS), list(ENCOUNTERS), dict(CORE_STORIES)
+    p, e, s = generated(seed)
+    return PATIENTS + p, ENCOUNTERS + e, {**CORE_STORIES, **s}
+
+
 LABS = [
     # name, loinc, unit, low, high, normal, sick (value when ill)
-    ('Sodium', '2951-2', 'mmol/L', 135, 145, 139, 133),
-    ('Potassium', '2823-3', 'mmol/L', 3.5, 5.1, 4.2, 4.9),
+    ('Sodium', '2951-2', 'mmol/L', 135, 145, 139, 131),
+    ('Potassium', '2823-3', 'mmol/L', 3.5, 5.1, 4.2, 5.6),
     ('Creatinine', '2160-0', 'mg/dL', 0.6, 1.2, 0.9, 2.3),
     ('BUN', '3094-0', 'mg/dL', 7, 20, 14, 38),
     ('Glucose', '2345-7', 'mg/dL', 70, 140, 110, 190),
     ('Lactate', '2524-7', 'mmol/L', 0.5, 2.0, 1.1, 4.1),
     ('WBC', '6690-2', '10^9/L', 4.0, 11.0, 7.5, 18.2),
-    ('Hemoglobin', '718-7', 'g/dL', 12.0, 16.0, 13.1, 9.8),
-    ('Platelets', '777-3', '10^9/L', 150, 400, 240, 138),
-    ('Troponin T', '6598-7', 'ng/L', 0, 14, 8, 380),
+    ('Hemoglobin', '718-7', 'g/dL', 12.0, 16.0, 13.1, 7.6),     # a woman's range: by_sex gives a man's
+    ('Platelets', '777-3', '10^9/L', 150, 400, 240, 98),
+    ('Troponin T', '67151-1', 'ng/L', 0, 14, 8, 380),          # high-sensitivity troponin T, in ng/L
     ('Procalcitonin', '33959-8', 'ng/mL', 0, 0.5, 0.1, 6.4),
     ('INR', '6301-6', '', 0.8, 1.2, 1.0, 1.6),
+    ('NT-proBNP', '33762-6', 'pg/mL', 0, 125, 80, 5200),
+    ('HbA1c', '4548-4', '%', 4.0, 5.6, 5.3, 8.9),
+    ('CRP', '1988-5', 'mg/L', 0, 5, 2, 160),
 ]
+# the laboratory tests each story makes abnormal (the others stay normal), and the tests drawn
+SICK = {
+    'nstemi_sepsis': {'Creatinine', 'BUN', 'Lactate', 'WBC', 'Platelets', 'Procalcitonin', 'Troponin T', 'Glucose', 'CRP', 'Hemoglobin'},
+    'sepsis': {'Creatinine', 'BUN', 'Lactate', 'WBC', 'Platelets', 'Procalcitonin', 'CRP', 'Sodium'},
+    'nstemi': {'Troponin T', 'Glucose'}, 'af': {'NT-proBNP'}, 'pneumonia': {'WBC', 'CRP', 'Procalcitonin', 'Sodium'},
+    'hf': {'NT-proBNP', 'Sodium', 'Creatinine', 'BUN'}, 'ckd': {'Creatinine', 'BUN', 'Potassium', 'Hemoglobin'},
+    'ckd_dialysis': {'Creatinine', 'BUN', 'Potassium', 'Hemoglobin'}, 'diabetes': {'Glucose', 'HbA1c'},
+    'surgery': {'WBC', 'CRP'}, 'appendicitis': {'WBC', 'CRP'}, 'abdominal_pain': {'WBC'}, 'copd': {'WBC', 'CRP'},
+    'stroke': {'Glucose'}, 'gi_bleed': {'Hemoglobin', 'BUN', 'Platelets', 'INR'}, 'seizure': {'Lactate'},
+}
+CORE_LABS = ['Sodium', 'Potassium', 'Creatinine', 'BUN', 'Glucose', 'Lactate', 'WBC', 'Hemoglobin', 'Platelets', 'Procalcitonin', 'INR']
+EXTRA_LABS = {'nstemi_sepsis': ['Troponin T', 'CRP'], 'nstemi': ['Troponin T'], 'hf': ['NT-proBNP'], 'af': ['NT-proBNP'],
+              'diabetes': ['HbA1c'], 'pneumonia': ['CRP'], 'sepsis': ['CRP'], 'copd': ['CRP'], 'surgery': ['CRP'], 'appendicitis': ['CRP']}
 
 
 def illness(enc, when):
     """How ill the patient is at `when` (0..1): a hump over the ICU stay."""
     icu = enc[8]
     if not icu:
-        return 0.15 if enc[3] == 'in' else 0.0
+        return 0.35 if enc[3] == 'in' else 0.0
     a, b = t(icu[2]), t(icu[3])
     mid = a + (b - a) * 0.55
     width = (b - a).total_seconds() * 0.45
     return max(0.0, math.exp(-((when - mid).total_seconds() / width) ** 2))
+
+
+def by_sex(name, lo, hi, norm, sex):
+    """A test's range and usual value for the patient's sex: hemoglobin F 12-16, M 13.5-17.5 g/dL."""
+    if name == 'Hemoglobin' and sex == 'M':
+        return 13.5, 17.5, 14.8
+    return lo, hi, norm
 
 
 def flag(v, lo, hi):
@@ -166,26 +388,154 @@ def flag(v, lo, hi):
     return ''
 
 
-# ------------------------------------------------------------------ ICU recordings
-
-def ecg_wave(phase):
-    """One heartbeat, phase 0..1: P, QRS, T (raw counts)."""
-    g = lambda c, w, a: a * math.exp(-((phase - c) / w) ** 2)
-    return int(g(0.18, 0.025, 90) - g(0.29, 0.008, 80) + g(0.31, 0.010, 900) - g(0.335, 0.010, 220) + g(0.58, 0.05, 220))
+def age_at(born, when):
+    b = datetime.strptime(born, '%Y-%m-%d')
+    return when.year - b.year - ((when.month, when.day) < (b.month, b.day))
 
 
-def abp_wave(phase, sys_, dia):
-    """Arterial pressure (mmHg) over one beat."""
-    up = 0.12
-    if phase < up:
-        return dia + (sys_ - dia) * math.sin(phase / up * math.pi / 2)
-    return dia + (sys_ - dia) * math.exp(-(phase - up) * 3.2) + 6 * math.exp(-((phase - 0.36) / 0.03) ** 2)
+# ------------------------------------------------------------------ the demo library
+
+class Library:
+    """The demo library (tools/demo/library): beat templates, pulse models, CT series and
+    radiographs, transformed from real recordings and pictures (tools/demo/README.md)."""
+
+    def __init__(self, folder):
+        self.folder = Path(folder)
+        self.items = json.loads((self.folder / 'manifest.json').read_text(encoding='utf-8'))['items']
+
+    def of(self, kind):
+        return [i for i in self.items if i['kind'] == kind]
+
+    def array(self, item):
+        a = np.fromfile(self.folder / item['file'], '<i2' if item['dtype'] == 'int16' else '<u2')
+        return a.reshape(item['shape']).astype(np.float64)
+
+    def pick(self, kind, k):
+        items = self.of(kind)
+        return items[k % len(items)] if items else None
 
 
-def pleth_wave(phase):
-    ph = (phase + 0.85) % 1.0
-    return int(1500 + 900 * (math.sin(ph / 0.3 * math.pi / 2) if ph < 0.3 else math.exp(-(ph - 0.3) * 2.6)))
+def library(path):
+    p = Path(path)
+    return Library(p) if (p / 'manifest.json').is_file() else None
 
+
+def overlap_add(template, pre, fs, beats, n, stretch=True):
+    """Beats of `template` (leads x samples, R at `pre`) placed at `beats` [(time s, RR s)],
+    the part after the R wave stretched with the RR (QT follows the rate), summed into n
+    samples.  The rendering tools/demo/README.md describes (and its checks measure)."""
+    out = np.zeros((template.shape[0], n))
+    L = template.shape[1]
+    i = np.arange(L, dtype=float)
+    for tb, rr in beats:
+        k = math.sqrt(min(1.4, rr) / 0.85) if stretch else 1.0
+        src = np.where(i < pre, i, pre + (i - pre) / k)
+        beat = np.stack([np.interp(src, i, v) for v in template])
+        s = int(round(tb * fs)) - pre
+        a, b = max(0, s), min(n, s + L)
+        if a < b:
+            out[:, a:b] += beat[:, a - s:b - s]
+    return out
+
+
+def pvc_beat(template, pre):
+    """A premature ventricular beat from a template: no P wave, a wide QRS, the T wave inverted."""
+    L = template.shape[1]
+    i = np.arange(L, dtype=float)
+    src = pre + (i - pre) / 2.2
+    w = np.stack([np.interp(src, i, v) for v in template])
+    w[:, :max(1, pre - int(0.02 * L))] *= np.linspace(0, 1, max(1, pre - int(0.02 * L)))
+    return -0.8 * w
+
+
+def pulse_cycle(kind, rng, model=None):
+    """A model pulse cycle (128 points, 0 to 1): arterial pressure (a fast upstroke, a decay with
+    a dicrotic notch) or pleth (a slower upstroke, a smooth decay); its time to peak and decay
+    drawn from the library's ranges (fitted to real recordings) when given."""
+    n = 128
+    tt = np.linspace(0, 1, n)
+    up = rng.uniform(*((model or {}).get('upstroke') or ((0.1, 0.16) if kind == 'abp' else (0.22, 0.32))))
+    k = rng.uniform(*((model or {}).get('decay') or (2.6, 3.6)))
+    c = np.where(tt < up, np.sin(np.clip(tt / up, 0, 1) * np.pi / 2), np.exp(-(tt - up) * k))
+    if kind == 'abp':
+        c = c + rng.uniform(0.04, 0.1) * np.exp(-((tt - up - rng.uniform(0.22, 0.28)) / 0.035) ** 2)
+    c = c - np.linspace(c[0], c[-1], n)
+    return (c - c.min()) / np.ptp(c)
+
+
+def pulse_wave(shape, beats, fs, n, lo, hi, delay, rng, breath_hz):
+    """A pulse signal: one cycle of `shape` per beat [(time s, RR s)], `delay` s after the R
+    wave, scaled between lo and hi (arrays per sample), each cycle 4 % higher or lower, the
+    amplitude and baseline modulated by breathing (as tools/demo/README.md describes)."""
+    out = np.zeros(n)
+    xs = np.linspace(0, 1, len(shape))
+    for tb, rr in beats:
+        a, b = int((tb + delay) * fs), int((tb + delay + rr) * fs)
+        a2, b2 = max(0, a), min(n, b)
+        if a2 < b2 and b > a:
+            out[a2:b2] = rng.normal(1, 0.04) * np.interp((np.arange(a2, b2) - a) / (b - a), xs, shape)
+    tt = np.arange(n) / fs
+    ph = rng.random(2) * 2 * np.pi
+    out = out * (1 + 0.12 * np.sin(2 * np.pi * breath_hz * tt + ph[0])) + 0.08 * np.sin(2 * np.pi * breath_hz * tt + ph[1])
+    return lo + (hi - lo) * out
+
+
+def beat_times(hr_at, seconds, rng, af=False, start=None):
+    """[(time s, RR s)] of beats over `seconds`, the rate hr_at(t) (bpm), 3 % variability (an
+    irregular rhythm with af)."""
+    out, tb = [], start if start is not None else rng.uniform(0.1, 0.6)
+    while tb < seconds + 1.5:
+        rr = 60 / hr_at(max(0.0, tb)) * (rng.uniform(0.62, 1.32) if af else rng.gauss(1, 0.03))
+        rr = max(0.3, rr)
+        out.append((tb, rr))
+        tb += rr
+    return out
+
+
+def ecg12_lib(lib, k, hr, st=False, af=False, lvh=False, fs=500, seconds=10, seed=0):
+    """Twelve leads (mV) of a resting ECG from library template k: beats at a new RR series,
+    the template's P waves taken out for atrial fibrillation (fibrillatory waves added), ST
+    depression and LV hypertrophy drawn in, baseline wander and noise."""
+    item = lib.pick('ecg12_beat', k)
+    tpl = lib.array(item) / 1000.0
+    pre = item['r_index']
+    rng = np.random.default_rng(seed)
+    idx = {name: i for i, name in enumerate(item['leads'])}
+    if af:
+        m = pre - int(0.07 * fs)
+        tpl[:, :m] *= np.concatenate([np.linspace(0, 0, m - 20), np.linspace(0, 1, 20)])
+    tt = (np.arange(tpl.shape[1]) - pre) / fs
+    if lvh:
+        q = np.exp(-(tt / 0.03) ** 2)
+        for lead, g in (('V5', 0.9), ('V6', 0.6), ('I', 0.4), ('aVL', 0.5), ('V1', 0.7), ('V2', 0.6)):
+            tpl[idx[lead]] *= 1 + g * q
+        for lead in ('V5', 'V6', 'I', 'aVL'):
+            tpl[idx[lead]] -= 0.12 * np.exp(-((tt - 0.26) / 0.06) ** 2)
+    if st:
+        for lead, d in (('I', 0.07), ('II', 0.07), ('V4', 0.12), ('V5', 0.16), ('V6', 0.10)):
+            tpl[idx[lead]] -= d * np.exp(-((tt - 0.13) / 0.05) ** 2)
+    n = int(fs * seconds)
+    beats = beat_times(lambda x: hr, seconds, random.Random(seed), af=af)
+    out = overlap_add(tpl, pre, fs, beats, n)
+    x = np.arange(n) / fs
+    out += 0.03 * np.sin(2 * np.pi * rng.uniform(0.1, 0.3) * x + rng.random() * 6)[None] + rng.normal(0, 0.008, out.shape)
+    if af:
+        f = 0.05 * np.sin(2 * np.pi * 5.7 * x + 0.3 * np.sin(x))
+        for lead in ('V1', 'II'):
+            out[idx[lead]] += 1.4 * f
+    I, II = out[idx['I']], out[idx['II']]
+    out[idx['III']], out[idx['aVR']], out[idx['aVL']], out[idx['aVF']] = II - I, -(I + II) / 2, I - II / 2, II - I / 2
+    return [out[idx[name]] for name in LEADS12]
+
+
+def ecg12_any(lib, k, hr, st=False, af=False, lvh=False):
+    """A 10 s 12-lead ECG: from the library when there is one, else the model (ecg12)."""
+    if lib is not None and lib.of('ecg12_beat'):
+        return ecg12_lib(lib, k, hr, st, af, lvh, seed=k * 1009 + hr)
+    return ecg12(hr, st, af)
+
+
+# ------------------------------------------------------------------ WFDB
 
 def wfdbx():
     """wfdb-x, which writes the WFDB records (in Medorama's environment: .venv/bin/python)."""
@@ -193,22 +543,23 @@ def wfdbx():
         import wfdbx as w
     except ImportError:
         sys.exit('wfdb-x is needed for the WFDB records: run this with .venv/bin/python, after\n'
-                 '  .venv/bin/pip install "wfdb-x @ https://github.com/alphanumericslab/wfdb-x/archive/4a91916f5282fba44ca3056802fbc7def298af08.tar.gz#subdirectory=python"\n'
+                 '  .venv/bin/pip install numpy "wfdb-x @ https://github.com/alphanumericslab/wfdb-x/archive/4a91916f5282fba44ca3056802fbc7def298af08.tar.gz#subdirectory=python"\n'
                  '(the Python viewer brings it too; docs/administration.md)')
     return w
 
 
 def wfdb_record(folder, name, fs, signals, start, comments=()):
     """A WFDB record in format 16, written with wfdb-x; signals: [(description, unit, gain, digital
-    samples)]; comments: the header's info lines (UTF-8 in the file)."""
-    import numpy as np
+    samples)]; start None: a header that states no time; comments: the header's info lines
+    (UTF-8 in the file)."""
     folder.mkdir(parents=True, exist_ok=True)
     w = wfdbx()
-    w.write_record(name, np.array([s[3] for s in signals], dtype=np.int32).T, fs, fmt=16,
+    extra = {'base_time': f'{start:%H:%M:%S %d/%m/%Y}'} if start is not None else {}
+    w.write_record(name, np.array([np.asarray(s[3]) for s in signals], dtype=np.int32).T, fs, fmt=16,
                    gains=[s[2] for s in signals], adcres=16, units=[s[1] for s in signals],
-                   names=[s[0] for s in signals], base_time=f'{start:%H:%M:%S %d/%m/%Y}',
+                   names=[s[0] for s in signals],
                    # wfdb-x writes one byte per character: give it the UTF-8 bytes
-                   comments=[' ' + c.encode('utf-8').decode('latin-1') for c in comments], dir=str(folder))
+                   comments=[' ' + c.encode('utf-8').decode('latin-1') for c in comments], dir=str(folder), **extra)
 
 
 def wfdb_markers(folder, record, marks):
@@ -219,96 +570,305 @@ def wfdb_markers(folder, record, marks):
                         sort=False)
 
 
-def recording(folder, start, minutes, ill):
+def write_csv(path, header, rows):
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'w', newline='', encoding='utf-8') as f:
+        w = csv.writer(f)
+        w.writerow(header)
+        w.writerows(rows)
+
+
+# ------------------------------------------------------------------ ICU recordings
+
+def recording(folder, start, minutes, ill, lib, seed, untimed=False):
     """An ICU recording as a WFDB collection (docs/wfdb-collection.md): ECG I, II, III at 240 Hz,
-    arterial pressure at 120 Hz, SpO2 pleth and respiration at 60 Hz, one record each; vital
-    signs every 2 s; an alarm while the heart rate is high; the ECG's R waves as markers."""
-    t0 = start.timestamp()
+    arterial pressure at 120 Hz, SpO2 pleth and respiration at 60 Hz; a 45 s break (signal loss)
+    after its first third; with `untimed`, its last two minutes in records that state no time,
+    after a break of known length; vital signs every 2 s; an alarm while the heart rate is high;
+    R-wave and PVC markers.  The ECG's beats are a library template's (else the model's)."""
+    rng = np.random.default_rng(seed)
+    prng = random.Random(seed)
     seconds = minutes * 60
-    state = []                                  # per quarter second: hr, rr, sys, dia, spo2
-    for q in range(seconds * 4):
-        sick = ill(datetime.fromtimestamp(t0 + q / 4, UTC))
-        state.append((72 + 40 * sick + 4 * math.sin(q / (seconds * 4) * 9), 14 + 10 * sick,
-                      128 - 34 * sick, 76 - 22 * sick, 97 - 5 * sick))
-
-    def wave(fs, f):
-        out, beat, breath = [], 0.0, 0.0
-        for i in range(seconds * fs):
-            hr, rr, sys_, dia, spo2 = state[i * 4 // fs]
-            out.append(f(beat, breath, sys_, dia))
-            beat = (beat + hr / 60 / fs) % 1.0
-            breath = (breath + rr / 60 / fs) % 1.0
-        return out
-
-    ecg = {lead: wave(240, lambda b, r, s, d, k=k: int(ecg_wave(b) * k) + R.randint(-6, 6))
-           for lead, k in (('I', 0.6), ('II', 1.0), ('III', 0.4))}
-    art = wave(120, lambda b, r, s, d: round(abp_wave(b, s, d) * 10))
-    pleth = wave(60, lambda b, r, s, d: pleth_wave(b))
-    resp = wave(60, lambda b, r, s, d: int(1000 + 400 * math.sin(2 * math.pi * r)))
+    t0 = start.timestamp()
+    sick = np.array([ill(datetime.fromtimestamp(t0 + s, UTC)) for s in range(seconds + 2)])
+    hr_s = 72 + 40 * sick + 4 * np.sin(np.arange(seconds + 2) / seconds * 9)
+    hr_at = lambda x: float(hr_s[min(len(hr_s) - 1, int(x))])  # noqa: E731
+    beats = beat_times(hr_at, seconds, prng)
+    # premature ventricular beats, more when ill
+    kinds = []
+    for j, (tb, rr) in enumerate(beats):
+        pvc = j > 2 and kinds[-1] == 'N' and prng.random() < 0.01 + 0.06 * sick[min(len(sick) - 1, int(tb))]
+        kinds.append('V' if pvc else 'N')
+    times = []
+    for j, (tb, rr) in enumerate(beats):
+        if kinds[j] == 'V':
+            tb = times[-1][0] + 0.62 * times[-1][1]
+        times.append((tb, rr))
+    fs = 240
+    n = seconds * fs
+    item = lib.pick('monitor_beat', seed) if lib is not None else None
+    if item is not None:
+        tpl, pre = lib.array(item)[:2] / 1000.0, item['r_index']        # leads I and II
+    else:
+        x = (np.arange(192) - 72) / fs
+        g = lambda c, w: np.exp(-((x - c) / w) ** 2)  # noqa: E731
+        base = 0.09 * g(-0.16, 0.025) - 0.08 * g(-0.022, 0.008) + 0.9 * g(0, 0.01) - 0.22 * g(0.025, 0.01) + 0.22 * g(0.27, 0.05)
+        tpl, pre = np.stack([0.6 * base, base]), 72
+    normal = [b for b, k in zip(times, kinds) if k == 'N']
+    ecg = overlap_add(tpl, pre, fs, normal, n)
+    ecg += overlap_add(pvc_beat(tpl, pre), pre, fs, [b for b, k in zip(times, kinds) if k == 'V'], n, stretch=False)
+    ecg += rng.normal(0, 0.012, ecg.shape) + 0.04 * np.sin(2 * np.pi * 0.2 * np.arange(n) / fs)[None]
+    ecg = np.vstack([ecg, ecg[1] - ecg[0]])                              # III = II - I
+    rr_br = 14 + 10 * sick
+    breath_hz = float(np.mean(rr_br)) / 60
+    models = {m['pulse']: m for m in (lib.of('pulse_model') if lib is not None else [])}
+    sec = lambda f: np.repeat(sick[:seconds], f)  # noqa: E731
+    art = pulse_wave(pulse_cycle('abp', rng, models.get('abp')), times, 120, seconds * 120,
+                     76 - 22 * sec(120), 128 - 34 * sec(120), 0.12, rng, breath_hz)
+    pleth = pulse_wave(pulse_cycle('pleth', rng, models.get('pleth')), times, 60, seconds * 60, 0, 1, 0.25, rng, breath_hz)
+    ph = np.cumsum(np.repeat(rr_br[:seconds], 60) / 60 / 60) * 2 * np.pi
+    resp = 1000 + 400 * np.sin(ph) + 60 * np.sin(2 * ph + 0.5) + rng.normal(0, 8, len(ph))
     name = folder.name.lower().replace('-', '_')
-    records = [('ecg', 240, [(lead, 'mV', 409.836, x) for lead, x in ecg.items()]),
+    # the segments: [0, a1) timed; a break of 45 s; [a1 + 45, b2) timed; with `untimed`, a
+    # break of 20 s, then [b2 + 20, end) without stated time
+    a1 = seconds // 3
+    b2 = seconds - 120 if untimed else seconds
+    segs = [(0, a1, True), (a1 + 45, b2, True)] + ([(b2 + 20, seconds, False)] if untimed else [])
+    signals = [('ecg', 240, [(lead, 'mV', 1000, ecg[i]) for i, lead in enumerate(('I', 'II', 'III'))]),
                ('pressure', 120, [('ART', 'mmHg', 10, art)]),
-               ('spo2', 60, [('Pleth', 'adu', 1, pleth)]),
+               ('spo2', 60, [('Pleth', 'adu', 1000, pleth)]),
                ('resp', 60, [('Resp', 'adu', 1, resp)])]
-    index = []
-    for modality, fs, signals in records:
-        rec = f'{name}_{modality}_{fs}_0001'
-        wfdb_record(folder / modality, rec, fs, signals, start)
-        (folder / modality / 'RECORDS').write_text(rec + '\n', encoding='ascii')
-        index.append([f'{modality}/{rec}', modality, fs, len(signals), ';'.join(x[0] for x in signals),
-                      ';'.join(x[1] for x in signals), len(signals[0][3]), seconds, f'{t0:.1f}', 'header time'])
-        if modality == 'ecg':
-            beats, beat, prev = [], 0.0, 0.0
-            for i in range(seconds * fs):
-                beat = (beat + state[i * 4 // fs][0] / 60 / fs) % 1.0
-                if prev < 0.31 <= beat:
-                    beats.append((i, 1, 1, 'R_WAVE'))
-                prev = beat
-            wfdb_markers(folder / modality, rec, beats)
-    write_csv(folder / 'index.csv', ['record', 'modality', 'fs', 'n_sig', 'signals', 'units', 'sig_len',
-                                     'duration_s', 'start_unix', 'time_source'], index)
+    index, gaps = [], []
+    for k, (sa, sb, timed) in enumerate(segs, 1):
+        for modality, f, sigs in signals:
+            rec = f'{name}_{modality}_{f}_{k:04d}'
+            part = [(lab, unit, gain, np.round(np.asarray(v[sa * f:sb * f]) * gain).astype(np.int64)) for lab, unit, gain, v in sigs]
+            when = datetime.fromtimestamp(t0 + sa, UTC) if timed else None
+            wfdb_record(folder / modality, rec, f, part, when)
+            index.append([f'{modality}/{rec}', modality, f, len(sigs), ';'.join(x[0] for x in sigs), ';'.join(x[1] for x in sigs),
+                          (sb - sa) * f, sb - sa, f'{t0 + sa:.1f}' if timed else '', 'header time' if timed else 'none',
+                          '' if timed else 'untimed-1'])
+            if modality == 'ecg':
+                marks = [(int(round((tb - sa) * f)), 1 if kd == 'N' else 5, 1, 'R_WAVE' if kd == 'N' else 'PVC')
+                         for (tb, rr), kd in zip(times, kinds) if sa <= tb < sb - 0.01]
+                if marks:
+                    wfdb_markers(folder / modality, rec, marks)
+    for modality, *_ in signals:
+        (folder / modality / 'RECORDS').write_text(''.join(f'{r[0].split("/")[1]}\n' for r in index if r[1] == modality), encoding='ascii')
+    recs = lambda k: ';'.join(r[0] for r in index if r[0].endswith(f'_{k:04d}'))  # noqa: E731
+    gaps.append(['all', 'signal_loss', f'{t0 + a1:.1f}', f'{t0 + a1 + 45:.1f}', 45, 0.01, 'clock', 'True', 'leads off', recs(1), recs(2)])
+    if untimed:
+        gaps.append(['all', 'signal_loss', f'{t0 + b2:.1f}', '', 20, 1, 'monitor', 'False', 'clock lost after the break', recs(2), recs(3)])
+    write_csv(folder / 'index.csv', ['record', 'modality', 'fs', 'n_sig', 'signals', 'units', 'sig_len', 'duration_s', 'start_unix',
+                                     'time_source', 'stretch'], index)
+    write_csv(folder / 'gaps.csv', ['scope', 'reason', 'end_before_unix', 'start_after_unix', 'gap_s', 'gap_uncertainty_s',
+                                    'measured_by', 'exact', 'notes', 'records_before', 'records_after'], gaps)
     vitals, events, high = [], [], None
-    for q in range(0, seconds * 4, 8):          # every 2 s
-        hr, rr, sys_, dia, spo2 = state[q]
-        when = f'{t0 + q / 4:.1f}'
+    timed_s = [s for sa, sb, tm in segs if tm for s in range(sa, sb, 2)]
+    for s in timed_s:
+        hr, rr = hr_s[s], rr_br[s]
+        sys_, dia, spo2 = 128 - 34 * sick[s], 76 - 22 * sick[s], 97 - 5 * sick[s]
+        when = f'{t0 + s:.1f}'
         for label, value, unit in (('HR', round(hr), 'bpm'), ('SpO2', round(spo2), '%'), ('ART-S', round(sys_), 'mmHg'),
                                    ('ART-D', round(dia), 'mmHg'), ('ART-M', round((sys_ + 2 * dia) / 3), 'mmHg'),
                                    ('RR', round(rr), '/min')):
             vitals.append(['monitor', when, label, value, unit, '0'])
         if hr > 105 and high is None:
-            high = t0 + q / 4
+            high = t0 + s
         elif hr <= 105 and high is not None:
             events.append([f'{high:.1f}', when, 2, 'HR HIGH > 105', 'alarm'])
             high = None
     if high is not None:
-        events.append([f'{high:.1f}', f'{t0 + seconds:.1f}', 2, 'HR HIGH > 105', 'alarm'])
+        events.append([f'{high:.1f}', f'{t0 + timed_s[-1]:.1f}', 2, 'HR HIGH > 105', 'alarm'])
+    events.append([f'{t0 + a1:.1f}', f'{t0 + a1 + 45:.1f}', 1, 'ECG LEADS OFF', 'technical'])
+    if any(k == 'V' for k in kinds):
+        first = next(tb for (tb, rr), k in zip(times, kinds) if k == 'V')
+        events.append([f'{t0 + first:.1f}', '', 1, 'PVC', 'arrhythmia'])
+    events.sort(key=lambda e: float(e[0]))
     write_csv(folder / 'vitals.csv', ['source', 'time', 'label', 'value', 'unit', 'validity'], vitals)
     write_csv(folder / 'events.csv', ['start_unix', 'end_unix', 'level', 'text', 'kind'], events)
 
 
-def holter(folder, start, hours=24, fs=128):
-    """A WFDB record of two ECG leads (II and V5, format 16, 200 adu/mV): the heart rate
-    follows the day (slower asleep), with baseline wander and noise."""
+def holter(folder, start, lib, seed, hours=24, fs=128):
+    """A WFDB record of two ECG leads (II and V5, format 16, 200 adu/mV): the heart rate follows
+    the day (slower asleep), a few premature ventricular beats, baseline wander and noise; the
+    beats a library monitor template's (else the model's)."""
     folder.mkdir(parents=True, exist_ok=True)
-    table = [ecg_wave(i / 1000) / 4 for i in range(1000)]   # about 1.1 mV R waves
-    n = hours * 3600 * fs
-    data = array('h', bytes(4 * n))
-    beat, wander = 0.0, 0.0
-    t0 = start.hour * 3600 + start.minute * 60
-    for i in range(n):
-        if i % fs == 0:   # once a second: the rate of the hour, a little variable
-            clock = (t0 + i / fs) % 86400 / 3600
-            asleep = 1 if clock >= 23 or clock < 6.5 else 0
-            hr = (82 - 22 * asleep + 6 * math.sin(clock / 24 * 2 * math.pi)) * R.uniform(0.97, 1.03)
-        beat = (beat + hr / 60 / fs) % 1.0
-        wander += 2 * math.pi * 0.25 / fs
-        v = table[int(beat * 1000)]
-        bw = 25 * math.sin(wander)
-        data[2 * i] = int(v + bw) + R.randint(-4, 4)
-        data[2 * i + 1] = int(0.7 * v - 0.5 * bw) + R.randint(-4, 4)
-    wfdb_record(folder, 'holter', fs, [('II', 'mV', 200, data[0::2]), ('V5', 'mV', 200, data[1::2])], start)
+    rng = np.random.default_rng(seed)
+    prng = random.Random(seed)
+    c0 = start.hour * 3600 + start.minute * 60
+    hourly = [prng.uniform(0.97, 1.03) for _ in range(hours * 60 + 2)]
+
+    def hr_at(x):
+        clock = (c0 + x) % 86400 / 3600
+        asleep = 1 if clock >= 23 or clock < 6.5 else 0
+        return (82 - 22 * asleep + 6 * math.sin(clock / 24 * 2 * math.pi)) * hourly[int(x // 60)]
+    seconds = hours * 3600
+    beats = beat_times(hr_at, seconds, prng)
+    item = lib.pick('monitor_beat', seed + 3) if lib is not None else None
+    if item is not None:
+        tpl = lib.array(item)[[1, 2]] / 1000.0                     # II and V
+        tpl = np.stack([np.interp(np.arange(0, tpl.shape[1], item['fs'] / fs), np.arange(tpl.shape[1]), v) for v in tpl])
+        pre = int(round(item['r_index'] * fs / item['fs']))
+    else:
+        x = (np.arange(102) - 38) / fs
+        g = lambda c, w: np.exp(-((x - c) / w) ** 2)  # noqa: E731
+        base = 0.09 * g(-0.16, 0.025) - 0.08 * g(-0.022, 0.008) + 1.1 * g(0, 0.012) - 0.22 * g(0.025, 0.012) + 0.25 * g(0.27, 0.05)
+        tpl, pre = np.stack([base, 0.7 * base]), 38
+    n = seconds * fs
+    kinds = ['V' if j > 2 and prng.random() < 0.004 else 'N' for j in range(len(beats))]
+    data = overlap_add(tpl, pre, fs, [b for b, k in zip(beats, kinds) if k == 'N'], n)
+    data += overlap_add(pvc_beat(tpl, pre), pre, fs, [(b[0] - 0.3 * b[1], b[1]) for b, k in zip(beats, kinds) if k == 'V'], n, stretch=False)
+    tt = np.arange(n) / fs
+    bw = 0.12 * np.sin(2 * np.pi * 0.25 * tt)
+    data[0] += bw
+    data[1] -= 0.5 * bw
+    data += rng.normal(0, 0.02, data.shape)
+    sig = np.round(data * 200).astype(np.int64)
+    wfdb_record(folder, 'holter', fs, [('II', 'mV', 200, sig[0]), ('V5', 'mV', 200, sig[1])], start)
     (folder / 'RECORDS').write_text('holter\n', encoding='ascii')
 
+
+# ------------------------------------------------------------------ EDF+ and BDF+
+
+def edf_plus(path, start, signals, notes, duration=1, bdf=False):
+    """An EDF+ file (continuous), or with `bdf` a BDF+ file (24-bit samples): signals [(label,
+    unit, pmin, pmax, samples per record, values)], notes [(onset s, duration s or None, text)],
+    each in the data record it falls in.  The patient field is EDF+'s anonymous one: the
+    database, not the file, says whose recording this is."""
+    field = lambda t, w: t.encode('ascii').ljust(w)  # noqa: E731
+    nb = 3 if bdf else 2
+    dmin, dmax = (-8388608, 8388607) if bdf else (-32768, 32767)
+    n = min(len(v) // spr for *_, spr, v in signals)
+    by_record = {}
+    for o, d, text in notes:
+        by_record.setdefault(int(o // duration), []).append((o, d, text))
+    tal = lambda o, d, t: (f'{o:+g}' + (f'\x15{d:g}' if d else '') + '\x14' + t + '\x14\x00').encode()  # noqa: E731
+    spr_notes = max(30, max((sum(len(tal(*x)) for x in v) + 16 for v in by_record.values()), default=0) // nb + 1)
+    sigs = [(label, unit, pmin, pmax, dmin, dmax, spr, v) for label, unit, pmin, pmax, spr, v in signals]
+    sigs.append(('BDF Annotations' if bdf else 'EDF Annotations', '', -1, 1, dmin, dmax, spr_notes, None))
+    d = start.astimezone(timezone.utc)
+    head = (b'\xffBIOSEMI' if bdf else field('0', 8)) + field('X X X X', 80) + field(f'Startdate {d.strftime("%d-%b-%Y").upper()} X X X', 80)
+    head += field(d.strftime('%d.%m.%y'), 8) + field(d.strftime('%H.%M.%S'), 8) + field(str(256 * (len(sigs) + 1)), 8)
+    head += field('BDF+C' if bdf else 'EDF+C', 44) + field(str(n), 8) + field(str(duration), 8) + field(str(len(sigs)), 4)
+    for get, w in ((0, 16), (None, 80), (1, 8), (2, 8), (3, 8), (4, 8), (5, 8), (None, 80), (6, 8), (None, 32)):
+        head += b''.join(field('' if get is None else str(x[get]), w) for x in sigs)
+    digital = []
+    for label, unit, pmin, pmax, lo, hi, spr, v in sigs:
+        if v is None:
+            digital.append(None)
+            continue
+        k = (hi - lo) / (pmax - pmin)
+        q = np.clip(np.round((np.asarray(v[:n * spr], float) - pmin) * k + lo), lo, hi).astype(np.int32)
+        digital.append(q.reshape(n, spr))
+    out = bytearray(head)
+    for r in range(n):
+        for (label, unit, pmin, pmax, lo, hi, spr, v), q in zip(sigs, digital):
+            if q is None:
+                b = tal(r * duration, None, '') + b''.join(tal(*x) for x in by_record.get(r, []))
+                out += b.ljust(nb * spr, b'\0')
+            elif bdf:
+                out += q[r].astype('<i4').view(np.uint8).reshape(spr, 4)[:, :3].tobytes()
+            else:
+                out += q[r].astype('<i2').tobytes()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(bytes(out))
+
+
+def sleep_study(path, start, seed, hours=2.0, ahi=8):
+    """An overnight sleep study (polysomnography), scored: stages every 30 s (wake, N1, N2, N3,
+    REM in cycles), obstructive apneas (about `ahi` per hour) with the desaturations and
+    arousals that follow them."""
+    rng = random.Random(seed)
+    nrng = np.random.default_rng(seed)
+    epochs = int(hours * 3600 // 30)
+    cycle = ['W'] * 4 + ['N1'] * 4 + ['N2'] * 30 + ['N3'] * 40 + ['N2'] * 20 + ['R'] * 30 + ['N2'] * 12
+    stages = [(cycle * 6)[i] for i in range(epochs)]
+    names = {'W': 'Sleep stage W', 'N1': 'Sleep stage N1', 'N2': 'Sleep stage N2', 'N3': 'Sleep stage N3', 'R': 'Sleep stage R'}
+    notes = [(30.0 * i, 30, names[st]) for i, st in enumerate(stages)]
+    step = max(60, int(3600 / max(1, ahi)))
+    apneas = [(x, 18 + rng.random() * 14) for x in range(900, int(hours * 3600) - 120, step) if stages[x // 30] in ('N1', 'N2', 'R')]
+    for x, d in apneas:
+        notes += [(float(x), round(d, 1), 'Obstructive apnea'), (round(x + d + 8, 1), 20, 'Oxygen desaturation'), (round(x + d, 1), 6, 'Arousal')]
+    notes.sort()
+    secs = int(hours * 3600)
+    st_idx = np.array([['W', 'N1', 'N2', 'N3', 'R'].index(s) for s in stages])
+    apnea_mask = lambda tt: np.any([(tt >= a) & (tt < a + d) for a, d in apneas], axis=0) if apneas else np.zeros(len(tt), bool)  # noqa: E731
+
+    def eeg(fs):
+        tt = np.arange(secs * fs) / fs
+        st = st_idx[np.minimum((tt // 30).astype(int), epochs - 1)]
+        f = np.array([10, 6, 13, 1.2, 5])[st]
+        a = np.array([18, 22, 14, 70, 18])[st]
+        ph = np.cumsum(2 * np.pi * f / fs)
+        x = a * np.sin(ph) + 8 * np.sin(2 * np.pi * 2.7 * tt + 1) + nrng.normal(0, 5, len(tt))
+        spindle = (st == 2) & ((tt % 9) < 1)
+        x += np.where(spindle, 25 * np.sin(2 * np.pi * 13 * tt) * np.sin(np.pi * (tt % 9)), 0)
+        return x
+
+    def eog(fs):
+        tt = np.arange(secs * fs) / fs
+        st = st_idx[np.minimum((tt // 30).astype(int), epochs - 1)]
+        return np.where((st == 4) | (st == 0), 60 * np.sin(2 * np.pi * 0.4 * tt), 5 * np.sin(2 * np.pi * 0.1 * tt)) + nrng.normal(0, 4, len(tt))
+
+    def ecg(fs):
+        tt = np.arange(secs * fs) / fs
+        ph = (tt * 62 / 60) % 1.0
+        g = lambda c, w, a: a * np.exp(-((ph - c) / w) ** 2)  # noqa: E731
+        return (g(0.18, 0.025, 90) - g(0.29, 0.008, 80) + g(0.31, 0.010, 900) - g(0.335, 0.010, 220) + g(0.58, 0.05, 220)) / 1000
+
+    def breath(fs, scale):
+        tt = np.arange(secs * fs) / fs
+        ap = apnea_mask(tt)
+        return np.where(ap & (scale > 1), 0.0, scale * np.sin(2 * np.pi * 0.25 * tt) * np.where(ap, 0.35, 1))
+
+    tt = np.arange(secs)
+    drop = np.zeros(secs)
+    for a, d in apneas:
+        drop = np.maximum(drop, (4 + 3 * (d > 25)) * np.exp(-((tt - (a + d + 18)) / 12) ** 2))
+    spo2 = np.round(96 - drop + nrng.normal(0, 0.3, secs), 1)
+    edf_plus(path, start, [
+        ('EEG C4-M1', 'uV', -500, 500, 100, eeg(100)),
+        ('EOG E1-M2', 'uV', -500, 500, 50, eog(50)),
+        ('ECG', 'mV', -5, 5, 200, ecg(200)),
+        ('Flow', '', -400, 400, 25, breath(25, 300)),
+        ('Thorax', '', -400, 400, 25, breath(25, 1)),
+        ('SpO2', '%', 0, 100, 1, spo2),
+    ], notes)
+
+
+def routine_eeg(path, start, seed, minutes=20, fs=256, seizure=True):
+    """A routine EEG as a BDF+ file (24-bit): eight channels of the 10-20 system, alpha at rest
+    with the eyes closed, photic stimulation, hyperventilation, and (with `seizure`) a short
+    run of 3 Hz spike-and-wave, as annotations."""
+    rng = np.random.default_rng(seed)
+    secs = minutes * 60
+    tt = np.arange(secs * fs) / fs
+    chans = ['Fp1', 'Fp2', 'C3', 'C4', 'O1', 'O2', 'T3', 'T4']
+    eyes_closed = ((tt // 30) % 2) == 1
+    sw0 = secs * 0.6
+    out = []
+    for i, ch in enumerate(chans):
+        occ = 1.0 if ch[0] == 'O' else 0.35
+        x = rng.normal(0, 6, len(tt)) + 10 * np.sin(2 * np.pi * 4.5 * tt + i)
+        x += np.where(eyes_closed, 30 * occ * np.sin(2 * np.pi * 10 * tt + i * 0.3), 0)
+        x += 4 * np.sin(2 * np.pi * 21 * tt + i)
+        if ch[:2] == 'Fp':
+            x += np.where((tt % 7) < 0.25, 120 * np.sin(np.pi * (tt % 7) / 0.25), 0)          # blinks
+        if seizure:
+            sw = (tt >= sw0) & (tt < sw0 + 8)
+            ph = (tt - sw0) * 3 % 1
+            x += np.where(sw, 140 * (np.exp(-((ph - 0.1) / 0.03) ** 2) - 0.45 * np.sin(np.pi * ph)), 0)
+        out.append((ch, 'uV', -1000, 1000, fs, x))
+    notes = [(0.0, 0, 'Recording start')] + [(30.0 * k, 30, 'Eyes closed' if k % 2 else 'Eyes open') for k in range(secs // 30)]
+    notes += [(secs * 0.3, 60, 'Photic stimulation'), (secs * 0.45, 180, 'Hyperventilation')]
+    if seizure:
+        notes.append((sw0, 8, 'Generalized 3 Hz spike-and-wave'))
+    notes.sort(key=lambda x: x[0])
+    edf_plus(path, start, out, notes, bdf=True)
+
+
+# ------------------------------------------------------------------ 12-lead ECGs
 
 # ------------------------------------------------------------------ 12-lead ECGs
 
@@ -322,92 +882,6 @@ ECG_WAVES = {
 ECG_COLUMNS = {'PR': 'ms', 'QRS': 'ms', 'QT': 'ms', 'QTc': 'ms', 'R axis': '°'}   # the ECG database's measurement columns
 LEADS12 = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6']
 
-
-def edf_plus(path, start, signals, notes, duration=1):
-    """An EDF+ file (continuous): signals [(label, unit, pmin, pmax, samples per record, values)],
-    notes [(onset s, duration s or None, text)], each in the data record it falls in.  The patient
-    field is EDF+'s anonymous one: the database, not the file, says whose recording this is."""
-    field = lambda t, w: t.encode('ascii').ljust(w)  # noqa: E731
-    n = min(len(v) // spr for *_, spr, v in signals)
-    by_record = {}
-    for o, d, text in notes:
-        by_record.setdefault(int(o // duration), []).append((o, d, text))
-    tal = lambda o, d, t: (f'{o:+g}' + (f'\x15{d:g}' if d else '') + '\x14' + t + '\x14\x00').encode()  # noqa: E731
-    spr_notes = max(30, max((sum(len(tal(*x)) for x in v) + 16 for v in by_record.values()), default=0) // 2 + 1)
-    sigs = [(label, unit, pmin, pmax, -32768, 32767, spr, v) for label, unit, pmin, pmax, spr, v in signals]
-    sigs.append(('EDF Annotations', '', -1, 1, -32768, 32767, spr_notes, None))
-    d = start.astimezone(timezone.utc)
-    head = field('0', 8) + field('X X X X', 80) + field(f'Startdate {d.strftime("%d-%b-%Y").upper()} X X X', 80)
-    head += field(d.strftime('%d.%m.%y'), 8) + field(d.strftime('%H.%M.%S'), 8) + field(str(256 * (len(sigs) + 1)), 8)
-    head += field('EDF+C', 44) + field(str(n), 8) + field(str(duration), 8) + field(str(len(sigs)), 4)
-    for get, w in ((0, 16), (None, 80), (1, 8), (2, 8), (3, 8), (4, 8), (5, 8), (None, 80), (6, 8), (None, 32)):
-        head += b''.join(field('' if get is None else str(x[get]), w) for x in sigs)
-    out = bytearray(head)
-    for r in range(n):
-        for label, unit, pmin, pmax, dmin, dmax, spr, v in sigs:
-            if v is None:
-                b = tal(r * duration, None, '') + b''.join(tal(*x) for x in by_record.get(r, []))
-                out += b.ljust(2 * spr, b'\0')
-                continue
-            k = (dmax - dmin) / (pmax - pmin)
-            out += array('h', [max(dmin, min(dmax, round((x - pmin) * k + dmin))) for x in v[r * spr:(r + 1) * spr]]).tobytes()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(bytes(out))
-
-
-def sleep_study(path, start, hours=2.0):
-    """An overnight sleep study (polysomnography), scored: stages every 30 s (wake, N1, N2, N3,
-    REM in cycles), obstructive apneas with the desaturations and arousals that follow them."""
-    rng = random.Random(7)
-    epochs = int(hours * 3600 // 30)
-    cycle = ['W'] * 4 + ['N1'] * 4 + ['N2'] * 30 + ['N3'] * 40 + ['N2'] * 20 + ['R'] * 30 + ['N2'] * 12
-    stages = [(cycle * 3)[i] for i in range(epochs)]
-    names = {'W': 'Sleep stage W', 'N1': 'Sleep stage N1', 'N2': 'Sleep stage N2', 'N3': 'Sleep stage N3', 'R': 'Sleep stage R'}
-    notes = [(30.0 * i, 30, names[st]) for i, st in enumerate(stages)]
-    apneas = [(t, 18 + rng.random() * 14) for t in range(900, int(hours * 3600) - 120, 260) if stages[t // 30] in ('N1', 'N2', 'R')]
-    for t, d in apneas:
-        notes += [(float(t), round(d, 1), 'Obstructive apnea'), (round(t + d + 8, 1), 20, 'Oxygen desaturation'),
-                  (round(t + d, 1), 6, 'Arousal')]
-    notes.sort()
-    secs = int(hours * 3600)
-    stage_at = lambda t: stages[min(int(t // 30), epochs - 1)]  # noqa: E731
-    in_apnea = lambda t: any(a <= t < a + d for a, d in apneas)  # noqa: E731
-
-    def eeg(fs):
-        out = []
-        for i in range(secs * fs):
-            t = i / fs
-            st = stage_at(t)
-            f, a = {'W': (10, 18), 'N1': (6, 22), 'N2': (13, 14), 'N3': (1.2, 70), 'R': (5, 18)}[st]
-            x = a * math.sin(2 * math.pi * f * t) + 8 * math.sin(2 * math.pi * 2.7 * t + 1) + rng.gauss(0, 5)
-            if st == 'N2' and (t % 9) < 1:  # spindles
-                x += 25 * math.sin(2 * math.pi * 13 * t) * math.sin(math.pi * (t % 9))
-            out.append(x)
-        return out
-
-    def eog(fs):
-        return [(60 * math.sin(2 * math.pi * 0.4 * i / fs) if stage_at(i / fs) in ('R', 'W') else 5 * math.sin(2 * math.pi * 0.1 * i / fs))
-                + rng.gauss(0, 4) for i in range(secs * fs)]
-
-    def ecg(fs):
-        return [ecg_wave((i / fs * 62 / 60) % 1.0) / 1000 for i in range(secs * fs)]
-
-    def breath(fs, scale):
-        return [0.0 if in_apnea(i / fs) and scale > 1 else scale * math.sin(2 * math.pi * 0.25 * i / fs) * (0.35 if in_apnea(i / fs) else 1)
-                for i in range(secs * fs)]
-
-    spo2 = []
-    for t in range(secs):
-        drop = max((4 + 3 * (d > 25)) * math.exp(-((t - (a + d + 18)) / 12) ** 2) for a, d in apneas) if apneas else 0
-        spo2.append(round(96 - drop + rng.gauss(0, 0.3), 1))
-    edf_plus(path, start, [
-        ('EEG C4-M1', 'uV', -500, 500, 100, eeg(100)),
-        ('EOG E1-M2', 'uV', -500, 500, 50, eog(50)),
-        ('ECG', 'mV', -5, 5, 200, ecg(200)),
-        ('Flow', '', -400, 400, 25, breath(25, 300)),
-        ('Thorax', '', -400, 400, 25, breath(25, 1)),
-        ('SpO2', '%', 0, 100, 1, spo2),
-    ], notes)
 
 
 def ecg12(hr, st_depression=False, af=False, fs=500, seconds=10):
@@ -790,27 +1264,25 @@ def echo_frames(pid, ef, frames=40, w=160, h=120):
     """The frames (8-bit grey, frame after frame) of a synthetic apical four-chamber loop: a fan
     of speckle with a left ventricle that contracts with ejection fraction `ef`."""
     rng = random.Random(len(pid) + frames)
-    speckle = [rng.random() for _ in range(w * h)]
+    speckle = np.array([rng.random() for _ in range(w * h)])
+    y, x = np.mgrid[0:h, 0:w]
+    u, v = (x - w / 2) / (h * 0.9), y / (h * 0.95)
+    fan = (v > 0.02) & (np.abs(np.arctan2(u, v)) < 0.62) & (np.hypot(u, v) < 1.05)
+    flat = (y * w + x)
     out = bytearray()
     for k in range(frames):
         ph = k / frames
         # volume over a beat: fast ejection, slower filling
         c = (1 - math.sin(math.pi * ph / 0.4)) if ph < 0.4 else 1.0
         scale = 1 - (1 - math.sqrt(1 - ef)) * (1 - c)
-        for y in range(h):
-            for x in range(w):
-                u, v = (x - w / 2) / (h * 0.9), y / (h * 0.95)
-                inside_fan = v > 0.02 and abs(math.atan2(u, v)) < 0.62 and math.hypot(u, v) < 1.05
-                val = 0
-                if inside_fan:
-                    val = 18 + 40 * speckle[(y * w + x + 7 * k) % (w * h)]
-                    for (cx, cy, rx, ry, s) in ((-0.17, 0.42, 0.13, 0.27, scale), (0.15, 0.48, 0.1, 0.2, 1), (-0.15, 0.82, 0.12, 0.1, 1), (0.14, 0.84, 0.1, 0.09, 1)):
-                        d = ((u - cx) / (rx * s)) ** 2 + ((v - cy) / (ry * (0.75 + 0.25 * s))) ** 2
-                        if d < 1:
-                            val = 6 + 10 * speckle[(y * w + x) % (w * h)]     # blood: dark
-                        elif d < 1.6:
-                            val = max(val, 120 + 90 * speckle[(y * w + x + k) % (w * h)])   # myocardium: bright
-                out.append(min(255, int(val)))
+        val = np.where(fan, 18 + 40 * speckle[(flat + 7 * k) % (w * h)], 0.0)
+        for (cx, cy, rx, ry, s) in ((-0.17, 0.42, 0.13, 0.27, scale), (0.15, 0.48, 0.1, 0.2, 1), (-0.15, 0.82, 0.12, 0.1, 1), (0.14, 0.84, 0.1, 0.09, 1)):
+            d = ((u - cx) / (rx * s)) ** 2 + ((v - cy) / (ry * (0.75 + 0.25 * s))) ** 2
+            blood = fan & (d < 1)
+            wall = fan & (d >= 1) & (d < 1.6)
+            val = np.where(blood, 6 + 10 * speckle[flat % (w * h)], val)
+            val = np.where(wall, np.maximum(val, 120 + 90 * speckle[(flat + k) % (w * h)]), val)
+        out += np.minimum(255, val.astype(int)).astype(np.uint8).tobytes()
     return bytes(out)
 
 
@@ -934,7 +1406,7 @@ def ecg_dicom(path, pid, when, leads, measures, statements, fs=500):
 # ------------------------------------------------------------------ a minimal Excel writer
 
 def write_xlsx(path, rows):
-    """One sheet of text cells (inline strings): enough for the catalog's reader."""
+    """One sheet of text cells (inline strings): enough for db-builder's reader."""
     def col(i):
         s = ''
         i += 1
@@ -970,14 +1442,7 @@ def write_xlsx(path, rows):
             z.writestr(info, text, zipfile.ZIP_DEFLATED)
 
 
-def write_csv(path, header, rows):
-    with open(path, 'w', newline='', encoding='utf-8') as f:
-        w = csv.writer(f)
-        w.writerow(header)
-        w.writerows(rows)
 
-
-# ------------------------------------------------------------------ the data set
 
 # ------------------------------------------------------------------ local examples of real ECGs
 
@@ -1220,6 +1685,7 @@ def add_dicom_examples(src, out, imaging, caths):
         print(f'--dicom: {name}: {n} file(s) to {pid}')
     return done
 
+# ------------------------------------------------------------------ an OMOP database (invented)
 
 # ------------------------------------------------------------------ an OMOP database (invented)
 
@@ -1229,10 +1695,13 @@ CREATE TABLE person (person_id INTEGER, gender_concept_id INTEGER, year_of_birth
 CREATE TABLE care_site (care_site_id INTEGER, care_site_name TEXT);
 CREATE TABLE visit_occurrence (visit_occurrence_id INTEGER, person_id INTEGER, visit_concept_id INTEGER, visit_start_date TEXT,
     visit_start_datetime TEXT, visit_end_date TEXT, visit_end_datetime TEXT, care_site_id INTEGER);
-CREATE TABLE visit_detail (visit_detail_id INTEGER, person_id INTEGER, visit_detail_concept_id INTEGER, visit_occurrence_id INTEGER);
+CREATE TABLE visit_detail (visit_detail_id INTEGER, person_id INTEGER, visit_detail_concept_id INTEGER, visit_occurrence_id INTEGER,
+    visit_detail_start_date TEXT, visit_detail_start_datetime TEXT, visit_detail_end_date TEXT, visit_detail_end_datetime TEXT,
+    care_site_id INTEGER);
 CREATE TABLE measurement (measurement_id INTEGER, person_id INTEGER, measurement_concept_id INTEGER, measurement_date TEXT,
     measurement_datetime TEXT, value_as_number REAL, value_as_concept_id INTEGER, unit_concept_id INTEGER, range_low REAL,
-    range_high REAL, visit_occurrence_id INTEGER, measurement_source_value TEXT, unit_source_value TEXT, value_source_value TEXT);
+    range_high REAL, visit_occurrence_id INTEGER, measurement_source_value TEXT, unit_source_value TEXT, value_source_value TEXT,
+    operator_concept_id INTEGER);
 CREATE TABLE observation (observation_id INTEGER, person_id INTEGER, observation_concept_id INTEGER, observation_date TEXT,
     observation_datetime TEXT, value_as_number REAL, value_as_string TEXT, value_as_concept_id INTEGER, unit_concept_id INTEGER,
     visit_occurrence_id INTEGER, observation_source_value TEXT, unit_source_value TEXT);
@@ -1255,7 +1724,8 @@ CREATE TABLE cdm_source (cdm_source_name TEXT, source_release_date TEXT, cdm_rel
 OMOP_CONCEPTS = [
     (3047181, 'Lactate [Moles/volume] in Blood', 'LOINC', '2524-7'),
     (3016723, 'Creatinine [Mass/volume] in Serum or Plasma', 'LOINC', '2160-0'),
-    (3019550, 'Troponin T.cardiac [Mass/volume] in Serum or Plasma', 'LOINC', '6598-7'),
+    # (a site's own concept, above 2 000 000 000: the demo's vocabulary holds only these few)
+    (2000000001, 'Troponin T.cardiac [Mass/volume] in Serum or Plasma by High sensitivity method', 'LOINC', '67151-1'),
     (3000963, 'Hemoglobin [Mass/volume] in Blood', 'LOINC', '718-7'),
     (3027018, 'Heart rate', 'LOINC', '8867-4'),
     (3004249, 'Systolic blood pressure', 'LOINC', '8480-6'),
@@ -1273,9 +1743,10 @@ OMOP_CONCEPTS = [
 ]
 
 
-def write_omop(path):
+def write_omop(path, extra=()):
     """An invented OMOP CDM database: another hospital's, with two of the demo patients (by
-    their MRNs: SYN0000002, SYN0000005) and two patients of its own."""
+    their MRNs: SYN0000002, SYN0000005) and two patients of its own; `extra`: more persons
+    [(MRN, sex concept, born, story)], each with a stay, results, a condition and a note."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         path.unlink()
@@ -1285,6 +1756,7 @@ def write_omop(path):
     # person_id, sex concept, born, MRN (person_source_value)
     persons = [(1, 8507, '1961-03-05', 'SYN0000002'), (2, 8532, '1966-06-14', 'SYN0000005'),
                (3, 8507, '1949-09-21', 'SYN0000101'), (4, 8532, '1983-12-02', 'SYN0000102')]
+    persons += [(5 + i, g, b, m) for i, (m, g, b, _) in enumerate(extra)]
     db.executemany('INSERT INTO person VALUES (?, ?, ?, ?, ?, NULL, ?)',
                    [(p, g, int(b[:4]), int(b[5:7]), int(b[8:]), m) for p, g, b, m in persons])
     db.executemany('INSERT INTO care_site VALUES (?, ?)', [(1, 'County General MICU'), (2, 'County General Cardiology'),
@@ -1294,38 +1766,18 @@ def write_omop(path):
               (2, 2, 9202, '2023-11-20 09:00', '2023-11-20 10:00', 3, False),
               (3, 3, 9201, '2024-01-04 22:00', '2024-01-12 15:00', 1, True),
               (4, 4, 9202, '2024-02-07 13:00', '2024-02-07 13:40', 3, False)]
-    db.executemany('INSERT INTO visit_occurrence VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-                   [(v, p, k, a[:10], a + ':00', b[:10], b + ':00', cs) for v, p, k, a, b, cs, _ in visits])
-    db.executemany('INSERT INTO visit_detail VALUES (?, ?, 32037, ?)', [(v, p, v) for v, p, *_, icu in visits if icu])
     # measurement concept, unit concept, low, high, then (person, visit, time, value) …
     results = [
         (3047181, 8753, 0.5, 2.0, [(1, 1, '2023-09-02 15:10', 3.4), (1, 1, '2023-09-03 06:00', 1.9), (3, 3, '2024-01-04 23:00', 5.2),
                                    (3, 3, '2024-01-05 06:00', 3.8), (3, 3, '2024-01-06 06:00', 1.6)]),
         (3016723, 8840, 0.6, 1.2, [(1, 1, '2023-09-02 15:10', 1.4), (2, 2, '2023-11-20 09:15', 0.8), (3, 3, '2024-01-05 06:00', 2.1)]),
-        (3019550, 8842, 0, 14, [(1, 1, '2023-09-02 15:10', 412), (1, 1, '2023-09-03 06:00', 655), (3, 3, '2024-01-05 06:00', 22)]),
+        (2000000001, 8842, 0, 14, [(1, 1, '2023-09-02 15:10', 412), (1, 1, '2023-09-03 06:00', 655), (3, 3, '2024-01-05 06:00', 22)]),
         (3000963, 8713, 12, 16, [(2, 2, '2023-11-20 09:15', 12.9), (4, 4, '2024-02-07 13:10', 10.6)]),
         (3027018, 8541, 60, 100, [(1, 1, '2023-09-02 14:30', 104), (3, 3, '2024-01-04 22:30', 121), (3, 3, '2024-01-05 08:00', 98)]),
         (3004249, 8876, 90, 140, [(1, 1, '2023-09-02 14:30', 152), (3, 3, '2024-01-04 22:30', 84)]),
     ]
-    m = 0
-    for concept, unit, low, high, rows in results:
-        for person, visit, t, value in rows:
-            m += 1
-            db.execute('INSERT INTO measurement VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, NULL, NULL)',
-                       (m, person, concept, t[:10], t + ':00', value, unit, low, high, visit))
-    # condition (SNOMED), its ICD-10 source concept and code, person, visit, start
-    for i, (c, sc, code, person, visit, t) in enumerate([
-            (4329847, 45576876, 'I21.4', 1, 1, '2023-09-02 15:00'), (201826, 45591076, 'E11.9', 2, 2, '2023-11-20 09:30'),
-            (132797, 45533176, 'A41.9', 3, 3, '2024-01-04 23:30'), (201826, 45591076, 'E11.9', 3, 3, '2024-01-05 09:00')], 1):
-        db.execute('INSERT INTO condition_occurrence VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)',
-                   (i, person, c, t[:10], t + ':00', visit, code, sc))
-    for i, (c, person, visit, a, b, unit) in enumerate([
-            (1367571, 1, 1, '2023-09-02 16:00', '2023-09-06 16:00', 'U'), (1503297, 2, 2, '2023-11-20 10:00', '2024-05-20 10:00', 'mg'),
-            (1717327, 3, 3, '2024-01-05 00:30', '2024-01-11 00:30', 'g')], 1):
-        db.execute('INSERT INTO drug_exposure VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)',
-                   (i, person, c, a[:10], a + ':00', b[:10], b + ':00', visit, unit))
-    db.execute("INSERT INTO procedure_occurrence VALUES (1, 1, 4006969, '2023-09-03', '2023-09-03 10:00:00', 1, NULL)")
-    db.executemany('INSERT INTO provider VALUES (?, ?)', [(1, 'Dr. Avery Quinn'), (2, 'Dr. Morgan Ellis')])
+    conditions = [(4329847, 45576876, 'I21.4', 1, 1, '2023-09-02 15:00'), (201826, 45591076, 'E11.9', 2, 2, '2023-11-20 09:30'),
+                  (132797, 45533176, 'A41.9', 3, 3, '2024-01-04 23:30'), (201826, 45591076, 'E11.9', 3, 3, '2024-01-05 09:00')]
     notes = [
         (1, 1, '2023-09-08 10:00', 'Discharge summary',
          'Admitted with chest pain and a non-ST elevation myocardial infarction; troponin peaked at 655 ng/L. '
@@ -1334,305 +1786,867 @@ def write_omop(path):
          'Sepsis of urinary origin with a lactate of 5.2 mmol/L on arrival, treated with piperacillin/tazobactam in the '
          'MICU. Lactate normalised within 48 hours.', 1, 3),
     ]
+    rng = random.Random(len(extra) + 11)
+    for i, (mrn, g, born, story) in enumerate(extra):
+        person, visit = 5 + i, 5 + i
+        a = t('2023-06-01 08:00') + timedelta(days=rng.randint(0, 80), hours=rng.randint(0, 10))
+        inpatient = story in ('sepsis', 'nstemi', 'hf', 'pneumonia')
+        b = a + (timedelta(days=rng.randint(3, 7)) if inpatient else timedelta(minutes=50))
+        visits.append((visit, person, 9201 if inpatient else 9202, fmt(a), fmt(b), 1 if story == 'sepsis' else 2 if story in ('nstemi', 'hf') else 3, story == 'sepsis'))
+        sick = 0.8 if inpatient else 0.3
+        results[0][4].append((person, visit, fmt(a + timedelta(hours=1)), round(1.0 + (3.5 if story == 'sepsis' else 0.4) * sick, 1)))
+        results[1][4].append((person, visit, fmt(a + timedelta(hours=1)), round(0.9 + (1.4 if story in ('sepsis', 'hf') else 0.2) * sick, 1)))
+        results[4][4].append((person, visit, fmt(a + timedelta(minutes=30)), round(78 + 30 * sick)))
+        if story == 'nstemi':
+            results[2][4].append((person, visit, fmt(a + timedelta(hours=2)), rng.randint(250, 900)))
+        code = {'sepsis': (132797, 45533176, 'A41.9'), 'nstemi': (4329847, 45576876, 'I21.4')}.get(story, (201826, 45591076, 'E11.9'))
+        conditions.append((*code, person, visit, fmt(a + timedelta(hours=2))))
+        notes.append((len(notes) + 1, person, fmt(b - timedelta(minutes=30)), 'Discharge summary' if inpatient else 'Clinic note',
+                      {'sepsis': 'Sepsis treated in the MICU; recovered.', 'nstemi': 'Non-ST elevation myocardial infarction, treated medically.',
+                       'hf': 'Decompensated heart failure; diuresed.', 'pneumonia': 'Community-acquired pneumonia, oral antibiotics.'}.get(
+                          story, 'Diabetes follow-up; metformin continued.'), 1 + i % 2, visit))
+    db.executemany('INSERT INTO visit_occurrence VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                   [(v, p, k, a[:10], a + ':00', b[:10], b + ':00', cs) for v, p, k, a, b, cs, _ in visits])
+    db.executemany('INSERT INTO visit_detail VALUES (?, ?, 32037, ?, ?, ?, ?, ?, ?)',
+                   [(v, p, v, a[:10], a + ':00', b[:10], b + ':00', cs) for v, p, k, a, b, cs, icu in visits if icu])
+    m = 0
+    for concept, unit, low, high, rows in results:
+        for person, visit, tm, value in rows:
+            m += 1
+            db.execute('INSERT INTO measurement VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, NULL, NULL, NULL)',
+                       (m, person, concept, tm[:10], tm + ':00', value, unit, low, high, visit))
+    for i, (c, sc, code, person, visit, tm) in enumerate(conditions, 1):
+        db.execute('INSERT INTO condition_occurrence VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?)',
+                   (i, person, c, tm[:10], tm + ':00', visit, code, sc))
+    for i, (c, person, visit, a, b, unit) in enumerate([
+            (1367571, 1, 1, '2023-09-02 16:00', '2023-09-06 16:00', 'U'), (1503297, 2, 2, '2023-11-20 10:00', '2024-05-20 10:00', 'mg'),
+            (1717327, 3, 3, '2024-01-05 00:30', '2024-01-11 00:30', 'g')], 1):
+        db.execute('INSERT INTO drug_exposure VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)',
+                   (i, person, c, a[:10], a + ':00', b[:10], b + ':00', visit, unit))
+    db.execute("INSERT INTO procedure_occurrence VALUES (1, 1, 4006969, '2023-09-03', '2023-09-03 10:00:00', 1, NULL)")
+    db.executemany('INSERT INTO provider VALUES (?, ?)', [(1, 'Dr. Avery Quinn'), (2, 'Dr. Morgan Ellis')])
     db.executemany("INSERT INTO note VALUES (?, ?, ?, ?, 44814637, ?, ?, ?, ?)",
-                   [(n, p, t[:10], t + ':00', title, text, prov, v) for n, p, t, title, text, prov, v in notes])
+                   [(n, p, tm[:10], tm + ':00', title, text, prov, v) for n, p, tm, title, text, prov, v in notes])
     db.execute("INSERT INTO cdm_source VALUES ('County General (synthetic)', '2024-03-01', '2024-03-02')")
     db.commit()
     db.close()
+    return persons
+
+
+# ------------------------------------------------------------------ what each story holds
+
+# per story (STORIES[story]), offsets in hours from the admission (negative: before the discharge):
+#   dx [(ICD-10, description, at)], meds [(drug, dose, unit, from, to)], micro [(test, at, result, flag, comment)],
+#   procs [(procedure, code, vocabulary, at)], support [(support, from, to, value, unit)], blood [(product, units, at)],
+#   imaging [(kind, study, report, at)], echo (LVEF, LVIDd, impression), cath (LAD %, RCA %, LVEDP, impression),
+#   ecg {af, st, lvh}, assessment (the notes' words), holter, sleep, eeg
+STORIES = {
+    'nstemi_sepsis': dict(
+        dx=[('I21.4', 'Non-ST elevation myocardial infarction', 1.3), ('A41.51', 'Sepsis due to Escherichia coli', 113), ('N17.9', 'Acute kidney injury', 100)],
+        meds=[('Heparin', 18, 'U/kg/h', 1.3, 108), ('Piperacillin-tazobactam', 4.5, 'g', 103, -1), ('Norepinephrine', 0.12, 'ug/kg/min', 104, 130),
+              ('Metoprolol', 50, 'mg', 144, -1), ('Insulin glargine', 18, 'U', 13, -1)],
+        micro=[('Blood culture', 104, 'Escherichia coli, ESBL negative', 'positive', 'Notify team; sepsis bundle in progress'),
+               ('Urine culture', 104.2, 'Escherichia coli > 100,000 CFU/mL', 'positive', '')],
+        procs=[('Coronary angiography', '93458', 'CPT', 24.5), ('Percutaneous coronary intervention, LAD', '92928', 'CPT', 25.5),
+               ('Central venous catheter insertion', '36556', 'CPT', 103.5)],
+        support=[('Mechanical ventilation', 105, 150, 40, '% FiO2')], blood=[('Packed red blood cells', 1, 110)],
+        imaging=[('cxr', 'Chest X-ray', 'No acute cardiopulmonary process. Heart size upper normal.', 0.8),
+                 ('ct', 'CT chest with contrast', 'Bilateral lower-lobe consolidation with small effusions; no pulmonary embolism.', 147 + 35 / 60)],
+        echo=(0.35, 6.1, 'LVEF 35 %, inferior hypokinesis, mild mitral regurgitation.'),
+        cath=(90, 30, 22, 'Severe proximal LAD stenosis (90 %), moderate RCA disease; LVEDP 22 mmHg. PCI to the LAD.'),
+        ecg=dict(st=True), assessment='septic shock secondary to E. coli bacteremia after a non-ST elevation myocardial infarction'),
+    'nstemi': dict(
+        dx=[('I21.4', 'Non-ST elevation myocardial infarction', 1)], meds=[('Heparin', 18, 'U/kg/h', 1, 48), ('Aspirin', 81, 'mg', 1, -1),
+                                                                         ('Ticagrelor', 90, 'mg', 20, -1), ('Atorvastatin', 80, 'mg', 3, -1)],
+        procs=[('Coronary angiography', '93458', 'CPT', 20), ('Percutaneous coronary intervention', '92928', 'CPT', 21)],
+        echo=(0.45, 5.4, 'LVEF 45 %, anterior hypokinesis.'), cath=(80, 20, 18, 'Significant LAD stenosis (80 %); stented.'),
+        ecg=dict(st=True), assessment='non-ST elevation myocardial infarction, chest pain resolved'),
+    'af': dict(dx=[('I48.91', 'Atrial fibrillation', 0.5)], meds=[('Amiodarone', 1, 'mg/min', 5.5, 42), ('Apixaban', 5, 'mg', 60, -1)],
+               micro=[('Blood culture', 6.5, 'No growth at 5 days', '', '')], ecg=dict(af=True),
+               echo=(0.55, 5.0, 'LVEF 55 %, dilated left atrium.'), assessment='atrial fibrillation with rapid ventricular response, rate controlled'),
+    'pneumonia': dict(
+        dx=[('J18.9', 'Pneumonia', 1), ('J96.01', 'Acute respiratory failure with hypoxia', 1)],
+        meds=[('Ceftriaxone', 2, 'g', 4, -2), ('Azithromycin', 500, 'mg', 4, 76), ('Propofol', 30, 'ug/kg/min', 2.3, 55)],
+        micro=[('Sputum culture', 3, 'Streptococcus pneumoniae', 'positive', '')], support=[('Mechanical ventilation', 2, 56, 50, '% FiO2')],
+        imaging=[('cxr-right', 'Chest X-ray', 'Right lower lobe consolidation consistent with pneumonia.', 1.2)],
+        assessment='community-acquired pneumonia with hypoxic respiratory failure, improving'),
+    'hf': dict(dx=[('I50.23', 'Acute on chronic systolic heart failure', 1)], meds=[('Furosemide', 40, 'mg', 1.5, -1), ('Sacubitril-valsartan', 49, 'mg', 50, -1)],
+               imaging=[('cxr', 'Chest X-ray', 'Cardiomegaly with interstitial edema and small bilateral effusions.', 1)],
+               echo=(0.28, 6.6, 'LVEF 28 %, dilated left ventricle, moderate functional mitral regurgitation.'),
+               obs=[('NYHA class', 'III')], assessment='decompensated heart failure, diuresing well'),
+    'ckd': dict(dx=[('N18.4', 'Chronic kidney disease, stage 4', 0.5)], meds=[('Calcitriol', 0.25, 'ug', 0.5, 2000)], assessment='chronic kidney disease, slowly progressing'),
+    'ckd_dialysis': dict(dx=[('N18.6', 'End stage renal disease', 1)], procs=[('Arteriovenous fistula creation', '36821', 'CPT', 26)],
+                         support=[('Hemodialysis', 6, 10, 300, 'mL/min'), ('Hemodialysis', 54, 58, 300, 'mL/min')], blood=[('Packed red blood cells', 1, 30)],
+                         assessment='end-stage renal disease, hemodialysis started'),
+    'diabetes': dict(dx=[('E11.9', 'Type 2 diabetes mellitus', 0.5)], meds=[('Metformin', 1000, 'mg', 0.5, 4000)], assessment='type 2 diabetes, glycemic control to improve'),
+    'followup': dict(assessment='doing well since the last admission'),
+    'checkup': dict(assessment='healthy; routine screening'),
+    'hypertension': dict(dx=[('I10', 'Essential hypertension', 0.5)], meds=[('Amlodipine', 5, 'mg', 0.5, 4000)], ecg=dict(lvh=True),
+                         echo=(0.6, 4.8, 'LVEF 60 %, concentric LV hypertrophy, normal valves.'), assessment='hypertension with LV hypertrophy'),
+    'palpitations': dict(dx=[('R00.2', 'Palpitations', 0.5)], holter=True, ecg=dict(lvh=True), assessment='palpitations; a 24-hour Holter is fitted'),
+    'surgery': dict(dx=[('K80.00', 'Calculus of gallbladder with acute cholecystitis', 1)], meds=[('Cefazolin', 2, 'g', 2, 26), ('Morphine', 2, 'mg', 4, 52)],
+                    procs=[('Laparoscopic cholecystectomy', '47562', 'CPT', 20)],
+                    imaging=[('ct-abdomen', 'CT abdomen and pelvis', 'Distended gallbladder with wall thickening and stones: acute cholecystitis.', 1.5)],
+                    path=('Gallbladder', 'Acute and chronic cholecystitis with cholelithiasis. No dysplasia or malignancy.', 50),
+                    assessment='acute cholecystitis, after laparoscopic cholecystectomy'),
+    'appendicitis': dict(dx=[('K35.80', 'Acute appendicitis', 0.5)], meds=[('Cefazolin', 2, 'g', 1, 25), ('Morphine', 2, 'mg', 4, 52)],
+                         procs=[('Laparoscopic appendectomy', '44970', 'CPT', 6)],
+                         imaging=[('ct-abdomen', 'CT abdomen and pelvis', 'Dilated appendix with periappendiceal fat stranding: acute appendicitis.', 0.5)],
+                         path=('Appendix', 'Acute suppurative appendicitis. No neoplasm.', 30), assessment='acute appendicitis, after appendectomy'),
+    'abdominal_pain': dict(dx=[('R10.31', 'Right lower quadrant pain', 0.7)], assessment='right lower quadrant pain, discharged with advice'),
+    'seizure': dict(dx=[('G40.309', 'Generalized epilepsy', 2)], meds=[('Levetiracetam', 500, 'mg', 2, -1)], eeg=True,
+                    obs=[('Glasgow Coma Scale', 14)], assessment='a first generalized seizure; EEG shows generalized spike-and-wave'),
+    'sleep': dict(dx=[('G47.33', 'Obstructive sleep apnea', 8)], sleep=True, assessment='overnight polysomnography'),
+    'copd': dict(dx=[('J44.1', 'COPD with acute exacerbation', 1)], meds=[('Prednisone', 40, 'mg', 2, 98), ('Ipratropium-albuterol', 3, 'mL', 1, -1)],
+                 support=[('Non-invasive ventilation', 2, 30, 35, '% FiO2')], imaging=[('cxr', 'Chest X-ray', 'Hyperinflated lungs; no consolidation.', 1)],
+                 assessment='COPD exacerbation, weaned off non-invasive ventilation'),
+    'stroke': dict(dx=[('I63.9', 'Cerebral infarction', 1)], meds=[('Alteplase', 0.9, 'mg/kg', 1.5, 2.5), ('Aspirin', 300, 'mg', 26, -1)],
+                   procs=[('Intravenous thrombolysis', '37195', 'CPT', 1.5)], obs=[('NIH Stroke Scale', 9), ('Glasgow Coma Scale', 13)],
+                   assessment='acute ischemic stroke, thrombolysed, improving'),
+    'gi_bleed': dict(dx=[('K92.2', 'Gastrointestinal hemorrhage', 1)], meds=[('Pantoprazole', 8, 'mg/h', 2, 74)],
+                     procs=[('Upper GI endoscopy with hemostasis', '43255', 'CPT', 8)], blood=[('Packed red blood cells', 2, 3), ('Fresh frozen plasma', 2, 4)],
+                     path=('Gastric biopsy', 'Chronic gastritis; Helicobacter pylori organisms identified.', 30), assessment='upper GI bleeding from a gastric ulcer, treated endoscopically'),
+}
+STORIES['sepsis'] = dict(
+    dx=[('A41.9', 'Sepsis, unspecified organism', 1), ('N17.9', 'Acute kidney injury', 20)],
+    meds=[('Piperacillin-tazobactam', 4.5, 'g', 1.5, -1), ('Norepinephrine', 0.1, 'ug/kg/min', 4, 40), ('Hydrocortisone', 50, 'mg', 10, 70)],
+    micro=[('Blood culture', 1, 'Klebsiella pneumoniae', 'positive', 'ESBL negative'), ('Urine culture', 1.2, 'Klebsiella pneumoniae > 100,000 CFU/mL', 'positive', '')],
+    procs=[('Central venous catheter insertion', '36556', 'CPT', 3)], support=[('Mechanical ventilation', 5, 60, 45, '% FiO2'), ('CRRT', 30, 70, 2000, 'mL/h')],
+    blood=[('Packed red blood cells', 2, 24)], imaging=[('ct-chest', 'CT chest with contrast', 'Bilateral dependent consolidation; no abscess.', 8),
+                                                         ('cxr', 'Chest X-ray', 'Endotracheal tube and central line in good position.', 6)],
+    obs=[('SOFA score', 9), ('Glasgow Coma Scale', 10)], assessment='septic shock of urinary origin, on vasopressors')
+
+CPT_DX = {}
+STAFF = {'in': ('Dr. A. Rivera', 'Dr. K. Osei'), 'out': ('Dr. M. Patel',)}
+
+
+class Demo:
+    """What the parts fill: the rows of each table, and the files written."""
+
+    def __init__(self, out, lib, full, seed):
+        self.out, self.lib, self.full, self.seed = out, lib, full, seed
+        self.t = {k: [] for k in ('labs', 'vitals', 'meds', 'dx', 'micro', 'notes', 'ecgs', 'icu', 'imaging', 'echos', 'caths',
+                                  'procs', 'blood', 'support', 'obs', 'path', 'holter', 'sleep')}
+        self.lib_ct = {r: [i for i in (lib.of('ct_series') if lib else []) if i['region'] == r] for r in ('chest', 'abdomen')}
+        self.lib_xray = list(lib.of('xray') if lib else [])
+        self.n_ecg = 0
+        self.icu_stays = 0
+        self.formats = {}
+
+
+def at(e, h):
+    """The time `h` hours after the admission (negative: before the discharge), within the stay."""
+    a, b = t(e[4]), t(e[5])
+    when = a + timedelta(hours=h) if h >= 0 else b + timedelta(hours=h)
+    return min(max(when, a), b)
+
+
+def fill(D, p, e, story):
+    """The rows of one encounter: results, vital signs, notes, ECGs, ICU recordings, and what
+    its story adds."""
+    eid, pid, _, kind, a, b = e[0], e[1], e[2], e[3], t(e[4]), t(e[5])
+    mrn, last, first, born, sex = p[1], p[2], p[3], p[4], p[5]
+    S = STORIES.get(story, {})
+    rng = random.Random(f'{D.seed}-{eid}')
+    sick_set = SICK.get(story, set())
+    chronic = 0.6 if kind == 'out' and sick_set else 0
+    ill = lambda when: max(chronic, illness(e, when)) if e[8] or kind == 'in' else chronic  # noqa: E731
+    age = age_at(born, a)
+    who = f'{first} {last}'
+    if story == 'sleep':
+        D.t['notes'].append((pid, eid, fmt(b - timedelta(minutes=30)), 'Sleep study report', 'Dr. S. Lee', 'Sleep medicine',
+                             f'Patient: {who}, DOB {born}.\nOvernight polysomnography (EEG, EOG, ECG, airflow, thoracic effort, SpO2).\n'
+                             'Obstructive apneas with oxygen desaturations to about 89 %; apnea-hypopnea index about 8 per hour.\n'
+                             'Sinus rhythm throughout.\nImpression: mild obstructive sleep apnea. Discuss treatment at the next visit.'))
+        for code, desc, h in S.get('dx', []):
+            D.t['dx'].append((pid, eid, code, desc, fmt(at(e, h))))
+        return
+    # laboratory: a morning panel each day, every 6 h in the ICU; a small panel at visits
+    times = []
+    if kind == 'out':
+        times = [a + timedelta(minutes=40)]
+    else:
+        d = a.replace(hour=6, minute=10)
+        if d < a:
+            d += timedelta(days=1)
+        while d < b:
+            times.append(d)
+            if e[8] and t(e[8][2]) <= d <= t(e[8][3]):
+                times += [d + timedelta(hours=h) for h in (6, 12, 18)]
+            d += timedelta(days=1)
+        times.insert(0, a + timedelta(minutes=50))
+    panel = CORE_LABS + EXTRA_LABS.get(story, [])
+    for when in sorted(times):
+        s = ill(when)
+        for name, loinc, unit, lo, hi, norm, sickv in LABS:
+            if name not in panel:
+                continue
+            lo, hi, norm = by_sex(name, lo, hi, norm, sex)
+            if kind == 'out' and name not in ('Sodium', 'Potassium', 'Creatinine', 'Glucose', 'Hemoglobin', 'WBC', *EXTRA_LABS.get(story, [])):
+                continue
+            if name in ('Lactate', 'Procalcitonin') and s < 0.2 and when.hour != 6:
+                continue
+            if name in ('Troponin T',) and when > a + timedelta(days=3):
+                continue
+            level = s if name in sick_set else 0.05 * s
+            v = norm + (sickv - norm) * level + (norm * 0.03) * rng.uniform(-1, 1)
+            v = round(v, 1 if abs(norm) < 20 else 0)
+            D.t['labs'].append((mrn, eid, name, v, unit, lo, hi, flag(v, lo, hi), fmt(when), loinc, 'LOINC'))
+    # vital signs: hourly in the ICU, every 4 h on the ward, once at a visit
+    when = a
+    while when < b:
+        in_icu = bool(e[8]) and t(e[8][2]) <= when <= t(e[8][3])
+        if in_icu or when.hour % 4 == 0 or kind == 'out':
+            s = ill(when) if kind == 'in' else 0
+            for name, unit, lo, hi, v in (('Heart rate', '/min', 50, 110, 76 + 40 * s), ('SpO2', '%', 92, 100, 97 - 5 * s),
+                                          ('Respiratory rate', '/min', 10, 22, 15 + 10 * s), ('Systolic blood pressure', 'mmHg', 90, 140, 128 - 36 * s),
+                                          ('Temperature', '°C', 36.0, 38.0, 36.8 + 2.1 * s)):
+                v = round(v + rng.uniform(-2, 2) * (0.1 if unit == '°C' else 1), 1)
+                D.t['vitals'].append((pid, eid, name, v, unit, lo, hi, fmt(when)))
+            if kind == 'out':
+                break
+        when += timedelta(hours=1)
+    # notes: they name the patient and give the date of birth, as notes do (Privacy Mode
+    # replaces both)
+    woman = 'woman' if sex == 'F' else 'man'
+    assessment = S.get('assessment', 'clinically stable')
+    if kind == 'out':
+        D.t['notes'].append((pid, eid, fmt(a + timedelta(minutes=55)), 'Clinic note', STAFF['out'][0], e[6],
+                             f'{who} (DOB {born}), a {age}-year-old {woman}, seen in clinic.\n'
+                             'No chest pain, no dyspnea at rest. Medications reviewed.\n'
+                             f'Assessment: {assessment}.\nPlan: continue current therapy; follow-up in 3 months.'))
+    else:
+        D.t['notes'].append((pid, eid, fmt(a + timedelta(hours=2)), 'Admission note', STAFF['in'][0], e[6],
+                             f'{who} (DOB {born}) is a {age}-year-old {woman} admitted from the emergency department.\n'
+                             f'Assessment: {assessment}.\nPlan: admit, monitor, labs in the morning.'))
+        d = a.replace(hour=15, minute=40) + timedelta(days=1)
+        while d < b - timedelta(hours=6):
+            in_icu = bool(e[8]) and t(e[8][2]) <= d <= t(e[8][3])
+            s = ill(d)
+            text = ('Subjective: overnight events reviewed.\n'
+                    f'Objective: HR {round(76 + 40 * s)}, SpO2 {round(97 - 5 * s)} %, temperature {36.8 + 2.1 * s:.1f} °C.\n'
+                    f'Assessment: {assessment if s > 0.4 else "clinically stable"}.\n'
+                    'Plan: continue current management; repeat labs in the morning.')
+            D.t['notes'].append((pid, eid, fmt(d), 'ICU progress note' if in_icu else 'Progress note',
+                                 STAFF['in'][1] if in_icu else STAFF['in'][0], 'ICU' if in_icu else e[6], text))
+            d += timedelta(days=1)
+        D.t['notes'].append((pid, eid, fmt(b - timedelta(hours=1)), 'Discharge summary', STAFF['in'][0], e[6],
+                             f'Hospital course: {who} (DOB {born}) was admitted on {a:%b %d, %Y}: {assessment}. '
+                             f'Discharged to {e[7].lower()} in stable condition.'))
+    # what the story adds
+    for code, desc, h in S.get('dx', []):
+        D.t['dx'].append((pid, eid, code, desc, fmt(at(e, h))))
+    for drug, dose, unit, h0, h1 in S.get('meds', []):
+        D.t['meds'].append((pid, eid, drug, dose, unit, fmt(at(e, h0)), fmt(at(e, h1) if h1 < 1000 else at(e, 0) + timedelta(hours=h1))))
+    for test, h, result, fl, comment in S.get('micro', []):
+        D.t['micro'].append((pid, eid, test, fmt(at(e, h)), result, fl, comment))
+    for name, code, vocab, h in S.get('procs', []):
+        D.t['procs'].append((pid, eid, name, code, vocab, fmt(at(e, h))))
+    for name, h0, h1, value, unit in S.get('support', []):
+        D.t['support'].append((pid, eid, name, value, unit, fmt(at(e, h0)), fmt(at(e, h1))))
+    for product, units, h in S.get('blood', []):
+        D.t['blood'].append((pid, eid, product, units, 'units', fmt(at(e, h))))
+    for name, value in S.get('obs', []):
+        for k in range(3 if kind == 'in' else 1):
+            when = at(e, 3 + 24 * k)
+            v = value if isinstance(value, str) else max(0, round(value - k * (2 if value > 6 else 1)))
+            D.t['obs'].append((pid, eid, name, v, fmt(when)))
+    if kind == 'in':
+        for k in range(min(3, max(1, (b - a).days))):
+            D.t['obs'].append((pid, eid, 'Pain score (0-10)', max(0, 6 - 2 * k + rng.randint(-1, 1)), fmt(at(e, 4 + 24 * k))))
+    if 'path' in S:
+        spec, text, h = S['path']
+        D.t['path'].append((pid, eid, fmt(at(e, h)), f'Surgical pathology: {spec}', 'Dr. P. Lindgren', text))
+    ecgs(D, p, e, story, ill)
+    imaging(D, p, e, story)
+    if e[8]:
+        unit, bed, i0, i1 = e[8]
+        for j, frac in enumerate((0.3, 0.62)):
+            st = (t(i0) + (t(i1) - t(i0)) * frac).replace(second=0, microsecond=0)
+            fname = '_'.join((unit, bed)) + '-' + str(int(st.timestamp()))
+            recording(D.out / 'icu' / fname, st, 10, ill, D.lib, seed=D.seed % 1000 + len(D.t['icu']), untimed=(j == 1 and D.icu_stays < 3))
+            D.t['icu'].append((pid, eid, f'../icu/{fname}'))
+        D.icu_stays += 1
+    if S.get('holter'):
+        hours = 24 if pid == 'P900004' else 12
+        rel = f'{pid}_{a:%Y%m%d}'
+        holter(D.out / 'holter' / rel, a + timedelta(minutes=90), D.lib, seed=len(D.t['holter']) + 5, hours=hours)
+        D.t['holter'].append((pid, eid, 'holter', f'../holter/{rel}/holter.hea'))
+    if S.get('eeg'):
+        routine_eeg(D.out / 'eeglab' / f'{pid}_eeg_{a:%Y%m%d}.bdf', a + timedelta(hours=20), seed=len(pid) + int(pid[-3:]))
+
+
+def ecgs(D, p, e, story, ill):
+    """The encounter's 12-lead ECGs: what a cart and MUSE would hold (12SL measurements and
+    statements, the physician's confirmation, sometimes a corrected reading), in the formats in
+    turn: WFDB mostly, then MUSE XML, DICOM, PDF and PNG."""
+    eid, pid, kind, a = e[0], e[1], e[3], t(e[4])
+    flags = STORIES.get(story, {}).get('ecg', {})
+    for k, when in enumerate([a + timedelta(minutes=20)] + ([a + timedelta(days=2, hours=3)] if kind == 'in' else [])):
+        s = ill(when) if kind == 'in' else 0
+        hr = round(72 + 40 * s) + (38 if flags.get('af') and k == 0 else 0)
+        af = bool(flags.get('af')) and k == 0
+        st = bool(flags.get('st')) and k == 0
+        lvh = bool(flags.get('lvh'))
+        leads = ecg12_any(D.lib, D.n_ecg, hr, st, af, lvh)
+        D.n_ecg += 1
+        meas = ecg_measures(hr, af, lvh)
+        name = f'ecg_{pid}_{when:%Y%m%d_%H%M}'
+        prev = D.formats.setdefault('last', {}).get(pid)
+        computer = twelve_sl(meas, af, st, lvh, prev)
+        D.formats['last'][pid] = (when, st, af)
+        interp = '; '.join(computer)
+        if st:
+            confirmed = [computer[0], 'Inferolateral ST depression, consistent with subendocardial ischemia', 'Abnormal ECG']
+        elif af:
+            confirmed = None
+        else:
+            confirmed = computer
+        # the format: the first patients' as before; then MUSE every 6th, DICOM, PDF and PNG once more each
+        n = D.n_ecg
+        fmt_ = 'wfdb'
+        if k == 1 and pid in ('P900001', 'P900002'):
+            fmt_ = 'muse'
+        elif k == 1 and pid == 'P900003':
+            fmt_ = 'dicom'
+        elif eid == 'E9100007':
+            fmt_ = 'pdf'
+        elif pid == 'P900003' and kind == 'out':
+            fmt_ = 'png'
+        elif pid >= 'P900007':
+            fmt_ = {20: 'dicom', 25: 'pdf', 30: 'png'}.get(n, 'muse' if n % 6 == 0 else 'wfdb')
+        if fmt_ == 'muse':
+            if pid == 'P900001':
+                confirmed = [computer[0], 'Nonspecific T wave abnormality', 'Borderline ECG']
+            file = ecg_muse(D.out / 'ecg' / f'{name}.xml', p, when, leads, meas, computer, confirmed or computer).name
+        elif fmt_ == 'dicom':
+            ecg_dicom(D.out / 'ecg' / f'{name}.dcm', p[1], when, leads, meas, computer)
+            file = f'{name}.dcm'
+        elif fmt_ == 'pdf':
+            ecg_pdf(D.out / 'ecg' / f'{name}.pdf', leads, f'Synthetic 12-lead ECG (not a patient)   {computer[0]}   {hr} bpm')
+            file = f'{name}.pdf'
+        elif fmt_ == 'png':
+            ecg_png(D.out / 'ecg' / f'{name}.png', leads)
+            file = f'{name}.png'
+        else:
+            age = age_at(p[4], when)
+            comments = [f'Age: {age}', f'Sex: {p[5]}', 'Device: MAC 5500 HD', 'Location: ' + e[6], 'Filters: 0.05-150 Hz, 60 Hz notch',
+                        'Program: Marquette 12SL v243']
+            comments += [f'{k2}: {v} {u}' for k2, (v, u) in meas.items()]
+            if st:
+                comments += [f'ST {lead}: {v:+.2f} mV' for lead, v in ST_DEPRESSION.items()]
+            if lvh:
+                comments += ['R amp V5: 3.4 mV', 'S amp V1: 1.9 mV']
+            comments.append(f'Dx: {"; ".join(computer)}')
+            if confirmed:
+                comments += [f'Dx confirmed: {"; ".join(confirmed)}', 'Confirmed by: A. Rivera', f'Confirmed at: {when + timedelta(hours=6):%Y-%m-%d %H:%M}']
+            file = ecg_wfdb(D.out / 'ecg', name, when, leads, comments=comments).name
+        D.t['ecgs'].append((pid, eid, fmt(when), '12-lead ECG', hr, 'bpm', *[meas[c][0] if c in meas else '' for c in ECG_COLUMNS], interp, f'../ecg/{file}'))
+
+
+ATTRIBUTION = {
+    # the public collections the library's CT series and radiographs come from (tools/demo/README.md)
+    'C1': 'C4KC-KiTS (Kidney Tumor Segmentation Challenge), The Cancer Imaging Archive. Heller N. et al. (2019), '
+          'https://doi.org/10.7937/TCIA.2019.IX49E8NX. License: CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/).',
+    'C2': 'LIDC-IDRI (Lung Image Database Consortium), The Cancer Imaging Archive. Armato III S. G. et al. (2015), '
+          'https://doi.org/10.7937/K9/TCIA.2015.LO9QL9SX. License: CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/).',
+    'C3': 'NLST (National Lung Screening Trial), The Cancer Imaging Archive. National Lung Screening Trial Research Team (2013), '
+          'https://doi.org/10.7937/TCIA.HMQ8-J677. License: CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/).',
+    'C4': 'Pancreas-CT, The Cancer Imaging Archive. Roth H. et al., Data From Pancreas-CT (Version 2), '
+          'https://doi.org/10.7937/K9/TCIA.2016.tNB1kqBU. License: CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/).',
+}
+
+
+def attribution(folder, item):
+    """ATTRIBUTION.txt beside a series made from the library: the collection it comes from, its
+    licence, and what was changed (the licences ask for both)."""
+    (folder / 'ATTRIBUTION.txt').write_text(
+        'Derived from: ' + ATTRIBUTION.get(item['collection'], item['collection']) + '\n'
+        'Changed for the Medorama demo: re-sliced, cropped, resampled, rotated, elastically deformed, intensity-remapped and noised'
+        + (', projected into a radiograph' if item['kind'] == 'xray' else '') + '; every identifier and date invented.\n'
+        'It shows no particular patient: the demo assigns it to an invented one.\n', encoding='utf-8')
+
+
+def ct_from_library(folder, lib, item, pid, when, description):
+    """A CT series (one file per slice) from a library series: its HU (+1024) in 12 bits."""
+    folder.mkdir(parents=True, exist_ok=True)
+    vol = lib.array(item).astype(np.uint16)
+    series, study = uid(), uid()
+    n, size = vol.shape[0], vol.shape[1]
+    px, dz = item['pixel_mm'], item['slice_mm']
+    for z in range(n):
+        zpos = round(z * dz - n * dz / 2, 2)
+        dicom(folder / f'IM{z + 1:04d}.dcm', [
+            (8, 0x20, 'DA', f'{when:%Y%m%d}'), (8, 0x60, 'CS', 'CT'), (8, 0x103e, 'LO', description),
+            (0x10, 0x20, 'LO', pid), (0x18, 0x50, 'DS', f'{dz:g}'), (0x20, 0xd, 'UI', study), (0x20, 0xe, 'UI', series), (0x20, 0x11, 'IS', '2'),
+            (0x20, 0x13, 'IS', str(z + 1)), (0x20, 0x32, 'DS', f'{-px * size / 2:g}\\{-px * size / 2:g}\\{zpos:g}'), (0x20, 0x37, 'DS', '1\\0\\0\\0\\1\\0'),
+            (0x20, 0x1041, 'DS', f'{zpos:g}'), (0x28, 2, 'US', 1), (0x28, 4, 'CS', 'MONOCHROME2'), (0x28, 0x10, 'US', size),
+            (0x28, 0x11, 'US', size), (0x28, 0x30, 'DS', f'{px:g}\\{px:g}'), (0x28, 0x100, 'US', 16), (0x28, 0x101, 'US', 12),
+            (0x28, 0x102, 'US', 11), (0x28, 0x103, 'US', 0), (0x28, 0x1050, 'DS', '40'), (0x28, 0x1051, 'DS', '400'),
+            (0x28, 0x1052, 'DS', '-1024'), (0x28, 0x1053, 'DS', '1'),
+        ], vol[z].astype('<u2').tobytes(), '1.2.840.10008.5.1.4.1.1.2')
+    attribution(folder, item)
+    return folder
+
+
+def xray_from_library(path, lib, item, pid, when):
+    """A frontal chest radiograph (DX) from a library radiograph (12 bits)."""
+    px = lib.array(item).astype(np.uint16)
+    size = px.shape[0]
+    dicom(path, [
+        (8, 0x20, 'DA', f'{when:%Y%m%d}'), (8, 0x60, 'CS', 'DX'), (8, 0x103e, 'LO', 'Chest PA'), (0x10, 0x20, 'LO', pid),
+        (0x20, 0xd, 'UI', uid()), (0x20, 0xe, 'UI', uid()), (0x20, 0x11, 'IS', '1'), (0x20, 0x13, 'IS', '1'),
+        (0x28, 2, 'US', 1), (0x28, 4, 'CS', 'MONOCHROME2'), (0x28, 0x10, 'US', size), (0x28, 0x11, 'US', size),
+        (0x28, 0x30, 'DS', f'{item["pixel_mm"]:g}\\{item["pixel_mm"]:g}'), (0x28, 0x100, 'US', 16), (0x28, 0x101, 'US', 12),
+        (0x28, 0x102, 'US', 11), (0x28, 0x103, 'US', 0), (0x28, 0x1050, 'DS', '2000'), (0x28, 0x1051, 'DS', '4000'),
+    ], px.astype('<u2').tobytes(), '1.2.840.10008.5.1.4.1.1.1.1')
+    (path.parent / f'{path.stem}.ATTRIBUTION.txt').write_text(
+        'Derived from: ' + ATTRIBUTION.get(item['collection'], item['collection']) + '\n'
+        'Changed for the Medorama demo: projected from a CT volume into a radiograph, deformed, intensity-remapped and noised; '
+        'every identifier and date invented.\n', encoding='utf-8')
+
+
+def imaging(D, p, e, story):
+    """The encounter's imaging (radiographs, CT series: from the library when it has them, else
+    the models), echo (loops and reports) and cath lab (angiography)."""
+    pid, eid = p[0], e[0]
+    S = STORIES.get(story, {})
+    for kind, name, report, h in S.get('imaging', []):
+        when = at(e, h)
+        if (pid, fmt(when)) in D.real:
+            continue
+        if kind.startswith('ct'):
+            region = 'abdomen' if 'abdomen' in kind else 'chest'
+            base = f'ct_{pid}_{when:%Y%m%d}'
+            if D.lib_ct[region]:
+                ct_from_library(D.out / 'imaging' / base, D.lib, D.lib_ct[region].pop(0), pid, when, name)
+            else:
+                ct_series(D.out / 'imaging' / base, region, pid, when)
+            file = f'{base}/'
+        else:
+            base = f'cxr_{pid}_{when:%Y%m%d}'
+            opacity = 'right' if kind == 'cxr-right' else None
+            if D.lib_xray and opacity is None:
+                xray_from_library(D.out / 'imaging' / f'{base}.dcm', D.lib, D.lib_xray.pop(0), pid, when)
+            else:
+                chest_xray(D.out / 'imaging' / f'{base}.dcm', pid, when, opacity=opacity)
+            file = f'{base}.dcm'
+        D.t['imaging'].append((pid, eid, fmt(when), name, 'imaging', report, f'../imaging/{file}'))
+    if S.get('echo'):
+        ef, lvidd, impression = S['echo']
+        when = at(e, 26 if e[3] == 'in' else 0.3)
+        base = f'echo_{pid}_{when:%Y%m%d}'
+        study = uid()
+        echo_loop(D.out / 'echo' / f'{base}_a4c.dcm', pid, when, ef=ef, study=study)
+        echo_report(D.out / 'echo' / f'{base}_sr.dcm', pid, when + timedelta(minutes=25), ef, lvidd, study)
+        tapse = 21 if ef > 0.5 else 15
+        D.t['echos'].append((pid, eid, fmt(when), 'Transthoracic echo', 'Apical 4-chamber', '', '', '', '', '', impression, f'../echo/{base}_a4c.dcm'))
+        if pid == 'P900004':
+            echo_pngs(D.out / 'echo' / f'{base}_a4c_frames', pid, ef)
+            D.t['echos'].append((pid, eid, fmt(when), 'Transthoracic echo', 'Apical 4-chamber (exported frames)', '', '', '', '1', '30', '', f'../echo/{base}_a4c_frames/'))
+        D.t['echos'].append((pid, eid, fmt(when + timedelta(minutes=25)), 'Echo report', 'Report', round(ef * 100), lvidd, tapse, '', '', impression, f'../echo/{base}_sr.dcm'))
+    if S.get('cath'):
+        lad, rca, lvedp, impression = S['cath']
+        when = at(e, 24.5 if story == 'nstemi_sepsis' else 20)
+        name = f'cath_{pid}_{when:%Y%m%d}_lca.dcm'
+        if (pid, fmt(when)) not in D.real:
+            angio_run(D.out / 'cath' / name, pid, when)
+            D.t['caths'].append((pid, eid, fmt(when), 'Coronary angiography', lad, rca, lvedp, impression, f'../cath/{name}'))
+
+
+# ------------------------------------------------------------------ the second hospital (north)
+
+def north(out, pats, seed):
+    """A second hospital's tables: some of the main hospital's patients by the same MRN
+    authority (one MRN in lower case), one identity conflict (one patient's MRN with another
+    patient's ID, issued by the main hospital), two patients of its own; its patient IDs
+    written PT_123 in its patients table and PT123 elsewhere (rules.toml makes them one); its
+    ECG files under a folder that its tables name `legacy/` (rules.toml: archive/), moved to
+    files/ after the database is built (moved.toml, for db-builder rewrite)."""
+    rng = random.Random(seed + 77)
+    d = out / 'north'
+    for sub in ('archive', 'files'):
+        shutil.rmtree(d / sub, ignore_errors=True)
+    gen = [p for p in pats if p[0] >= 'P900007']
+    shared = [pats[1], pats[4]] + gen[:3]                     # by MRN
+    lower = gen[3]                                            # the same MRN, in lower case
+    conflict_mrn, conflict_id = gen[4], gen[5]
+    own = [('', 'SYN0005001', 'Mbeki', 'Thandi', '1969-04-11', 'F'), ('', 'SYN0005002', 'Varga', 'Andras', '1954-10-30', 'M')]
+    rows, encs, labs, notes, ecg_rows = [], [], [], [], []
+    people = [(p, p[1]) for p in shared] + [(lower, lower[1].lower())] + [(p, p[1]) for p in own]
+    for i, (p, mrn) in enumerate(people):
+        nid = f'{701 + i:06d}'
+        rows.append((f'PT_{nid}', '', mrn, p[2], p[3], p[4], p[5]))
+        a = t('2023-03-01 09:00') + timedelta(days=rng.randint(0, 150), hours=rng.randint(0, 8))
+        b = a + timedelta(days=rng.randint(1, 4))
+        eid = f'N{8000 + i}'
+        encs.append((eid, f'PT{nid}', fmt(a), fmt(b), rng.choice(['Medicine', 'Cardiology', 'Surgery']), 'Home'))
+        for name, loinc, unit, lo, hi, norm, sick in LABS[:8]:
+            lo, hi, norm = by_sex(name, lo, hi, norm, p[5])
+            v = round(norm * rng.uniform(0.9, 1.12), 1)
+            labs.append((f'PT{nid}', eid, name, v, unit, lo, hi, flag(v, lo, hi), fmt(a + timedelta(hours=2)), loinc, 'LOINC'))
+        notes.append((f'PT{nid}', eid, fmt(b - timedelta(hours=1)), 'Discharge letter', 'Dr. H. Andersen', 'Northside Hospital',
+                      f'{p[3]} {p[2]} (DOB {p[4]}) was admitted to Northside Hospital and discharged home in good condition.'))
+        if i < 4:
+            when = a + timedelta(minutes=30)
+            hr = rng.randint(62, 88)
+            leads = ecg12(hr)
+            meas = ecg_measures(hr)
+            comp = twelve_sl(meas, False, False, False)
+            fname = f'ecg_{when:%Y%m%d_%H%M}_{i}.xml'
+            (d / 'archive' / 'ecg').mkdir(parents=True, exist_ok=True)
+            ecg_muse(d / 'archive' / 'ecg' / fname, (p[0], mrn.upper(), p[2], p[3], p[4], p[5]), when, leads, meas, comp, comp)
+            ecg_rows.append((f'PT{nid}', eid, fmt(when), '12-lead ECG', 'ecg', '; '.join(comp), f'legacy/ecg/{fname}'))
+    # the identity conflict: a registration error, one patient's MRN with another's ID
+    rows.append((conflict_id[0], 'DEMO', conflict_mrn[1], conflict_mrn[2], conflict_mrn[3], conflict_mrn[4], conflict_mrn[5]))
+    write_csv(d / 'patients.csv', ['Patient ID', 'Issuer', 'MRN', 'Last Name', 'First Name', 'DOB', 'Sex'], rows)
+    write_csv(d / 'encounters.csv', ['Encounter ID', 'Patient ID', 'Admit Time', 'Discharge Time', 'Admit Unit', 'Disposition'], encs)
+    write_csv(d / 'labs.csv', ['Patient ID', 'Encounter ID', 'Test Name', 'Result', 'Units', 'Ref Low', 'Ref High', 'Abnormal Flag', 'Collected', 'Code', 'Code System'], labs)
+    write_csv(d / 'notes.csv', ['Patient ID', 'Encounter ID', 'time', 'note_type', 'author', 'service', 'note_text'], notes)
+    write_csv(d / 'ecg_index.csv', ['Patient ID', 'Encounter ID', 'time', 'name', 'category', 'interpretation', 'file'], ecg_rows)
+    (d / 'rules.toml').write_text(
+        '# db-builder rewrite rules for the second hospital (db-builder/README.md, "Rewrite rules")\n'
+        '# its patients table writes PT_000701, its other tables PT000701: one patient ID\n'
+        '[patient_id]\n'
+        "replace = [{ regex = '(?i)^pt_', to = 'PT' }]\n\n"
+        "# its export names its ECG files under legacy/; they are in archive/\n"
+        '[[path]]\nprefix = "legacy"\nto = "archive"\n', encoding='utf-8')
+    (d / 'moved.toml').write_text(
+        '# after the database was built, archive/ was moved to files/: db-builder rewrite repoints its files\n'
+        '# (the database keeps paths relative to its own folder; an absolute prefix works the same way)\n'
+        '[[path]]\nprefix = "archive"\nto = "files"\n', encoding='utf-8')
+    return [p for p, _ in people], (conflict_mrn, conflict_id)
+
+
+# ------------------------------------------------------------------ the registry (kind views)
+
+REGISTRY_VIEWS = {
+    'persons': """SELECT p.id AS person_key, CASE WHEN p.mrn = '' THEN p.study_id ELSE '' END AS patient_id,
+       CASE WHEN p.mrn = '' THEN 'REGISTRY' ELSE '' END AS patient_id_issuer, p.mrn, 'DEMO' AS mrn_authority,
+       '' AS last_name, '' AS first_name, p.birth_date, p.sex
+FROM reg_patient p""",
+    'visits': """SELECT v.id AS visit_key, v.patient_id AS person_key, v.started AS start_time, v.ended AS end_time,
+       v.site AS unit, 0 AS icu
+FROM reg_visit v""",
+    'entries': """SELECT 'm' || m.id AS entry_key, m.patient_id AS person_key, m.visit_id AS visit_key, m.category,
+       m.measured AS time, NULL AS end_time, m.item AS name, m.code, m.vocabulary, m.value_num, m.value_text, m.unit,
+       m.low AS ref_low, m.high AS ref_high, '' AS flag, '' AS author, '' AS text
+FROM reg_measure m
+UNION ALL
+SELECT 'n' || n.id, n.patient_id, n.visit_id, 'note', n.written, NULL, n.title, '', '', NULL, '', '', NULL, NULL, '',
+       n.author, n.body
+FROM reg_note n""",
+    'version': "SELECT MAX(loaded_at) FROM reg_load",
+}
+
+
+def registry(out, pats, stories, encs, seed):
+    """A heart-failure registry's own tables (registry/registry.sqlite), connected through
+    canonical views (REGISTRY_VIEWS): patients of the main hospital by MRN, two of its own by
+    study ID, its visits, scores (NYHA, KCCQ, 6-minute walk), NT-proBNP and LVEF, notes."""
+    d = out / 'registry'
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / 'registry.sqlite'
+    if path.exists():
+        path.unlink()
+    rng = random.Random(seed + 5)
+    hf = [p for p in pats if any(stories.get(e[0]) in ('hf', 'hypertension', 'nstemi', 'nstemi_sepsis') for e in encs if e[1] == p[0])][:5]
+    people = [(p[1], '', p[4], p[5]) for p in hf] + [('', 'HF-0101', '1957-07-07', 'M'), ('', 'HF-0102', '1948-02-19', 'F')]
+    db = sqlite3.connect(path)
+    db.executescript('''
+CREATE TABLE reg_patient (id INTEGER PRIMARY KEY, study_id TEXT, mrn TEXT, birth_date TEXT, sex TEXT);
+CREATE TABLE reg_visit (id INTEGER PRIMARY KEY, patient_id INTEGER, started TEXT, ended TEXT, site TEXT);
+CREATE TABLE reg_measure (id INTEGER PRIMARY KEY, patient_id INTEGER, visit_id INTEGER, category TEXT, measured TEXT, item TEXT,
+    code TEXT, vocabulary TEXT, value_num REAL, value_text TEXT, unit TEXT, low REAL, high REAL);
+CREATE TABLE reg_note (id INTEGER PRIMARY KEY, patient_id INTEGER, visit_id INTEGER, written TEXT, title TEXT, author TEXT, body TEXT);
+CREATE TABLE reg_load (loaded_at TEXT);
+''')
+    m = v = 0
+    for i, (mrn, study, born, sex) in enumerate(people, 1):
+        db.execute('INSERT INTO reg_patient VALUES (?, ?, ?, ?, ?)', (i, study or f'HF-{i:04d}', mrn, born, sex))
+        nyha = rng.choice(['II', 'III', 'III', 'IV'])
+        for k in range(3):
+            v += 1
+            a = t('2023-10-01 09:00') + timedelta(days=90 * k + rng.randint(0, 20), hours=rng.randint(0, 6))
+            db.execute('INSERT INTO reg_visit VALUES (?, ?, ?, ?, ?)', (v, i, fmt(a), fmt(a + timedelta(hours=1)), 'Heart failure clinic'))
+            better = k * rng.uniform(0.1, 0.3)
+            for cat, item, code, vocab, num, text_, unit, lo, hi in (
+                    ('obs', 'NYHA class', '', '', None, nyha if k < 2 else 'II', '', None, None),
+                    ('obs', 'KCCQ overall summary score', '71940-4', 'LOINC', round(45 + 40 * better + rng.uniform(-5, 5)), '', 'points', None, None),
+                    ('obs', '6-minute walk distance', '64098-7', 'LOINC', round(250 + 300 * better + rng.uniform(-30, 30)), '', 'm', None, None),
+                    ('lab', 'NT-proBNP', '33762-6', 'LOINC', round(4200 * (1 - better) + rng.uniform(-200, 200)), '', 'pg/mL', 0, 125),
+                    ('obs', 'LVEF', '10230-1', 'LOINC', round(28 + 12 * better), '', '%', 50, 70)):
+                m += 1
+                db.execute('INSERT INTO reg_measure VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                           (m, i, v, cat, fmt(a + timedelta(minutes=10)), item, code, vocab, num, text_, unit, lo, hi))
+            db.execute('INSERT INTO reg_note VALUES (?, ?, ?, ?, ?, ?, ?)',
+                       (v, i, v, fmt(a + timedelta(minutes=50)), 'Registry visit', 'Research nurse J. Okonkwo',
+                        f'Registry follow-up {k + 1} of 3. Symptoms {"improved" if k else "unchanged"}; medication titrated per protocol.'))
+    db.execute("INSERT INTO reg_load VALUES ('2024-05-01 02:00')")
+    db.commit()
+    db.close()
+    (d / 'views.toml').write_text('# the canonical views of the registry (docs/databases.md, "Connect any SQL database through views")\n'
+                                  + ''.join(f"{k} = '''\n{v}'''\n" for k, v in REGISTRY_VIEWS.items()), encoding='utf-8')
+    return [p for p in hf]
+
+
+# ------------------------------------------------------------------ the encrypted database (secure)
+
+def secure(out, pats, seed):
+    """A transplant clinic's tables, made into a SQLCipher-encrypted db-builder database: three
+    of the main hospital's patients by MRN and one of its own; the demo key in keys/."""
+    d = out / 'secure'
+    rng = random.Random(seed + 9)
+    gen = [p for p in pats if p[0] >= 'P900007']
+    people = [pats[0]] + gen[10:12] + [('', 'SYN0006001', 'Aalto', 'Kaisa', '1975-05-05', 'F')]
+    rows, labs, notes = [], [], []
+    for i, p in enumerate(people):
+        rows.append((p[1], p[2], p[3], p[4], p[5]))
+        a = t('2024-04-01 08:30') + timedelta(days=7 * i)
+        for k in range(4):
+            when = a + timedelta(days=14 * k)
+            v = round(rng.uniform(5, 13), 1)
+            labs.append((p[1], 'Tacrolimus trough', v, 'ng/mL', 5, 10, flag(v, 5, 10), fmt(when), '11253-2', 'LOINC'))
+        notes.append((p[1], fmt(a + timedelta(hours=1)), 'Transplant clinic note', 'Dr. E. Haugen', 'Transplant',
+                      f'{p[3]} {p[2]} (DOB {p[4]}): kidney transplant follow-up; graft function stable.'))
+    write_csv(d / 'patients.csv', ['MRN', 'Last Name', 'First Name', 'DOB', 'Sex'], rows)
+    write_csv(d / 'labs.csv', ['MRN', 'Test Name', 'Result', 'Units', 'Ref Low', 'Ref High', 'Abnormal Flag', 'Collected', 'Code', 'Code System'], labs)
+    write_csv(d / 'notes.csv', ['MRN', 'time', 'note_type', 'author', 'service', 'note_text'], notes)
+    key = __import__('hashlib').sha256(f'medorama-demo-key-{seed}'.encode()).hexdigest()
+    (out / 'keys').mkdir(exist_ok=True)
+    (out / 'keys' / 'demo_secure.key').write_text(key + '\n', encoding='ascii')
+    return people
+
+
+# ------------------------------------------------------------------ the databases to build and connect
+
+def manifest(out, full, tables):
+    """demo-databases.json: each database's name, kind, file, settings, key file, and the
+    db-builder steps that build it ('@' + a path relative to OUT)."""
+    tz = 'America/New_York'
+    dbs = [{'name': 'demo', 'kind': 'dbb', 'file': 'demo.sqlite', 'build': [
+        ['new', '@demo.sqlite', '--timezone', tz],
+        # the patients and their encounters first: every other table names them
+        ['add', '@demo.sqlite', '@databases/patients.csv', '@databases/encounters.xlsx', *[f'@databases/{x}' for x in tables],
+         '--issuer', 'DEMO', '--mrn-authority', 'DEMO'],
+    ]}]
+    if full:
+        dbs[0]['build'] += [['recordings', '@demo.sqlite', '@sleeplab', '--pattern', '{patient}_*.edf', '--issuer', 'DEMO', '--category', 'sleep'],
+                            ['recordings', '@demo.sqlite', '@eeglab', '--pattern', '{patient}_*.bdf', '--issuer', 'DEMO', '--category', 'eeg']]
+        dbs.append({'name': 'demo_north', 'kind': 'dbb', 'file': 'north/north.sqlite', 'build': [
+            ['new', '@north/north.sqlite', '--timezone', tz],
+            ['add', '@north/north.sqlite', '@north/patients.csv', '@north/encounters.csv', '@north/labs.csv', '@north/notes.csv',
+             '@north/ecg_index.csv', '--issuer', 'NORTH', '--mrn-authority', 'DEMO', '--rules', '@north/rules.toml'],
+            ['move', '@north/archive', '@north/files'],
+            ['rewrite', '@north/north.sqlite', '--rules', '@north/moved.toml'],
+        ]})
+    dbs.append({'name': 'demo_omop', 'kind': 'omop', 'file': 'omop/omop.sqlite', 'settings': {'mrn_authority': 'DEMO', 'timezone': tz}})
+    if full:
+        dbs.append({'name': 'demo_registry', 'kind': 'views', 'file': 'registry/registry.sqlite',
+                    'settings': {**REGISTRY_VIEWS, 'mrn_authority': 'DEMO', 'timezone': tz}})
+        dbs.append({'name': 'demo_secure', 'kind': 'dbb', 'file': 'secure/secure.sqlite', 'key_file': 'keys/demo_secure.key', 'encrypt': True, 'build': [
+            ['new', '@secure/secure.sqlite', '--timezone', tz],
+            ['add', '@secure/secure.sqlite', '@secure/patients.csv', '@secure/labs.csv', '@secure/notes.csv', '--issuer', 'SECURE', '--mrn-authority', 'DEMO'],
+        ]})
+    m = {'made_by': 'tools/make-demo-data.py', 'databases': dbs}
+    if (out / 'actions').is_dir():
+        m['actions_dirs'] = ['actions']
+    (out / 'demo-databases.json').write_text(json.dumps(m, indent=1) + '\n', encoding='utf-8')
+    return m
+
+
+def build(out, exe):
+    """Builds the demo's db-builder databases (demo-databases.json's steps) with `exe`."""
+    m = json.loads((out / 'demo-databases.json').read_text(encoding='utf-8'))
+    for d in m['databases']:
+        if not d.get('build'):
+            continue
+        f = out / d['file']
+        for suffix in ('', '-wal', '-shm', '-journal'):
+            Path(f'{f}{suffix}').unlink(missing_ok=True)
+        env = dict(os.environ)
+        if d.get('key_file'):
+            env['DB_BUILDER_KEY'] = (out / d['key_file']).read_text(encoding='ascii').strip()
+        for step in d['build']:
+            args = [str(out / a[1:]) if a.startswith('@') else a for a in step]
+            if step[0] == 'move':
+                shutil.rmtree(args[2], ignore_errors=True)
+                shutil.move(args[1], args[2])
+                continue
+            cmd = [exe] + (['--encrypt'] if d.get('encrypt') else []) + args
+            r = subprocess.run(cmd, env=env, capture_output=True, text=True, encoding='utf-8', errors='replace')
+            if r.returncode:
+                sys.exit(f'db-builder {step[0]} ({d["name"]}) failed:\n{r.stderr.strip() or r.stdout.strip()}')
+            last = (r.stdout.strip().splitlines() or [''])[-1]
+            print(f'  {d["name"]}: {step[0]}: {last}')
+
+
+def identities(full=True, seed=SEED):
+    """Every person of the demo's databases, as tools/screenshots.py checks them:
+    [{'mrn', 'last_name', 'first_name', 'birth_date', 'patient_id'}] (MRNs as the main hospital
+    writes them; persons of a database's own included)."""
+    pats, encs, stories = all_people(full, seed)
+    out = [{'patient_id': p[0], 'mrn': p[1], 'last_name': p[2], 'first_name': p[3], 'birth_date': p[4]} for p in pats]
+    omop_own = [('SYN0000101', '1949-09-21'), ('SYN0000102', '1983-12-02')]
+    if full:
+        omop_own += [(m, b) for m, _, b, s in omop_extra(pats, encs, stories) if not any(p[1] == m for p in pats)]
+        out += [{'patient_id': 'PT000707', 'mrn': 'SYN0005001', 'last_name': 'Mbeki', 'first_name': 'Thandi', 'birth_date': '1969-04-11'},
+                {'patient_id': 'PT000708', 'mrn': 'SYN0005002', 'last_name': 'Varga', 'first_name': 'Andras', 'birth_date': '1954-10-30'},
+                {'patient_id': '', 'mrn': 'SYN0006001', 'last_name': 'Aalto', 'first_name': 'Kaisa', 'birth_date': '1975-05-05'},
+                {'patient_id': 'HF-0101', 'mrn': '', 'last_name': '', 'first_name': '', 'birth_date': '1957-07-07'},
+                {'patient_id': 'HF-0102', 'mrn': '', 'last_name': '', 'first_name': '', 'birth_date': '1948-02-19'}]
+    out += [{'patient_id': '', 'mrn': m, 'last_name': '', 'first_name': '', 'birth_date': b} for m, b in omop_own]
+    return out
+
+
+def omop_extra(pats, encs, stories):
+    """The OMOP database's persons beyond the first four: four of the main hospital's (by MRN)
+    and two of its own [(MRN, sex concept, born, story)]."""
+    gen = [p for p in pats if p[0] >= 'P900007']
+    story = lambda p: next((stories[e[0]] for e in encs if e[1] == p[0]), 'checkup')  # noqa: E731
+    shared = [(p[1], 8532 if p[5] == 'F' else 8507, p[4], story(p)) for p in gen[12:16]]
+    return shared + [('SYN0000103', 8507, '1972-01-15', 'nstemi'), ('SYN0000104', 8532, '1990-08-08', 'hf')]
+
+
+def copy_action(out):
+    """The example action plug-in (medorama/actions/examples/recording-summary), run with this
+    Python (any platform)."""
+    src = ROOT / 'medorama' / 'actions' / 'examples' / 'recording-summary'
+    if not src.is_dir():
+        return
+    dst = out / 'actions' / 'recording-summary'
+    shutil.rmtree(dst, ignore_errors=True)
+    dst.mkdir(parents=True)
+    shutil.copy2(src / 'summary.py', dst / 'summary.py')
+    text = (src / 'action.toml').read_text(encoding='utf-8')
+    py = json.dumps(sys.executable)
+    text = '\n'.join(f'command = [{py}, "summary.py"]' if line.startswith('command =') else line for line in text.splitlines()) + '\n'
+    (dst / 'action.toml').write_text(text, encoding='utf-8')
 
 
 def main():
     args = sys.argv[1:]
-    examples = dicoms = None
-    if '--examples' in args:
-        i = args.index('--examples')
-        examples = args[i + 1] if i + 1 < len(args) else ''
-        del args[i:i + 2]
-    if '--dicom' in args:
-        i = args.index('--dicom')
-        dicoms = args[i + 1] if i + 1 < len(args) else ''
-        del args[i:i + 2]
+    opts = {}
+    for name in ('--examples', '--dicom', '--db-builder', '--seed'):
+        if name in args:
+            i = args.index(name)
+            opts[name] = args[i + 1] if i + 1 < len(args) else ''
+            del args[i:i + 2]
+    flags = {f for f in ('--small', '--no-library') if f in args}
+    args = [a for a in args if a not in flags]
     if any(a in ('-h', '--help') for a in args):
         print(__doc__)
         return
     unknown = [a for a in args if a.startswith('-')]
     if unknown or len(args) > 1:
         sys.exit(f'make-demo-data.py: unexpected {" ".join(unknown or args[1:])} (--help shows the options)')
+    if np is None:
+        sys.exit('NumPy is needed: run this with .venv/bin/python (docs/administration.md, "The demo")')
+    examples, dicoms = opts.get('--examples'), opts.get('--dicom')
+    seed = int(opts.get('--seed') or SEED)
+    full = '--small' not in flags
+    R.seed(seed)
     out = Path(args[0] if args else ROOT / 'sample_data' / 'demo').resolve()
+    lib = None if '--no-library' in flags else library(LIBRARY)
     for d in ('icu', 'holter', 'sleep', 'ecg', 'imaging', 'echo', 'cath', 'databases'):
         (out / d).mkdir(parents=True, exist_ok=True)
+    pats, encs, stories = all_people(full, seed)
+    by_patient = {p[0]: p for p in pats}
     db = out / 'databases'
-    by_patient = {p[0]: p for p in PATIENTS}
-
     write_csv(db / 'patients.csv', ['MRN', 'Last Name', 'First Name', 'DOB', 'Sex', 'Patient ID'],
-              [(p[1], p[2], p[3], p[4], p[5], p[0]) for p in PATIENTS])
-
+              [(p[1], p[2], p[3], p[4], p[5], p[0]) for p in pats])
     rows = [['Encounter ID', 'Patient ID', 'CSN', 'Admit Time', 'Discharge Time', 'Admit Unit', 'Disposition', 'Care Unit', 'Bed', 'Bed Start', 'Bed End']]
-    for e in ENCOUNTERS:
+    for e in encs:
         rows.append([e[0], e[1], e[2], e[4], e[5], e[6], e[7], '', '', '', ''])
         if e[8]:
             rows.append([e[0], e[1], e[2], e[4], e[5], e[6], e[7], e[8][0], e[8][1], e[8][2], e[8][3]])
     write_xlsx(db / 'encounters.xlsx', rows)
 
-    labs, vitals, meds, dx, micro, notes, ecgs, icu, imaging, echos, caths = [], [], [], [], [], [], [], [], [], [], []
-    last_ecg = {}            # each patient's previous ECG: (time, ST depression, AF), for 12SL's comparison
-    for e in ENCOUNTERS:
-        eid, pid, _, kind, a, b = e[0], e[1], e[2], e[3], t(e[4]), t(e[5])
-        mrn = MRN[pid]
-        p = by_patient[pid]
-        ill = lambda when, e=e: illness(e, when)
-        if e[6] == 'Sleep laboratory':
-            # an overnight study: its recording (written below) and its report, nothing else
-            notes.append((pid, eid, fmt(b - timedelta(minutes=30)), 'Sleep study report', 'Dr. S. Lee', 'Sleep medicine',
-                          'Overnight polysomnography, 2 h recorded (EEG, EOG, ECG, airflow, thoracic effort, SpO2).\n'
-                          'Obstructive apneas with oxygen desaturations to about 89 %; apnea-hypopnea index about 8 per hour.\n'
-                          'Sinus rhythm throughout.\nImpression: mild obstructive sleep apnea. Discuss treatment at the next visit.'))
-            continue
-        # laboratory: a morning panel each day, every 6 h in the ICU; a small panel at visits
-        times = []
-        if kind == 'out':
-            times = [a + timedelta(minutes=40)]
-        else:
-            d = a.replace(hour=6, minute=10)
-            if d < a:
-                d += timedelta(days=1)
-            while d < b:
-                times.append(d)
-                if e[8] and t(e[8][2]) <= d <= t(e[8][3]):
-                    times += [d + timedelta(hours=h) for h in (6, 12, 18)]
-                d += timedelta(days=1)
-            times.insert(0, a + timedelta(minutes=50))
-        for when in sorted(times):
-            s = ill(when)
-            for name, loinc, unit, lo, hi, norm, sick in LABS:
-                if kind == 'out' and name not in ('Sodium', 'Potassium', 'Creatinine', 'Glucose', 'Hemoglobin', 'WBC'):
-                    continue
-                if name in ('Lactate', 'Procalcitonin') and s < 0.2 and when.hour != 6:
-                    continue
-                if name == 'Troponin T' and not (eid == 'E9100002' and when < a + timedelta(days=3)):
-                    continue
-                v = norm + (sick - norm) * s + (norm * 0.03) * R.uniform(-1, 1)
-                v = round(v, 1 if abs(norm) < 20 else 0)
-                labs.append((mrn, eid, name, v, unit, lo, hi, flag(v, lo, hi), fmt(when), loinc, 'LOINC'))
-        # vital signs: hourly in the ICU, every 4 h on the ward, once at a visit
-        when = a
-        while when < b:
-            in_icu = bool(e[8]) and t(e[8][2]) <= when <= t(e[8][3])
-            if in_icu or when.hour % 4 == 0 or kind == 'out':
-                s = ill(when)
-                for name, unit, lo, hi, v in (('Heart rate', '/min', 50, 110, 76 + 40 * s), ('SpO2', '%', 92, 100, 97 - 5 * s),
-                                              ('Respiratory rate', '/min', 10, 22, 15 + 10 * s), ('Systolic blood pressure', 'mmHg', 90, 140, 128 - 36 * s),
-                                              ('Temperature', '°C', 36.0, 38.0, 36.8 + 2.1 * s)):
-                    v = round(v + R.uniform(-2, 2) * (0.1 if unit == '°C' else 1), 1)
-                    vitals.append((pid, eid, name, v, unit, lo, hi, fmt(when)))
-                if kind == 'out':
-                    break
-            when += timedelta(hours=1)
-        # notes
-        if kind == 'out':
-            notes.append((pid, eid, fmt(a + timedelta(minutes=55)), 'Clinic note', 'Dr. M. Patel', 'Cardiology',
-                          f'{p[3]} returns for follow-up.\nNo chest pain, no dyspnea at rest. Medications reviewed.\n'
-                          'Exam: regular rhythm, no murmur, lungs clear.\nPlan: continue current therapy; follow-up in 3 months.'))
-        else:
-            notes.append((pid, eid, fmt(a + timedelta(hours=2)), 'Admission note', 'Dr. A. Rivera', e[6],
-                          f'Admitted from the emergency department. History of present illness: {p[3]} presented with acute symptoms.\n'
-                          'Assessment: see problem list. Plan: admit, monitor, labs in the morning.'))
-            d = a.replace(hour=15, minute=40) + timedelta(days=1)
-            day = 1
-            while d < b - timedelta(hours=6):
-                in_icu = bool(e[8]) and t(e[8][2]) <= d <= t(e[8][3])
-                s = ill(d)
-                text = ('Subjective: overnight events reviewed.\n'
-                        f'Objective: HR {round(76 + 40 * s)}, SpO2 {round(97 - 5 * s)} %, temperature {36.8 + 2.1 * s:.1f} °C.\n'
-                        f'Assessment: {"septic shock secondary to E. coli bacteremia, improving" if eid == "E9100002" and s > 0.4 else "clinically stable"}.\n'
-                        'Plan: continue current management; repeat labs in the morning.')
-                notes.append((pid, eid, fmt(d), 'ICU progress note' if in_icu else 'Progress note',
-                              'Dr. K. Osei' if in_icu else 'Dr. A. Rivera', 'ICU' if in_icu else e[6], text))
-                d += timedelta(days=1)
-                day += 1
-            notes.append((pid, eid, fmt(b - timedelta(hours=1)), 'Discharge summary', 'Dr. A. Rivera', e[6],
-                          f'Hospital course: {p[3]} was admitted on {a:%b %d}. '
-                          f'{"Course complicated by E. coli bacteremia and septic shock requiring norepinephrine. " if eid == "E9100002" else ""}'
-                          f'Discharged to {e[7].lower()} in stable condition.'))
-        # ECGs: what a cart and MUSE would hold (12SL measurements and statements, the
-        # physician's confirmation, sometimes a corrected reading)
-        for k, when in enumerate([a + timedelta(minutes=20)] + ([a + timedelta(days=2, hours=3)] if kind == 'in' else [])):
-            s = ill(when)
-            hr = round(72 + 40 * s)
-            af = pid == 'P900005' and k == 0
-            st = eid == 'E9100002' and k == 0
-            lvh = pid == 'P900004'
-            leads = ecg12(hr, st, af)
-            meas = ecg_measures(hr, af, lvh)
-            name = f'ecg_{pid}_{when:%Y%m%d_%H%M}'
-            computer = twelve_sl(meas, af, st, lvh, last_ecg.get(pid))
-            last_ecg[pid] = (when, st, af)
-            interp = '; '.join(computer)
-            reader = ('A. Rivera', when + timedelta(hours=6))
-            if st:
-                # the cardiologist reads it as ischaemia
-                confirmed = [computer[0], 'Inferolateral ST depression, consistent with subendocardial ischemia', 'Abnormal ECG']
-            elif af:
-                confirmed = None        # not confirmed yet: the computer's reading only
-            else:
-                confirmed = computer
-            if k == 1 and pid in ('P900001', 'P900002'):
-                # MUSE XML; for P900001, the physician corrected the computer's reading
-                if pid == 'P900001':
-                    confirmed = [computer[0], 'Nonspecific T wave abnormality', 'Borderline ECG']
-                file = ecg_muse(out / 'ecg' / f'{name}.xml', p, when, leads, meas, computer, confirmed or computer).name
-            elif k == 1 and pid == 'P900003':
-                ecg_dicom(out / 'ecg' / f'{name}.dcm', MRN[pid], when, leads, meas, computer)
-                file = f'{name}.dcm'
-            elif eid == 'E9100007':
-                ecg_pdf(out / 'ecg' / f'{name}.pdf', leads, f'Synthetic 12-lead ECG (not a patient)   {computer[0]}   {hr} bpm')
-                file = f'{name}.pdf'
-            elif pid == 'P900003' and kind == 'out':
-                ecg_png(out / 'ecg' / f'{name}.png', leads)
-                file = f'{name}.png'
-            else:
-                born = datetime.strptime(p[4], '%Y-%m-%d')
-                age = when.year - born.year - ((when.month, when.day) < (born.month, born.day))
-                comments = [f'Age: {age}', f'Sex: {p[5]}', 'Device: MAC 5500 HD', 'Location: ' + e[6], 'Filters: 0.05-150 Hz, 60 Hz notch',
-                            'Program: Marquette 12SL v243']
-                comments += [f'{k2}: {v} {u}' for k2, (v, u) in meas.items()]
-                if st:
-                    comments += [f'ST {lead}: {v:+.2f} mV' for lead, v in ST_DEPRESSION.items()]
-                if lvh:
-                    comments += ['R amp V5: 3.4 mV', 'S amp V1: 1.9 mV']
-                comments.append(f'Dx: {"; ".join(computer)}')
-                if confirmed:
-                    comments += [f'Dx confirmed: {"; ".join(confirmed)}', f'Confirmed by: {reader[0]}', f'Confirmed at: {reader[1]:%Y-%m-%d %H:%M}']
-                file = ecg_wfdb(out / 'ecg', name, when, leads, comments=comments).name
-            ecgs.append((pid, eid, fmt(when), '12-lead ECG', hr, 'bpm', *[meas[c][0] if c in meas else '' for c in ECG_COLUMNS], interp, f'../ecg/{file}'))
-        # ICU recordings: two 10-minute pieces of each ICU stay, named as bedside monitors name
-        # them (UNIT_BED-<Unix time>), which links them to their bed stay
-        if e[8]:
-            unit, bed, i0, i1 = e[8]
-            for frac in (0.3, 0.62):
-                st = t(i0) + (t(i1) - t(i0)) * frac
-                st = st.replace(second=0, microsecond=0)
-                fname = '_'.join((unit, bed)) + '-' + str(int(st.timestamp()))
-                recording(out / 'icu' / fname, st, 10, ill)
-                icu.append((pid, eid, f'../icu/{fname}'))
-    # medications, diagnoses, microbiology, imaging (by hand, for the main stories)
-    meds += [
-        ('P900001', 'E9100002', 'Heparin', 18, 'U/kg/h', '2023-12-28 09:00', '2024-01-02 20:00'),
-        ('P900001', 'E9100002', 'Piperacillin-tazobactam', 4.5, 'g', '2024-01-01 15:00', '2024-01-09 12:00'),
-        ('P900001', 'E9100002', 'Norepinephrine', 0.12, 'ug/kg/min', '2024-01-01 16:00', '2024-01-02 18:00'),
-        ('P900001', 'E9100002', 'Metoprolol', 50, 'mg', '2024-01-03 08:00', '2024-01-09 12:00'),
-        ('P900001', 'E9100002', 'Insulin glargine', 18, 'U', '2023-12-28 21:00', '2024-01-09 12:00'),
-        ('P900002', 'E9100004', 'Propofol', 30, 'ug/kg/min', '2024-01-15 04:30', '2024-01-17 09:00'),
-        ('P900002', 'E9100004', 'Ceftriaxone', 2, 'g', '2024-01-15 06:00', '2024-01-21 12:00'),
-        ('P900003', 'E9100006', 'Cefazolin', 2, 'g', '2024-03-10 12:00', '2024-03-11 12:00'),
-        ('P900003', 'E9100006', 'Morphine', 2, 'mg', '2024-03-10 15:00', '2024-03-12 15:00'),
-        ('P900005', 'E9100009', 'Amiodarone', 1, 'mg/min', '2024-02-13 02:00', '2024-02-14 14:00'),
-        ('P900005', 'E9100009', 'Apixaban', 5, 'mg', '2024-02-15 08:00', '2024-02-20 10:00'),
-    ]
-    dx += [
-        ('P900001', 'E9100001', 'E11.9', 'Type 2 diabetes mellitus', '2023-10-12 09:00'),
-        ('P900001', 'E9100002', 'I21.4', 'Non-ST elevation myocardial infarction', '2023-12-28 09:00'),
-        ('P900001', 'E9100002', 'A41.51', 'Sepsis due to Escherichia coli', '2024-01-02 01:05'),
-        ('P900001', 'E9100002', 'N17.9', 'Acute kidney injury', '2024-01-01 12:00'),
-        ('P900002', 'E9100004', 'J96.01', 'Acute respiratory failure with hypoxia', '2024-01-15 03:00'),
-        ('P900002', 'E9100004', 'J18.9', 'Pneumonia', '2024-01-15 03:00'),
-        ('P900003', 'E9100005', 'R10.31', 'Right lower quadrant pain', '2024-02-02 19:00'),
-        ('P900003', 'E9100006', 'K35.80', 'Acute appendicitis', '2024-03-10 11:30'),
-        ('P900004', 'E9100007', 'I10', 'Essential hypertension', '2023-11-05 14:30'),
-        ('P900005', 'E9100009', 'I48.91', 'Atrial fibrillation', '2024-02-12 21:00'),
-    ]
-    micro += [
-        ('P900001', 'E9100002', 'Blood culture', '2024-01-01 15:30', 'Escherichia coli, ESBL negative', 'positive', 'Notify team; sepsis bundle in progress'),
-        ('P900001', 'E9100002', 'Urine culture', '2024-01-01 15:40', 'Escherichia coli > 100,000 CFU/mL', 'positive', ''),
-        ('P900002', 'E9100004', 'Sputum culture', '2024-01-15 05:00', 'Streptococcus pneumoniae', 'positive', ''),
-        ('P900005', 'E9100009', 'Blood culture', '2024-02-13 03:00', 'No growth at 5 days', '', ''),
-    ]
-    real = add_dicom_examples(dicoms, out, imaging, caths) if dicoms is not None else set()
-    for pid, eid, when, name, kind, report in [
-        ('P900001', 'E9100002', '2023-12-28 08:30', 'Chest X-ray', 'cxr', 'No acute cardiopulmonary process. Heart size upper normal.'),
-        ('P900001', 'E9100002', '2024-01-03 11:15', 'CT chest with contrast', 'ct', 'Bilateral lower-lobe consolidation with small effusions; no pulmonary embolism.'),
-        ('P900002', 'E9100004', '2024-01-15 03:20', 'Chest X-ray', 'cxr', 'Right lower lobe consolidation consistent with pneumonia.'),
-        ('P900003', 'E9100006', '2024-03-10 09:40', 'CT abdomen and pelvis', 'ct', 'Dilated appendix with periappendiceal fat stranding: acute appendicitis.'),
-    ]:
-        if (pid, when) in real:
-            continue
-        base = f'{kind}_{pid}_{t(when):%Y%m%d}'
-        if kind == 'ct':
-            ct_series(out / 'imaging' / base, 'abdomen' if 'abdomen' in name else 'chest', pid, t(when))
-            file = f'{base}/'
-        elif kind == 'cxr':
-            chest_xray(out / 'imaging' / f'{base}.dcm', pid, t(when), opacity='right' if pid == 'P900002' else None)
-            file = f'{base}.dcm'
-        imaging.append((pid, eid, when, name, 'imaging', report, f'../imaging/{file}'))
-    # echocardiography: a database of its own, its measurements as columns (from the reports);
-    # loops in DICOM, one loop as PNG frames (its scale and frame rate are columns)
-    for pid, eid, when, ef, lvidd, impression, raw in [
-        ('P900001', 'E9100002', '2023-12-30 09:40', 0.35, 6.1, 'LVEF 35 %, inferior hypokinesis, mild mitral regurgitation.', False),
-        ('P900004', 'E9100007', '2023-11-05 14:20', 0.6, 4.8, 'LVEF 60 %, concentric LV hypertrophy, normal valves.', True),
-    ]:
-        base = f'echo_{pid}_{t(when):%Y%m%d}'
-        study = uid()
-        (out / 'echo').mkdir(exist_ok=True)
-        echo_loop(out / 'echo' / f'{base}_a4c.dcm', pid, t(when), ef=ef, study=study)
-        echo_report(out / 'echo' / f'{base}_sr.dcm', pid, t(when) + timedelta(minutes=25), ef, lvidd, study)
-        tapse = 21 if ef > 0.5 else 15
-        echos.append((pid, eid, when, 'Transthoracic echo', 'Apical 4-chamber', '', '', '', '', '', impression, f'../echo/{base}_a4c.dcm'))
-        if raw:
-            echo_pngs(out / 'echo' / f'{base}_a4c_frames', pid, ef)
-            echos.append((pid, eid, when, 'Transthoracic echo', 'Apical 4-chamber (exported frames)', '', '', '', '1', '30', '', f'../echo/{base}_a4c_frames/'))
-        echos.append((pid, eid, fmt(t(when) + timedelta(minutes=25)), 'Echo report', 'Report', round(ef * 100), lvidd, tapse, '', '', impression, f'../echo/{base}_sr.dcm'))
-    # the cath lab: the NSTEMI's coronary angiography, its findings as columns
-    (out / 'cath').mkdir(exist_ok=True)
-    angio_run(out / 'cath' / 'cath_P900001_20231229_lca.dcm', 'P900001', t('2023-12-29 08:10'))
-    caths.append(('P900001', 'E9100002', '2023-12-29 08:10', 'Coronary angiography', 90, 30, 22,
-                  'Severe proximal LAD stenosis (90 %), moderate RCA disease; LVEDP 22 mmHg. PCI to the LAD.', '../cath/cath_P900001_20231229_lca.dcm'))
+    D = Demo(out, lib, full, seed)
+    D.real = set()
+    if dicoms is not None:
+        D.real = add_dicom_examples(dicoms, out, D.t['imaging'], D.t['caths'])
+    for e in encs:
+        fill(D, by_patient[e[1]], e, stories[e[0]])
     # a patient known only by MRN, with laboratory results and no encounter
     for d in range(3):
         when = t('2024-03-20 08:00') + timedelta(days=30 * d)
         for name, loinc, unit, lo, hi, norm, _ in LABS[:8]:
+            lo, hi, norm = by_sex(name, lo, hi, norm, 'M')           # Hiro Tanaka
             v = round(norm * R.uniform(0.95, 1.05), 1)
-            labs.append(('SYN0000006', '', name, v, unit, lo, hi, flag(v, lo, hi), fmt(when), loinc, 'LOINC'))
-
-    write_csv(db / 'labs.csv', ['MRN', 'Encounter ID', 'Test Name', 'Result', 'Units', 'Ref Low', 'Ref High', 'Abnormal Flag', 'Collected', 'Code', 'Code System'], labs)
-    write_csv(db / 'vitals.csv', ['patient_id', 'encounter_id', 'name', 'value', 'unit', 'ref_low', 'ref_high', 'charttime'], vitals)
-    write_csv(db / 'medications.csv', ['patient_id', 'encounter_id', 'Medication', 'Dose', 'Units', 'Start Time', 'Stop Time'], meds)
-    write_csv(db / 'diagnoses.csv', ['patient_id', 'encounter_id', 'ICD10', 'Description', 'Date'], dx)
-    write_csv(db / 'microbiology.csv', ['patient_id', 'encounter_id', 'Test', 'Collected', 'Result', 'Flag', 'Comment'], micro)
-    write_csv(db / 'notes.csv', ['patient_id', 'encounter_id', 'time', 'note_type', 'author', 'service', 'note_text'], notes)
-    write_csv(db / 'allergies.csv', ['patient_id', 'category', 'name', 'reaction'],
-              [('P900001', 'allergy', 'Penicillin', 'rash'), ('P900002', 'allergy', 'Iodinated contrast', 'urticaria')])
+            D.t['labs'].append(('SYN0000006', '', name, v, unit, lo, hi, flag(v, lo, hi), fmt(when), loinc, 'LOINC'))
+    allergies = [('P900001', 'allergy', 'Penicillin', 'rash'), ('P900002', 'allergy', 'Iodinated contrast', 'urticaria')]
+    if full:
+        rng = random.Random(seed + 3)
+        for p in pats[6:]:
+            if rng.random() < 0.3:
+                allergies.append((p[0], 'allergy', *rng.choice([('Sulfonamides', 'rash'), ('Latex', 'contact dermatitis'), ('Peanuts', 'anaphylaxis'),
+                                                                ('Codeine', 'nausea'), ('Penicillin', 'hives')])))
+    T = D.t
+    write_csv(db / 'labs.csv', ['MRN', 'Encounter ID', 'Test Name', 'Result', 'Units', 'Ref Low', 'Ref High', 'Abnormal Flag', 'Collected', 'Code', 'Code System'], T['labs'])
+    write_csv(db / 'vitals.csv', ['patient_id', 'encounter_id', 'name', 'value', 'unit', 'ref_low', 'ref_high', 'charttime'], T['vitals'])
+    write_csv(db / 'medications.csv', ['patient_id', 'encounter_id', 'Medication', 'Dose', 'Units', 'Start Time', 'Stop Time'], T['meds'])
+    write_csv(db / 'diagnoses.csv', ['patient_id', 'encounter_id', 'ICD10', 'Description', 'Date'], T['dx'])
+    write_csv(db / 'microbiology.csv', ['patient_id', 'encounter_id', 'Test', 'Collected', 'Result', 'Flag', 'Comment'], T['micro'])
+    write_csv(db / 'notes.csv', ['patient_id', 'encounter_id', 'time', 'note_type', 'author', 'service', 'note_text'], T['notes'])
+    write_csv(db / 'allergies.csv', ['patient_id', 'category', 'name', 'reaction'], allergies)
+    tables = ['labs.csv', 'vitals.csv', 'medications.csv', 'diagnoses.csv', 'microbiology.csv', 'notes.csv', 'allergies.csv']
+    if full:
+        write_csv(db / 'procedures.csv', ['patient_id', 'encounter_id', 'Procedure', 'Code', 'Code System', 'Time'], T['procs'])
+        write_csv(db / 'transfusions.csv', ['patient_id', 'encounter_id', 'Product', 'Amount', 'Units', 'Time'], T['blood'])
+        write_csv(db / 'life_support.csv', ['patient_id', 'encounter_id', 'Support', 'Value', 'Units', 'Start Time', 'Stop Time'], T['support'])
+        write_csv(db / 'assessments.csv', ['patient_id', 'encounter_id', 'Item', 'Value', 'Time'], T['obs'])
+        write_csv(db / 'pathology.csv', ['patient_id', 'encounter_id', 'time', 'note_type', 'author', 'report'], T['path'])
+        tables += ['procedures.csv', 'transfusions.csv', 'life_support.csv', 'assessments.csv', 'pathology.csv']
     if examples is not None:
-        print(f'{add_examples(examples, out, ecgs)} example ECG(s) added from {examples}')
+        print(f'{add_examples(examples, out, T["ecgs"])} example ECG(s) added from {examples}')
     write_csv(db / 'ecg_index.csv', ['patient_id', 'encounter_id', 'time', 'name', 'value', 'unit',
-                                     *[f'{c} ({u})' for c, u in ECG_COLUMNS.items()], 'interpretation', 'file'], ecgs)
-    write_csv(db / 'icu_index.csv', ['patient_id', 'encounter_id', 'file'], icu)
-    # a 24-hour Holter after a clinic visit (its own column, not the ICU's)
-    holter(out / 'holter' / 'P900004_20240301', t('2024-03-01 11:30'))
-    write_csv(db / 'holter_index.csv', ['patient_id', 'encounter_id', 'category', 'file'],
-              [('P900004', 'E9100008', 'holter', '../holter/P900004_20240301/holter.hea')])
-    # an overnight sleep study for the patient with palpitations (an EDF+ file, its own column):
-    # 22:30 at the sleep laboratory (New York), which the file states as 03:30 (its clock time is
-    # read as UTC)
-    sleep_study(out / 'sleep' / 'P900004_psg_20240305.edf', t('2024-03-06 03:30'))
+                                     *[f'{c} ({u})' for c, u in ECG_COLUMNS.items()], 'interpretation', 'file'], T['ecgs'])
+    write_csv(db / 'icu_index.csv', ['patient_id', 'encounter_id', 'file'], T['icu'])
+    write_csv(db / 'holter_index.csv', ['patient_id', 'encounter_id', 'category', 'file'], T['holter'])
+    # the first patients' overnight sleep study (an EDF+ file, its own column): 22:30 at the
+    # sleep laboratory (New York), which the file states as 03:30 (its clock time is read as UTC)
+    sleep_study(out / 'sleep' / 'P900004_psg_20240305.edf', t('2024-03-06 03:30'), seed=7)
     write_csv(db / 'sleep_index.csv', ['patient_id', 'encounter_id', 'time', 'study', 'category', 'file'],
               [('P900004', 'E9100010', '2024-03-05 22:30', 'Polysomnography', 'sleep', '../sleep/P900004_psg_20240305.edf')])
-    write_csv(db / 'imaging_index.csv', ['patient_id', 'encounter_id', 'time', 'study', 'category', 'impression', 'file'], imaging)
+    write_csv(db / 'imaging_index.csv', ['patient_id', 'encounter_id', 'time', 'study', 'category', 'impression', 'file'], T['imaging'])
     write_csv(db / 'echo_index.csv', ['patient_id', 'encounter_id', 'time', 'study', 'view', 'LVEF (%)', 'LVIDd (cm)', 'TAPSE (mm)',
-                                      'pixel spacing (mm)', 'frame rate (fps)', 'impression', 'file'], echos)
+                                      'pixel spacing (mm)', 'frame rate (fps)', 'impression', 'file'], T['echos'])
     write_csv(db / 'cath_index.csv', ['patient_id', 'encounter_id', 'time', 'procedure', 'LAD stenosis (%)', 'RCA stenosis (%)', 'LVEDP (mmHg)',
-                                      'impression', 'file'], caths)
-    write_omop(out / 'omop' / 'omop.sqlite')
+                                      'impression', 'file'], T['caths'])
+    tables += ['ecg_index.csv', 'icu_index.csv', 'holter_index.csv', 'sleep_index.csv', 'imaging_index.csv', 'echo_index.csv', 'cath_index.csv']
+    extra = []
+    if full:
+        # more sleep studies, added by a pattern on their file names ({patient}_*.edf)
+        for e in encs:
+            if stories[e[0]] == 'sleep' and e[1] != 'P900004':
+                a = t(e[4])
+                sleep_study(out / 'sleeplab' / f'{e[1]}_psg_{a:%Y%m%d}.edf', a + timedelta(hours=5), seed=int(e[1][-3:]), hours=2.0, ahi=22)
+        (out / 'eeglab').mkdir(exist_ok=True)
+        north(out, pats, seed)
+        extra = omop_extra(pats, encs, stories)
+        registry(out, pats, stories, encs, seed)
+        secure(out, pats, seed)
+        copy_action(out)
+    write_omop(out / 'omop' / 'omop.sqlite', extra)
+    manifest(out, full, tables)
     (out / 'README.txt').write_text(__doc__.replace('OUT', str(out)), encoding='utf-8')
-    # what went in: invented data only, or also local files (--examples, --dicom); a picture of
-    # the demo is published only when it holds invented data alone (tools/screenshots.py --demo)
+    # what went in: models only, the demo library, local files (--examples, --dicom); a
+    # picture of the demo is published only without local files (tools/screenshots.py --demo)
     (out / 'demo.json').write_text(json.dumps({
         'made_by': 'tools/make-demo-data.py',
-        'synthetic_only': examples is None and dicoms is None,
+        'full': full,
+        'seed': seed,
+        'invented': lib is None and examples is None and dicoms is None,
+        'library': lib is not None,
         'examples': examples is not None,
         'dicom': dicoms is not None,
     }, indent=2) + '\n', encoding='utf-8')
-    print(f'demo data written to {out}: {len(PATIENTS)} patients, {len(ENCOUNTERS)} encounters, {len(icu)} ICU recordings, '
-          f'{len(ecgs)} ECGs, {len(imaging)} images, {len(labs)} lab results, {len(notes)} notes')
+    print(f'demo data written to {out}: {len(pats)} patients, {len(encs)} encounters, {len(T["icu"])} ICU recordings, '
+          f'{len(T["ecgs"])} ECGs, {len(T["imaging"])} images, {len(T["labs"])} lab results, {len(T["notes"])} notes'
+          + (' (with the demo library)' if lib else ' (models only)'))
+    if opts.get('--db-builder'):
+        build(out, opts['--db-builder'])
 
 
 if __name__ == '__main__':

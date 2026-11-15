@@ -1,6 +1,5 @@
 //! An EDF or BDF file: its header, read from the bytes and from the file alike, and its index
-//! (recording-engine), the identifiers of its patient and recording fields (`identify`), and
-//! the copy Privacy Mode sends (`deid::edf_header`, then
+//! (recording-engine), its patient and recording fields, and the copy Privacy Mode sends (`deid::edf_header`, then
 //! `deid::edf_annotations` on every annotation signal of every data record, as the server's
 //! `edf_deidentified` does).  An answer or an error, never a panic.
 #![no_main]
@@ -13,9 +12,7 @@ fuzz_target!(|data: &[u8]| {
     std::fs::write(&path, data).expect("a temporary file");
     let s = medorama::deid::Settings::default();
 
-    if let Ok((patient, recording)) = edf::identification(&path) {
-        let _ = medorama::identify::from_edf(&patient, &recording);
-    }
+    let _ = edf::identification(&path);
     // the header rewritten whatever its length; an annotation signal's bytes, whatever they are
     let _ = medorama::deid::edf_header(data, &s);
     let _ = medorama::deid::edf_header(data, &s.for_draw(Some(0.5)));

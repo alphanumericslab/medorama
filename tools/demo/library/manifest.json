@@ -1,0 +1,774 @@
+{
+ "format": 1,
+ "made_by": "the demo library builder (maintainer only)",
+ "seed": 20261114,
+ "description": "transformed short pieces of real recordings and pictures, for tools/make-demo-data.py (tools/demo/README.md)",
+ "items": [
+  {
+   "id": "ecg12-01",
+   "kind": "ecg12_beat",
+   "fs": 500,
+   "r_index": 150,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6"
+   ],
+   "file": "ecg12/ecg12-01.i16",
+   "dtype": "int16",
+   "shape": [
+    12,
+    400
+   ]
+  },
+  {
+   "id": "ecg12-02",
+   "kind": "ecg12_beat",
+   "fs": 500,
+   "r_index": 150,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6"
+   ],
+   "file": "ecg12/ecg12-02.i16",
+   "dtype": "int16",
+   "shape": [
+    12,
+    400
+   ]
+  },
+  {
+   "id": "ecg12-03",
+   "kind": "ecg12_beat",
+   "fs": 500,
+   "r_index": 150,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6"
+   ],
+   "file": "ecg12/ecg12-03.i16",
+   "dtype": "int16",
+   "shape": [
+    12,
+    400
+   ]
+  },
+  {
+   "id": "ecg12-04",
+   "kind": "ecg12_beat",
+   "fs": 500,
+   "r_index": 150,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6"
+   ],
+   "file": "ecg12/ecg12-04.i16",
+   "dtype": "int16",
+   "shape": [
+    12,
+    400
+   ]
+  },
+  {
+   "id": "ecg12-05",
+   "kind": "ecg12_beat",
+   "fs": 500,
+   "r_index": 150,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6"
+   ],
+   "file": "ecg12/ecg12-05.i16",
+   "dtype": "int16",
+   "shape": [
+    12,
+    400
+   ]
+  },
+  {
+   "id": "ecg12-06",
+   "kind": "ecg12_beat",
+   "fs": 500,
+   "r_index": 150,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6"
+   ],
+   "file": "ecg12/ecg12-06.i16",
+   "dtype": "int16",
+   "shape": [
+    12,
+    400
+   ]
+  },
+  {
+   "id": "ecg12-07",
+   "kind": "ecg12_beat",
+   "fs": 500,
+   "r_index": 150,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6"
+   ],
+   "file": "ecg12/ecg12-07.i16",
+   "dtype": "int16",
+   "shape": [
+    12,
+    400
+   ]
+  },
+  {
+   "id": "ecg12-08",
+   "kind": "ecg12_beat",
+   "fs": 500,
+   "r_index": 150,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6"
+   ],
+   "file": "ecg12/ecg12-08.i16",
+   "dtype": "int16",
+   "shape": [
+    12,
+    400
+   ]
+  },
+  {
+   "id": "ecg12-09",
+   "kind": "ecg12_beat",
+   "fs": 500,
+   "r_index": 150,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6"
+   ],
+   "file": "ecg12/ecg12-09.i16",
+   "dtype": "int16",
+   "shape": [
+    12,
+    400
+   ]
+  },
+  {
+   "id": "ecg12-10",
+   "kind": "ecg12_beat",
+   "fs": 500,
+   "r_index": 150,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6"
+   ],
+   "file": "ecg12/ecg12-10.i16",
+   "dtype": "int16",
+   "shape": [
+    12,
+    400
+   ]
+  },
+  {
+   "id": "ecg12-11",
+   "kind": "ecg12_beat",
+   "fs": 500,
+   "r_index": 150,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6"
+   ],
+   "file": "ecg12/ecg12-11.i16",
+   "dtype": "int16",
+   "shape": [
+    12,
+    400
+   ]
+  },
+  {
+   "id": "ecg12-12",
+   "kind": "ecg12_beat",
+   "fs": 500,
+   "r_index": 150,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6"
+   ],
+   "file": "ecg12/ecg12-12.i16",
+   "dtype": "int16",
+   "shape": [
+    12,
+    400
+   ]
+  },
+  {
+   "id": "ecg12-13",
+   "kind": "ecg12_beat",
+   "fs": 500,
+   "r_index": 150,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6"
+   ],
+   "file": "ecg12/ecg12-13.i16",
+   "dtype": "int16",
+   "shape": [
+    12,
+    400
+   ]
+  },
+  {
+   "id": "ecg12-14",
+   "kind": "ecg12_beat",
+   "fs": 500,
+   "r_index": 150,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6"
+   ],
+   "file": "ecg12/ecg12-14.i16",
+   "dtype": "int16",
+   "shape": [
+    12,
+    400
+   ]
+  },
+  {
+   "id": "ecg12-15",
+   "kind": "ecg12_beat",
+   "fs": 500,
+   "r_index": 150,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6"
+   ],
+   "file": "ecg12/ecg12-15.i16",
+   "dtype": "int16",
+   "shape": [
+    12,
+    400
+   ]
+  },
+  {
+   "id": "ecg12-16",
+   "kind": "ecg12_beat",
+   "fs": 500,
+   "r_index": 150,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "III",
+    "aVR",
+    "aVL",
+    "aVF",
+    "V1",
+    "V2",
+    "V3",
+    "V4",
+    "V5",
+    "V6"
+   ],
+   "file": "ecg12/ecg12-16.i16",
+   "dtype": "int16",
+   "shape": [
+    12,
+    400
+   ]
+  },
+  {
+   "id": "monitor-01",
+   "kind": "monitor_beat",
+   "fs": 240,
+   "r_index": 72,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "V"
+   ],
+   "file": "monitor/monitor-01.i16",
+   "dtype": "int16",
+   "shape": [
+    3,
+    192
+   ]
+  },
+  {
+   "id": "monitor-02",
+   "kind": "monitor_beat",
+   "fs": 240,
+   "r_index": 72,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "V"
+   ],
+   "file": "monitor/monitor-02.i16",
+   "dtype": "int16",
+   "shape": [
+    3,
+    192
+   ]
+  },
+  {
+   "id": "monitor-03",
+   "kind": "monitor_beat",
+   "fs": 240,
+   "r_index": 72,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "V"
+   ],
+   "file": "monitor/monitor-03.i16",
+   "dtype": "int16",
+   "shape": [
+    3,
+    192
+   ]
+  },
+  {
+   "id": "monitor-04",
+   "kind": "monitor_beat",
+   "fs": 240,
+   "r_index": 72,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "V"
+   ],
+   "file": "monitor/monitor-04.i16",
+   "dtype": "int16",
+   "shape": [
+    3,
+    192
+   ]
+  },
+  {
+   "id": "monitor-05",
+   "kind": "monitor_beat",
+   "fs": 240,
+   "r_index": 72,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "V"
+   ],
+   "file": "monitor/monitor-05.i16",
+   "dtype": "int16",
+   "shape": [
+    3,
+    192
+   ]
+  },
+  {
+   "id": "monitor-06",
+   "kind": "monitor_beat",
+   "fs": 240,
+   "r_index": 72,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "V"
+   ],
+   "file": "monitor/monitor-06.i16",
+   "dtype": "int16",
+   "shape": [
+    3,
+    192
+   ]
+  },
+  {
+   "id": "monitor-07",
+   "kind": "monitor_beat",
+   "fs": 240,
+   "r_index": 72,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "V"
+   ],
+   "file": "monitor/monitor-07.i16",
+   "dtype": "int16",
+   "shape": [
+    3,
+    192
+   ]
+  },
+  {
+   "id": "monitor-08",
+   "kind": "monitor_beat",
+   "fs": 240,
+   "r_index": 72,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "V"
+   ],
+   "file": "monitor/monitor-08.i16",
+   "dtype": "int16",
+   "shape": [
+    3,
+    192
+   ]
+  },
+  {
+   "id": "monitor-09",
+   "kind": "monitor_beat",
+   "fs": 240,
+   "r_index": 72,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "V"
+   ],
+   "file": "monitor/monitor-09.i16",
+   "dtype": "int16",
+   "shape": [
+    3,
+    192
+   ]
+  },
+  {
+   "id": "monitor-10",
+   "kind": "monitor_beat",
+   "fs": 240,
+   "r_index": 72,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "V"
+   ],
+   "file": "monitor/monitor-10.i16",
+   "dtype": "int16",
+   "shape": [
+    3,
+    192
+   ]
+  },
+  {
+   "id": "monitor-11",
+   "kind": "monitor_beat",
+   "fs": 240,
+   "r_index": 72,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "V"
+   ],
+   "file": "monitor/monitor-11.i16",
+   "dtype": "int16",
+   "shape": [
+    3,
+    192
+   ]
+  },
+  {
+   "id": "monitor-12",
+   "kind": "monitor_beat",
+   "fs": 240,
+   "r_index": 72,
+   "units": "uV",
+   "leads": [
+    "I",
+    "II",
+    "V"
+   ],
+   "file": "monitor/monitor-12.i16",
+   "dtype": "int16",
+   "shape": [
+    3,
+    192
+   ]
+  },
+  {
+   "id": "abp-model",
+   "kind": "pulse_model",
+   "pulse": "abp",
+   "upstroke": [
+    0.15,
+    0.23
+   ],
+   "decay": [
+    2.62,
+    4.37
+   ],
+   "cycles": 17
+  },
+  {
+   "id": "pleth-model",
+   "kind": "pulse_model",
+   "pulse": "pleth",
+   "upstroke": [
+    0.19,
+    0.33
+   ],
+   "decay": [
+    0.98,
+    2.92
+   ],
+   "cycles": 51
+  },
+  {
+   "id": "ct-01",
+   "kind": "ct_series",
+   "region": "abdomen",
+   "collection": "C1",
+   "pixel_mm": 1.45,
+   "slice_mm": 17.4,
+   "hu_offset": 1024,
+   "file": "ct/ct-01.u16",
+   "dtype": "uint16",
+   "shape": [
+    24,
+    256,
+    256
+   ]
+  },
+  {
+   "id": "ct-02",
+   "kind": "ct_series",
+   "region": "chest",
+   "collection": "C2",
+   "pixel_mm": 1.49,
+   "slice_mm": 10.8,
+   "hu_offset": 1024,
+   "file": "ct/ct-02.u16",
+   "dtype": "uint16",
+   "shape": [
+    24,
+    256,
+    256
+   ]
+  },
+  {
+   "id": "ct-03",
+   "kind": "ct_series",
+   "region": "chest",
+   "collection": "C3",
+   "pixel_mm": 1.15,
+   "slice_mm": 10.4,
+   "hu_offset": 1024,
+   "file": "ct/ct-03.u16",
+   "dtype": "uint16",
+   "shape": [
+    24,
+    256,
+    256
+   ]
+  },
+  {
+   "id": "ct-04",
+   "kind": "ct_series",
+   "region": "abdomen",
+   "collection": "C4",
+   "pixel_mm": 1.58,
+   "slice_mm": 7.5,
+   "hu_offset": 1024,
+   "file": "ct/ct-04.u16",
+   "dtype": "uint16",
+   "shape": [
+    24,
+    256,
+    256
+   ]
+  },
+  {
+   "id": "xray-01",
+   "kind": "xray",
+   "region": "chest",
+   "collection": "C2",
+   "pixel_mm": 1.46,
+   "file": "xray/xray-01.u16",
+   "dtype": "uint16",
+   "shape": [
+    256,
+    256
+   ]
+  },
+  {
+   "id": "xray-02",
+   "kind": "xray",
+   "region": "chest",
+   "collection": "C3",
+   "pixel_mm": 1.24,
+   "file": "xray/xray-02.u16",
+   "dtype": "uint16",
+   "shape": [
+    256,
+    256
+   ]
+  }
+ ]
+}

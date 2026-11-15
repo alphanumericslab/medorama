@@ -1,20 +1,22 @@
-% Part III: ECGs and imaging as data. Sources: docs/importing.md "Files"; docs/administration.md
-% "Files and recordings", "Import formats"; viewers/ecg/python/muse/README.md;
+% Part III: ECGs and imaging as data. Sources: docs/importing.md "Files"; db-builder/README.md
+% (Tables: files; Known exports); viewers/ecg/python/muse/README.md;
 % viewers/pacs/python/dicom/README.md; docs/edf.md; docs/security.md 7.3 (the file rules) and
 % docs/protecting-patient-data.md#dicom (the DICOM element rules). Checked against
-% medorama/src/tables.rs (files of rows), patient/files.rs (kinds, viewers, hints), gate.rs
+% db-builder/src/add.rs (files of rows), medorama/src/patient/files.rs (kinds, viewers, hints), gate.rs
 % (FileKind), viewers/ecg/python/muse/muse_reader_py/cli.py, viewers/pacs/python/dicom.
 \chapter{ECGs and imaging as data}
 \label{chap:ecg-imaging}
 
 This chapter explains how ECGs, images and documents come into Medorama, and how they are
-opened and protected. It is written for data managers who build the tables that name these
+opened and protected. It is written for data managers who build the databases that name these
 files.
 
-Resting ECGs, echocardiograms, angiograms, CT and MR series, X-rays, reports and documents come
-into Medorama as the files of a table's rows (\cref{chap:importing}). Each row names its
-patient, its time and its file, and becomes an item of the ECG, Echo, Cath lab or Imaging column
-of the Patient Journey. Its file opens in the ECG viewer (\cref{chap:ecg-viewer}) or the PACS
+Medorama imports nothing: resting ECGs, echocardiograms, angiograms, CT and MR series, X-rays,
+reports and documents are files that a connected database names. A db-builder database names
+them in the rows of the tables it was built from (\cref{chap:importing}); a site's own database
+names them in its \code{recordings} view (\cref{chap:connecting}). Each row names its patient,
+its time, its category and its file, and becomes an item of the ECG, Echo, Cath lab or Imaging
+column of the Patient Journey. Its file opens in the ECG viewer (\cref{chap:ecg-viewer}) or the PACS
 viewer (\cref{chap:pacs-viewer}). Such tables are written by the systems that hold the files, or
 made from the files themselves with \cmd{muse-py index} and \cmd{dicom-py index}. Waveform
 recordings (ICU monitoring, Holters, EEGs and sleep studies) are the subject of
@@ -23,12 +25,14 @@ recordings (ICU monitoring, Holters, EEGs and sleep studies) are the subject of
 \section{Files as attachments}
 \label{sec:ecg-imaging-files}
 
-A row's file is the \emph{attachment} of the row's item when the row's category (or the table's)
-is not a recording category (\code{icu}, \code{holter}, \code{eeg} or \code{sleep}). Its kind is
+Every file a db-builder row names is a row of the database's \code{recordings}, with the row's
+category. A file is the \emph{attachment} of its item, opened by a viewer from the patient page,
+when its category is not a recording category (\code{icu}, \code{holter}, \code{eeg} or
+\code{sleep}). Its kind is
 recognized from its extension, and a file without one is recognized as DICOM by the \code{DICM}
 marker after its 128-byte preamble (\cref{tab:ecg-imaging-viewers}). The file must lie inside
-\code{data\_roots}. It is read where it is, never copied, and shown only to users who may see the
-patient.
+\code{data\_roots}. It is read where it is, never copied, and shown only to users granted
+\code{view} on its database.
 
 \begin{table}[htbp]
 \caption{Which viewer opens an attachment, by the item's category and the file's kind.}
@@ -77,33 +81,34 @@ The ECG viewer opens the following formats (\cref{chap:ecg-viewer} describes how
 \end{itemize}
 
 A table of ECGs names, in each row, the patient, the time, the file and, when there are any, the
-measurements and statements. The following commands import such a table:
+measurements and statements. The following commands add such a table to a database:
 \begin{lstlisting}[language=CSV]
 patient_id,encounter_id,time,QT (ms),QTc (ms),interpretation,file
 P900001,E9100002,2024-01-02 08:00,410,452,Sinus tachycardia,ecg/ecg_P900001_20240102.hea
 \end{lstlisting}
 \begin{lstlisting}[style=shell]
-medorama import-table ecg_index.csv              # the category from the file name: ecg
-medorama import-table ecgs.csv --category ecg    # else name it
+db-builder add study.sqlite ecg_index.csv                 # the category from the file name: ecg
+db-builder add study.sqlite ecgs.csv --category ecg       # else name it
 \end{lstlisting}
 An export of GE MUSE's ECG metadata (one row per ECG, the XML elements as columns) is recognized
-and converted by the import format \code{ge-muse} (\code{ge-muse-patient-id} when its patients
-are named by a research ID: \cref{chap:importing}).
+and converted by db-builder's known export \code{ge-muse} (\code{ge-muse-patient-id} when its
+patients are named by a research ID: \cref{sec:importing-known}).
 
 \subsection{Building an ECG database: muse-py index}
 \label{sec:ecg-imaging-muse}
 
 A folder of GE MUSE XML files becomes an ECG database with \cmd{muse-py index}, the MUSE reader of
 the ECG viewer, which needs no other package. The following commands install it, index a folder
-and import the result:
+and add the result to a database:
 \begin{lstlisting}[style=shell]
 pip install -e viewers/ecg/python/muse
 muse-py index /data/muse -o /data/muse/ecg.csv     # one row per MUSE file
-medorama import-table /data/muse/ecg.csv           # each row an ECG of its patient
+db-builder add study.sqlite /data/muse/ecg.csv --mrn-authority HOSP   # an ECG per row
 \end{lstlisting}
 It reads every \file{.xml} file below the folder (hidden files left out), and writes one row per
 ECG with the columns of \cref{tab:ecg-imaging-muse}; the files it cannot read are listed on
-standard error. File paths are relative to the CSV, which the import reads from the CSV's folder.
+standard error. File paths are relative to the CSV, and db-builder reads them from the CSV's
+folder.
 
 \begin{table}[htbp]
 \caption{The columns \cmd{muse-py index} writes.}
@@ -113,7 +118,8 @@ standard error. File paths are relative to the CSV, which the import reads from 
 {\tabhead Column} & {\tabhead Holds} \\
 \midrule
 \code{mrn} & The MUSE \code{PatientDemographics/PatientID}, in a column named \code{mrn}:
-  Medorama links each row to its patient by it, as an MRN\phimark \\
+  db-builder finds each row's patient by it, as an MRN (give its authority with
+  \opt{-{}-mrn-authority})\phimark \\
 \code{time} & The acquisition date and time, as the cart's clock wrote them \\
 \code{category}, \code{name} & \code{ecg}, \code{12-lead ECG} \\
 \code{value}, \code{unit} & The ventricular rate, \code{bpm} \\
@@ -156,11 +162,11 @@ file and its WFDB signal files, can be read through the item.
 \label{sec:ecg-imaging-dicom}
 
 A folder of DICOM files becomes an imaging database with \cmd{dicom-py index}, which uses pydicom
-and numpy. The following commands install it, index a folder and import the result:
+and numpy. The following commands install it, index a folder and add the result to a database:
 \begin{lstlisting}[style=shell]
 pip install -e viewers/pacs/python/dicom
 dicom-py index /data/echo -o /data/echo/imaging.csv   # one row per loop, run, series, report
-medorama import-table /data/echo/imaging.csv          # the rows reach their patients
+db-builder add study.sqlite /data/echo/imaging.csv --mrn-authority HOSP
 \end{lstlisting}
 It reads every DICOM file under the folder, headers only, never the pixels, and writes one row per
 object a viewer shows (\cref{tab:ecg-imaging-dicom}). The objects it cannot link are listed on
@@ -199,8 +205,9 @@ ultrasound, \code{cath} for angiography, fluoroscopy, IVUS and OCT, \code{ecg} o
 for ECG waveforms, and \code{img} for everything else; a report or a PDF takes its category from
 the words of its title (echo, cath, ECG).
 
-Columns of different databases are never merged: an echo database's \code{LVEF (\%)} and a cath
-database's are distinct, and a cohort's criterion names which one (\cref{chap:cohorts}).
+A measurement column such as \code{LVEF (\%)} becomes entries named \code{LVEF}, in \%
+(\cref{sec:importing-columns}). The same name in two connected databases is searched in each;
+a criterion that names a database searches that one only (\cref{chap:cohorts}).
 
 \section{Hints for the viewers}
 \label{sec:ecg-imaging-hints}
@@ -278,5 +285,5 @@ files are named by tokens (\code{mo-f0000.hea}, \code{mo-f0001.dat}), and a real
 accepted.
 
 The databases that \cmd{muse-py index} and \cmd{dicom-py index} write hold the patients' IDs, the
-key that links each row to its patient. Keep them as PHI, with the catalog's databases, and never
-in a repository. They never hold names or dates of birth.
+key that links each row to its patient. Keep them as PHI, like the databases db-builder makes
+of them, and never in a repository. They never hold names or dates of birth.

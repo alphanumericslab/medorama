@@ -5,18 +5,27 @@ example starts from nothing and ends with the program running. Everything is bui
 of the repository, in your user account; administrator rights are needed only to install a
 compiler, once.
 
+Each installer first shows Medorama's license terms and goes on only if you accept them by typing
+`y` or `yes`. Medorama is free for noncommercial use (personal research and study, universities,
+public research and public health organizations); commercial use needs a license from the author
+([COMMERCIAL.md](../COMMERCIAL.md)). For scripts and CI, `--accept-license` (Windows:
+`-AcceptLicense`) or `MEDORAMA_ACCEPT_LICENSE=yes` accepts them without asking
+([building.md, License terms](building.md#license-terms)). The ECG and PACS viewers install with
+`pip`, which asks nothing; the same terms apply to them.
+
 - [Which one do I need?](#which-one-do-i-need)
 - [Medorama](#medorama)
 - [VitalStream, on its own](#vitalstream-on-its-own)
 - [The ECG viewer, on its own](#the-ecg-viewer-on-its-own)
 - [The PACS viewer, on its own](#the-pacs-viewer-on-its-own)
+- [Upgrading from 0.1.0](#upgrading-from-010)
 - [Next steps](#next-steps)
 
 ## Which one do I need?
 
 | You want to | Install | Needs |
 |---|---|---|
-| Bring patients' data from several databases together, build cohorts, and open their recordings, ECGs and images, for a team | [Medorama](#medorama), which includes all the viewers | Git, Python, a C compiler; Rust is installed for you |
+| Bring patients' data from several databases together, build cohorts, and open their recordings, ECGs and images, for a team | [Medorama](#medorama), which includes all the viewers and db-builder | Git, Python, a C compiler and Perl; Rust is installed for you |
 | Read long physiological recordings (ICU monitoring, Holter, sleep studies) on one computer or server | [VitalStream](#vitalstream-on-its-own) | The same, or Python alone for its Python version |
 | Read 12-lead ECGs | Nothing: [open the ECG viewer](https://medorama.org/viewers/ecg/) in a browser. To serve the ECGs of a server, [`muse-py serve`](#the-ecg-viewer-on-its-own) | Python, for `muse-py serve` |
 | Read DICOM studies (echo, angiography, CT, MR, X-ray) | Nothing: [open the PACS viewer](https://medorama.org/viewers/pacs/) in a browser. To serve the studies of a server, [`dicom-py serve`](#the-pacs-viewer-on-its-own) | Python, for `dicom-py serve` |
@@ -26,43 +35,56 @@ computer, even on the website.
 
 ## Medorama
 
-The installer builds Medorama, one VitalStream waveform viewer (here the Rust viewer, which needs
-nothing beyond Rust) and the database tools into a `.venv` folder inside the clone. `--demo`
-adds six invented patients for trying it; leave it out for a catalog that starts empty, ready
-for real data. The first build takes a few minutes.
+The installer builds Medorama, db-builder, one VitalStream waveform viewer (here the Rust
+viewer, built with the same tools as Medorama) and the database tools into a `.venv` folder inside the
+clone. `--demo` also makes two small databases of invented patients for trying it; leave it out
+for a Medorama that starts with no database, ready for real data. The first build takes a few
+minutes: it compiles SQLCipher and OpenSSL, which needs a C compiler and Perl.
+
+Medorama imports nothing: it connects databases and reads them in place. After the installation
+come three steps:
+1. `medorama init --workspace DIR` (once) sets Medorama up: its settings, its control store, its
+   master key, the first administrator, and the workspace where it keeps what it generates,
+   encrypted. With `--demo`, it also connects the demo's databases.
+2. `medorama databases connect …` (or, in the page, Databases › **Connect a database**) connects
+   each database: an OMOP database, any SQL database through views, or a SQLite file made by
+   **db-builder** from tables, exports (GE MUSE, CLIF) and folders of recordings
+   ([db-builder's README](../db-builder/README.md)).
+3. `medorama serve` runs the page.
 
 ### Linux
 
-On Debian or Ubuntu (on Fedora or RHEL: `sudo dnf install git python3 gcc`):
+On Debian or Ubuntu (on Fedora or RHEL: `sudo dnf install git python3 gcc perl`):
 
 ```bash
-sudo apt install git python3 python3-venv build-essential    # once: Git, Python and a C compiler
+sudo apt install git python3 python3-venv build-essential perl   # once: Git, Python, a C compiler and Perl
 git clone https://github.com/alphanumericslab/medorama.git && cd medorama
-tools/install-medorama.sh --viewer rs --demo                 # Medorama, the Rust viewer and the demo
+tools/install-medorama.sh --viewer rs --demo                 # Medorama, db-builder, the Rust viewer and the demo
 source .venv/bin/activate                                    # in every new terminal
-medorama init --results ~/medorama-results                   # once: creates the catalog; asks for the admin password
+medorama init --workspace ~/medorama-workspace --demo        # once: asks for the admin password; connects the demo
 medorama serve                                               # then open http://127.0.0.1:8090 and sign in as admin
 ```
 
 ### macOS
 
 ```bash
-xcode-select --install                                       # once: Git, Python and the compilers
+xcode-select --install                                       # once: Git, Python, the compilers (Perl is part of macOS)
 git clone https://github.com/alphanumericslab/medorama.git && cd medorama
 tools/install-medorama.sh --viewer rs --demo
 source .venv/bin/activate                                    # in every new terminal
-medorama init --results ~/medorama-results
+medorama init --workspace ~/medorama-workspace --demo
 medorama serve                                               # then open http://127.0.0.1:8090
 ```
 
 ### Windows 10 and 11
 
-In PowerShell. Open a new PowerShell window after the `winget` lines, so that Git and Python are
-found:
+In PowerShell. Open a new PowerShell window after the `winget` lines, so that Git, Python and
+Perl are found:
 
 ```powershell
 winget install Git.Git
 winget install Python.Python.3.12
+winget install StrawberryPerl.StrawberryPerl
 winget install Microsoft.VisualStudio.2022.BuildTools --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 ```
 
@@ -72,24 +94,41 @@ Then:
 git clone https://github.com/alphanumericslab/medorama.git; cd medorama
 powershell -ExecutionPolicy Bypass -File tools\install-medorama.ps1 -Viewer rs -Demo
 .venv\Scripts\Activate.ps1                                   # in every new PowerShell window
-medorama init --results $HOME\medorama-results
+medorama init --workspace $HOME\medorama-workspace --demo
 medorama serve                                               # then open http://127.0.0.1:8090
 ```
 
 If PowerShell answers "running scripts is disabled on this system" for `Activate.ps1`, run
 `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once.
 
+### Your own databases
+
+Without `--demo`, Medorama starts with no database. Connect one as an administrator, from the
+page (Databases › **Connect a database**) or from the command line, for example:
+
+```bash
+medorama databases connect omop --kind omop --url "postgres://reader@omop.example.org/cdm?sslmode=require" \
+    --password-file ~/.omop-password --mrn-authority HOSP
+db-builder add ~/study.sqlite patients.csv labs.xlsx --issuer HOSP --mrn-authority HOSP   # tables made into a database
+medorama databases connect study --kind dbb --url sqlite:$HOME/study.sqlite
+```
+
+[Administration, Connected databases](administration.md#connected-databases) explains every
+option, and [databases.md](databases.md) what a database must provide.
+
 ### Options
 
 | Linux and macOS | Windows | Effect |
 |---|---|---|
 | `--viewer cpp` (the default), `rs`, `py`, `none` | `-Viewer` | The waveform viewer to build with Medorama. The C++ viewer also needs a C++20 compiler (`g++` on Linux; the Command Line Tools on macOS; the Build Tools above on Windows). |
-| `--demo` | `-Demo` | Adds the demo's invented patients ([Get started](getting-started.md) tours them and shows how to remove them). |
+| `--demo` | `-Demo` | Makes the demo's databases of invented patients, which `medorama init --demo` connects ([Get started](getting-started.md) tours them and shows how to remove them). |
 | `--no-tools` | `-NoTools` | Leaves out the database tools `muse-py` and `dicom-py`. |
 | `--no-wfdb` | `-NoWfdb` | Builds without WFDB support, with no wfdb-x code ([Without WFDB](building.md#without-wfdb)); not with the demo. |
+| `--accept-license` | `-AcceptLicense` | Accepts the license terms without asking (scripts, CI). |
 
 To serve Medorama to other people, read [Administration](administration.md#deployment) before
-going further: it covers HTTPS, institutional sign-in, PostgreSQL, services and backups.
+going further: it covers HTTPS, institutional sign-in, grants, keys, PostgreSQL, services and
+backups.
 
 ## VitalStream, on its own
 
@@ -97,12 +136,13 @@ VitalStream reads WFDB, EDF and BDF recordings, and other formats through add-on
 versions with the same page and features: `vitalstream-cpp` (C++), `vitalstream-rs` (Rust) and
 `vitalstream-py` (Python). The examples install the Rust version; change `--viewer rs` to
 `--viewer cpp` or `--viewer py` for the others. The Python version needs only Python, and no
-compiler.
+compiler. The Rust version compiles SQLCipher and OpenSSL for its index store, so it needs Perl
+as well as a C compiler; the C++ version builds SQLCipher without OpenSSL and needs no Perl.
 
 ### Linux and macOS
 
 Install the prerequisites as for [Medorama](#linux) (`sudo apt install git python3 python3-venv
-build-essential` on Debian or Ubuntu, `xcode-select --install` on macOS), then:
+build-essential perl` on Debian or Ubuntu, `xcode-select --install` on macOS), then:
 
 ```bash
 git clone https://github.com/alphanumericslab/medorama.git && cd medorama
@@ -133,6 +173,7 @@ For the C++ version (`-Viewer cpp`), run the installer from a "Developer PowerSh
 | `--root DIR` | `-Root DIR` | The folder the viewer may open at most, fixed in the program (default: the home folder of whoever runs it). |
 | `--no-password` | `-NoPassword` | Builds it without password support. |
 | `--no-wfdb` | `-NoWfdb` | Builds it without WFDB support, with no wfdb-x code. |
+| `--accept-license` | `-AcceptLicense` | Accepts the license terms without asking (scripts, CI). |
 
 On a computer that other people can reach, set a password once with `vitalstream-rs
 --set-password`. [VitalStream's README](../viewers/vitalstream/README.md#deploy) shows how to
@@ -197,11 +238,52 @@ As for the ECG viewer, `--root` is the folder served and `dicom-py serve --set-p
 password; Medorama's installer already puts `dicom-py` into its `.venv`. The
 [PACS viewer's README](../viewers/pacs/README.md#run-it) describes every way to run it.
 
+## Upgrading from 0.1.0
+
+Medorama 0.2.0, a pre-release, changes how Medorama holds data, so a 0.1.0 installation is not
+updated in place: 0.2.0 is set up in a new home, next to the old one.
+
+- **Medorama no longer imports data.** It connects databases: OMOP, any SQL database through
+  views, or a SQLite database made with [db-builder](../db-builder/README.md) from the tables,
+  exports (GE MUSE, CLIF) and folders of recordings that 0.1.0 imported. Make those databases
+  again from the original files, then connect them.
+- **The control store starts again.** Its schema is new, with no migration. 0.2.0 refuses a
+  0.1.0 control store and a 0.1.0 `medorama.toml`, and says so.
+- **A workspace is required** (`medorama init --workspace DIR`). It holds what Medorama keeps of
+  each database, the recordings' indexes included, encrypted with that database's own key. The
+  setting `index_dir` is gone; the recordings are indexed again.
+- **Users, grants and cohorts are not carried over.** Add the users again, grant them the
+  databases, and build the cohorts again.
+- **Keep the 0.1.0 home** (with its audit log and seals) for as long as your retention rules
+  require; 0.2.0 never writes to it.
+
+On Linux or macOS, from the existing clone:
+
+```bash
+cd medorama && git pull
+tools/install-medorama.sh --viewer rs          # the same options as before
+source .venv/bin/activate
+medorama init --home ~/medorama-0.2 --workspace ~/medorama-workspace   # a new home; becomes the default
+db-builder new study.sqlite --timezone Europe/Paris
+db-builder add study.sqlite patients.csv labs.csv --issuer HOSP --mrn-authority HOSP
+db-builder recordings study.sqlite /data/icu --patients icu_patients.csv --issuer HOSP
+medorama databases connect study --kind dbb --url sqlite:$PWD/study.sqlite
+medorama user add alice --role analyst
+medorama databases grant study alice view
+medorama serve
+```
+
+[Databases](databases.md) explains each kind of database, and [db-builder](../db-builder/README.md)
+every way to build one. The standalone viewers keep their settings; their indexes are now in one
+store, `index.sqlite` in the cache folder (`~/.cache/vitalstream`), so the index folders 0.1.0
+left there can be deleted. Every change is listed in [medorama/CHANGELOG.md](../medorama/CHANGELOG.md).
+
 ## Next steps
 
 | | |
 |---|---|
 | [Get started](getting-started.md) | A guided tour of Medorama with the demo, and how to remove the demo. |
 | [Building and installing](building.md) | Every build option, machines without administrator rights or internet access, updating and uninstalling, and troubleshooting. |
-| [Administration](administration.md) | Running Medorama for other people: settings, PostgreSQL, imports, users, the audit log, deployment and backups. |
+| [Administration](administration.md) | Running Medorama for other people: settings, connected databases, grants, keys, users, the audit log, deployment and backups. |
+| [db-builder](../db-builder/README.md) | Tables, known exports and folders of recordings made into a database to connect. |
 | [User's manual](user-manual/medorama-user-manual.pdf) | The complete manual, installation included. |

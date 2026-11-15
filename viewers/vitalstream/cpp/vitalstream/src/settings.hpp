@@ -17,6 +17,8 @@
 // - cache_dir: the index cache, shared by the three viewers (they write the same index).
 //   Default, run from a clone of the repository: <viewer>/sample_data/outputs/index; elsewhere
 //   ~/.cache/vitalstream.
+// - index_key_file: a file holding 64 hex digits, the key the viewer's index store
+//   (cache_dir/index.sqlite) is encrypted with (SQLCipher); empty: a plain store.
 // - adapters_dir: the folder of adapters, programs that read formats the viewer does not read
 //   itself (docs/adapters.md).  Default: ~/.local/share/medorama/adapters.
 // - auth_file: the password (shared by the three viewers), default ~/.config/vitalstream/auth.json.
@@ -67,6 +69,7 @@ struct Settings {
   std::string timezone = "America/New_York";
   std::vector<std::string> data_roots;
   fs::path cache_dir;
+  fs::path index_key_file;  // the key of the index store (empty: a plain store)
   std::string host = "127.0.0.1";
   int port = 8070;
   std::size_t index_workers = 2;

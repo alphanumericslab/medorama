@@ -160,6 +160,100 @@ TEST(Limits, AHeaderStatingTooMuchIsReadToTheEndOfItsData) {
   fs::remove_all(dir);
 }
 
+TEST(Limits, AHeaderWithoutASampleCountIsReadToTheEndOfItsData) {
+  VS_NEEDS_WFDB();
+  // a record line with no number of samples (wfdb-x gives 0): every sample the file holds, as
+  // libwfdb reads it
+  fs::path dir = temp_dir("vs_limits_nocount");
+  record(dir, "r", "r 1 250", {1, 2, 3, 4, 5, 6, 7, 8});
+  Dict m = meta_of(dir / "r.hea", dir / "cache");
+  EXPECT_EQ(int_of(list(m, "pieces")[0].get("n")), 8);
+  EXPECT_EQ(f64_of(scan(dir / "r.hea", Limits{}).get("duration_s")), 8.0 / 250.0);
+  fs::remove_all(dir);
+}
+
+TEST(Limits, AMultiFrequencyRecordKeepsEverySampleOfEachSignal) {
+  VS_NEEDS_WFDB();
+  // signals A (4 samples per frame), B (1) and C (2), 5 frames at 100 Hz; A's sample j is j, B's
+  // 1000 + j, C's 2000 + 10 (j / 2) + j % 2; a marker N at frame 2 of A
+  fs::path dir = temp_dir("vs_limits_multifreq");
+  std::string bytes;
+  std::int16_t sums[3] = {0, 0, 0};
+  auto put = [&](int s, int v) {
+    sums[s] = static_cast<std::int16_t>(sums[s] + v);
+    bytes += static_cast<char>(v & 0xff);
+    bytes += static_cast<char>((v >> 8) & 0xff);
+  };
+  for (int f = 0; f < 5; ++f) {
+    for (int k = 0; k < 4; ++k) put(0, 4 * f + k);
+    put(1, 1000 + f);
+    for (int k = 0; k < 2; ++k) put(2, 2000 + 10 * f + k);
+  }
+  write(dir / "mf.dat", bytes);
+  write(dir / "mf.hea", "mf 3 100 5\nmf.dat 16x4 1/mV 16 0 0 " + std::to_string(sums[0]) +
+                            " 0 A\nmf.dat 16 1/mV 16 0 0 " + std::to_string(sums[1]) +
+                            " 0 B\nmf.dat 16x2 1/mV 16 0 0 " + std::to_string(sums[2]) + " 0 C\n");
+  write(dir / "mf.mrk", std::string("\x02\x04\x00\x00", 4));
+  std::string key = build_index(dir / "mf.hea", dir / "cache", [](double) {});
+  auto loaded = load_index(dir / "cache", key);
+  ASSERT_TRUE(loaded);
+  std::vector<double> fs_, n_;
+  for (const auto& p : list(loaded->first, "pieces")) {
+    fs_.push_back(*f64_of(p.get("fs")));
+    n_.push_back(*f64_of(p.get("n")));
+  }
+  EXPECT_EQ(fs_, (std::vector<double>{400, 100, 200}));
+  EXPECT_EQ(n_, (std::vector<double>{20, 5, 10}));
+  const auto& a = loaded->second;
+  EXPECT_EQ(std::vector<std::int64_t>(a.mk_sample.data(), a.mk_sample.data() + a.mk_sample.size()),
+            (std::vector<std::int64_t>{8}));
+  Dataset ds(std::move(loaded->first), std::move(loaded->second));
+  std::vector<double> all;
+  for (int j = 0; j < 20; ++j) all.push_back(j);
+  EXPECT_EQ(ds.samples(0, 0, 20), all);
+  EXPECT_EQ(ds.samples(0, 7, 13), (std::vector<double>{7, 8, 9, 10, 11, 12}));
+  EXPECT_EQ(ds.samples(1, 1, 4), (std::vector<double>{1001, 1002, 1003}));
+  EXPECT_EQ(ds.samples(2, 3, 7), (std::vector<double>{2011, 2020, 2021, 2030}));
+  EXPECT_EQ(ds.samples(2, 8, 50), (std::vector<double>{2040, 2041}));
+  fs::remove_all(dir);
+}
+
+TEST(Limits, RecordsWithoutAStartBeforeTheFirstWithOneEndWhereItStarts) {
+  VS_NEEDS_WFDB();
+  const double T0 = 1709287200.0;
+  fs::path dir = temp_dir("vs_limits_leading");
+  fs::path d = dir / "f";
+  record(d, "a", "a 1 250 4", {1, 2, 3, 4});
+  record(d, "b", "b 1 250 4 10:00:00 01/03/2024", {1, 2, 3, 4});
+  record(d, "c", "c 1 250 4", {1, 2, 3, 4});
+  Dict m = meta_of(d, dir / "cache");
+  const List& p = list(m, "pieces");
+  EXPECT_EQ(f64_of(p[1].get("t0")), T0);
+  EXPECT_EQ(f64_of(p[0].get("t0")), T0 - 4.0 / 250.0);  // not 1970
+  EXPECT_EQ(f64_of(p[2].get("t0")), T0 + 4.0 / 250.0);
+  bool noted = false;
+  for (const auto& n : list(m, "notes"))
+    noted = noted || n.py_str().find("before the first record with one") != std::string::npos;
+  EXPECT_TRUE(noted);
+  fs::remove(d / "b.hea");
+  m = meta_of(d, dir / "cache2");
+  EXPECT_EQ(f64_of(list(m, "pieces")[0].get("t0")), 0.0);
+  fs::remove_all(dir);
+}
+
+TEST(Limits, ThinningKeepsLongPieces) {
+  auto piece = [](double t0, std::int64_t n) {
+    Piece p;
+    p.t0 = t0;
+    p.n = n;
+    return p;
+  };
+  std::vector<Piece> p{piece(0.0, 0), piece(0.1, 8), piece(0.2, 0), piece(9.0, 0), piece(9.1, 0), piece(9.2, 0)};
+  EXPECT_EQ(thin(p, {0, 1, 2, 3, 4, 5}, 0.0, 10.0, 5.0), (std::vector<std::size_t>{1, 5}));
+  p = {piece(0.0, 3), piece(0.5, 2), piece(5.0, 0), piece(5.5, 0), piece(7.0, 0), piece(7.0, 0)};
+  EXPECT_EQ(thin(p, {0, 1, 2, 3, 4, 5}, 0.0, 10.0, 10.0), (std::vector<std::size_t>{0, 1, 3, 4}));
+}
+
 TEST(Limits, ARateThatIsNotANumberIsRefused) {
   VS_NEEDS_WFDB();
   fs::path dir = temp_dir("vs_limits_nan");

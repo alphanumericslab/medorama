@@ -4,15 +4,17 @@
     python3 tools/screenshots.py --url http://127.0.0.1:8090/ --user admin --password-file FILE --demo DIR [OUT]
     python3 tools/screenshots.py --vitalstream http://127.0.0.1:8060/ [OUT]
 
-OUT defaults to docs/images/screens. The catalog must hold only the synthetic data set of
-tools/make-demo-data.py (docs/administration.md, "The demo"): every picture is published.  The
-script checks this through the API before it turns Privacy Mode off (the one source is DEMO,
-every patient and recording is the demo's), and again before the first picture (every patient
-is one of the demo's, with its SYN MRN), and refuses otherwise; it signs in as an admin.  DIR is
-the folder the catalog's demo was made in and loaded from: its demo.json must say that it holds
-invented data alone (a demo made with --examples or --dicom holds local files on the demo's
-patients, which nothing in the catalog tells apart), and every recording of the catalog must lie
-in it.  The
+OUT defaults to docs/images/screens. Medorama must be connected to the synthetic demo alone
+(tools/make-demo-data.py, made into databases by the installers' --demo; docs/administration.md,
+"The demo"): every picture is published.  The script checks this through the API before it turns
+Privacy Mode off (the databases connected are the demo's, their files in the demo's folder,
+every patient is one of the demo's), and again before the first picture (every patient is one of
+the demo's persons, with its SYN MRN, names and birth date, as tools/make-demo-data.py makes
+them), and refuses otherwise; it signs in as an admin who manages every demo database.  DIR is
+the folder the demo was made in: its demo.json must say that it holds invented data and the
+demo library alone (the library's pieces are transformed and checked so that they may be
+published: tools/demo/README.md; a demo made with --examples or --dicom holds local files on
+the demo's patients, which nothing tells apart), and every recording must lie in it.  The
 pictures are in the dark theme, but for ecg.png (the ECG viewer in the light
 theme, beside ecg-dark.png).
 
@@ -24,7 +26,6 @@ records… (vitalstream-open-multiple.png, the summary before it opens) and the 
 """
 
 import argparse
-import ast
 import base64
 import json
 import os
@@ -267,59 +268,80 @@ class Browser:
 
 # ------------------------------------------------------------------ the demo, and nothing else
 
-DEMO_SOURCE, DEMO_CONNECTION = "DEMO", "demo_omop"   # medorama/src/demo.rs
+# the names `medorama init --demo` connects the demo's databases by (tools/make-demo-data.py's
+# demo-databases.json; the small demo has the first two)
+DEMO_DATABASES = {"demo", "demo_north", "demo_omop", "demo_registry", "demo_secure"}
 
 
 class NotDemo(Exception):
     """The catalog holds more than the synthetic demo."""
 
 
-def demo_patients():
-    """The patients tools/make-demo-data.py invents (read from its source, not run): those of
-    the demo's tables, {patient_id: (MRN, last name, first name, birth date)}, and the persons of
-    its OMOP database, {MRN: birth date}, which the connection demo_omop adds when it is synced."""
-    tree = ast.parse((ROOT / "tools" / "make-demo-data.py").read_text(encoding="utf-8"))
-
-    def literal(name):
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in node.targets):
-                return ast.literal_eval(node.value)
-        raise RuntimeError(f"tools/make-demo-data.py has no {name}")
-
-    return {p[0]: tuple(p[1:5]) for p in literal("PATIENTS")}, {m: born for _, _, born, m in literal("persons")}
+def generator():
+    """tools/make-demo-data.py, as a module (not run: its functions only)."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("make_demo_data", ROOT / "tools" / "make-demo-data.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
-def check_catalog(api):
-    """Before Privacy Mode is turned off: the catalog's sources are DEMO and the demo's connected
-    database alone, it is connected to no other database, and every recording and patient came
-    from them.  `api(path)` answers a GET of api/v1/<path>.  NotDemo otherwise."""
-    sources = {s.get("source"): s for s in api("sources")["items"]}
-    if DEMO_SOURCE not in sources or set(sources) - {DEMO_SOURCE, DEMO_CONNECTION}:
-        raise NotDemo(f"its sources are {sorted(sources)}, not {DEMO_SOURCE} alone")
-    connections = [c.get("name") for c in api("connections")["items"]]
-    if any(n != DEMO_CONNECTION for n in connections):
-        raise NotDemo(f"it is connected to databases other than the demo's: {connections}")
-    demo = api("demo/removal")
-    patients, recordings = api("patients?limit=1")["total"], api("recordings?limit=1")["total"]
-    tables, omop = demo_patients()
-    from_connection = sources.get(DEMO_CONNECTION, {}).get("patients", 0)
-    if demo.get("recordings") != recordings or demo.get("kept_recordings") or demo.get("kept_encounters"):
-        raise NotDemo("it holds recordings or encounters that are not the demo's")
-    if patients > demo.get("patients", 0) + from_connection or patients > len(tables) + len(omop):
+def demo_patients(full=True):
+    """The persons tools/make-demo-data.py invents (from its code, for the same seed): every
+    person of every demo database, [{patient_id, mrn, last_name, first_name, birth_date}]."""
+    return generator().identities(full)
+
+
+def made(folder):
+    """The demo folder's demo.json (what went in), {} when there is none."""
+    try:
+        return json.loads((pathlib.Path(folder).expanduser() / "demo.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def check_catalog(api, folder=None):
+    """Before Privacy Mode is turned off: the databases connected are the demo's alone (their
+    files in `folder`, when given), and there are no more patients than the demo's persons.
+    `api(path)` answers a GET of api/v1/<path>.  NotDemo otherwise."""
+    dbs = api("databases")["items"]
+    names = {d.get("name") for d in dbs}
+    if not names or names - DEMO_DATABASES:
+        raise NotDemo(f"it is connected to databases other than the demo's: {sorted(names)}")
+    for d in dbs:
+        if d.get("permission") != "manage":
+            raise NotDemo(f"{d.get('name')}: the user does not manage it (its file cannot be checked)")
+        if folder is not None:
+            path = pathlib.Path(str(d.get("url", "")).removeprefix("sqlite:"))
+            try:
+                path.resolve().relative_to(pathlib.Path(folder).expanduser().resolve())
+            except ValueError:
+                raise NotDemo(f"{d.get('name')} is not a file of the demo's folder") from None
+    people = demo_patients(made(folder).get("full", True) if folder is not None else True)
+    if api("patients?limit=1")["total"] > len(people):
         raise NotDemo("it holds patients that are not the demo's")
 
 
+def publishable(m):
+    """A demo of invented data, or made with the demo library (which may be published: its
+    pieces are transformed and checked, tools/demo/README.md), and no local files."""
+    if m.get("made_by") != "tools/make-demo-data.py" or m.get("examples") or m.get("dicom"):
+        return False
+    return m.get("invented") is True or m.get("library") is True or m.get("synthetic_only") is True
+
+
 def check_folder(api, folder):
-    """The demo folder `folder` holds invented data alone (its demo.json, from
-    tools/make-demo-data.py), and every recording of the catalog lies in it.  NotDemo otherwise,
-    and when demo.json is missing or unreadable (a folder made before it existed: make it again)."""
+    """The demo folder `folder` holds invented data and the demo library alone (its demo.json,
+    from tools/make-demo-data.py: no --examples, no --dicom), and every recording of the catalog
+    lies in it.  NotDemo otherwise, and when demo.json is missing or unreadable (a folder made
+    before it existed: make it again)."""
     folder = pathlib.Path(folder).expanduser().resolve()
     try:
-        made = json.loads((folder / "demo.json").read_text(encoding="utf-8"))
+        m = json.loads((folder / "demo.json").read_text(encoding="utf-8"))
     except (OSError, ValueError) as e:
         raise NotDemo(f"{folder} has no readable demo.json ({e}): make the demo again with tools/make-demo-data.py")
-    if made.get("made_by") != "tools/make-demo-data.py" or made.get("synthetic_only") is not True:
-        raise NotDemo(f"{folder} holds local files besides invented data ({made}): make the demo without --examples or --dicom")
+    if not publishable(m):
+        raise NotDemo(f"{folder} holds local files besides invented data ({m}): make the demo without --examples or --dicom")
     offset, seen = 0, 0
     while True:
         page = api(f"recordings?limit=1000&offset={offset}")
@@ -335,10 +357,13 @@ def check_folder(api, folder):
             return
 
 
-def check_identities(api):
-    """With Privacy Mode off, before any picture: every patient is one of the demo's, with the
-    demo's SYN MRN, names and birth date.  NotDemo otherwise (naming patients by pseudonym)."""
-    tables, omop = demo_patients()
+def check_identities(api, full=True):
+    """With Privacy Mode off, before any picture: every patient is one of the demo's persons,
+    with the demo's SYN MRN (in any letter case), names and birth date.  NotDemo otherwise
+    (naming patients by pseudonym)."""
+    people = demo_patients(full)
+    by_id = {p["patient_id"]: p for p in people if p["patient_id"]}
+    by_mrn = {p["mrn"].upper(): p for p in people if p["mrn"]}
     rows, total = [], None
     while total is None or len(rows) < total:
         page = api(f"patients?limit=1000&offset={len(rows)}")
@@ -353,18 +378,17 @@ def check_identities(api):
         phi = p.get("phi")
         if not phi:
             raise NotDemo(f"{who}: no identity shown (Privacy Mode is still on?)")
-        mrns = [m for _, m in phi.get("mrns") or []]
-        if not mrns or any(not m.startswith("SYN") for m in mrns):
+        mrns = {m.upper() for _, m in phi.get("mrns") or []}
+        if any(not m.startswith("SYN") for m in mrns):
             raise NotDemo(f"{who} has an MRN that is not a demo's SYN one")
         names = (phi.get("last_name"), phi.get("first_name"), phi.get("birth_date"))
-        if p.get("patient_id") in tables:
-            want = tables[p["patient_id"]]
-            if mrns != [want[0]] or names != want[1:]:
-                raise NotDemo(f"{who} is not the demo's {p['patient_id']}")
-        elif p.get("sources") == [DEMO_CONNECTION] and len(mrns) == 1 and omop.get(mrns[0]) == names[2] and names[:2] == ("", ""):
-            pass   # a person of the demo's OMOP database
-        else:
+        if len(mrns) > 1:
+            raise NotDemo(f"{who} has MRNs of two demo persons")
+        want = by_mrn.get(next(iter(mrns))) if mrns else by_id.get(p.get("patient_id"))
+        if want is None or (want["mrn"].upper() if want["mrn"] else "") != (next(iter(mrns)) if mrns else ""):
             raise NotDemo(f"{who} is not one of the demo's")
+        if names != (want["last_name"], want["first_name"], want["birth_date"]) or (p.get("patient_id") or "") != want["patient_id"]:
+            raise NotDemo(f"{who} is not the demo's {want['patient_id'] or want['mrn']}")
 
 
 def standalone_vitalstream(url, out):
@@ -431,7 +455,7 @@ def main():
         # every picture is published: the catalog must hold the synthetic demo and nothing else,
         # checked before Privacy Mode is turned off and again, by the identities, before any picture
         try:
-            check_catalog(api)
+            check_catalog(api, a.demo)
             check_folder(api, a.demo)
         except Exception as e:
             sys.exit(f"refused: {base} is not a catalog of the demo alone: {e} (tools/README.md, \"Refresh the screenshots\"; an admin signs in)")
@@ -439,7 +463,7 @@ def main():
             b.eval("document.querySelector('#btn-privacy').click(); true")
             b.until("!document.body.classList.contains('privacy')", "Privacy Mode off")
         try:
-            check_identities(api)
+            check_identities(api, made(a.demo).get("full", True))
         except Exception as e:
             try:
                 if not privacy_on():
@@ -453,13 +477,9 @@ def main():
             b.eval(f"location.hash = {json.dumps(hash)}; true")
             b.until(ready, what)
 
-        # the patient with the most to show: an ICU stay, ECGs and images
+        # the patient with the most to show (an ICU stay, ECGs, echo, images): the most kinds of data
         patients = api("patients?limit=50")["items"]
-        pid = max(patients, key=lambda p: len(json.dumps(p)))["id"]
-        for p in patients:
-            if "ecg" in json.dumps(p).lower() and "icu" in json.dumps(p).lower():
-                pid = p["id"]
-                break
+        pid = max(patients, key=lambda p: (len(p.get("kinds", [])), p.get("items", 0), -p["id"]))["id"]
 
         def type_into(selector, text):
             b.eval(f"""(i => {{ i.value = {json.dumps(text)}; i.dispatchEvent(new Event('input', {{bubbles: true}})); }})
@@ -506,6 +526,7 @@ def main():
         # a sleep study (an EDF+ file) and its scoring
         sleep = next((r for r in api("recordings?limit=50")["items"] if r["path"].lower().endswith(".edf")), None)
         sleepers = api("patients?q=sleep")["items"] if sleep else []
+        sleepers = sorted(sleepers, key=lambda p: p.get("patient_id") != "P900004")   # the first patients' study first
         if sleepers:
             go(f"#/patient/{sleepers[0]['id']}", patient_ready, "the sleep study's patient")
             open_entry("Sleep study", None)
@@ -513,17 +534,17 @@ def main():
 
         go("#/patients", "document.querySelector('#view-patients').innerText.includes('MRN') || document.querySelectorAll('#view-patients tr').length > 3", "the Patient Catalog")
         b.shoot(out / "patients.png")
-        go("#/databases", "document.querySelectorAll('#db-list *').length > 5", "the databases")
+        go("#/databases", "document.querySelector('#db-list').innerText.includes('online')", "the databases")
         b.shoot(out / "databases.png")
-        go("#/import", "!document.querySelector('#view-sources').classList.contains('hidden')", "Import")
-        b.shoot(out / "import.png", only="#view-sources .card")  # not the server's folders
+        # the form that connects a database (not the server's folders)
+        b.shoot(out / "connect.png", only="#db-connect")
 
         # a cohort, by an expression
         go("#/cohorts", "!document.querySelector('#view-cohorts').classList.contains('hidden')", "the cohorts")
         if not b.eval("!!document.querySelector('#co-criteria input[data-k=\"text\"]')"):
             b.eval("document.querySelector('#co-addexpr').click(); true")
         b.until("!!document.querySelector('#co-criteria input[data-k=\"text\"]')", "the expression's field")
-        type_into('#co-criteria input[data-k="text"]', "labs.creatinine > 1.5 OR has icu")
+        type_into('#co-criteria input[data-k="text"]', "demo.creatinine > 1.5 OR has icu")
         b.until("/^\\d+ patient/.test(document.querySelector('#co-count').innerText)", "the patients found")
         b.shoot(out / "cohorts.png", settle=2.5)
 

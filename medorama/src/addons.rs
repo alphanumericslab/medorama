@@ -2,7 +2,7 @@
 //! vendor formats; docs/adapters.md). They are programs in the adapter folder (`adapters_dir`);
 //! this module lists them, and installs or removes one. Installing is done on the server only
 //! (the command line), never through the web interface: an adapter is a program that runs with
-//! the catalog's rights.
+//! Medorama's rights.
 
 use anyhow::{anyhow, bail, Context, Result};
 use recording_engine::adapters::{self, Adapter};

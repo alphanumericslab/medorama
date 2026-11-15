@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <stdexcept>
 #include <tuple>
 
 #include "core/pyfmt.hpp"
@@ -117,6 +118,22 @@ std::pair<std::int64_t, std::int64_t> Piece::span(double w0, double w1) const {
   return {sat_i64(a), sat_i64(b)};
 }
 
+std::vector<std::size_t> thin(const std::vector<Piece>& pieces, const std::vector<std::size_t>& found, double t0,
+                              double t1, double px) {
+  auto col_of = [&](double t) { return sat_i64(std::floor((std::fmax(t, t0) - t0) / (t1 - t0) * px)); };
+  std::vector<std::size_t> kept;
+  for (std::size_t k = 0; k < found.size();) {
+    const std::int64_t col = col_of(pieces[found[k]].t0);
+    std::size_t j = k, latest = k;
+    for (; j < found.size() && col_of(pieces[found[j]].t0) == col; ++j)
+      if (pieces[found[j]].end() > pieces[found[latest]].end()) latest = j;
+    for (std::size_t q = k; q < j; ++q)
+      if (q == latest || col_of(pieces[found[q]].end()) > col) kept.push_back(found[q]);
+    k = j;
+  }
+  return kept;
+}
+
 std::vector<std::size_t> Dataset::pieces_in(std::int64_t ch, double t0, double t1, double px) const {
   const ChannelPieces* c = by_channel_.get(ch);
   if (!c) return {};
@@ -132,16 +149,7 @@ std::vector<std::size_t> Dataset::pieces_in(std::int64_t ch, double t0, double t
     auto [a, b] = pieces[c->order[k]].span(t0, t1);
     if (b > a) found.push_back(c->order[k]);
   }
-  if (static_cast<double>(found.size()) > px) {
-    std::vector<std::size_t> kept;
-    std::optional<std::int64_t> last;
-    for (std::size_t i : found) {
-      std::int64_t col = sat_i64(std::floor((std::fmax(pieces[i].t0, t0) - t0) / (t1 - t0) * px));
-      if (last != col) kept.push_back(i);
-      last = col;
-    }
-    found = std::move(kept);
-  }
+  if (static_cast<double>(found.size()) > px) found = thin(pieces, found, t0, t1, px);
   std::sort(found.begin(), found.end());
   return found;
 }
@@ -292,11 +300,13 @@ std::string Dataset::env_block(const Piece& p, std::int64_t a, std::int64_t b, d
   auto i1 = static_cast<std::size_t>(std::min<std::int64_t>(static_cast<std::int64_t>(length), (b + size - 1) / size));
   std::vector<double> lo, hi;
   if (i1 > i0 && lvl < arrays.env_min.size()) {
-    const float* mn = arrays.env_min[lvl].data();
-    const float* mx = arrays.env_max[lvl].data();
-    for (std::size_t i = off + i0; i < off + i1; ++i) {
-      lo.push_back(static_cast<double>(mn[i]));
-      hi.push_back(static_cast<double>(mx[i]));
+    // read by range: a store's envelope a chunk at a time
+    auto mn = arrays.env_min[lvl].range(off + i0, i1 - i0);
+    auto mx = arrays.env_max[lvl].range(off + i0, i1 - i0);
+    if (!mn || !mx) throw std::runtime_error("the index's envelopes cannot be read");
+    for (std::size_t i = 0; i < mn->size(); ++i) {
+      lo.push_back(static_cast<double>((*mn)[i]));
+      hi.push_back(static_cast<double>((*mx)[i]));
     }
   }
   return "{\"piece\":" + id + ",\"kind\":\"env\",\"t0\":" +

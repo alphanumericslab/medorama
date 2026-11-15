@@ -125,3 +125,6 @@ patients.
 
 The package uses [pydicom](https://pydicom.github.io/) (MIT license) and NumPy (BSD-3-Clause
 license).
+
+It is licensed, like the rest of the repository's software, under the PolyForm Noncommercial
+License 1.0.0 ([LICENSE](../../../../LICENSE), [COMMERCIAL.md](../../../../COMMERCIAL.md)).

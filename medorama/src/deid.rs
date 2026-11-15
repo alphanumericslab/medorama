@@ -2,7 +2,7 @@
 //! far back it moves dates, as the admin sets them (the `settings` table, key `deid`).  The page
 //! applies it to what it shows; exports apply it on the server (`deid=1`).
 //!
-//! Dates move back by the catalog's offset and by each patient's own whole days (0 to
+//! Dates move back by Medorama's offset and by each patient's own whole days (0 to
 //! `spread_days`, drawn once and stored: [`Settings::for_draw`]), so the time between any two of
 //! a patient's events (their encounters, their ECGs) is kept exactly.  The offset is written in
 //! years, months, days and hours; it is counted on the calendar from 2000-01-01 00:00 UTC, which
@@ -15,17 +15,20 @@ use serde::{Deserialize, Serialize};
 use crate::db::{audit, now};
 use crate::users::User;
 
-/// What may be hidden: key, what it covers, whether HIPAA's Safe Harbor lists it, whether it is
-/// hidden by default.  Notes are shown by default, marked: free text may name the patient, and
-/// no rule removes names from it.
+/// What an administrator may choose to hide: key, what it covers, whether HIPAA's Safe Harbor
+/// lists it, whether it is hidden by default.  Free text is shown by default, marked: it may
+/// name the patient, and no rule removes every name from it.  Patients' names, medical record
+/// numbers, dates of birth and account numbers are always withheld (the privacy gate, gate.rs):
+/// they are not a choice, and a saved setting that lists them is read without them.
 pub const FIELDS: &[(&str, &str, bool, bool)] = &[
-    ("names", "Patients' names", true, true),
-    ("birth_date", "Dates of birth", true, true),
     ("dates", "Real dates and times: moved back by the offset", true, true),
     ("age_over_89", "Ages above 89: shown as 90+", true, true),
-    ("mrn", "Medical record numbers", true, true),
-    ("account_numbers", "Account and encounter numbers (CSN)", true, true),
-    ("notes", "The text of notes and reports (else shown, marked: it may name the patient)", true, false),
+    (
+        "notes",
+        "The text of notes, reports and every other free text (else shown, marked: it may name the patient)",
+        true,
+        false,
+    ),
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -58,7 +61,7 @@ pub struct Settings {
     /// ([`Settings::for_draw`]); 0 otherwise.
     #[serde(skip)]
     pub extra: i64,
-    /// Dates written `01/02/2024` in text are read day first (the catalog's display setting
+    /// Dates written `01/02/2024` in text are read day first (Medorama's display setting
     /// writes dates day first: display.rs), else month first.
     #[serde(skip)]
     pub day_first: bool,
@@ -90,7 +93,7 @@ impl Settings {
         Settings { extra: days * 86400, ..self.clone() }
     }
 
-    /// The settings for one patient of the catalog (their stored draw).
+    /// The settings for one patient (their stored draw).
     pub fn for_patient(&self, c: &Connection, patient: i64) -> anyhow::Result<Settings> {
         let draw: Option<f64> =
             c.query_row("SELECT date_draw FROM patients WHERE id = ?1", [patient], |r| r.get(0)).optional()?.flatten();
@@ -144,16 +147,22 @@ impl Settings {
         shift_text_read(s, self.offset_seconds(), self.day_first)
     }
 
-    /// Whether a database's column, by the catalog column it maps to, is hidden.
+    /// Whether a database's column, by the canonical column it maps to, is hidden (identifiers
+    /// always).
     pub fn hides_column(&self, maps_to: &str) -> bool {
         match maps_to {
-            "last_name" | "first_name" => self.hides("names"),
-            "birth_date" => self.hides("birth_date"),
-            "mrn" | "mrn_authority" => self.hides("mrn"),
-            "csn" => self.hides("account_numbers"),
+            "last_name" | "first_name" | "birth_date" | "mrn" | "mrn_authority" | "csn" => true,
             "text" => self.hides("notes"),
             _ => false,
         }
+    }
+
+    /// Whether these settings withhold less than `before`: a choice unticked, fewer days of each
+    /// patient's own, or a smaller offset (only an administrator with the PHI permission may).
+    pub fn weaker_than(&self, before: &Settings) -> bool {
+        before.fields.iter().any(|f| FIELDS.iter().any(|x| x.0 == f) && !self.hides(f))
+            || self.spread_days < before.spread_days
+            || self.base_seconds() < before.base_seconds()
     }
 }
 
@@ -173,26 +182,75 @@ const MONTH_NAMES: [&str; 12] = [
     "December",
 ];
 
-/// A month's name at `at` (`Jan`, `JAN`, `January`; not followed by a letter): its number
-/// (0-11), its length, and whether it is written in full.
+/// A month's name at `at` (`Jan`, `JAN`, `Jan.`, `January`, `Sept`, `Sept.`; not followed by
+/// a letter): its number (0-11), its length (with its dot), and whether it is written in full.
 fn month_at(s: &str, at: usize) -> Option<(usize, usize, bool)> {
     let rest = s.get(at..)?;
     let letters = rest.chars().take_while(char::is_ascii_alphabetic).count();
     let word = &rest[..letters];
-    if let Some(m) = MONTH_NAMES.iter().position(|n| n.eq_ignore_ascii_case(word)) {
-        return Some((m, letters, word.len() > 3));
-    }
-    (letters == 3).then(|| MONTHS.iter().position(|n| n.eq_ignore_ascii_case(word)).map(|m| (m, 3, false))).flatten()
+    let (m, full) = match MONTH_NAMES.iter().position(|n| n.eq_ignore_ascii_case(word)) {
+        Some(m) => (m, word.len() > 3),
+        None if letters == 3 => (MONTHS.iter().position(|n| n.eq_ignore_ascii_case(word))?, false),
+        None if word.eq_ignore_ascii_case("sept") => (8, false),
+        None => return None,
+    };
+    // an abbreviation's dot (`Mar. 2, 2024`)
+    let dot = (!full && rest[letters..].starts_with('.')) as usize;
+    Some((m, letters + dot, full))
 }
 
-/// A month's name written as `like` was (its length and case).
+/// A month's name written as `like` was (in full or abbreviated, with its dot, its case).
 fn month_like(m: usize, like: &str) -> String {
-    let full = like.len() > 3 && MONTH_NAMES.iter().any(|n| n.eq_ignore_ascii_case(like));
-    let name = if full { MONTH_NAMES[m].to_string() } else { MONTH_NAMES[m][..3].to_string() };
-    if like.chars().all(|c| c.is_ascii_uppercase()) {
-        name.to_uppercase()
+    let base = like.trim_end_matches('.');
+    let full = base.len() > 3
+        && !base.eq_ignore_ascii_case("sept")
+        && MONTH_NAMES.iter().any(|n| n.eq_ignore_ascii_case(base));
+    let mut name = if full {
+        MONTH_NAMES[m].to_string()
+    } else if base.eq_ignore_ascii_case("sept") && m == 8 {
+        "Sept".to_string()
     } else {
-        name
+        MONTH_NAMES[m][..3].to_string()
+    };
+    if base.chars().all(|c| c.is_ascii_uppercase()) {
+        name = name.to_uppercase();
+    }
+    if like.ends_with('.') && !full {
+        name.push('.');
+    }
+    name
+}
+
+/// A two-digit year as a year: in this century unless that would be more than a year ahead.
+fn full_year(yy: i32) -> i32 {
+    let this = chrono::Utc::now().year();
+    if 2000 + yy <= this + 1 {
+        2000 + yy
+    } else {
+        1900 + yy
+    }
+}
+
+/// The English ordinal suffix of a day (`1st`, `2nd`, `23rd`, `11th`).
+fn ordinal(d: u32) -> &'static str {
+    match (d % 10, d % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    }
+}
+
+/// An ordinal suffix at `at` (`st`, `nd`, `rd`, `th`, any case): its length, 2, else 0.
+fn ordinal_at(s: &str, at: usize) -> usize {
+    let w = s.get(at..at + 2).unwrap_or("").to_ascii_lowercase();
+    // (`get`: an index inside a character, such as the ° of "37.1 °C", is no suffix)
+    let next = s.get((at + 2).min(s.len())..).and_then(|t| t.chars().next());
+    if ["st", "nd", "rd", "th"].contains(&w.as_str()) && !next.is_some_and(|c| c.is_ascii_alphanumeric()) {
+        2
+    } else {
+        0
     }
 }
 
@@ -224,11 +282,15 @@ fn digits(b: &[u8], at: usize, n: usize) -> bool {
 }
 
 /// `s` with each date (and time) moved back by `offset` seconds, written as it was: ISO 8601
-/// (`2024-01-02`, with ` 08:00` or `T08:00:05`), `2024/01/02`, `01/02/2024` (month first, else
-/// day first if the month would be over 12), `2.1.2024` (day first), `02-JAN-2024`,
-/// `Jan 2, 2024`, `2 January 2024`, `20240102` (1900-2100), and the Unix time of a
-/// bedside-monitor recording's name (`UNIT_BED-<Unix time>`; one before 1970 is written
-/// `UNIT_BED--<seconds before 1970>`).  A Unix time on its own is a number, and is kept.
+/// (`2024-01-02`, with ` 08:00` or `T08:00:05`), `2024/01/02`, `2024.01.02`, `01/02/2024` (month
+/// first, else day first if the month would be over 12), `2.1.2024` (day first), `02-JAN-2024`,
+/// `Jan 2, 2024`, `Jan. 2, 2024`, `Sept 2, 2024`, `January 2nd, 2024`, `2 January 2024`,
+/// `2nd January 2024`, month and year (`January 2024`, `01/2024`), `20240102` (1900-2100), HL7
+/// and DICOM date-times (`202401020830`, `20240102083000`, with a fraction), and the Unix time
+/// of a bedside-monitor recording's name (`UNIT_BED-<Unix time>`; one before 1970 is written
+/// `UNIT_BED--<seconds before 1970>`).  Two-digit years (`01/02/24`, `2.1.24`, `02-JAN-24`) are
+/// read in this century unless that is ahead, and written in full once moved: two digits would
+/// read as the real century.  A Unix time on its own is a number, and is kept.
 pub fn shift_text(s: &str, offset: i64) -> String {
     shift_text_read(s, offset, false)
 }
@@ -286,14 +348,18 @@ pub fn shift_text_read(s: &str, offset: i64, day_first: bool) -> String {
         if boundary && b[i].is_ascii_digit() {
             let d = if digits(b, i, 2) { 2 } else { 1 };
             let m0 = i + d + 1;
-            if b.get(i + d) == Some(&b'-')
-                && b.get(m0 + 3) == Some(&b'-')
-                && digits(b, m0 + 4, 4)
-                && !digits(b, m0 + 8, 1)
-            {
+            // the year in full, or two digits (`11-MAR-24`)
+            let yn = if digits(b, m0 + 4, 4) && !digits(b, m0 + 8, 1) {
+                4
+            } else if digits(b, m0 + 4, 2) && !digits(b, m0 + 6, 1) {
+                2
+            } else {
+                0
+            };
+            if b.get(i + d) == Some(&b'-') && b.get(m0 + 3) == Some(&b'-') && yn > 0 {
                 if let Some(mon) = s.get(m0..m0 + 3).and_then(|m| MONTHS.iter().position(|x| x.eq_ignore_ascii_case(m)))
                 {
-                    let mut end = m0 + 8;
+                    let mut end = m0 + 4 + yn;
                     let mut time = (0u32, 0u32);
                     let timed = b.get(end) == Some(&b' ')
                         && digits(b, end + 1, 2)
@@ -304,7 +370,8 @@ pub fn shift_text_read(s: &str, offset: i64, day_first: bool) -> String {
                         end += 6;
                     }
                     let day: u32 = s[i..i + d].parse().unwrap_or(0);
-                    let year: i32 = s[m0 + 4..m0 + 8].parse().unwrap_or(0);
+                    let year: i32 = s[m0 + 4..m0 + 4 + yn].parse().unwrap_or(0);
+                    let year = if yn == 2 { full_year(year) } else { year };
                     if let Some(t) = NaiveDate::from_ymd_opt(year, mon as u32 + 1, day)
                         .and_then(|x| x.and_hms_opt(time.0, time.1, 0))
                     {
@@ -329,6 +396,27 @@ pub fn shift_text_read(s: &str, offset: i64, day_first: bool) -> String {
                 i = end;
                 last = end;
                 continue;
+            }
+        }
+        // HL7 and DICOM date-times: YYYYMMDDHHMM, YYYYMMDDHHMMSS[.ffffff] (1900-2100)
+        if boundary && !b[i..].starts_with(b"0") && digits(b, i, 12) {
+            let n = if digits(b, i, 14) && !digits(b, i + 14, 1) {
+                14
+            } else if !digits(b, i + 12, 1) {
+                12
+            } else {
+                0
+            };
+            let fmt = if n == 14 { "%Y%m%d%H%M%S" } else { "%Y%m%d%H%M" };
+            if let Some(t) = (n > 0).then(|| NaiveDateTime::parse_from_str(&s[i..i + n], fmt).ok()).flatten() {
+                if (1900..=2100).contains(&t.year()) {
+                    let m = t - Duration::seconds(offset);
+                    out.push_str(&s[last..i]);
+                    out.push_str(&m.format(fmt).to_string());
+                    i += n;
+                    last = i;
+                    continue;
+                }
             }
         }
         // YYYYMMDD, alone (file names: "muse_20240102"): a valid date between 1900 and 2100
@@ -372,41 +460,67 @@ pub fn shift_text_read(s: &str, offset: i64, day_first: bool) -> String {
 }
 
 /// The forms of dates [`shift_text`] reads besides ISO 8601, `DD-MON-YYYY` and `YYYYMMDD`, at
-/// `i`: where the date (and its time) ends, and it moved back, written as it was.
+/// `i`: where the date (and its time) ends, and it moved back, written as it was (a two-digit
+/// year in full).
 fn other_date(s: &str, i: usize, offset: i64, day_first: bool) -> Option<(usize, String)> {
     let b = s.as_bytes();
     let not_digit_at = |at: usize| !b.get(at).is_some_and(u8::is_ascii_digit);
     let pad = |v: u32, n: usize| if n == 2 { format!("{v:02}") } else { v.to_string() };
     let year = |at: usize| digits(b, at, 4).then(|| s[at..at + 4].parse::<i32>().ok()).flatten();
-    // (year, month, day, end, writer of the moved date)
+    // a year at `at`, in full or in two digits, not inside a longer number: (year, its length)
+    let any_year = |at: usize| {
+        if let Some(y) = year(at).filter(|_| not_digit_at(at + 4)) {
+            return Some((y, 4));
+        }
+        (digits(b, at, 2) && not_digit_at(at + 2)).then(|| Some((full_year(s[at..at + 2].parse().ok()?), 2))).flatten()
+    };
+    // (year, month, day, end, writer of the moved date, whether a day is written)
     type Write = Box<dyn Fn(&NaiveDateTime) -> String>;
-    let found: Option<(i32, u32, u32, usize, Write)> = (|| {
+    let found: Option<(i32, u32, u32, usize, Write, bool)> = (|| {
         if b[i].is_ascii_digit() {
-            // YYYY/MM/DD
-            if let Some(y) = year(i).filter(|_| b.get(i + 4) == Some(&b'/')) {
+            // YYYY/MM/DD, YYYY.MM.DD
+            if let Some(y) = year(i).filter(|_| matches!(b.get(i + 4), Some(b'/' | b'.'))) {
+                let sep = b[i + 4];
                 let (m, mn) = small(b, i + 5)?;
-                (b.get(i + 5 + mn) == Some(&b'/')).then_some(())?;
+                (b.get(i + 5 + mn) == Some(&sep)).then_some(())?;
                 let (d, dn) = small(b, i + 6 + mn)?;
                 let end = i + 6 + mn + dn;
-                not_digit_at(end).then_some(())?;
+                (not_digit_at(end) && !(b.get(end) == Some(&sep) && !not_digit_at(end + 1))).then_some(())?;
+                let sep = sep as char;
                 return Some((
                     y,
                     m,
                     d,
                     end,
                     Box::new(move |t: &NaiveDateTime| {
-                        format!("{}/{}/{}", t.year(), pad(t.month(), mn), pad(t.day(), dn))
+                        format!("{}{sep}{}{sep}{}", t.year(), pad(t.month(), mn), pad(t.day(), dn))
                     }) as Write,
+                    true,
                 ));
             }
             let (a, an) = small(b, i)?;
             let sep = *b.get(i + an)?;
+            // MM/YYYY: a month and its year
+            if sep == b'/' && (1..=12).contains(&a) {
+                if let Some(y) =
+                    year(i + an + 1).filter(|_| not_digit_at(i + an + 5) && b.get(i + an + 5) != Some(&b'/'))
+                {
+                    return Some((
+                        y,
+                        a,
+                        15,
+                        i + an + 5,
+                        Box::new(move |t: &NaiveDateTime| format!("{}/{}", pad(t.month(), an), t.year())) as Write,
+                        false,
+                    ));
+                }
+            }
             if sep == b'/' || sep == b'.' {
-                // A/B/YYYY, A.B.YYYY
+                // A/B/YYYY, A.B.YYYY, A/B/YY, A.B.YY
                 let (c, cn) = small(b, i + an + 1)?;
                 (b.get(i + an + 1 + cn) == Some(&sep)).then_some(())?;
-                let y = year(i + an + 2 + cn)?;
-                let end = i + an + 6 + cn;
+                let (y, yn) = any_year(i + an + 2 + cn)?;
+                let end = i + an + 2 + cn + yn;
                 // not inside a longer run of numbers ("1.2.2024.5")
                 (not_digit_at(end) && !(b.get(end) == Some(&sep) && !not_digit_at(end + 1))).then_some(())?;
                 let first_is_day = sep == b'.' || a > 12 || (day_first && c <= 12);
@@ -425,13 +539,16 @@ fn other_date(s: &str, i: usize, offset: i64, day_first: bool) -> Option<(usize,
                             format!("{m}{sep}{d}{sep}{}", t.year())
                         }
                     }) as Write,
+                    true,
                 ));
             }
-            // D Month YYYY
-            if sep == b' ' {
-                let (m, ml, _) = month_at(s, i + an + 1)?;
-                let like = s[i + an + 1..i + an + 1 + ml].to_string();
-                let at = i + an + 1 + ml;
+            // D Month YYYY, Dth Month YYYY
+            let suffix = ordinal_at(s, i + an);
+            if b.get(i + an + suffix) == Some(&b' ') {
+                let at = i + an + suffix + 1;
+                let (m, ml, _) = month_at(s, at)?;
+                let like = s[at..at + ml].to_string();
+                let at = at + ml;
                 (b.get(at) == Some(&b' ')).then_some(())?;
                 let y = year(at + 1)?;
                 not_digit_at(at + 5).then_some(())?;
@@ -441,18 +558,32 @@ fn other_date(s: &str, i: usize, offset: i64, day_first: bool) -> Option<(usize,
                     a,
                     at + 5,
                     Box::new(move |t: &NaiveDateTime| {
-                        format!("{} {} {}", pad(t.day(), an), month_like(t.month0() as usize, &like), t.year())
+                        let th = if suffix > 0 { ordinal(t.day()) } else { "" };
+                        format!("{}{th} {} {}", pad(t.day(), an), month_like(t.month0() as usize, &like), t.year())
                     }) as Write,
+                    true,
                 ));
             }
             return None;
         }
-        // Month D, YYYY
+        // Month D, YYYY; Month Dth, YYYY; Month YYYY
         let (m, ml, _) = month_at(s, i)?;
         let like = s[i..i + ml].to_string();
         (b.get(i + ml) == Some(&b' ')).then_some(())?;
+        if let Some(y) = year(i + ml + 1).filter(|_| not_digit_at(i + ml + 5)) {
+            return Some((
+                y,
+                m as u32 + 1,
+                15,
+                i + ml + 5,
+                Box::new(move |t: &NaiveDateTime| format!("{} {}", month_like(t.month0() as usize, &like), t.year()))
+                    as Write,
+                false,
+            ));
+        }
         let (d, dn) = small(b, i + ml + 1)?;
-        let at = i + ml + 1 + dn;
+        let suffix = ordinal_at(s, i + ml + 1 + dn);
+        let at = i + ml + 1 + dn + suffix;
         let comma = b.get(at) == Some(&b',');
         let at = at + comma as usize;
         (b.get(at) == Some(&b' ')).then_some(())?;
@@ -465,19 +596,22 @@ fn other_date(s: &str, i: usize, offset: i64, day_first: bool) -> Option<(usize,
             at + 5,
             Box::new(move |t: &NaiveDateTime| {
                 format!(
-                    "{} {}{} {}",
+                    "{} {}{}{} {}",
                     month_like(t.month0() as usize, &like),
                     pad(t.day(), dn),
+                    if suffix > 0 { ordinal(t.day()) } else { "" },
                     if comma { "," } else { "" },
                     t.year()
                 )
             }) as Write,
+            true,
         ))
     })();
-    let (y, m, d, end, write) = found?;
+    let (y, m, d, end, write, has_day) = found?;
     let date = NaiveDate::from_ymd_opt(y, m, d)?;
     // a time after it moves with it
-    let (time, end, seconds) = match time_after(b, end) {
+    let timed = if has_day { time_after(b, end) } else { None };
+    let (time, end, seconds) = match timed {
         Some((h, mi, sec, e)) => (chrono::NaiveTime::from_hms_opt(h, mi, sec.unwrap_or(0))?, e, Some(sec.is_some())),
         None => (chrono::NaiveTime::MIN, end, None),
     };
@@ -494,27 +628,73 @@ fn other_date(s: &str, i: usize, offset: i64, day_first: bool) -> Option<(usize,
 pub fn load(c: &Connection) -> anyhow::Result<Settings> {
     let v: Option<String> =
         c.query_row("SELECT value FROM settings WHERE key = 'deid'", [], |r| r.get(0)).optional()?;
+    let v = match v {
+        Some(v) => Some(v),
+        None => draw_offset(c)?,
+    };
     let mut s: Settings = v.and_then(|v| serde_json::from_str(&v).ok()).unwrap_or_default();
-    // dates in text read as the catalog writes them
+    s.fields.retain(|f| FIELDS.iter().any(|x| x.0 == f));
+    // dates in text read as Medorama writes them
     s.day_first = crate::display::load(c).is_ok_and(|d| d.date.starts_with("dmy"));
     Ok(s)
 }
 
+/// A new installation's offset, drawn at random (80 to 120 years and 0 to 364 days, from the
+/// system's secure generator) and kept, the first time the settings are read before any patient
+/// is linked: the documented default ([`Offset::default`]) would let anyone re-date what Privacy
+/// Mode shows.  An installation with patients already keeps the default (its dates as shown do
+/// not move): `serve` warns about it ([`start_warning`]).  The settings kept, if drawn.
+pub fn draw_offset(c: &Connection) -> anyhow::Result<Option<String>> {
+    let patients: i64 = c.query_row("SELECT COUNT(*) FROM patients", [], |r| r.get(0))?;
+    if patients > 0 {
+        return Ok(None);
+    }
+    let mut r = [0u8; 4];
+    getrandom::fill(&mut r).map_err(|e| anyhow::anyhow!("the system's random generator failed: {e}"))?;
+    let (a, b) = (u16::from_le_bytes([r[0], r[1]]), u16::from_le_bytes([r[2], r[3]]));
+    let s = Settings {
+        offset: Offset { years: 80 + (a % 41) as i64, months: 0, days: (b % 365) as i64, hours: 0 },
+        ..Default::default()
+    };
+    c.execute(
+        "INSERT INTO settings (key, value, updated_by, updated_at) VALUES ('deid', ?1, NULL, ?2) ON CONFLICT(key) DO NOTHING",
+        params![serde_json::to_string(&s)?, now()],
+    )?;
+    // another connection may have drawn first: what is kept
+    let kept: String = c.query_row("SELECT value FROM settings WHERE key = 'deid'", [], |r| r.get(0))?;
+    if kept == serde_json::to_string(&s)? {
+        // the offset itself stays out of the log
+        audit(c, None, "deid_offset_drawn", "deid", "");
+    }
+    Ok(Some(kept))
+}
+
 /// Admins only.
-/// The fewest days each patient's dates may move by on top of the catalog's offset (`spread_days`).
+/// The fewest days each patient's dates may move by on top of Medorama's offset (`spread_days`).
 pub const MIN_SPREAD_DAYS: i64 = 30;
 
 /// What `serve` warns about at start: fewer days than [`MIN_SPREAD_DAYS`], saved before that
-/// minimum (raising it moves every patient's dates as shown, so it is left to an administrator).
+/// minimum, and the documented default offset still in use (an installation made before
+/// offsets were drawn: [`draw_offset`]).  Changing either moves every patient's dates as shown,
+/// so it is left to an administrator.
 pub fn start_warning(s: &Settings) -> Option<String> {
-    (s.spread_days < MIN_SPREAD_DAYS).then(|| {
-        format!(
+    let mut w = vec![];
+    if s.spread_days < MIN_SPREAD_DAYS {
+        w.push(format!(
             "each patient's own days in Privacy Mode (spread_days) are {}, under the minimum of {MIN_SPREAD_DAYS}: \
              one real date gives others too closely; raise it in Admin › Privacy Mode \
              (docs/protecting-patient-data.md).",
             s.spread_days
-        )
-    })
+        ));
+    }
+    if s.offset == Offset::default() {
+        w.push(
+            "Privacy Mode's offset is the documented default (36,570 days): anyone who reads the documentation \
+             can re-date what it shows; set another in Admin › Privacy Mode (docs/protecting-patient-data.md)."
+                .to_string(),
+        );
+    }
+    (!w.is_empty()).then(|| w.join(" "))
 }
 
 pub fn save(c: &Connection, user: &User, s: &Settings) -> anyhow::Result<Settings> {
@@ -525,6 +705,13 @@ pub fn save(c: &Connection, user: &User, s: &Settings) -> anyhow::Result<Setting
     s.fields.retain(|f| FIELDS.iter().any(|x| x.0 == f));
     s.fields.sort();
     s.fields.dedup();
+    // withholding less is for who may see what it withholds
+    if !user.phi_allowed && s.weaker_than(&load(c)?) {
+        anyhow::bail!(
+            "only an admin with the PHI permission may withhold less (untick a choice, fewer days of each \
+             patient's own, a smaller offset)"
+        );
+    }
     let o = &s.offset;
     if [o.years, o.months, o.days, o.hours].iter().any(|x| *x < 0) {
         anyhow::bail!("the offset moves dates back: years, months, days and hours are 0 or more");
@@ -704,6 +891,150 @@ pub fn answer_with(
     }
     if s.hides("dates") || s.hides("age_over_89") {
         walk(v, "", s, patient_of);
+    }
+}
+
+/// Numbers that look like Unix times (2000 to 2100, in seconds or milliseconds) under keys
+/// [`answer_with`] does not know, moved back as it moves times: a plug-in's summary has keys of
+/// its own.  Keys it knows are left to it (they would move twice).
+pub fn shift_unknown_times(v: &mut serde_json::Value, s: &Settings) {
+    use serde_json::Value;
+    if !s.hides("dates") {
+        return;
+    }
+    let off = s.offset_seconds() as f64;
+    fn walk(v: &mut Value, key: &str, off: f64) {
+        match v {
+            Value::Number(n) if !TIME_KEYS.contains(&key) => {
+                let x = n.as_f64().unwrap_or(0.0);
+                if (9.4e8..4.11e9).contains(&x) {
+                    *v = serde_json::json!(x - off);
+                } else if (9.4e11..4.11e12).contains(&x) {
+                    *v = serde_json::json!(x - off * 1000.0);
+                }
+            }
+            Value::Array(items)
+                if !["t", "cells", "points", "series", "gaps"].contains(&key) && !TIME_KEYS.contains(&key) =>
+            {
+                items.iter_mut().for_each(|x| walk(x, key, off))
+            }
+            Value::Object(m) => m.iter_mut().for_each(|(k, x)| walk(x, k, off)),
+            _ => {}
+        }
+    }
+    walk(v, "", off);
+}
+
+/// An SVG picture without the texts it shows or describes (`<text>`, `<title>`, `<desc>`,
+/// `<metadata>`, comments), which may name the patient: its drawing as it is.
+pub fn svg(x: &str) -> String {
+    let lower = x.to_ascii_lowercase();
+    let mut out = String::with_capacity(x.len());
+    let mut i = 0;
+    while i < x.len() {
+        let rest = &lower[i..];
+        if rest.starts_with("<!--") {
+            i += rest.find("-->").map_or(rest.len(), |e| e + 3);
+            continue;
+        }
+        let tag = ["text", "title", "desc", "metadata"].into_iter().find(|t| {
+            rest.starts_with(&format!("<{t}"))
+                && rest[t.len() + 1..].starts_with(|c: char| c.is_ascii_whitespace() || c == '>' || c == '/')
+        });
+        if let Some(t) = tag {
+            let open_end = rest.find('>').map_or(rest.len(), |e| e + 1);
+            if rest[..open_end].ends_with("/>") {
+                i += open_end;
+                continue;
+            }
+            let close = format!("</{t}");
+            i += rest.find(&close).map_or(rest.len(), |e| e + rest[e..].find('>').map_or(rest.len() - e, |g| g + 1));
+            continue;
+        }
+        let ch = x[i..].chars().next().unwrap_or(' ');
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// A PDF document's descriptive fields blanked in place (its offsets kept: the file still
+/// opens): the document information dictionary's `/Author`, `/Title`, `/Subject`, `/Keywords`,
+/// `/Creator` and `/Producer` strings, and the XMP metadata's authors, titles, descriptions,
+/// subjects and keywords where they are written uncompressed.  What the pages show is not
+/// changed (it may still identify: the file stays marked).
+pub fn pdf_info(b: &mut [u8]) {
+    fn find(b: &[u8], what: &[u8], from: usize) -> Option<usize> {
+        b.get(from..)?.windows(what.len()).position(|w| w == what).map(|p| p + from)
+    }
+    for key in [&b"/Author"[..], b"/Title", b"/Subject", b"/Keywords", b"/Creator", b"/Producer"] {
+        let mut at = 0;
+        while let Some(k) = find(b, key, at) {
+            let mut i = k + key.len();
+            at = i;
+            if b.get(i).is_some_and(|c| c.is_ascii_alphanumeric()) {
+                continue; // a longer name (`/Titles`)
+            }
+            while b.get(i).is_some_and(|c| c.is_ascii_whitespace()) {
+                i += 1;
+            }
+            match b.get(i) {
+                // a literal string: balanced parentheses, backslash escapes
+                Some(b'(') => {
+                    let (mut depth, mut j) = (1, i + 1);
+                    while j < b.len() && depth > 0 {
+                        match b[j] {
+                            b'\\' => {
+                                b[j] = b' ';
+                                if j + 1 < b.len() {
+                                    b[j + 1] = b' ';
+                                }
+                                j += 2;
+                                continue;
+                            }
+                            b'(' => depth += 1,
+                            b')' => depth -= 1,
+                            _ => {}
+                        }
+                        if depth > 0 {
+                            b[j] = b' ';
+                        }
+                        j += 1;
+                    }
+                    at = j;
+                }
+                // a hexadecimal string (not a dictionary): spaces
+                Some(b'<') if b.get(i + 1) != Some(&b'<') => {
+                    let mut j = i + 1;
+                    while j < b.len() && b[j] != b'>' {
+                        if b[j].is_ascii_hexdigit() {
+                            b[j] = if (j - i) % 2 == 1 { b'2' } else { b'0' };
+                        }
+                        j += 1;
+                    }
+                    at = j;
+                }
+                _ => {}
+            }
+        }
+    }
+    // XMP: the texts inside these elements, their tags kept
+    for tag in ["dc:creator", "dc:title", "dc:description", "dc:subject", "pdf:Keywords", "pdf:Author"] {
+        let (open, close) = (format!("<{tag}"), format!("</{tag}>"));
+        let mut at = 0;
+        while let Some(o) = find(b, open.as_bytes(), at) {
+            let Some(e) = find(b, close.as_bytes(), o) else { break };
+            let mut in_tag = false;
+            for c in &mut b[o..e] {
+                match *c {
+                    b'<' => in_tag = true,
+                    b'>' => in_tag = false,
+                    _ if !in_tag && !c.is_ascii_whitespace() => *c = b' ',
+                    _ => {}
+                }
+            }
+            at = e + close.len();
+        }
     }
 }
 
@@ -1170,7 +1501,8 @@ mod tests {
             let s = Settings { spread_days: days, ..Default::default() };
             assert!(save(&c, &admin, &s).is_err(), "{days}");
         }
-        let s = Settings { spread_days: MIN_SPREAD_DAYS, ..Default::default() };
+        let offset = Offset { years: 97, months: 0, days: 11, hours: 0 };
+        let s = Settings { spread_days: MIN_SPREAD_DAYS, offset, ..Default::default() };
         assert_eq!(save(&c, &admin, &s).unwrap().spread_days, MIN_SPREAD_DAYS);
         assert!(start_warning(&s).is_none());
         assert!(start_warning(&Settings { spread_days: 0, ..Default::default() }).is_some());
@@ -1268,7 +1600,7 @@ mod tests {
         assert_eq!(shift_text("seen 01/02/2024 at 08:00", day), "seen 01/01/2024 at 08:00");
         assert_eq!(shift_text("seen 1/2/2024 08:00", day + 3600), "seen 1/1/2024 07:00");
         assert_eq!(shift_text("on 25/12/2024", day), "on 24/12/2024");
-        assert_eq!(shift_text_read("01/02/2024", day, true), "31/01/2024", "day first, as the catalog writes dates");
+        assert_eq!(shift_text_read("01/02/2024", day, true), "31/01/2024", "day first, as Medorama writes dates");
         assert_eq!(shift_text("2.1.2024", day), "1.1.2024");
         assert_eq!(shift_text("on 2024/01/02", day), "on 2024/01/01");
         assert_eq!(shift_text("Jan 2, 2024", day), "Jan 1, 2024");
@@ -1287,6 +1619,167 @@ mod tests {
         for kept in ["v1.2.2024.5", "1.2.3", "1704182400", "13/13/2024", "May be 2, 2024x", "Jan 2"] {
             assert_eq!(shift_text(kept, day), kept);
         }
+    }
+
+    #[test]
+    fn no_text_breaks_the_date_reader() {
+        // every string of up to four pieces among digits, date words and separators, with
+        // characters of two to four bytes beside them: none may cut a character in two
+        let pieces = [
+            "1",
+            "11",
+            "2024",
+            "24",
+            "202403110830",
+            "03",
+            "/",
+            ".",
+            "-",
+            " ",
+            ":",
+            "Mar",
+            "Mar.",
+            "March",
+            "Sept",
+            "2nd",
+            "st",
+            "°",
+            "é",
+            "µg",
+            "€",
+            "😀",
+            "Ü",
+            ",",
+            "T",
+        ];
+        let n = pieces.len();
+        let mut text = String::new();
+        for a in 0..n {
+            for b in 0..n {
+                for c in 0..n {
+                    for d in 0..n {
+                        text.clear();
+                        for k in [a, b, c, d] {
+                            text.push_str(pieces[k]);
+                        }
+                        let _ = shift_text_read(&text, 86400, false);
+                        let _ = shift_text_read(&text, 86400, true);
+                    }
+                }
+            }
+        }
+        // the case that broke a page: a temperature after a date
+        assert_eq!(shift_text_read("on 2024-03-11 37.1 °C", 86400, false), "on 2024-03-10 37.1 °C");
+    }
+
+    #[test]
+    fn dates_in_more_forms() {
+        let day = 86400;
+        let both = |t: &str, month_first: &str, day_first: &str| {
+            assert_eq!(shift_text_read(t, day, false), month_first, "{t}, month first");
+            assert_eq!(shift_text_read(t, day, true), day_first, "{t}, day first");
+        };
+        // two-digit years: read in this century, written in full once moved
+        both("seen 03/11/24.", "seen 03/10/2024.", "seen 02/11/2024.");
+        both("11.03.24", "10.03.2024", "10.03.2024");
+        both("11-MAR-24 08:50", "10-MAR-2024 08:50", "10-MAR-2024 08:50");
+        // HL7 and DICOM date-times
+        both("OBR|202403110830|", "OBR|202403100830|", "OBR|202403100830|");
+        both("20240311083000.123+0100", "20240310083000.123+0100", "20240310083000.123+0100");
+        // ordinals, abbreviations with a dot, September's four letters, a year first with dots
+        both("on 2nd March 2024", "on 1st March 2024", "on 1st March 2024");
+        both("March 2nd, 2024", "March 1st, 2024", "March 1st, 2024");
+        both("Mar. 2, 2024", "Mar. 1, 2024", "Mar. 1, 2024");
+        both("Sept 2, 2024 and Sept. 1, 2024", "Sept 1, 2024 and Aug. 31, 2024", "Sept 1, 2024 and Aug. 31, 2024");
+        both("2024.03.11", "2024.03.10", "2024.03.10");
+        // a month and its year, moved by a month
+        let month = 31 * day;
+        for (t, moved) in [("March 2024", "February 2024"), ("Mar 2024", "Feb 2024"), ("03/2024", "02/2024")] {
+            assert_eq!(shift_text_read(t, month, false), moved, "{t}");
+            assert_eq!(shift_text_read(t, month, true), moved, "{t}");
+        }
+        // a century back: no form keeps the real year
+        let off = Settings::default().offset_seconds();
+        for t in ["03/11/24", "11.03.24", "11-MAR-24", "202403110830", "2nd March 2024", "March 2024", "03/2024"] {
+            let moved = shift_text(t, off);
+            assert!(!moved.contains("2024") && moved.contains("192"), "{t}: {moved}");
+        }
+        // still not dates
+        for kept in ["1.2.3", "v1.2.24", "120/80", "May be 2, 2024x", "13/2024", "1/3/245", "2024.5"] {
+            assert_eq!(shift_text(kept, day), kept);
+        }
+    }
+
+    #[test]
+    fn identifiers_are_no_choice_and_withholding_less_is_weaker() {
+        let s = Settings { fields: vec!["names".into(), "dates".into()], ..Default::default() };
+        assert!(s.hides_column("first_name") && s.hides_column("mrn") && s.hides_column("birth_date"));
+        assert!(!FIELDS.iter().any(|f| ["names", "mrn", "birth_date", "account_numbers"].contains(&f.0)));
+        let before = Settings::default();
+        assert!(!before.weaker_than(&before));
+        let untick = Settings { fields: vec!["dates".into()], ..Default::default() };
+        assert!(untick.weaker_than(&before), "age_over_89 unticked");
+        assert!(Settings { spread_days: 100, ..Default::default() }.weaker_than(&before));
+        let zero = Settings { offset: Offset { years: 0, months: 0, days: 0, hours: 0 }, ..Default::default() };
+        assert!(zero.weaker_than(&before));
+        let more = Settings {
+            fields: vec!["dates".into(), "age_over_89".into(), "notes".into()],
+            offset: Offset { years: 110, months: 0, days: 0, hours: 0 },
+            ..Default::default()
+        };
+        assert!(!more.weaker_than(&before), "withholding more, a larger offset");
+        // the documented offset is warned about
+        assert!(start_warning(&before).is_some_and(|w| w.contains("default")));
+        assert!(start_warning(&more).is_none());
+    }
+
+    #[test]
+    fn a_new_installation_draws_its_offset() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = crate::config::Config::new(&dir.path().join("home"), &dir.path().join("results"));
+        let db = crate::db::Db::open(&cfg, true).unwrap();
+        let c = db.get().unwrap();
+        let s = load(&c).unwrap();
+        assert!((80..=120).contains(&s.offset.years) && s.offset != Offset::default(), "{:?}", s.offset);
+        assert_eq!(load(&c).unwrap().offset, s.offset, "drawn once, kept");
+        // an admin without the PHI permission may not withhold less
+        let admin = User { phi: false, phi_allowed: false, ..User::local() };
+        let weaker = Settings { offset: Offset { years: 1, months: 0, days: 0, hours: 0 }, ..s.clone() };
+        assert!(save(&c, &admin, &weaker).is_err());
+        assert!(save(&c, &User::local(), &weaker).is_ok());
+    }
+
+    #[test]
+    fn pictures_and_documents_lose_their_texts() {
+        let x = "<svg><title>Zyxwortha</title><!-- MRN83651927 --><desc>for Q.</desc><rect width=\"3\"/>\
+                 <text x=\"1\">Zyxwortha <tspan>Q</tspan></text><metadata><a>b</a></metadata><title/></svg>";
+        assert_eq!(svg(x), "<svg><rect width=\"3\"/></svg>");
+        let mut pdf = b"%PDF-1.4\n1 0 obj << /Author (Zyx \\(Q\\) wortha) /Title <5A79> /Titles (kept) >> endobj\n\
+            <x:xmpmeta><dc:creator><rdf:li>Zyxwortha</rdf:li></dc:creator></x:xmpmeta>"
+            .to_vec();
+        let len = pdf.len();
+        pdf_info(&mut pdf);
+        let t = String::from_utf8_lossy(&pdf).to_string();
+        assert_eq!(pdf.len(), len, "offsets kept");
+        assert!(!t.contains("Zyx") && !t.contains("wortha") && !t.contains("5A79"), "{t}");
+        assert!(t.contains("/Titles (kept)") && t.contains("<rdf:li>") && t.contains("<2020>"), "{t}");
+    }
+
+    #[test]
+    fn times_under_a_plug_ins_own_keys_move() {
+        let s = Settings::default();
+        let off = s.offset_seconds() as f64;
+        let mut v = serde_json::json!({"onset": 1_704_110_400.0, "ms": 1_704_110_400_000.0, "time": 1_704_110_400.0,
+                                       "beats": 5_000_000_000_000.0, "n": 72, "nested": [{"peak_at": 1_704_110_401.0}]});
+        shift_unknown_times(&mut v, &s);
+        assert_eq!(v["onset"], 1_704_110_400.0 - off);
+        assert_eq!(v["ms"], 1_704_110_400_000.0 - off * 1000.0);
+        assert_eq!(v["nested"][0]["peak_at"], 1_704_110_401.0 - off);
+        assert_eq!(v["time"], 1_704_110_400.0, "a key the answers' gate knows: moved there, once");
+        assert_eq!(
+            (v["n"].clone(), v["beats"].clone()),
+            (serde_json::json!(72), serde_json::json!(5_000_000_000_000.0))
+        );
     }
 
     #[test]
@@ -1341,7 +1834,7 @@ mod tests {
         assert_eq!(s.age(89), "89");
         assert!(
             s.hides_column("first_name") && !s.hides_column("care_unit") && !s.hides_column("text"),
-            "notes shown by default"
+            "free text shown by default"
         );
         let none = Settings { fields: vec![], ..Default::default() };
         assert_eq!(none.shift_text("2024-03-01"), "2024-03-01");

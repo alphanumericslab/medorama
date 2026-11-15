@@ -358,8 +358,10 @@ async fn a_recording_that_cannot_be_indexed_is_an_error() {
     let (_, v) = opened(&a, &c).await;
     assert_eq!(v.get("state").and_then(Value::as_str), Some("error"));
     assert!(v.get("error").unwrap().py_str().contains("no record column"));
-    // nothing left behind in the index folder
-    let left: Vec<_> = std::fs::read_dir(dir.path().join("cache")).unwrap().collect();
+    // nothing left behind: no index in the store, nothing of the build next to it
+    let store = recording_engine::store::Store::open(&dir.path().join("cache/index.sqlite"), None).unwrap();
+    assert!(store.keys().is_empty());
+    let left: Vec<_> = std::fs::read_dir(store.tmp_dir()).map(|d| d.collect()).unwrap_or_default();
     assert!(left.is_empty());
 }
 
@@ -417,4 +419,48 @@ async fn without_wfdb_a_wfdb_record_is_refused() {
         == Some("record")));
     let (_, v) = opened(&a, &testdata("edf/psg_plus.edf").canonicalize().unwrap()).await;
     assert_eq!(v.get("state").and_then(Value::as_str), Some("ready"));
+}
+
+#[cfg_attr(not(feature = "wfdb"), ignore = "WFDB records: a build without the `wfdb` feature refuses them")]
+#[tokio::test]
+async fn stores_and_keys_on_a_pipe() {
+    // launched by Medorama: a database's store and the viewer's own, each with its key
+    let dir = tempfile::tempdir().unwrap();
+    let (db_store, own) = (dir.path().join("db-0001/index.sqlite"), dir.path().join("viewer/index.sqlite"));
+    let stores = vitalstream_rs::server::Stores::default();
+    let line = |p: &Path, k: u8, own: bool| {
+        format!(
+            "{{\"store\":{},\"key\":\"{}\",\"own\":{own}}}",
+            Value::from(p.to_string_lossy().to_string()).to_json(),
+            format!("{k:02x}").repeat(32)
+        )
+    };
+    // Medorama indexed one recording into its database's store
+    let rec = testdata("collection");
+    {
+        let st = recording_engine::store::Store::open(&db_store, Some(&[1u8; 32])).unwrap();
+        recording_engine::index::build_into_store(&rec, &st, &|_| {}, &|| false).unwrap();
+    }
+    stores.apply(&line(&db_store, 1, false)).unwrap();
+    stores.apply(&line(&own, 2, true)).unwrap();
+    assert!(stores.apply(&line(&db_store, 9, false)).is_err(), "a wrong key is refused");
+    let mut s = Settings::defaults();
+    s.auth_file = dir.path().join("auth.json");
+    s.cache_dir = dir.path().join("cache");
+    let a = Arc::new(App::with_stores(s.finish().unwrap(), Some(false), stores).unwrap());
+    // found in the database's store, nothing written to the viewer's
+    let (_, v) = opened(&a, &rec).await;
+    assert_eq!(v.get("state").and_then(Value::as_str), Some("ready"));
+    assert!(recording_engine::store::Store::open(&own, Some(&[2u8; 32])).unwrap().keys().is_empty());
+    // another recording: indexed into the viewer's own store, encrypted with its key
+    let (key, v) = opened(&a, &testdata("plain")).await;
+    assert_eq!(v.get("state").and_then(Value::as_str), Some("ready"));
+    assert_eq!(recording_engine::store::Store::open(&own, Some(&[2u8; 32])).unwrap().keys(), vec![key]);
+    assert!(recording_engine::store::Store::open(&own, None).is_err());
+    assert!(!dir.path().join("cache/index.sqlite").exists(), "no store of its own in cache_dir");
+    // forgotten: the database's store is no longer read
+    a.stores()
+        .apply(&format!("{{\"forget\":{}}}", Value::from(db_store.to_string_lossy().to_string()).to_json()))
+        .unwrap();
+    assert!(!a.stores().paths().contains(&db_store.to_string_lossy().to_string()));
 }

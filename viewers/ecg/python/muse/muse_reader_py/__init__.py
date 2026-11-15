@@ -20,7 +20,7 @@ import re
 import struct
 import xml.etree.ElementTree as ET
 
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 # measurements: element of RestingECGMeasurements -> (name, unit), as the ECG viewer names them
 MEASUREMENTS = [
@@ -38,14 +38,34 @@ def _text(e, path):
     return (x.text or '').strip() if x is not None and x.text else ''
 
 
+_BOMS = ((b'\xef\xbb\xbf', 'utf-8'), (b'\xff\xfe', 'utf-16-le'), (b'\xfe\xff', 'utf-16-be'))
+
+
+def _xml_text(data):
+    """XML bytes as the parser takes them, as the viewer's muse.js reads them: a byte order mark
+    decides the encoding (whatever the declaration says); UTF-16 without one and the encoding the
+    declaration names are the parser's own reading; a declaration of UTF-16 in 8-bit text is read
+    as UTF-8."""
+    data = bytes(data)
+    for mark, enc in _BOMS:
+        if data.startswith(mark):
+            return data[len(mark):].decode(enc, 'replace')
+    if len(data) >= 4 and (bool(data[0]) != bool(data[1])) and (bool(data[2]) != bool(data[3])):
+        return data                                         # UTF-16 without a mark
+    m = re.match(rb'^\s*<\?xml[^>]*encoding\s*=\s*["\']([\w.:-]+)["\']', data[:200], re.I)
+    if m and re.match(rb'(utf-?16|ucs-?2)', m.group(1), re.I):
+        return data.decode('utf-8', 'replace')
+    return data
+
+
 def _parse(source):
-    """An ElementTree root from a path or bytes (the XML declaration gives the encoding), or the
-    root itself (a file read once for several of the functions below)."""
+    """An ElementTree root from a path or bytes (in their encoding: _xml_text), or the root
+    itself (a file read once for several of the functions below)."""
     if isinstance(source, ET.Element):
         return source
     data = source if isinstance(source, (bytes, bytearray)) else open(source, 'rb').read()
     try:
-        root = ET.fromstring(bytes(data))
+        root = ET.fromstring(_xml_text(data))
     except ET.ParseError as e:
         raise ValueError(f'not XML: {e}') from None
     if root.tag != 'RestingECG':

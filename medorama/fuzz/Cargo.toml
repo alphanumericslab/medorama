@@ -22,13 +22,6 @@ recording-engine = { path = "../../libs/engine" }
 [workspace]
 
 [[bin]]
-name = "tables"
-path = "fuzz_targets/tables.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "wfdb_header"
 path = "fuzz_targets/wfdb_header.rs"
 test = false

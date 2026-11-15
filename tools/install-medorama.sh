@@ -6,16 +6,20 @@
 #   tools/install-medorama.sh --viewer py      Medorama + the Python viewer (vitalstream-py)
 #   tools/install-medorama.sh --viewer none    Medorama alone
 # Other options:
-#   --demo         also make the demo: invented patients that `medorama init` loads into a cohort
-#                  DEMO, for trying Medorama (off by default; docs/administration.md, "The demo")
+#   --demo         also make the demo: about 40 invented patients in five databases (db-builder's,
+#                  an encrypted one, OMOP, SQL views) with recordings, ECGs and images of every
+#                  kind, that `medorama init --demo` connects, for trying Medorama (off by
+#                  default; docs/administration.md, "The demo")
+#   --accept-license  accept the license terms without being asked (scripts, CI; or
+#                  MEDORAMA_ACCEPT_LICENSE=yes); otherwise they are shown and must be accepted
 #   --no-rustup    fail rather than install Rust if cargo is missing
 #   --no-tools     leave out the database tools (below)
 #   --no-wfdb      build Medorama and the viewer without WFDB support: no wfdb-x code in them (a
 #                  WFDB recording is refused, not added; every other format is read; not with
 #                  --demo, whose recordings are WFDB records; docs/building.md, "Without WFDB")
 #
-# Medorama (medorama/, Rust) always; the viewer you choose; the database tools, which build
-# databases to import and the demo's DICOM examples: muse-py (GE MUSE ECGs) and dicom-py (DICOM
+# Medorama (medorama/, Rust) and db-builder always; the viewer you choose; the database tools,
+# which read exports for db-builder and the demo's DICOM examples: muse-py (GE MUSE ECGs) and dicom-py (DICOM
 # studies, with pydicom), into .venv.  Nothing else (the other viewers, the libraries' Python
 # packages).  The programs go into .venv/bin, where Medorama finds the viewer; the choice is
 # recorded in .venv/bin/medorama.viewer (docs/administration.md, "The waveform viewer"):
@@ -30,7 +34,7 @@ set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
-VIEWER=cpp RUSTUP=1 TOOLS=1 DEMO=0 WFDB=1
+VIEWER=cpp RUSTUP=1 TOOLS=1 DEMO=0 WFDB=1 ACCEPT_LICENSE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --viewer) VIEWER="${2:?--viewer needs a value: cpp, rs, py or none}"; shift 2 ;;
@@ -39,6 +43,7 @@ while [ $# -gt 0 ]; do
     --no-tools) TOOLS=0; shift ;;
     --demo) DEMO=1; shift ;;
     --no-wfdb) WFDB=0; shift ;;
+    --accept-license) ACCEPT_LICENSE=1; shift ;;
     -h|--help) sed -n '2,/^# For every/p' "$0"; exit 0 ;;
     *) echo "unknown option $1 (see --help)"; exit 2 ;;
   esac
@@ -51,6 +56,10 @@ if [ "$WFDB" = 0 ] && [ "$DEMO" = 1 ]; then
   echo "--demo needs WFDB support (the demo's recordings are WFDB records): leave out --no-wfdb or --demo"; exit 2
 fi
 step() { printf '\n==> %s\n' "$*"; }
+
+# the license terms, accepted before anything is built (tools/license-accept.sh)
+. "$ROOT/tools/license-accept.sh"
+accept_license
 
 # macOS: Xcode installed but its license not accepted makes cc fail: use the Command Line Tools.
 if [ "$(uname)" = Darwin ] && [ -z "${DEVELOPER_DIR:-}" ] && [ -d /Library/Developer/CommandLineTools ] \
@@ -98,7 +107,10 @@ need_compiler "${CC:-cc}"
 step "Building Medorama (medorama)"
 cargo build --release --locked -p medorama $([ "$WFDB" = 1 ] || echo --no-default-features)
 ln -sf "$ROOT/target/release/medorama" .venv/bin/medorama
-COMMANDS="medorama"
+# db-builder: tables, exports and folders of recordings made into a database to connect
+cargo build --release --locked -p db-builder $([ "$WFDB" = 1 ] || echo --no-default-features)
+ln -sf "$ROOT/target/release/db-builder" .venv/bin/db-builder
+COMMANDS="medorama db-builder"
 
 # --- the viewer ----------------------------------------------------------------------------
 case "$VIEWER" in
@@ -157,7 +169,7 @@ if [ "$TOOLS" = 1 ]; then
   COMMANDS="$COMMANDS muse-py dicom-py"
 fi
 
-# --- the demo (--demo): invented patients, loaded by `medorama init` (docs/administration.md) --
+# --- the demo (--demo): invented patients' databases, connected by `medorama init --demo` ---------
 DEMO_DIR="$ROOT/.venv/share/medorama/demo"
 if [ "$DEMO" = 1 ]; then
   step "The demo: invented patients and their files, in .venv/share/medorama/demo"
@@ -167,11 +179,13 @@ if [ "$DEMO" = 1 ]; then
     wfdbx=$(sed -n 's/^ *"\(wfdb-x @ [^"]*\)",*$/\1/p' viewers/vitalstream/python/vitalstream/pyproject.toml)
     .venv/bin/pip install --quiet numpy "$wfdbx"
   fi
-  .venv/bin/python tools/make-demo-data.py "$DEMO_DIR" | tail -1
-  # `medorama init` loads the demo from the folder named here (next to the programs)
+  # the full demo (its parts: tools/README.md, "The demo's features"), and its db-builder
+  # databases built as a site would build them (the steps in its demo-databases.json)
+  .venv/bin/python tools/make-demo-data.py "$DEMO_DIR" --db-builder .venv/bin/db-builder | grep -v '^  '
+  # `medorama init --demo` connects the demo's databases from the folder named here (next to the programs)
   echo "$DEMO_DIR" > .venv/bin/medorama.demo
 else
-  # without --demo, new catalogs start empty (a catalog that holds the demo keeps it)
+  # without --demo, `init --demo` has nothing to connect
   rm -f .venv/bin/medorama.demo
 fi
 
@@ -205,9 +219,10 @@ step "Done"
 echo "Installed in .venv/bin: $COMMANDS"
 echo "Next, in each new terminal:  source .venv/bin/activate"
 if [ "$DEMO" = 1 ]; then
-  echo "  medorama init --results DIR      (once; docs/administration.md): it loads the demo, the cohort DEMO"
+  echo "  medorama init --workspace DIR --demo   (once; docs/administration.md): it connects the demo's databases"
 else
-  echo "  medorama init --results DIR      (once; docs/administration.md)"
+  echo "  medorama init --workspace DIR    (once; docs/administration.md)"
+  echo "  medorama databases connect NAME --kind KIND --url URL"
 fi
 echo "  medorama serve                   (http://127.0.0.1:8090)"
 echo "Licensed formats: medorama addons install PROGRAM   (docs/adapters.md)"

@@ -1,7 +1,7 @@
 //! The privacy gate (docs/security.md, "The privacy gate"): what leaves the server for a
 //! session in Privacy Mode.
 //!
-//! Privacy Mode is the state of a session, not of the data: the catalog keeps every identifier
+//! Privacy Mode is the state of a session, not of the data: Medorama keeps every identifier
 //! as imported, and the gate decides, at the moment of sending, how an answer leaves the server.
 //! A session is in Privacy Mode unless its user has the PHI permission and turned it off
 //! (`server::Auth`); for such a session ("restricted"), every answer passes through here:
@@ -48,86 +48,36 @@ pub const MAY_HOLD_PHI: &str = "x-medorama-may-contain-phi";
 /// server's last layer removes it, and refuses answers without it.
 pub const CLEARED: &str = "x-medorama-gate";
 
-/// The placeholder of a database's column, by the catalog field it maps to, in Privacy Mode;
-/// `None`: the column is shown.  Unmapped columns hold what the importer could not recognise:
-/// only their measurements are shown (databases.rs).
-pub fn column_placeholder(maps_to: &str, s: &Settings) -> Option<&'static str> {
-    match maps_to {
-        "last_name" | "first_name" if s.hides("names") => Some(PATIENT_NAME),
-        "birth_date" if s.hides("birth_date") => Some(BIRTH_DATE),
-        "mrn" | "mrn_authority" if s.hides("mrn") => Some(MRN),
-        "csn" if s.hides("account_numbers") => Some(CSN),
-        "patient_id" => Some(PATIENT_ID),
-        "encounter_id" => None, // replaced by the dictionary with the encounter's pseudonym
-        "text" if s.hides("notes") => Some(WITHHELD),
-        "file" => Some(FILE_NAME),
-        "author" => Some(STAFF_NAME),
-        _ => None,
-    }
-}
-
-/// How a database's column leaves the server: `None`, shown (its cells through the gate in
-/// Privacy Mode); else the placeholder every non-empty cell becomes.  The column itself is
-/// always listed, under its imported name.
-pub fn column_mask(
-    user: &crate::users::User,
-    gate: Option<&Restricted>,
-    header: &str,
-    maps_to: &str,
-) -> Option<&'static str> {
-    match gate {
-        None if crate::databases::column_visible(user, header, maps_to) => None,
-        None => Some(WITHHELD),
-        Some(g) => match column_placeholder(maps_to, &g.settings) {
-            Some(p) => Some(p),
-            None if crate::databases::column_visible(
-                &crate::users::User { phi: false, ..user.clone() },
-                header,
-                maps_to,
-            ) =>
-            {
-                None
-            }
-            None => Some(WITHHELD),
-        },
-    }
-}
-
-/// A cell as it leaves: its placeholder (when not empty), or its text through the gate.
-pub fn cell(gate: Option<&Restricted>, mask: Option<&'static str>, v: &str) -> String {
-    match (mask, gate) {
-        (Some(_), _) if v.trim().is_empty() => String::new(),
-        (Some(p), _) => p.to_string(),
-        (None, Some(g)) => g.text(v),
-        (None, None) => v.to_string(),
-    }
-}
-
 // ------------------------------------------------------------------ the dictionary
 
-/// Every identifier the catalog holds, with what Privacy Mode writes instead: imported patient
-/// and encounter IDs (their pseudonyms), MRNs and account numbers (placeholders), recordings'
-/// paths and file names (tokens).  Built from the database, kept while the data do not change.
+/// Every identifier Medorama knows, with what Privacy Mode writes instead: the databases'
+/// patient IDs (their patients' pseudonyms), MRNs (placeholders), recordings' paths and file
+/// names (tokens).  Built from each connected database's persons and recordings as kept in the
+/// workspace, kept while they do not change.
 pub struct Dict {
     /// The version of the identifiers it was built at (`data_version.identifiers`).
     pub version: i64,
-    /// Whole values: a string equal to one of these is replaced.
+    /// Whole values, lower case: a string equal to one of these (case ignored) is replaced.
     whole: HashMap<String, String>,
-    /// Words: identifiers of 4 characters or more with a digit, replaced inside any text.
+    /// Words, lower case: identifiers of 4 characters or more with a digit, replaced inside any
+    /// text (case ignored) …
     words: HashMap<String, String>,
+    /// … and by their digits ([`normal`]: `SYN-0004`, `syn0004` and `SYN4` are one).
+    normal: HashMap<String, String>,
+    /// The words of every linked patient's names (lower case, 3 letters or more): replaced in
+    /// text that may be about any patient ([`Dict::scrub_any_names`]).
+    names: std::collections::HashSet<String>,
     /// Recordings' paths (by their tokens) and the folders they lie in ([`FOLDER`]), replaced
     /// inside any text (an error that names a file) …
     paths: HashMap<String, String>,
     /// … whose lengths, longest first.
     path_lengths: Vec<usize>,
-    /// Patients' pseudonyms, by the catalog's patient number.
+    /// Patients' pseudonyms, by Medorama's patient number.
     pub pseudonyms: HashMap<i64, String>,
     /// Each patient's date draw (Privacy Mode's own offset), by patient number …
     pub draws: HashMap<i64, f64>,
-    /// … and by the pseudonyms that name them: theirs, their encounters', their aliases.
+    /// … and by the pseudonyms that name them.
     pub draws_by_pseudonym: HashMap<String, f64>,
-    /// … and by the catalog's encounter number (entries' keys name their encounter).
-    pub draws_by_encounter: HashMap<i64, f64>,
     /// Recordings' tokens and their real paths.
     pub recordings: HashMap<String, String>,
     /// … and their patient's date draw (a recording linked to an encounter).
@@ -141,116 +91,167 @@ fn wordlike(s: &str) -> bool {
         && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// An identifier as compared by its digits: lower case, without separators (`-`, `_`, `.`,
+/// `/`, spaces), each run of digits without its leading zeros; none for a form too short to be
+/// told from other numbers (fewer than 4 characters, or fewer than 6 digits alone: a year).
+fn normal(s: &str) -> Option<String> {
+    let mut out = String::with_capacity(s.len());
+    let mut in_digits = false;
+    for ch in s.trim().chars().filter(|c| !matches!(c, '-' | '_' | '.' | '/' | ' ')) {
+        if !ch.is_ascii_alphanumeric() {
+            return None;
+        }
+        if ch.is_ascii_digit() {
+            // a run's leading zeros dropped
+            if !in_digits && ch == '0' {
+                continue;
+            }
+            in_digits = true;
+        } else {
+            in_digits = false;
+        }
+        out.push(ch.to_ascii_lowercase());
+    }
+    let digits = out.chars().all(|c| c.is_ascii_digit());
+    let long = if digits { out.len() >= 6 } else { out.len() >= 4 };
+    (long && out.chars().any(|c| c.is_ascii_digit())).then_some(out)
+}
+
 impl Dict {
-    pub fn build(c: &Connection, version: i64) -> anyhow::Result<Dict> {
+    pub fn build(c: &Connection, cfg: &crate::config::Config, version: i64) -> anyhow::Result<Dict> {
         let mut d = Dict {
             version,
             whole: HashMap::new(),
             words: HashMap::new(),
+            normal: HashMap::new(),
+            names: Default::default(),
             paths: HashMap::new(),
             path_lengths: vec![],
             pseudonyms: HashMap::new(),
             draws: HashMap::new(),
             draws_by_pseudonym: HashMap::new(),
-            draws_by_encounter: HashMap::new(),
             recordings: HashMap::new(),
             draws_by_recording: HashMap::new(),
         };
-        let add = |d: &mut Dict, from: String, to: String| {
-            let from = from.trim().to_string();
-            if from.is_empty() {
-                return;
-            }
-            if wordlike(&from) {
-                d.words.insert(from.clone(), to.clone());
-            }
-            d.whole.insert(from, to);
-        };
-        let rows: Vec<(i64, String, String, Option<f64>)> = c
-            .prepare("SELECT id, patient_id, COALESCE(pseudonym, ''), date_draw FROM patients")?
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        let rows: Vec<(i64, String, Option<f64>)> = c
+            .prepare("SELECT id, COALESCE(pseudonym, ''), date_draw FROM patients")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<Result<_, _>>()?;
-        for (id, pid, ps, draw) in rows {
-            add(&mut d, pid, ps.clone());
+        for (id, ps, draw) in rows {
             if let Some(dr) = draw {
                 d.draws.insert(id, dr);
                 d.draws_by_pseudonym.insert(ps.clone(), dr);
             }
             d.pseudonyms.insert(id, ps);
         }
-        let rows: Vec<(i64, String, String, i64)> = c
-            .prepare("SELECT id, encounter_id, COALESCE(pseudonym, ''), patient FROM encounters")?
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-            .collect::<Result<_, _>>()?;
-        for (id, eid, ps, patient) in rows {
-            if let Some(dr) = d.draws.get(&patient).copied() {
-                d.draws_by_pseudonym.insert(ps.clone(), dr);
-                d.draws_by_encounter.insert(id, dr);
-            }
-            add(&mut d, eid, ps);
-        }
-        let aliases: Vec<(String, i64)> = c
-            .prepare("SELECT pseudonym, patient FROM pseudonym_aliases")?
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<Result<_, _>>()?;
-        for (ps, patient) in aliases {
-            if let Some(dr) = d.draws.get(&patient).copied() {
-                d.draws_by_pseudonym.insert(ps, dr);
-            }
-        }
-        for sql in ["SELECT mrn FROM patient_mrns", "SELECT mrn FROM patient_identifiers WHERE mrn != ''"] {
-            let mrns: Vec<String> = c.prepare(sql)?.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
-            for m in mrns {
-                add(&mut d, m, MRN.into());
-            }
-        }
-        let csns: Vec<String> = c
-            .prepare("SELECT csn FROM encounter_identifiers WHERE csn != ''")?
-            .query_map([], |r| r.get(0))?
-            .collect::<Result<_, _>>()?;
-        for x in csns {
-            add(&mut d, x, CSN.into());
-        }
-        let recs: Vec<(i64, String, String)> = c
-            .prepare("SELECT id, path, name FROM recordings")?
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-            .collect::<Result<_, _>>()?;
-        for (id, path, name) in recs {
-            let token = recording_token(id);
-            d.whole.insert(path.clone(), token.clone());
-            d.whole.insert(name, RECORDING.into());
-            // its folders: a folder may be named after the patient
-            for dir in Path::new(&path).ancestors().skip(1) {
-                let dir = dir.to_string_lossy();
-                if dir.len() > 1 && dir.contains(['/', '\\']) {
-                    d.paths.entry(dir.to_string()).or_insert_with(|| FOLDER.into());
+        for s in crate::sources::list(c)? {
+            for k in crate::persons::all_of(cfg, c, s.id)? {
+                let ps = d.pseudonyms.get(&k.patient).cloned().unwrap_or_else(|| PATIENT_ID.into());
+                d.add(&k.patient_id, ps);
+                d.add(&k.mrn, MRN.into());
+                for w in name_words(&[k.last_name, k.first_name]) {
+                    if w.chars().count() >= 3 && w.chars().all(char::is_alphabetic) {
+                        d.names.insert(w.to_lowercase());
+                    }
                 }
             }
-            d.paths.insert(path.clone(), token.clone());
-            d.recordings.insert(token, path);
+            if crate::recordings::count(cfg, c, s.id)? == 0 {
+                continue;
+            }
+            for r in crate::recordings::of_database(cfg, c, &s)? {
+                let token = recording_token(r.id);
+                d.whole.insert(r.path.to_lowercase(), token.clone());
+                d.whole.insert(r.name.to_lowercase(), RECORDING.into());
+                // its folders: a folder may be named after the patient
+                for dir in Path::new(&r.path).ancestors().skip(1) {
+                    let dir = dir.to_string_lossy();
+                    if dir.len() > 1 && dir.contains(['/', '\\']) {
+                        d.paths.entry(dir.to_string()).or_insert_with(|| FOLDER.into());
+                    }
+                }
+                d.paths.insert(r.path.clone(), token.clone());
+                if let Some(dr) = r.patient.and_then(|p| d.draws.get(&p).copied()) {
+                    d.draws_by_recording.insert(token.clone(), dr);
+                }
+                d.recordings.insert(token, r.path);
+            }
         }
         let mut lengths: Vec<usize> = d.paths.keys().map(|k| k.len()).collect();
         lengths.sort_unstable_by(|a, b| b.cmp(a));
         lengths.dedup();
         d.path_lengths = lengths;
-        let links: Vec<(i64, i64)> = c
-            .prepare("SELECT recording, MIN(encounter) FROM recording_links GROUP BY recording")?
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-            .collect::<Result<_, _>>()?;
-        for (rec, enc) in links {
-            if let Some(dr) = d.draws_by_encounter.get(&enc).copied() {
-                d.draws_by_recording.insert(recording_token(rec), dr);
+        Ok(d)
+    }
+
+    /// An identifier and what replaces it: as a whole value always; inside text when it is
+    /// [`wordlike`], case ignored and by its digits ([`normal`]).
+    fn add(&mut self, from: &str, to: String) {
+        let from = from.trim().to_lowercase();
+        if from.is_empty() {
+            return;
+        }
+        if wordlike(&from) {
+            self.words.insert(from.clone(), to.clone());
+            if let Some(n) = normal(&from) {
+                self.normal.insert(n, to.clone());
             }
         }
-        Ok(d)
+        self.whole.insert(from, to);
+    }
+
+    /// What replaces a word of text, if it is an identifier (case ignored, by its digits).
+    fn word(&self, w: &str) -> Option<&String> {
+        let lower = w.to_ascii_lowercase();
+        self.words.get(&lower).or_else(|| normal(&lower).and_then(|n| self.normal.get(&n)))
     }
 
     /// Text with every identifier it holds replaced; `None` when nothing changes.
     pub fn scrub(&self, s: &str) -> Option<String> {
-        if let Some(to) = self.whole.get(s.trim()) {
+        let t = s.trim().to_lowercase();
+        if let Some(to) = self.whole.get(&t).or_else(|| normal(&t).and_then(|n| self.normal.get(&n))) {
             return Some(to.clone());
         }
         self.scrub_words(s)
+    }
+
+    /// Every linked patient's names (whole words, case ignored) replaced by [`PATIENT_NAME`]:
+    /// for text that may be about any patient (a recording's label, a plug-in's summary, the
+    /// reasons of a cohort search); `None` when nothing changes.
+    pub fn scrub_any_names(&self, s: &str) -> Option<String> {
+        if self.names.is_empty() {
+            return None;
+        }
+        let mut out = String::with_capacity(s.len());
+        let mut last = 0;
+        let mut changed = false;
+        let mut it = s.char_indices().peekable();
+        while let Some((i, ch)) = it.next() {
+            if !ch.is_alphabetic() || s[..i].chars().next_back().is_some_and(char::is_alphanumeric) {
+                continue;
+            }
+            let mut end = i + ch.len_utf8();
+            while let Some(&(j, c)) = it.peek() {
+                if !c.is_alphabetic() {
+                    break;
+                }
+                end = j + c.len_utf8();
+                it.next();
+            }
+            if s[end..].chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                continue;
+            }
+            if self.names.contains(&s[i..end].to_lowercase()) {
+                out.push_str(&s[last..i]);
+                out.push_str(PATIENT_NAME);
+                last = end;
+                changed = true;
+            }
+        }
+        if !changed {
+            return None;
+        }
+        out.push_str(&s[last..]);
+        Some(out)
     }
 
     /// Identifiers inside text replaced (not a value that is one whole: a number may equal a
@@ -279,7 +280,7 @@ impl Dict {
             // the whole run (an ID with dashes), else each alphanumeric part of it
             let run = s[start..i].trim_matches(['-', '_']);
             let run_start = start + s[start..i].find(run).unwrap_or(0);
-            if let Some(to) = self.words.get(run) {
+            if let Some(to) = self.word(run) {
                 out.push_str(&s[last..run_start]);
                 out.push_str(to);
                 last = run_start + run.len();
@@ -296,7 +297,7 @@ impl Dict {
                 while j < i && b[j].is_ascii_alphanumeric() {
                     j += 1;
                 }
-                if let Some(to) = self.words.get(&s[k0..j]) {
+                if let Some(to) = self.word(&s[k0..j]) {
                     out.push_str(&s[last..k0]);
                     out.push_str(to);
                     last = j;
@@ -372,19 +373,25 @@ pub fn recording_path(d: &Dict, token: &str) -> Option<String> {
 pub struct Restricted {
     pub settings: Settings,
     pub dict: Arc<Dict>,
-    /// The catalog's secret (DICOM UIDs).
-    pub secret: Vec<u8>,
+    /// Medorama's secret (DICOM UIDs), wiped when dropped.
+    pub secret: zeroize::Zeroizing<Vec<u8>>,
 }
 
 /// Keys whose strings name staff (authors, signers, overreaders).
 const STAFF_KEYS: &[&str] = &["author", "signed_by", "overreader", "confirmed_by", "editor", "physician"];
 
-/// Keys whose strings are addresses inside the catalog (internal numbers only): never scrubbed.
+/// Keys whose strings are addresses inside Medorama (internal numbers only): never scrubbed.
 const ADDRESSES: &[&str] = &["url", "src", "href", "link", "hash", "viewer"];
 
 /// Keys whose value names the patient an object is about, once identifiers are replaced: a
-/// pseudonym (the patient's or an encounter's), or the catalog's patient number.
+/// pseudonym (the patient's or an encounter's), or Medorama's patient number.
 const PATIENT_KEYS: &[&str] = &["pseudonym", "patient_id", "encounter_id", "patient"];
+
+/// Keys whose strings (and everything under them) are free text that may be about any patient:
+/// a recording's label and error, a plug-in's summary, the reasons of a cohort search.  Every
+/// linked patient's names are replaced in them ([`Dict::scrub_any_names`]), and contact
+/// details ([`safe_harbor`]).
+const FREE_KEYS: &[&str] = &["label", "error", "summary", "reasons", "why", "recording_name"];
 
 impl Restricted {
     /// The gate narrowed to one patient: their dates move by their own offset too.
@@ -405,14 +412,14 @@ impl Restricted {
         }
     }
 
-    /// The settings for an entry's key (`labs:<encounter>:…`): its encounter's patient's, so that
-    /// the key reads the same on every page and comes back through [`Restricted::real_key`].
+    /// The settings for an entry's key (`labs:<patient>:…`): its patient's, so that the key
+    /// reads the same on every page and comes back through [`Restricted::real_key`].
     pub fn key_settings(&self, key: &str) -> Settings {
-        let enc = key.split(':').nth(1).and_then(|e| e.parse::<i64>().ok());
-        self.settings.for_draw(enc.and_then(|e| self.dict.draws_by_encounter.get(&e).copied()))
+        let p = key.split(':').nth(1).and_then(|e| e.parse::<i64>().ok());
+        self.settings.for_draw(p.and_then(|p| self.dict.draws.get(&p).copied()))
     }
 
-    /// An entry's key as the catalog knows it, from the key this gate sent.
+    /// An entry's key as Medorama knows it, from the key this gate sent.
     pub fn real_key(&self, key: &str) -> String {
         real_key(key, &self.key_settings(key))
     }
@@ -444,17 +451,19 @@ impl Restricted {
     /// patient's page: [`Restricted::for_patient`]).
     pub fn json(&self, v: &mut Value) {
         // identifiers first, as they are stored (a recording's name holds its time), then dates
-        self.scrub_value(v, "");
+        self.scrub_value(v, "", false);
         crate::deid::answer_with(v, &self.settings, &|m| self.settings_of(m));
     }
 
-    fn scrub_value(&self, v: &mut Value, key: &str) {
+    /// `free`: under one of [`FREE_KEYS`].
+    fn scrub_value(&self, v: &mut Value, key: &str, free: bool) {
         if let Value::String(s) = v {
             if let Some(k) = shown_key(s, &self.key_settings(s)) {
                 *s = k;
                 return;
             }
         }
+        let free = free || FREE_KEYS.contains(&key);
         match v {
             // staff names (a note's author): withheld
             Value::String(s) if STAFF_KEYS.contains(&key) && !s.trim().is_empty() => *s = STAFF_NAME.into(),
@@ -466,11 +475,19 @@ impl Restricted {
                 if let Some(n) = crate::deid::staff_phrases(s) {
                     *s = n;
                 }
+                if free {
+                    if let Some(n) = self.dict.scrub_any_names(s) {
+                        *s = n;
+                    }
+                    if let Some(n) = safe_harbor(s) {
+                        *s = n;
+                    }
+                }
             }
-            Value::Array(items) => items.iter_mut().for_each(|x| self.scrub_value(x, key)),
+            Value::Array(items) => items.iter_mut().for_each(|x| self.scrub_value(x, key, free)),
             Value::Object(m) => {
                 for (k, x) in m.iter_mut() {
-                    self.scrub_value(x, k);
+                    self.scrub_value(x, k, free);
                 }
             }
             _ => {}
@@ -478,18 +495,33 @@ impl Restricted {
     }
 
     /// Text (a header, a note, a CSV cell) as a restricted session gets it: identifiers
-    /// replaced, dates moved back.
+    /// replaced, contact details too ([`safe_harbor`]), dates moved back.
     pub fn text(&self, s: &str) -> String {
         let s = self.dict.scrub(s).unwrap_or_else(|| s.to_string());
+        let s = safe_harbor(&s).unwrap_or(s);
         self.settings.shift_text(&s)
     }
 
     /// A patient's own names, MRNs and date of birth replaced in text written about them (a
-    /// note), besides [`Restricted::text`]: free text may still name them in other ways, so the
-    /// page keeps its warning on it.
+    /// note), besides [`Restricted::text`], and staff named in it ("Confirmed by …"): free text
+    /// may still name them in other ways, so the page keeps its warning on it.
     pub fn note(&self, s: &str, names: &[String], birth: &str) -> String {
         // before dates are moved: the date of birth as written
-        self.text(&own_words(s, names, birth))
+        let s = self.text(&own_words(s, names, birth));
+        crate::deid::staff_phrases(&s).unwrap_or(s)
+    }
+
+    /// Free text about a patient (a note's, a report's, any entry's text or long value) as a
+    /// restricted session gets it: [`WITHHELD`] when Privacy Mode withholds the text of notes and
+    /// reports, else [`Restricted::note`].
+    pub fn entry_text(&self, s: &str, names: &[String], birth: &str) -> String {
+        if s.trim().is_empty() {
+            return s.to_string();
+        }
+        if self.settings.hides("notes") {
+            return WITHHELD.into();
+        }
+        self.note(s, names, birth)
     }
 
     /// Free text inside a file (a WFDB header's comment, a MUSE statement, a DICOM text value)
@@ -498,23 +530,24 @@ impl Restricted {
     pub fn free_text(&self, s: &str, names: &[String], birth: &str) -> String {
         let s = own_words(s, names, birth);
         let s = self.dict.scrub_words(&s).unwrap_or(s);
+        let s = safe_harbor(&s).unwrap_or(s);
         self.settings.shift_text(&s)
     }
 
     /// What names a patient in their own notes: their names, and their date of birth as
     /// written (the server's copy; never sent).
-    pub fn identity_words(c: &Connection, patient: i64) -> (Vec<String>, String) {
-        let row: Option<(String, String, String)> = c
-            .query_row(
-                "SELECT last_name, first_name, birth_date FROM patient_identifiers WHERE patient = ?1",
-                [patient],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .optional()
-            .ok()
-            .flatten();
-        let (last, first, birth) = row.unwrap_or_default();
-        (name_words(&[last, first]), birth)
+    pub fn identity_words(c: &Connection, cfg: &crate::config::Config, patient: i64) -> (Vec<String>, String) {
+        let records = crate::persons::records_of(cfg, c, patient, None).unwrap_or_default();
+        let mut names = vec![];
+        let mut birth = String::new();
+        for k in records {
+            names.push(k.last_name);
+            names.push(k.first_name);
+            if birth.is_empty() {
+                birth = k.birth_date;
+            }
+        }
+        (name_words(&names), birth)
     }
 
     pub fn pseudonym(&self, patient: i64) -> String {
@@ -552,12 +585,14 @@ pub fn own_words(s: &str, names: &[String], birth: &str) -> String {
 }
 
 /// A patient's own names (whole words) and date of birth replaced in every string of an answer
-/// about them (their notes, reports, the titles of entries).
+/// about them (their notes, reports, the titles of entries), and contact details
+/// ([`safe_harbor`]).
 pub fn scrub_names(v: &mut Value, names: &[String], birth: &str) {
     fn walk(v: &mut Value, key: &str, names: &[String], birth: &str) {
         match v {
             Value::String(s) if !ADDRESSES.contains(&key) => {
                 let out = own_words(s, names, birth);
+                let out = safe_harbor(&out).unwrap_or(out);
                 if out != *s {
                     *s = out;
                 }
@@ -571,8 +606,8 @@ pub fn scrub_names(v: &mut Value, names: &[String], birth: &str) {
 }
 
 /// An entry's key as Privacy Mode sends it: the keys of a day's laboratory results and vital
-/// signs hold their real time (`labs:<encounter>:<unix time>`, `vit:<encounter>:<day>`); they
-/// leave with it moved back (`vit:` keys as `vit:<encounter>:t<moved start of the day>`), and
+/// signs hold their real time (`labs:<patient>:<unix time>`, `vit:<patient>:<day>`); they
+/// leave with it moved back (`vit:` keys as `vit:<patient>:t<moved start of the day>`), and
 /// come back through [`real_key`].
 pub fn shown_key(key: &str, s: &Settings) -> Option<String> {
     let off = if s.hides("dates") { s.offset_seconds() } else { return None };
@@ -586,7 +621,7 @@ pub fn shown_key(key: &str, s: &Settings) -> Option<String> {
     }
 }
 
-/// An entry's key as the catalog knows it, from the key Privacy Mode sent ([`shown_key`]).
+/// An entry's key as Medorama knows it, from the key Privacy Mode sent ([`shown_key`]).
 pub fn real_key(key: &str, s: &Settings) -> String {
     let off = if s.hides("dates") { s.offset_seconds() } else { return key.to_string() };
     let parts: Vec<&str> = key.splitn(3, ':').collect();
@@ -602,63 +637,302 @@ pub fn real_key(key: &str, s: &Settings) -> String {
     }
 }
 
-/// `text` with every whole-word, case-insensitive occurrence of `word` replaced.
+/// `text` with every whole-word, case-insensitive occurrence of `word` replaced, compared
+/// character by character (lower-casing may change a text's length: `İ`, `ẞ`).
 fn replace_word(text: &str, word: &str, with: &str) -> String {
-    let lower = text.to_lowercase();
-    let w = word.to_lowercase();
-    if w.is_empty() || lower.len() != text.len() {
-        // lower-casing changed the length (non-ASCII): compare as is
-        return text.replace(word, with);
+    let w: Vec<char> = word.chars().collect();
+    if w.is_empty() {
+        return text.to_string();
     }
+    let same = |a: char, b: char| a == b || a.to_lowercase().eq(b.to_lowercase());
+    let chars: Vec<(usize, char)> = text.char_indices().collect();
     let mut out = String::with_capacity(text.len());
     let mut last = 0;
-    let mut from = 0;
-    while let Some(rel) = lower[from..].find(&w) {
-        let at = from + rel;
-        let end = at + w.len();
-        let before = text[..at].chars().next_back().is_none_or(|c| !c.is_alphanumeric());
-        let after = text[end..].chars().next().is_none_or(|c| !c.is_alphanumeric());
-        if before && after {
+    let mut i = 0;
+    while i + w.len() <= chars.len() {
+        let at = chars[i].0;
+        let end = chars.get(i + w.len()).map_or(text.len(), |c| c.0);
+        let before = i == 0 || !chars[i - 1].1.is_alphanumeric();
+        let after = chars.get(i + w.len()).is_none_or(|c| !c.1.is_alphanumeric());
+        if before && after && w.iter().enumerate().all(|(k, &c)| same(chars[i + k].1, c)) {
             out.push_str(&text[last..at]);
             out.push_str(with);
             last = end;
+            i += w.len();
+            continue;
         }
-        from = end;
+        i += 1;
     }
     out.push_str(&text[last..]);
     out
 }
 
-/// The catalog's secret (32 random bytes, made once, in the settings table): it keys DICOM
-/// UIDs' replacements.  Never sent anywhere.
-pub fn secret(c: &Connection) -> anyhow::Result<Vec<u8>> {
-    let v: Option<String> =
-        c.query_row("SELECT value FROM settings WHERE key = 'gate_secret'", [], |r| r.get(0)).optional()?;
-    if let Some(hex) = v.and_then(|v| serde_json::from_str::<String>(&v).ok()) {
-        if let Some(b) = from_hex(&hex) {
-            return Ok(b);
-        }
-    }
-    let mut b = [0u8; 32];
-    getrandom::fill(&mut b).map_err(|e| anyhow::anyhow!("the system's random generator failed: {e}"))?;
-    let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
-    c.execute(
-        "INSERT INTO settings (key, value, updated_by, updated_at) VALUES ('gate_secret', ?1, NULL, ?2)
-         ON CONFLICT(key) DO NOTHING",
-        crate::sql::params![serde_json::to_string(&hex)?, crate::db::now()],
-    )?;
-    // another connection may have made it first: read what is stored
-    let v: String = c.query_row("SELECT value FROM settings WHERE key = 'gate_secret'", [], |r| r.get(0))?;
-    serde_json::from_str::<String>(&v)
-        .ok()
-        .and_then(|h| from_hex(&h))
-        .ok_or_else(|| anyhow::anyhow!("the catalog's secret is unreadable"))
+// ------------------------------------------------------------------ Safe Harbor's other identifiers
+
+/// What Privacy Mode writes where free text holds contact details or numbers that identify
+/// (HIPAA Safe Harbor's telephone numbers, e-mail addresses, social security numbers, web
+/// addresses, street addresses, medical record numbers after their label).
+pub const PHONE: &str = "[Phone]";
+pub const EMAIL: &str = "[Email]";
+pub const SSN: &str = "[SSN]";
+pub const URL: &str = "[URL]";
+pub const ADDRESS: &str = "[Address]";
+
+/// The words that end a street address (`12 Elm Street`, `4 Oak Ave.`).
+const STREETS: &[&str] = &[
+    "street",
+    "st",
+    "avenue",
+    "ave",
+    "road",
+    "rd",
+    "boulevard",
+    "blvd",
+    "lane",
+    "ln",
+    "drive",
+    "court",
+    "ct",
+    "way",
+    "place",
+    "pl",
+    "terrace",
+    "circle",
+    "parkway",
+    "pkwy",
+    "highway",
+    "hwy",
+    "square",
+    "sq",
+    "alley",
+];
+
+fn digit_run(b: &[u8], at: usize) -> usize {
+    b[at.min(b.len())..].iter().take_while(|c| c.is_ascii_digit()).count()
 }
 
-fn from_hex(h: &str) -> Option<Vec<u8>> {
+/// A web address at `at` (`http://…`, `https://…`, `www.…`): where it ends.
+fn url_at(s: &str, at: usize) -> Option<usize> {
+    let rest = &s[at..];
+    let lower: String = rest.chars().take(8).collect::<String>().to_ascii_lowercase();
+    if !["http://", "https://", "www."].iter().any(|p| lower.starts_with(p)) {
+        return None;
+    }
+    let len =
+        rest.find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\'' | '(' | ')')).unwrap_or(rest.len());
+    let t = rest[..len].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+    (t.len() > 4).then_some(at + t.len())
+}
+
+/// An e-mail address starting at `at`: where it ends.
+fn email_at(s: &str, at: usize) -> Option<usize> {
+    let b = s.as_bytes();
+    let local = b[at..].iter().take_while(|c| c.is_ascii_alphanumeric() || b"._%+-".contains(c)).count();
+    if local == 0 || b.get(at + local) != Some(&b'@') {
+        return None;
+    }
+    let d0 = at + local + 1;
+    let dom = b[d0..].iter().take_while(|c| c.is_ascii_alphanumeric() || b".-".contains(c)).count();
+    let domain = s[d0..d0 + dom].trim_end_matches(['.', '-']);
+    let tld = domain.rsplit('.').next().unwrap_or("");
+    (domain.contains('.') && tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()))
+        .then_some(d0 + domain.len())
+}
+
+/// A social security number at `at` (`123-45-6789`): where it ends.
+fn ssn_at(b: &[u8], at: usize) -> Option<usize> {
+    let ok = digit_run(b, at) == 3
+        && b.get(at + 3) == Some(&b'-')
+        && digit_run(b, at + 4) == 2
+        && b.get(at + 6) == Some(&b'-')
+        && digit_run(b, at + 7) == 4;
+    ok.then_some(at + 11)
+}
+
+/// A telephone number at `at`: `(555) 123-4567`, `555-123-4567`, `555.123.4567`,
+/// `555 123 4567`, with `+1 ` or `1-` before them, or `+` and 8 to 15 digits in groups
+/// (`+44 20 7946 0958`): where it ends.
+fn phone_at(b: &[u8], at: usize) -> Option<usize> {
+    let sep = |i: usize| matches!(b.get(i), Some(b'-' | b'.' | b' '));
+    let mut i = at;
+    // a country code
+    if b.get(i) == Some(&b'+') {
+        let n = digit_run(b, i + 1);
+        if (1..=3).contains(&n) && sep(i + 1 + n) {
+            let after = i + 2 + n;
+            // the North American form after it, else digits in groups
+            if let Some(e) = phone_at(b, after).filter(|_| n == 1) {
+                return Some(e);
+            }
+            let (mut j, mut digits) = (i + 1, 0);
+            loop {
+                let k = digit_run(b, j);
+                if k == 0 {
+                    break;
+                }
+                digits += k;
+                j += k;
+                if !(sep(j) && digit_run(b, j + 1) > 0) {
+                    break;
+                }
+                j += 1;
+            }
+            return ((8..=15).contains(&digits)).then_some(j);
+        }
+        return None;
+    }
+    if b.get(i) == Some(&b'1') && b.get(i + 1) == Some(&b'-') && digit_run(b, i + 2) == 3 {
+        i += 2;
+    }
+    let after_area = if b.get(i) == Some(&b'(') && digit_run(b, i + 1) == 3 && b.get(i + 4) == Some(&b')') {
+        let j = i + 5;
+        if b.get(j) == Some(&b' ') {
+            j + 1
+        } else {
+            j
+        }
+    } else if digit_run(b, i) == 3 && sep(i + 3) {
+        i + 4
+    } else {
+        return None;
+    };
+    let ok = digit_run(b, after_area) == 3 && sep(after_area + 3) && digit_run(b, after_area + 4) == 4;
+    ok.then_some(after_area + 8)
+}
+
+/// A street address at `at` (`12 Elm Street`, `4410 Old Mill Rd.`, `P.O. Box 77`): where it
+/// ends.
+fn address_at(s: &str, at: usize) -> Option<usize> {
+    let b = s.as_bytes();
+    let lower = s[at..].chars().take(9).collect::<String>().to_ascii_lowercase();
+    for p in ["p.o. box ", "po box ", "p.o.box "] {
+        if lower.starts_with(p) {
+            let n = digit_run(b, at + p.len());
+            return (n > 0).then_some(at + p.len() + n);
+        }
+    }
+    let n = digit_run(b, at);
+    if !(1..=6).contains(&n) || b.get(at + n) != Some(&b' ') {
+        return None;
+    }
+    let mut i = at + n + 1;
+    for words in 0..5 {
+        let len = s[i..].chars().take_while(|c| c.is_alphabetic()).map(char::len_utf8).sum::<usize>();
+        if len == 0 {
+            return None;
+        }
+        let word = &s[i..i + len];
+        let end = i + len;
+        let ends = !s[end..].chars().next().is_some_and(char::is_alphanumeric);
+        if words > 0 && ends && STREETS.contains(&word.to_lowercase().as_str()) {
+            let end = if b.get(end) == Some(&b'.') { end + 1 } else { end };
+            return Some(end);
+        }
+        // the street's name: capitalized words
+        if !word.chars().next().is_some_and(char::is_uppercase) || b.get(end) != Some(&b' ') {
+            return None;
+        }
+        i = end + 1;
+    }
+    None
+}
+
+/// A medical record number after its label (`MRN: 0012345`, `MR# 77-1`, `medical record
+/// number 4471`): where its value starts and ends.
+fn labelled_mrn_at(s: &str, at: usize) -> Option<(usize, usize)> {
+    let lower = s[at..].chars().take(24).collect::<String>().to_ascii_lowercase();
+    let label =
+        ["medical record number", "mrn", "mr#", "mr no", "mr number"].into_iter().find(|l| lower.starts_with(l))?;
+    let b = s.as_bytes();
+    let mut i = at + label.len();
+    if b.get(i).is_some_and(|c| c.is_ascii_alphanumeric()) && !label.ends_with('#') {
+        return None;
+    }
+    while b.get(i).is_some_and(|c| matches!(c, b' ' | b':' | b'#' | b'.' | b'=')) {
+        i += 1;
+    }
+    let len = b[i..].iter().take_while(|c| c.is_ascii_alphanumeric() || **c == b'-').count();
+    let v = &s[i..i + len];
+    (len >= 3 && v.chars().any(|c| c.is_ascii_digit())).then_some((i, i + len))
+}
+
+/// Free text with telephone numbers, e-mail and web addresses, social security numbers,
+/// street addresses and labelled medical record numbers replaced (Privacy Mode); `None` when
+/// none is found.  Rules, not understanding: what they miss, the warning on free text covers.
+pub fn safe_harbor(s: &str) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut last = 0;
+    let mut i = 0;
+    while i < b.len() {
+        let prev = s[..i].chars().next_back();
+        let boundary = prev.is_none_or(|c| !c.is_alphanumeric());
+        let numeric_boundary = boundary && !matches!(prev, Some('/' | '.' | '-' | ':' | '+'));
+        let found: Option<(usize, usize, &str)> = if !boundary {
+            None
+        } else if let Some(e) = url_at(s, i) {
+            Some((i, e, URL))
+        } else if let Some(e) = email_at(s, i) {
+            Some((i, e, EMAIL))
+        } else if let Some((v, e)) = labelled_mrn_at(s, i) {
+            Some((v, e, MRN))
+        } else if !numeric_boundary {
+            None
+        } else if let Some(e) = ssn_at(b, i).filter(|e| digit_run(b, *e) == 0) {
+            Some((i, e, SSN))
+        } else if let Some(e) = phone_at(b, i).filter(|e| digit_run(b, *e) == 0) {
+            Some((i, e, PHONE))
+        } else {
+            address_at(s, i).map(|e| (i, e, ADDRESS))
+        };
+        match found {
+            Some((from, end, to)) => {
+                out.push_str(&s[last..from]);
+                out.push_str(to);
+                last = end;
+                i = end;
+            }
+            None => i += s[i..].chars().next().map_or(1, char::len_utf8),
+        }
+    }
+    if last == 0 {
+        return None;
+    }
+    out.push_str(&s[last..]);
+    Some(out)
+}
+
+/// Medorama's secret (32 random bytes, made once): it keys the patient index's hashes
+/// (persons.rs), the tokens of entries and visits, file tokens and DICOM UIDs' replacements.
+/// It is kept wrapped by the master key like a data key (owner [`crate::workspace::GATE_OWNER`],
+/// in the `keys` table), never in plain text: with it, a copy of the control store would let
+/// medical record numbers, which are few, be tried one by one against the index's hashes.  A
+/// secret an earlier version kept in plain text (the `gate_secret` setting) is wrapped at its
+/// first use, and its setting deleted.  Never sent anywhere.
+pub fn secret(c: &Connection) -> anyhow::Result<zeroize::Zeroizing<Vec<u8>>> {
+    use crate::workspace::{self, Key, GATE_OWNER};
+    let m = workspace::loaded()?;
+    if let Some(k) = workspace::key(c, m, GATE_OWNER)? {
+        return Ok(k.bytes());
+    }
+    let plain: Option<String> =
+        c.query_row("SELECT value FROM settings WHERE key = 'gate_secret'", [], |r| r.get(0)).optional()?;
+    let old = plain.and_then(|v| serde_json::from_str::<String>(&v).ok()).and_then(|h| from_hex(&h));
+    let k = match old.as_deref().and_then(|b| Key::from_bytes(b)) {
+        Some(k) => k,
+        None => Key::random()?,
+    };
+    // another connection may have kept one first: the one kept
+    let k = workspace::keep_key(c, m, GATE_OWNER, &k)?;
+    c.execute("DELETE FROM settings WHERE key = 'gate_secret'", [])?;
+    Ok(k.bytes())
+}
+
+fn from_hex(h: &str) -> Option<zeroize::Zeroizing<Vec<u8>>> {
     (h.len() == 64)
         .then(|| (0..32).map(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).ok()).collect::<Option<Vec<u8>>>())
         .flatten()
+        .map(zeroize::Zeroizing::new)
 }
 
 // ------------------------------------------------------------------ files
@@ -784,30 +1058,53 @@ pub fn wfdb_header(
 mod tests {
     use super::*;
 
+    #[test]
+    fn no_text_breaks_the_scrubbers() {
+        // identifiers, contact details and names beside characters of two to four bytes
+        let pieces =
+            ["Doe", "doe", "Jane", "555", "-", "0123", "@", "x.org", " ", "St", "°", "é", "😀", "Ü", "MRN", ":", "1"];
+        let names = vec!["Doe".to_string(), "Jane".to_string()];
+        let n = pieces.len();
+        let mut text = String::new();
+        for a in 0..n {
+            for b in 0..n {
+                for c in 0..n {
+                    for d in 0..n {
+                        text.clear();
+                        for k in [a, b, c, d] {
+                            text.push_str(pieces[k]);
+                        }
+                        let _ = safe_harbor(&text);
+                        let mut v = serde_json::json!({"text": text.clone()});
+                        scrub_names(&mut v, &names, "1950-03-04");
+                    }
+                }
+            }
+        }
+    }
+
     fn dict() -> Dict {
         let mut d = Dict {
             version: 0,
             whole: HashMap::new(),
             words: HashMap::new(),
+            normal: HashMap::new(),
+            names: ["zyxwortha".to_string(), "quilbert".into()].into(),
             paths: HashMap::new(),
             path_lengths: vec![],
             pseudonyms: HashMap::new(),
             draws: HashMap::from([(1, 0.25), (2, 0.75)]),
             draws_by_pseudonym: HashMap::from([("MO-1111-1111".into(), 0.25), ("MO-2222-2222".into(), 0.75)]),
-            draws_by_encounter: HashMap::from([(3, 0.25), (4, 0.75)]),
             recordings: HashMap::new(),
             draws_by_recording: HashMap::from([(recording_token(5), 0.75)]),
         };
         for (a, b) in
             [("P900004", "MO-7F3K-2QXM"), ("SYN0000004", MRN), ("E9100002", "MO-E-AAAA-AAAA"), ("P1", "MO-1111-1111")]
         {
-            if wordlike(a) {
-                d.words.insert(a.into(), b.into());
-            }
-            d.whole.insert(a.into(), b.into());
+            d.add(a, b.into());
         }
         // a bedside-monitor recording name, made at run time (the repository's hook refuses real-looking ones)
-        d.whole.insert(format!("/data/icu/ICU7_12-{}", 1_700_000_000), recording_token(5));
+        d.whole.insert(format!("/data/icu/icu7_12-{}", 1_700_000_000), recording_token(5));
         d
     }
 
@@ -822,6 +1119,80 @@ mod tests {
         assert!(d.scrub("P9000045 and XP900004").is_none(), "only whole words");
         assert_eq!(d.scrub(&format!("/data/icu/ICU7_12-{}", 1_700_000_000)).unwrap(), "mo-rec:5");
         assert!(d.scrub("nothing here").is_none());
+    }
+
+    #[test]
+    fn identifiers_are_found_whatever_their_case_and_zeros() {
+        let d = dict();
+        // the MRN SYN0000004, written otherwise
+        for t in ["syn0000004", "SYN-0000004", "Syn_0000004", "MRN syn4 here"] {
+            let out = d.scrub(t).unwrap_or_else(|| panic!("{t}"));
+            assert!(out.contains(MRN) && !out.to_lowercase().contains("syn"), "{t}: {out}");
+        }
+        assert_eq!(d.scrub("p900004").unwrap(), "MO-7F3K-2QXM");
+        // a short form of digits alone is not taken for one (a year)
+        assert_eq!(normal("0002024"), None);
+        assert_eq!(normal("00083651927").as_deref(), Some("83651927"));
+        assert_eq!(normal("SYN-0004").as_deref(), Some("syn4"));
+        assert_eq!(normal("P01"), None);
+        assert!(d.scrub("in 2024 and 2025").is_none());
+    }
+
+    #[test]
+    fn names_are_replaced_whatever_their_letters() {
+        // lower-casing İ makes it longer: compared character by character, whole words only
+        assert_eq!(
+            replace_word("Dr İnce saw İNCE, not İncey.", "İnce", PATIENT_NAME),
+            "Dr [Patient Name] saw [Patient Name], not İncey."
+        );
+        assert_eq!(replace_word("ÉLODIE and élodie", "Élodie", "X"), "X and X");
+        assert_eq!(replace_word("Smithson Smith", "smith", "X"), "Smithson X");
+        // every linked patient's names, in text about any of them
+        let d = dict();
+        assert_eq!(
+            d.scrub_any_names("ECG of ZYXWORTHA, Quilbert's").unwrap(),
+            "ECG of [Patient Name], [Patient Name]'s"
+        );
+        assert!(d.scrub_any_names("Zyxworthas and Quilbert2").is_none(), "whole words only");
+        let r = Restricted { settings: Settings::default(), dict: Arc::new(d), secret: Default::default() };
+        let mut v = serde_json::json!({"label": "Quilbert's ECG", "results": [{"summary": {"note": "for Zyxwortha"}}], "name": "Quilbert"});
+        r.json(&mut v);
+        assert_eq!(v["label"], "[Patient Name]'s ECG");
+        assert_eq!(v["results"][0]["summary"]["note"], "for [Patient Name]");
+        assert_eq!(v["name"], "Quilbert", "only under the keys of free text about anyone");
+    }
+
+    #[test]
+    fn contact_details_are_replaced_in_text() {
+        let t = "Call (555) 123-4567 or 555.123.4568, +1 555 123 4569, +44 20 7946 0958; SSN 123-45-6789; \
+                 mail jane.doe+x@example.org; see https://example.org/p?id=7. Lives at 12 Elm Street, \
+                 then 4410 Old Mill Rd. and P.O. Box 77. MRN: 0012345.";
+        let out = safe_harbor(t).unwrap();
+        for gone in ["555", "7946", "6789", "jane", "example", "Elm", "Mill", "Box 77", "0012345"] {
+            assert!(!out.contains(gone), "{gone}: {out}");
+        }
+        for p in [PHONE, SSN, EMAIL, URL, ADDRESS, MRN] {
+            assert!(out.contains(p), "{p}: {out}");
+        }
+        assert!(out.ends_with("MRN: [MRN]."), "{out}");
+        // not contact details: dates, times, measurements, doses
+        for kept in [
+            "2024-01-02 08:00",
+            "BP 120/80, HR 72",
+            "Lactate 4.1 mmol/L",
+            "QT 400 ms",
+            "2 tablets daily",
+            "recording-1704110400",
+            "v1.2.3",
+            "20240102083000",
+            "Dr. Osei",
+            "3 Main points",
+        ] {
+            assert_eq!(safe_harbor(kept), None, "{kept}");
+        }
+        // in a note as Privacy Mode shows it
+        let r = Restricted { settings: Settings::default(), dict: Arc::new(dict()), secret: Default::default() };
+        assert!(r.note("phone 555-123-4567", &[], "").contains(PHONE));
     }
 
     #[test]
@@ -850,14 +1221,14 @@ mod tests {
         for x in ["Smith", "Jones", "O'Brien", "Brien", "Mary"] {
             assert!(w.contains(&x.to_string()), "{x}: {w:?}");
         }
-        let r = Restricted { settings: Settings::default(), dict: Arc::new(dict()), secret: vec![] };
+        let r = Restricted { settings: Settings::default(), dict: Arc::new(dict()), secret: Default::default() };
         let n = r.note("Mrs Smith-Jones (née Jones), and O'Brien", &w, "");
         assert!(!n.contains("Smith") && !n.contains("Jones") && !n.contains("Brien"), "{n}");
     }
 
     #[test]
     fn notes_lose_the_patients_own_names() {
-        let r = Restricted { settings: Settings::default(), dict: Arc::new(dict()), secret: vec![] };
+        let r = Restricted { settings: Settings::default(), dict: Arc::new(dict()), secret: Default::default() };
         let n = r.note(
             "Jane Doe (DOE, JANE), born 1950-03-04, seen 2024-01-02. Janet is her sister.",
             &["Jane".into(), "Doe".into()],
@@ -883,7 +1254,7 @@ mod tests {
 
     #[test]
     fn each_patient_has_their_own_offset() {
-        let r = Restricted { settings: Settings::default(), dict: Arc::new(dict()), secret: vec![] };
+        let r = Restricted { settings: Settings::default(), dict: Arc::new(dict()), secret: Default::default() };
         let day = 86400.0;
         let (t1, t2) = (1_704_175_800.0, 1_704_175_800.0 + 3.0 * day);
         let mut v = serde_json::json!({"items": [
@@ -895,33 +1266,27 @@ mod tests {
         let a = v["items"][0]["time"].as_f64().unwrap();
         let b = v["items"][1]["time"].as_f64().unwrap();
         let base = v["items"][2]["time"].as_f64().unwrap();
-        assert_eq!(base, t1 - r.settings.base_seconds() as f64, "no patient: the catalog's offset");
+        assert_eq!(base, t1 - r.settings.base_seconds() as f64, "no patient: Medorama's offset");
         assert!(a < base && b < a, "each patient moved further, by their own days: {a} {b} {base}");
         assert_eq!(v["items"][0]["end"].as_f64().unwrap() - a, t2 - t1, "a patient's intervals are kept");
         // the same patient, on their page, by another session: the same dates
         let mut w = serde_json::json!({"time": t1});
         r.for_patient(1).json(&mut w);
         assert_eq!(w["time"].as_f64().unwrap(), a);
-        // an entry's key: by its encounter's patient, and back
-        let k = r
-            .dict
-            .draws_by_encounter
-            .get(&4)
-            .map(|_| shown_key("labs:4:1704175800", &r.key_settings("labs:4:1")))
-            .unwrap()
-            .unwrap();
-        assert_eq!(k, format!("labs:4:{}", t1 - (t1 - b)));
-        assert_eq!(r.real_key(&k), "labs:4:1704175800");
+        // an entry's key: by its patient, and back
+        let k = shown_key("labs:2:1704175800", &r.key_settings("labs:2:1")).unwrap();
+        assert_eq!(k, format!("labs:2:{}", t1 - (t1 - b)));
+        assert_eq!(r.real_key(&k), "labs:2:1704175800");
         // a recording: by its patient's
         assert_eq!(r.for_recording(&recording_token(5)).settings.offset_seconds(), (t1 - b) as i64);
-        // none spread: the catalog's offset for everyone
+        // none spread: Medorama's offset for everyone
         let flat = Settings { spread_days: 0, ..Settings::default() };
         assert_eq!(flat.for_draw(Some(0.99)).offset_seconds(), flat.base_seconds());
     }
 
     #[test]
     fn a_recording_moves_by_its_patients_offset() {
-        let r = Restricted { settings: Settings::default(), dict: Arc::new(dict()), secret: vec![] };
+        let r = Restricted { settings: Settings::default(), dict: Arc::new(dict()), secret: Default::default() };
         let t1 = 1_704_175_800.0;
         let patient2 = t1 - r.for_patient(2).settings.offset_seconds() as f64;
         let patient1 = t1 - r.for_patient(1).settings.offset_seconds() as f64;
@@ -937,7 +1302,7 @@ mod tests {
         assert_eq!(v["items"][0]["t_start"].as_f64().unwrap(), patient2, "by its token");
         assert_eq!(v["items"][1]["t_start"].as_f64().unwrap(), patient1, "by its encounter");
         let base = t1 - r.settings.base_seconds() as f64;
-        assert_eq!(v["items"][2]["t_start"].as_f64().unwrap(), base, "linked to no one: the catalog's offset");
+        assert_eq!(v["items"][2]["t_start"].as_f64().unwrap(), base, "linked to no one: Medorama's offset");
         assert!(patient2 != base && patient1 != base);
     }
 
@@ -962,7 +1327,7 @@ mod tests {
 
     #[test]
     fn wfdb_headers_lose_names_and_file_names() {
-        let r = Restricted { settings: Settings::default(), dict: Arc::new(dict()), secret: vec![] };
+        let r = Restricted { settings: Settings::default(), dict: Arc::new(dict()), secret: Default::default() };
         let text = "P900004_ecg 2 500 5000 08:30:00 15/01/2024\nP900004_ecg.dat 16 200/mV 16 0 0 0 0 I\nP900004_ecg.dat 16 200/mV 16 0 0 0 0 II\n# Name: Jane Doe\n# MRN: SYN0000004\n# Age: 94\n# Confirmed by: Dr. K. Osei\n# Confirmed at: 2024-01-16 09:00\n";
         let names: HashMap<String, String> = [("P900004_ecg.dat".to_string(), "mo-f0001.dat".to_string())].into();
         let out = wfdb_header(&r, text, "mo-f0000", &names, (&[], ""));

@@ -2,7 +2,7 @@
 
 import { api } from './api.js';
 import { LABEL_W, PAD_R, drawAxis, drawLanes, drawOverview, fmtVal, readTheme, repairedSpans } from './render.js';
-import { escapeHtml, displayModality, infoContent } from './text.js';
+import { escapeHtml, channelMeta, displayModality, infoContent } from './text.js';
 import { fields, fmtDuration, fmtFull, fmtTime, toUnix, zoneName } from './timefmt.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -562,7 +562,7 @@ function buildLanes() {
   for (const m of s.modalityOrder) {
     for (const c of ds.channels.filter((x) => x.modality === m && s.enabledCh.has(x.id))) {
       lanes.push({
-        type: 'wave', ch: c.id, title: c.label, sub: `${c.unit || 'adu'}${c.fs ? ` · ${+c.fs.toFixed(3)} Hz` : ''}`,
+        type: 'wave', ch: c.id, title: c.label, sub: channelMeta(c),
         h: Math.round((m === 'ecg' ? 92 : 80) * k), color: theme.modality(m), unit: c.unit,
       });
     }
@@ -631,7 +631,7 @@ function renderChannelList() {
       const lab = document.createElement('label');
       lab.innerHTML = `<input type="checkbox" ${s.enabledCh.has(c.id) ? 'checked' : ''}>
         <span class="sw"></span>
-        <span>${escapeHtml(c.label)}</span><span class="meta">${escapeHtml(c.unit || 'adu')}${c.fs ? ` · ${+(+c.fs).toFixed(3)} Hz` : ''}</span>`;
+        <span>${escapeHtml(c.label)}</span><span class="meta">${escapeHtml(channelMeta(c))}</span>`;
       lab.querySelector('.sw').style.background = theme.modality(m);   // CSSOM: no style attribute (CSP)
       lab.querySelector('input').onchange = (ev) => {
         if (ev.target.checked && s.enabledCh.size >= MAX_WAVE_LANES) {

@@ -191,6 +191,13 @@ def _plus_year(recording):
     return int(date[7:])
 
 
+def _days_in_month(year, m):
+    """The days of month m (1-12) of `year` (Gregorian: February has 29 in leap years)."""
+    if m == 2:
+        return 29 if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0) else 28
+    return 30 if m in (4, 6, 9, 11) else 31
+
+
 def start_of(date, time, recording=None):
     """The start of a file: its header's date (dd.mm.yy: 85-99 are 1985-1999, the others
     2000-2084; an EDF+ recording field's 'Startdate dd-MMM-yyyy' gives the year in full) and time
@@ -207,7 +214,7 @@ def start_of(date, time, recording=None):
         year = 1900 + yy if yy >= 85 else 2000 + yy
     else:
         return None
-    if not (1 <= m <= 12 and 1 <= d <= 31) or hh > 23 or mi > 59 or ss > 59:
+    if not (1 <= m <= 12 and 1 <= d <= _days_in_month(year, m)) or hh > 23 or mi > 59 or ss > 59:
         return None
     return float(_days_from_civil(year, m, d) * 86400 + hh * 3600 + mi * 60 + ss)
 

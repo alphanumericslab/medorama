@@ -12,7 +12,7 @@ JSON as the Rust and C++ viewers, and writes the same index
 | | |
 |---|---|
 | Command | `vitalstream-py` (default port 8050) |
-| Package | `vitalstream_py`, for Python 3.9 or later, with FastAPI, uvicorn, NumPy (and, on Windows, `tzdata` for the time zones) and, with the `[wfdb]` extra, [wfdb-x](https://github.com/alphanumericslab/wfdb-x) (installed from GitHub). |
+| Package | `vitalstream_py`, for Python 3.9 or later, with FastAPI, uvicorn, NumPy, [sqlcipher3](https://github.com/coleifer/sqlcipher3) (the index store: its wheels bundle SQLCipher 4 on SQLite 3.54.1 or later; nothing to install besides) (and, on Windows, `tzdata` for the time zones) and, with the `[wfdb]` extra, [wfdb-x](https://github.com/alphanumericslab/wfdb-x) (installed from GitHub). |
 | Install | `pip install './viewers/vitalstream/python/vitalstream[wfdb]'`, or `viewers/vitalstream/install.sh --viewer py` ([VitalStream's README](../../README.md#install)). |
 | Run, settings, services | [VitalStream's README](../../README.md#run). |
 
@@ -68,6 +68,8 @@ key of the wrong type stops it. Among the keys:
 | `data_roots` | the viewer's root | The folders the viewer may open, inside its root. A path is allowed when the file or folder it leads to, with every symbolic link resolved, lies inside one. |
 | `max_records`, `max_depth`, `max_scan_s` | 5000, 20, 10 | The limits on a folder of WFDB records: header files below it, folder levels, and seconds to count them ([docs/wfdb-collection.md, Limits](../../../../docs/wfdb-collection.md#limits)). |
 | `require_password` | false | Refuses to start without a password. |
+| `cache_dir` | `<viewer>/sample_data/outputs/index` from a clone, else `~/.cache/vitalstream` | The folder of the viewer's own index store, `index.sqlite` (index format 3; shared with the Rust and C++ viewers). |
+| `index_key_file` | empty | A file holding 64 hex digits: the key the viewer's own store is encrypted with (SQLCipher 4, raw key). Empty: a plain store. A store made with a key opens only with it. |
 | `allowed_hosts`, `secure_cookie` | `[]`, false | The host names answered for besides the local ones and `host` ([docs/viewer-api.md, Requests](../../docs/viewer-api.md#requests)); the sign-in cookie marked `Secure`. |
 
 ## How it works
@@ -77,12 +79,29 @@ key of the wrong type stops it. Among the keys:
 | [`__main__.py`](vitalstream_py/__main__.py), [`settings.py`](vitalstream_py/settings.py), [`auth.py`](vitalstream_py/auth.py) | The command line, the settings file, the password. |
 | [`server.py`](vitalstream_py/server.py) | The HTTP API (FastAPI; [docs/viewer-api.md](../../docs/viewer-api.md)), with its interactive description at `api/v1/docs`. |
 | [`sources/`](vitalstream_py/sources) | The built-in readers, chosen in [`sources/__init__.py`](vitalstream_py/sources/__init__.py). [`wfdb_folder.py`](vitalstream_py/sources/wfdb_folder.py) reads WFDB records: one record, multi-segment records, a collection, a folder of records read as one session, and the limits on a folder ([`wfdb_files.py`](vitalstream_py/sources/wfdb_files.py) holds what needs no wfdb-x; [`wfdb_none.py`](vitalstream_py/sources/wfdb_none.py) takes the reader's place without wfdb-x). [`edf.py`](vitalstream_py/sources/edf.py) reads EDF, EDF+, BDF and BDF+ files ([docs/edf.md](../../../../docs/edf.md)). Other formats are read through [`adapters.py`](vitalstream_py/adapters.py). |
-| [`common.py`](vitalstream_py/common.py), [`index.py`](vitalstream_py/index.py), [`dataset.py`](vitalstream_py/dataset.py) | Channels, pieces and envelopes; the index ([docs/index-format.md](../../docs/index-format.md)), memory-mapped; the window, vital-sign and marker queries. |
+| [`common.py`](vitalstream_py/common.py), [`index.py`](vitalstream_py/index.py), [`store.py`](vitalstream_py/store.py), [`dataset.py`](vitalstream_py/dataset.py) | Channels, pieces and envelopes; the index ([docs/index-format.md](../../docs/index-format.md)) and the index store it is packed into (format 3: [Version 3: the index store](../../docs/index-format.md#version-3-the-index-store)); the window, vital-sign and marker queries. |
+
+**The index store.** The viewer keeps its indexes in one SQLite database, `cache_dir/index.sqlite`,
+encrypted with SQLCipher when `index_key_file` is set; the Rust and C++ viewers write and read
+the same stores, with the same rows. An index is built as the files of format 2 in a private
+temporary folder next to the store (`index.tmp/`), then packed in one transaction (an index of
+the same key written by the same version is kept). Envelopes are read back by range, a chunk at a
+time; markers and vital signs whole. An adapter's recording loaded from a store gets a private
+folder holding only its `meta.json`, for the adapter to read samples again, for as long as it is
+loaded. `vitalstream-py --index PATH` indexes into the own store. The index folder of format 2
+(`index.build_index`, `index.load_index`) is kept for the tests only.
+
+**Launched by Medorama** (`--keys-on-stdin`), the viewer reads its stores and their keys on
+standard input, one JSON line each (`{"store": PATH, "key": HEX}`, with `"own": true` for the one
+it writes; `{"forget": PATH}`), looks a recording up in the stores given, then in its own, and
+forgets them all when standard input closes. The keys are kept in memory only: never written,
+logged or repeated in an error message. The worker processes that build indexes need no key:
+they write the files, and the server packs them.
 
 Indexing runs in worker processes (`index_workers` at a time), which report their progress
-through a file beside the index (`<key>.progress.json`). A cancelled index
+through a file in the server's private temporary folder. A cancelled index
 (`POST api/v1/cancel`) stops at the next block of samples, through a flag file the worker
-checks, and leaves nothing in the index folder; so does an index that fails, whose dataset
+checks, and leaves nothing in the store or next to it; so does an index that fails, whose dataset
 state becomes `error` with the reason. A worker process that dies (killed, out of memory) makes
 the state `error` too, and the next index is built in a new pool of workers. The workers open no
 file outside the data roots ([`paths.py`](vitalstream_py/paths.py);
@@ -119,6 +138,16 @@ the package afresh with wfdb-x made unimportable.
   messages of the Rust engine's `libs/engine/tests/wfdb_mat.rs`: read as the `.dat` file,
   refused when they do not match their header, and a signal file opened alone answered with its
   header.
+- [`test_store.py`](tests/test_store.py) tests the index store with the checks of the Rust
+  engine's `libs/engine/tests/store.rs` and the Rust viewer's `stores_and_keys_on_a_pipe`: a store
+  answers as a folder does, plain and encrypted, cut into small chunks; reads by range across
+  chunk boundaries, and a chunk or an array not of its length refused; without its key (or with
+  another) a store is not read, and its file holds no text of the index; an index kept, replaced
+  and removed whole; a cancelled or failed build leaves nothing; the keys on a pipe; the own
+  store and `index_key_file`; an adapter reading samples through its private folder. When
+  `vitalstream-rs` is built (`target/release` or `target/debug`), stores it writes (`--index`,
+  plain and with `index_key_file`) are read here with the same rows, and a store written here is
+  read by it (`open` answers `ready`, with the same windows).
 - [`test_edf.py`](tests/test_edf.py) tests EDF, EDF+ and BDF files with the checks of the Rust
   engine's `tests/edf.rs`, the header dates and the annotation lists.
 - [`test_limits.py`](tests/test_limits.py) tests the limits and checks shared with the Rust

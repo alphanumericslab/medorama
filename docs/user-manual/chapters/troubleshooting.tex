@@ -27,9 +27,21 @@ as the programs print them; \code{...} stands for the part that varies.
 \endhead
 \bottomrule
 \endfoot
-\code{no catalog in .../.local/share/medorama} & The catalog is elsewhere:
-  \cmd{medorama -{}-home DIR use}, or \opt{-{}-home DIR}, or \code{MEDORAMA\_HOME}
-  (\cref{chap:administration}) \\
+\code{Medorama is not set up in .../.local/share/medorama} & Its home is elsewhere:
+  \cmd{medorama -{}-home DIR use}, or \opt{-{}-home DIR}, or \code{MEDORAMA\_HOME}; or set it
+  up with \cmd{medorama init -{}-workspace DIR} (\cref{chap:administration}) \\
+\code{...: workspace\_dir is required} & \file{medorama.toml} names no workspace: add
+  \code{workspace\_dir} (\cref{sec:administration-settings}) \\
+\code{...: no master key (...): set MEDORAMA\_MASTER\_KEY, master\_key\_command or
+  master\_key\_file} & The master key file is not where the settings say: put it back, or name
+  the key's source (\cref{sec:administration-keys}). Without it, the workspace cannot be read \\
+\code{...: the master key must be 64 hex digits (256 bits)} & The key file, the variable or the
+  command's output is not a key: \cmd{medorama keys new FILE} makes one \\
+\code{master\_key\_command failed: ...} & The command that prints the master key failed (a locked
+  keyring, an expired Vault token): its own message follows \\
+\code{...: its key does not unwrap with this master key}, \code{...: its key was wrapped by
+  another master key} & Medorama runs with another master key than the one that wrapped the
+  data keys: give it the right one; after a rotation, the new one (\cref{sec:administration-keys}) \\
 \code{... medorama.sqlite is missing, although ... medorama.toml is there} & \cmd{init} stopped
   before creating the database (delete \file{medorama.toml} and run \cmd{init} again), or the
   database was moved or deleted (put it back, or set \code{database}) \\
@@ -38,6 +50,10 @@ as the programs print them; \code{...} stands for the part that varies.
   system: choose a home folder on a local disk with \opt{-{}-home} \\
 \code{unknown settings: ...}, \code{bad value for ...} & A mistyped key or a value of the wrong
   type in \file{medorama.toml}; the keys and their types are in \cref{chap:settings-reference} \\
+\code{index\_dir is no longer a setting: indexes are kept in each database's workspace folder
+  (index format 3); remove the line} & \file{medorama.toml} still has \code{index\_dir}, from an
+  earlier version: delete that line. Each database's indexes are now in its workspace folder,
+  encrypted; recordings are indexed again into it \\
 \code{unknown time zone ...} & \code{timezone} (or \opt{-{}-timezone}) takes an IANA name, such
   as \code{America/New\_York} \\
 \code{cannot listen on 127.0.0.1:8090} & Another program uses the port: \opt{-{}-port N}, or
@@ -45,21 +61,44 @@ as the programs print them; \code{...} stands for the part that varies.
 \cmd{serve}: \code{WARNING: reachable from other machines without HTTPS} & \code{host} is not a
   loopback address and \code{secure\_cookies} is \code{false}: serve it behind a proxy with TLS
   (\cref{chap:deployment}) \\
-Import: \code{skipped ...: the catalog writes to ...} & The results, index or home folder is a
-  recording's folder or inside one: choose folders elsewhere \\
-Import: \code{outside the configured data\_roots} & Add the folder to \code{data\_roots} (empty:
-  anywhere) \\
-Import: \code{... not a recording Medorama reads. A format read by an add-on needs it installed
-  ...} & A recording row (ICU, Holter, EEG or sleep) names a file that no installed reader reads: install the add-on,
-  restart, then remove that import and import the table again (\cref{chap:addons}) \\
+Connecting: \code{the file is outside the folders data may come from (data\_roots)} & Add the
+  database file's folder to \code{data\_roots} (empty: anywhere), and restart \\
+Connecting: \code{that file is in Medorama's workspace}, \code{that is Medorama's own control
+  store} & A connected database lies outside the workspace and is never the control store: move
+  the database file \\
+Connecting: \code{no database file ...} & The \code{sqlite:} URL names no file: give its
+  absolute path \\
+Connecting: \code{a database named ... is connected} & Names are unique (whatever their case):
+  choose another \\
+Connecting: \code{only admins connect databases} & Ask an administrator \\
+Connecting: \code{... is connected, but reading it failed (refresh it)} & The database answered
+  the check, but reading its variables, persons or recordings failed: fix the cause given, then
+  \cmd{medorama databases refresh NAME} \\
+A database has a grey dot (offline) & It did not answer its last check: the users who manage it
+  see why on its page (\cref{sec:administration-status}). It is checked again every 60 seconds,
+  or with \ui{Check now}; meanwhile searches leave it out and say so \\
+\code{... does not answer: ...} (refresh) & The database is offline: see its error, fix the
+  connection, then refresh again \\
+\code{no search permission on db:N}, \code{no view permission on ...} & The user holds no such
+  grant on the database or cohort: a user who manages it grants it
+  (\cref{sec:administration-grants}) \\
+A patient is two patients, or a person is not linked & Its identifiers differ between the
+  databases (another issuer, another MRN authority), or name two patients: the database's
+  \ui{Identity conflicts} (\cmd{medorama databases conflicts NAME}) list the latter. Correct the
+  identifiers in the database, or its \code{issuer} and \code{mrn\_authority} settings, then
+  refresh it (\cref{sec:administration-identity}) \\
+A recording is listed as missing: \code{no such file or folder}, \code{outside the folders data
+  may come from (data\_roots)}, \code{inside Medorama's workspace} & The file a recording
+  database names is not there, lies outside \code{data\_roots}, or lies inside the workspace:
+  correct the database (relative paths are read from \code{files\_root}, else the SQLite file's
+  folder) or the settings, then refresh it \\
+A recording is listed as unreadable: \code{not a recording this program reads ...} & No installed
+  reader reads it: for a vendor format, install its add-on and restart (\cref{chap:addons}) \\
 A recording stays gray (not indexed) & Is the server running with workers and
   \code{auto\_index = true}? Otherwise \cmd{medorama run index -{}-recording ID} and
   \cmd{medorama work}. When it shows \ui{Failed}, the \ui{Jobs} tab shows the error \\
-Recordings are not linked to encounters & Linking needs a row naming the file, or a bed stay
-  with the same \code{UNIT\_BED} overlapping the recording's time: check
-  \cmd{medorama recordings -{}-unlinked} and the databases' times (their time zone) \\
-\ui{View} is grayed out & Its tooltip says why; usually no viewer is installed beside the
-  catalog: \cmd{tools/install-medorama.sh -{}-viewer cpp}, or set \code{viewer} \\
+\ui{View} is grayed out & Its tooltip says why; usually no viewer is installed beside
+  Medorama: \cmd{tools/install-medorama.sh -{}-viewer cpp}, or set \code{viewer} \\
 The \ui{VitalStream} tab does not start & The viewer's own output is in
   \file{<home>/viewer/viewer.log} \\
 \code{too many failed attempts; try again in 60 s} & 5 wrong passwords lock a user name for a
@@ -67,15 +106,14 @@ The \ui{VitalStream} tab does not start & The viewer's own output is in
 A forgotten admin password & \cmd{medorama user set NAME -{}-password} on the server \\
 \code{the catalog needs at least one enabled admin} & A change or removal would leave no enabled
   admin: make another user an admin first \\
+\code{you cannot revoke your own manage permission} & Another user who manages the database or
+  cohort revokes it \\
 \code{the database has schema version N, newer than this program knows} & A newer
-  \cmd{medorama} updated the database: use that version \\
-\code{a database key is configured, but this build has no encryption} & \code{MEDORAMA\_KEY} or
-  \code{key\_file} is set for a build without \opt{-{}-features encryption}: build it with
-  encryption, or remove the key if the database was never encrypted \\
+  \cmd{medorama} updated the control store: use that version \\
 \code{key\_file encrypts a SQLite database; a PostgreSQL database is encrypted by its server} &
   remove \code{key\_file}: on PostgreSQL the server encrypts \\
 \code{the PostgreSQL database ... holds no catalog yet} & \code{database\_url} names an empty
-  database: create the catalog there (\cmd{init -{}-database-url}), or copy one
+  database: create the control store there (\cmd{init -{}-database-url}), or copy one
   (\cmd{copy-database}) \\
 \code{PostgreSQL: ... TLS ...} & The server offers no TLS, or a certificate Medorama cannot
   verify: install a certificate, or name its authority in \code{database\_ca\_file};
@@ -85,12 +123,14 @@ A forgotten admin password & \cmd{medorama user set NAME -{}-password} on the se
 A query fails on PostgreSQL only & Run with \code{MEDORAMA\_DEBUG\_SQL=1}: it prints the
   statement PostgreSQL refused, as translated (never its values) \\
 A patient's page says \code{omop: not available} & That connected database did not answer:
-  \cmd{medorama connections check omop} (\cref{chap:connecting}) \\
+  \cmd{medorama databases check omop} (\cref{chap:connecting}) \\
 A criterion: \code{... names N measurements in omop} & OMOP's concept names are long: write the
   one meant, quoted (\code{omop."Lactate [Moles/volume] in Blood" > 4}) \\
-A search is refused in Privacy Mode & Searches of names, MRNs, dates of birth, account numbers
-  or withheld columns are refused there; find patients by their pseudonyms, or leave Privacy
-  Mode with the PHI permission (\cref{chap:users-privacy}) \\
+A search is refused in Privacy Mode & Searches of names, MRNs and dates of birth are refused
+  there; find patients by their pseudonyms, or leave Privacy Mode with the PHI permission and
+  the \code{phi} grant on the database (\cref{chap:users-privacy}) \\
+A cohort's result says \code{left out: ... (offline)} or \code{(not ticked)} & That database was
+  not searched: it is offline, or not ticked in \ui{Search in} (\cref{sec:cohorts-search-in}) \\
 A file does not open in Privacy Mode (403) & Privacy Mode sends only the files it can
   de-identify or mark (WFDB headers and their \file{.dat} and \file{.mat} signal files, GE MUSE
   XML, DICOM, EDF and BDF, pictures, videos and PDF) and refuses the rest: JSON ECGs, text files,
@@ -170,8 +210,9 @@ An IPv4 proxy is ignored although its address is listed & When Medorama listens 
   another Medorama: ask for the release that matches yours \\
 \cmd{addons list} shows it, but its files are still refused & The server was not restarted, or
   it runs as another account whose \code{adapters\_dir} is elsewhere \\
-Recordings named by an earlier import are missing & They were skipped before the add-on was
-  there: remove that import and import the table again \\
+Recordings of a recording database stay unreadable & They were checked before the add-on was
+  there: restart the server after installing it, then refresh the database or run
+  \cmd{medorama check} \\
 Indexing fails with the adapter's message & The adapter could not read the file; a session that
   ended is started again once, and the recording stays unreadable until the file or the adapter
   changes \\
@@ -264,7 +305,7 @@ The synthetic test recordings cannot be opened & The clone must lie inside the v
 \code{not a recording this program reads: ...} & No reader reads that file: for a vendor format,
   install its add-on (\cref{chap:addons}) \\
 \code{this build has no WFDB support (...)} & A program built without WFDB support (no wfdb-x)
-  refuses WFDB records and folders; an import lists them among the skipped files. Use a build with
+  refuses WFDB records and folders; Medorama lists them as unreadable. Use a build with
   WFDB support (\cref{sec:installation-no-wfdb}) \\
 \code{a password is required here (require\_password); set one with --set-password} & The
   settings require a password: \opt{-{}-set-password}, once \\
@@ -316,10 +357,14 @@ A toast with an error in the page & The request in the browser's network panel: 
   \code{detail}; a 500 is also on the server's standard error \\
 A screen stays empty & The browser's console (errors that no screen caught are also shown as a
   toast) \\
-A database imports, but rows are missing or wrong & The import report (warnings, ``held back''),
-  then the \ui{Databases} tab (each row's status) and \ui{Review} \\
-A file does not open in its viewer & The row's \code{file} column, \code{data\_roots} in
-  \file{medorama.toml}, then the viewer's own message (it names what it cannot read) \\
+A db-builder database lacks rows, or patients & \cmd{db-builder check} on it (rows without an
+  issuer, identifiers given to two patients), then \cmd{db-builder info} (\cref{chap:importing}) \\
+A connected database's patients or variables look wrong & Its page on the \ui{Databases} tab
+  (status, version, variables, identity conflicts), \cmd{medorama databases variables NAME},
+  then a refresh \\
+A file does not open in its viewer & The recording's \code{file} in its database,
+  \code{data\_roots} in \file{medorama.toml}, the recording's status in \ui{Databases}
+  $\rightarrow$ \ui{Recordings}, then the viewer's own message (it names what it cannot read) \\
 A job fails & \cmd{medorama jobs -{}-state failed}; a plug-in's own log is \file{log.txt} in its
   output folder \\
 Privacy Mode shows something it should not & Report it as a vulnerability; the code is in
@@ -329,13 +374,13 @@ A cohort finds the wrong patients & \code{POST cohorts/parse \{"text": ...\}} sh
   expression is read (\cref{chap:http-api}) \\
 A query fails on PostgreSQL only & \code{MEDORAMA\_DEBUG\_SQL=1} prints each statement
   PostgreSQL refuses, as translated (never its values) \\
-A connected database answers wrongly & \cmd{medorama connections check NAME}; its views;
+A connected database answers wrongly & \cmd{medorama databases check NAME}; its views;
   \code{MEDORAMA\_DEBUG\_SQL=1} \\
 The waveform viewer under Medorama & \file{<home>/viewer/viewer.log} \\
 \end{xltabular}
 
 \begin{phibox}
-The database holds identifiers: \cmd{sqlite3 medorama.sqlite} opens it (with its key,
-\code{MEDORAMA\_KEY}, if it is encrypted), but open copies of real catalogs only where patient data
-may be, and never paste their values, headers or paths into a report.
+The control store holds no identifier, but the workspace does, encrypted, and so do the
+connected databases: open copies of real ones only where patient data may be, and never paste
+their values, headers or paths into a report.
 \end{phibox}

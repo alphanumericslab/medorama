@@ -40,6 +40,30 @@ def _clamp(x, lo, hi):
     return x if x != x else min(max(x, lo), hi)
 
 
+def thin(pieces, found, t0, t1, px):
+    """Of `found` (pieces of one channel, by start then id), with more than `px` of them over
+    [t0, t1]: of the pieces that start in each pixel column, the one that ends latest (the first of
+    those) and every one that reaches past the column, so that a long piece is never lost among
+    short ones."""
+    def col_of(t):
+        return _as_i64(_floor((max(t, t0) - t0) / (t1 - t0) * px))
+
+    def end(i):
+        p = pieces[i]
+        return p['t0'] + p['n'] / p['fs']
+    kept, k = [], 0
+    while k < len(found):
+        col = col_of(pieces[found[k]]['t0'])
+        j = latest = k
+        while j < len(found) and col_of(pieces[found[j]]['t0']) == col:
+            if end(found[j]) > end(found[latest]):
+                latest = j
+            j += 1
+        kept += [found[q] for q in range(k, j) if q == latest or col_of(end(found[q])) > col]
+        k = j
+    return kept
+
+
 def _span(p, t0, t1):
     """Samples [a, b) of piece `p` that a window [t0, t1] takes: one sample more before, two
     after; within [0, n] (any finite times)."""
@@ -57,6 +81,9 @@ def _fmt(x, digits):
 
 
 class Dataset:
+    """`arrays`: NumPy arrays, or for the envelopes of an index store, arrays read by range
+    (store.Chunked), sliced the same way."""
+
     def __init__(self, meta, arrays, folder):
         self.meta = meta
         self.arrays = arrays
@@ -79,11 +106,17 @@ class Dataset:
             for i in order:
                 margin = fmax(margin, 3.0 / self.pieces[i]['fs'])
             self._order[ch] = (order, [self.pieces[i]['t0'] for i in order], ends, margin)
+        # an adapter's recording loaded from a store: a private folder holding its meta.json,
+        # held for as long as the dataset is (store.ReadFolder)
+        self.folder = folder
         self.reader = reader(meta, folder)
         self.vitals = {v['name']: v for v in meta['vitals']}
 
     def close(self):
         self.reader.close()
+        remove = getattr(self.folder, 'remove', None)
+        if remove is not None:
+            remove()
 
     # ------------------------------------------------------------------ info
     def info(self):
@@ -111,7 +144,7 @@ class Dataset:
     # ---------------------------------------------------------------- window
     def pieces_in(self, ch, t0, t1, px):
         """The channel's pieces that lie in [t0, t1], in order of id.  With more than `px` of them,
-        only the first (by start, then id) to start in each pixel column."""
+        those `thin` keeps."""
         found = self._order.get(ch)
         if found is None:
             return []
@@ -133,13 +166,7 @@ class Dataset:
             if b > a:
                 out.append(i)
         if len(out) > px:
-            kept, last = [], None
-            for i in out:
-                col = _as_i64(_floor((max(self.pieces[i]['t0'], t0) - t0) / (t1 - t0) * px))
-                if col != last:
-                    kept.append(i)
-                last = col
-            out = kept
+            out = thin(self.pieces, out, t0, t1, px)
         return sorted(out)
 
     def window_json(self, channels, t0, t1, px):

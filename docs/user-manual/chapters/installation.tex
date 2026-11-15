@@ -5,8 +5,8 @@ This chapter explains how to build and install Medorama from source, on Linux, m
 Windows, with or without administrator rights or internet access. It is written for whoever
 installs Medorama: a researcher on a workstation, or an administrator on a server. The quickest
 route is one of the installers (\cref{sec:installation-installers}); the rest of the chapter
-builds each program by hand. Once Medorama is built, \cref{chap:quickstart} sets up a catalog
-with the demo, and \cref{chap:administration} sets one up for real data. Installing the viewers
+builds each program by hand. Once Medorama is built, \cref{chap:quickstart} sets it up with
+the demo, and \cref{chap:administration} sets it up for real data. Installing the viewers
 on their own, without Medorama, is described in \cref{chap:viewers-alone}. Copy-and-paste
 commands for each operating system, for Medorama and for each viewer on its own, are also on
 the website, at \url{https://medorama.org/docs/install.html} (\file{docs/install.md}).
@@ -114,7 +114,8 @@ shell script for Linux and macOS and a PowerShell script for Windows
 \end{tabularx}
 \end{table}
 
-Run them from the root of a clone. On Linux or macOS:
+Each installer first shows Medorama's license terms and goes on only if they are accepted
+(\cref{sec:installation-license}). Run them from the root of a clone. On Linux or macOS:
 \begin{lstlisting}[style=shell]
 git clone https://github.com/alphanumericslab/medorama.git && cd medorama
 tools/install-medorama.sh
@@ -156,8 +157,8 @@ scripts take the same options, written as \opt{-Viewer}, \opt{-NoTools}, \opt{-D
   \code{cpp} (the default) needs a C++20 compiler; \code{rs} needs only Rust; \code{py} the
   Python viewer and its packages; \code{none}, Medorama alone. The choice is recorded in
   \file{.venv/bin/medorama.viewer} (\cref{chap:viewers-in-medorama}). \\
-\opt{--no-tools} (\opt{-NoTools}) & \file{install-medorama} & Leave out the database tools
-  (\cmd{muse-py}, \cmd{dicom-py}). \\
+\opt{--no-tools} (\opt{-NoTools}) & \file{install-medorama} & Leave out the Python database tools
+  (\cmd{muse-py}, \cmd{dicom-py}); db-builder is always built. \\
 \opt{--viewer cpp|rs|py} (\opt{-Viewer}) & VitalStream's \file{install} & The viewer to build (default
   \code{cpp}). \\
 \opt{--prefix DIR} (\opt{-Prefix}) & VitalStream's \file{install} & Where the viewer goes:
@@ -180,12 +181,15 @@ scripts take the same options, written as \opt{-Viewer}, \opt{-NoTools}, \opt{-D
   Rust when \cmd{cargo} is missing. VitalStream's \file{install.ps1} has no \opt{-NoRustup}: it
   never installs Rust, and \opt{-Viewer rs} fails when \cmd{cargo} is missing. \\
 \opt{--demo} (\opt{-Demo}) & \file{install-medorama}, \file{install} & Also make the demo:
-  invented patients that \cmd{medorama init} loads into a cohort \code{DEMO}
-  (\cref{chap:quickstart}). Off by default. \\
+  about 40 invented patients in five databases (db-builder's, an encrypted one, OMOP, SQL views)
+  that \cmd{medorama init -{}-demo} connects (\cref{chap:quickstart}). Off by default. \\
 \opt{--no-wfdb} (\opt{-NoWfdb}) & \file{install-medorama}, VitalStream's \file{install} & Build
   without WFDB support, with no wfdb-x code: a WFDB recording is refused, every other format is
   read (\cref{sec:installation-no-wfdb}). \file{install-medorama} builds both Medorama and its
   viewer this way, and refuses \opt{--demo} with it (the demo's recordings are WFDB records). \\
+\opt{--accept-license} (\opt{-AcceptLicense}) & Every installer & Accept the license terms
+  without being asked, for scripts and CI (or set \code{MEDORAMA\_ACCEPT\_LICENSE=yes});
+  otherwise the installer shows them and asks (\cref{sec:installation-license}). \\
 \opt{--help} & The shell scripts & Print the script's description and options. \\
 \end{xltabular}
 
@@ -194,17 +198,48 @@ All three use the compilers named in \code{CC} and \code{CXX} when they are set 
 when such a compiler is available (\cref{sec:installation-no-admin}). On macOS, when Xcode is
 installed but its license was never accepted, they build with the Command Line Tools instead.
 
+\subsection{The license terms}
+\label{sec:installation-license}
+
+Every installer, before it builds anything, shows a summary of Medorama's license terms
+(\file{tools/license-notice.txt}) and asks whether the user accepts them:
+\begin{lstlisting}[style=text]
+Medorama - license terms
+Copyright 2025-2026 Reza Sameni (https://github.com/alphanumericslab/medorama)
+
+  * The software is licensed under the PolyForm Noncommercial License 1.0.0 (LICENSE).
+    It is free for noncommercial purposes: personal research, study and testing, and use by
+    universities and schools, public research and public health organizations, charities
+    and government institutions.
+  * Commercial use needs a commercial license from the author: use by or for a company, in a
+    product, or as a service to customers (COMMERCIAL.md, https://sameni.info).
+  * ...
+Do you accept these terms? Type y or yes to continue [no]:
+\end{lstlisting}
+Only \code{y} or \code{yes}, in any case, goes on; any other answer stops the installer, and
+nothing is installed. Scripts, CI and configuration management accept the terms with
+\opt{-{}-accept-license} (Windows: \opt{-AcceptLicense}) or the environment variable
+\code{MEDORAMA\_ACCEPT\_LICENSE=yes}. Without a terminal to ask and without either, the
+installer stops and says how to accept. The acceptance is recorded, with its date, the user and
+the version, in \file{\textasciitilde/.config/medorama/license-accepted} (Windows:
+\file{\%APPDATA\%\textbackslash medorama\textbackslash license-accepted}), so that the terms are
+asked once per user, and again only when they change. \cmd{medorama init} shows the same terms
+(\cref{sec:quickstart-init}). Building by hand (\cmd{cargo build}, \cmd{pip install}) asks
+nothing, and the same license applies (\cref{chap:licences}).
+
 \subsection{What the Medorama installer does}
 \label{sec:installation-what}
 
 \file{tools/install-medorama.sh} takes these steps, in order:
 \begin{enumerate}
+\item It shows the license terms and stops unless they are accepted
+  (\cref{sec:installation-license}).
 \item It makes the Python environment \file{.venv} (with Python 3.9 or later) if it is not
   there.
 \item It installs Rust in the user's account (\file{\textasciitilde/.rustup},
   \file{\textasciitilde/.cargo}) if \cmd{cargo} is missing, unless \opt{--no-rustup} is given.
-\item It builds Medorama (\cmd{cargo build --release --locked -p medorama}) and links it into
-  \file{.venv/bin}.
+\item It builds Medorama (\cmd{cargo build --release --locked -p medorama}) and db-builder
+  (\opt{-p db-builder}, \cref{chap:importing}), and links both into \file{.venv/bin}.
 \item It builds the chosen viewer, with the whole file system as its root and with password
   support, and links it into \file{.venv/bin}. With \opt{--no-wfdb}, Medorama and the viewer are
   built without WFDB support (\cref{sec:installation-no-wfdb}). The C++ viewer is built in
@@ -215,7 +250,7 @@ installed but its license was never accepted, they build with the Command Line T
 \item It installs the database tools \cmd{muse-py} and \cmd{dicom-py} into \file{.venv}, unless
   \opt{--no-tools} is given.
 \item With \opt{--demo}, it makes the demo (\cref{sec:installation-demo}). Without it, it removes
-  \file{.venv/bin/medorama.demo}, so that catalogs created afterwards start empty.
+  \file{.venv/bin/medorama.demo}, so that \cmd{medorama init -{}-demo} has nothing to connect.
 \item It records the viewer chosen in \file{.venv/bin/medorama.viewer}.
 \item In a git clone, it enables the repository's git hooks, which run the privacy check
   (\file{tools/git-hooks/check-files}) before each commit and merge; it warns if the clone
@@ -225,27 +260,41 @@ Cargo builds into the clone's \file{target/}, whatever \code{CARGO\_TARGET\_DIR}
 \code{build.target-dir} says, and the installer stops with an error if a program it installs is
 missing at the end.
 It ends by printing the commands it installed and the next steps:
-\cmd{source .venv/bin/activate}, \cmd{medorama init --results DIR} and \cmd{medorama serve}.
+\cmd{source .venv/bin/activate}, \cmd{medorama init -{}-workspace DIR} (with \opt{-{}-demo}
+after a demo was made), \cmd{medorama databases connect NAME -{}-kind KIND -{}-url URL} and
+\cmd{medorama serve}.
 
 \subsection{The demo}
 \label{sec:installation-demo}
 
-The \emph{demo} is a set of six invented patients with their encounters, laboratory results,
-vital signs, medications, notes, ICU recordings, a 24-hour Holter, an overnight sleep study (an
-EDF+ file), ECGs and imaging (\cref{chap:quickstart}). With \opt{--demo}, the Medorama and
-development installers also take these steps:
+The \emph{demo} is five databases of about 40 invented patients, with enough data and files to
+try every feature: three hospitals' (two made by db-builder, one of them sharing patients by MRN
+and holding an identity conflict, and an OMOP database), a research registry read through SQL
+views, and an encrypted db-builder database (\cref{chap:quickstart}). Its ECGs, CT series and
+two of its X-rays are built from the demo library, \file{tools/demo/library}: short pieces of
+real recordings and public images, transformed so that they represent no particular person and
+checked against re-identification by a maintainer-only tool kept outside the repository.
+With \opt{--demo}, the Medorama and development installers also take these steps:
 \begin{enumerate}
 \item They install NumPy and wfdb-x into \file{.venv} if they are not there: the demo's WFDB
   records are written with wfdb-x, at the commit that the Python viewer uses.
-\item They write the demo's files into \file{.venv/share/medorama/demo} (Windows
-  \file{.venv\textbackslash share\textbackslash medorama\textbackslash demo}; about 60\,MB),
-  with \file{tools/make-demo-data.py}.
+\item They write the demo into \file{.venv/share/medorama/demo} (Windows
+  \file{.venv\textbackslash share\textbackslash medorama\textbackslash demo}; about 160\,MB) and
+  build its db-builder databases there, with \cmd{tools/make-demo-data.py DIR -{}-db-builder
+  PATH}, which runs the steps its \file{demo-databases.json} lists: \file{demo.sqlite}
+  (\cmd{db-builder add} with \opt{-{}-issuer DEMO} and \opt{-{}-mrn-authority DEMO}, then
+  \cmd{db-builder recordings} on its folders of sleep studies and EEGs, by file-name pattern),
+  \file{north/north.sqlite} (with \opt{-{}-rules}, then its ECG folder moved and
+  \cmd{db-builder rewrite}), and \file{secure/secure.sqlite} (with \opt{-{}-encrypt} and the
+  demo's key). The OMOP and registry databases are SQLite files already.
 \item They name that folder in \file{.venv/bin/medorama.demo} (Windows
   \file{.venv\textbackslash Scripts\textbackslash medorama.demo}), next to the programs.
 \end{enumerate}
-\cmd{medorama init} then loads the demo by itself (\cref{chap:quickstart}). Running the
-installer again without \opt{--demo} removes \file{medorama.demo}: catalogs created after that
-start empty, and a catalog that holds the demo already keeps it. The demo needs WFDB support:
+\cmd{medorama init -{}-demo} then connects every database \file{demo-databases.json} lists,
+with the encrypted one's key from its key file, and adds the demo's example action plug-in
+(\cref{chap:quickstart}). Running the installer again without \opt{--demo}
+removes \file{medorama.demo}, so that \cmd{init -{}-demo} has nothing to connect; a Medorama that
+connected the demo already keeps it until its databases are removed. The demo needs WFDB support:
 its ICU and Holter recordings are WFDB records, so \opt{--demo} and \opt{--no-wfdb} are refused
 together.
 
@@ -287,12 +336,11 @@ cargo build --release --locked --target x86_64-unknown-linux-musl -p medorama
 # -> target/x86_64-unknown-linux-musl/release/medorama
 \end{lstlisting}
 
-\paragraph{Database encryption} (SQLCipher, with OpenSSL built from source; needs Perl and
-\cmd{make}):
-\begin{lstlisting}[style=shell]
-cargo build --release --locked -p medorama --features encryption
-\end{lstlisting}
-The key and the file that holds it are described in \cref{chap:deployment}.
+\paragraph{Encryption.} Medorama, db-builder and the Rust viewer are always built with SQLCipher,
+with OpenSSL built from source: the build needs Perl, \cmd{make} and a C compiler, and takes a few
+minutes the first time. SQLCipher encrypts the workspace (\cref{sec:administration-workspace}),
+the recordings' index stores in it, and, when \code{key\_file} is set, the SQLite control store
+(\cref{chap:deployment}).
 
 \paragraph{macOS.} If the build stops with \code{linking with cc failed: exit status: 69} or
 ``You have not agreed to the Xcode license agreements'', Xcode is installed but its license was
@@ -446,15 +494,16 @@ widen it. The standalone installer builds in folders of its own (\file{target/st
 WFDB support is the only part of the programs that uses wfdb-x. Each program can be built
 without it, and such a build contains no wfdb-x code. It reads every other format as usual: EDF,
 EDF+, BDF and BDF+ files, the formats of installed add-ons (such as STP, GE MUSE and DICOM), CLIF
-tables, and the databases Medorama imports or connects to. A WFDB recording (a \file{.hea}
+tables, the inputs of db-builder, and the databases Medorama connects. A WFDB recording (a \file{.hea}
 file, a multi-segment record, a folder of records or a WFDB collection) is still recognised, and
 refused with one message, never skipped in silence:
 \begin{lstlisting}[style=text]
 this build has no WFDB support (built without the `wfdb` feature)
 \end{lstlisting}
 The C++ viewer ends the message with ``(built with VS\_WFDB=OFF)'', and the Python viewer with
-``(wfdb-x is not installed: pip install 'vitalstream\_py[wfdb]')''. Medorama does not add such a
-recording: an import lists it among the files it skipped, with this reason. A viewer lists it
+``(wfdb-x is not installed: pip install 'vitalstream\_py[wfdb]')''. Medorama lists such a recording
+of a recording database as unreadable, with this reason, and db-builder lists it without its
+start and end. A viewer lists it
 when browsing, and refuses to open or scan it (HTTP 422, with the message). At start-up, every
 program built this way says so. \Cref{tab:installation-no-wfdb} shows how each program is built
 without WFDB support.
@@ -466,8 +515,10 @@ without WFDB support.
 \toprule
 {\tabhead Program} & {\tabhead Without WFDB support} & {\tabhead The default} \\
 \midrule
-\cmd{medorama} & \cmd{cargo build --release --locked -p medorama --no-default-features} (add
-  \opt{--features encryption} for database encryption) & The Cargo feature \code{wfdb}, on \\
+\cmd{medorama} & \cmd{cargo build --release --locked -p medorama --no-default-features} & The
+  Cargo feature \code{wfdb}, on \\
+\cmd{db-builder} & \cmd{cargo build --release --locked -p db-builder --no-default-features} &
+  The Cargo feature \code{wfdb}, on \\
 \cmd{vitalstream-rs} & \cmd{cargo build --release --locked -p vitalstream-rs
   --no-default-features --features password} & The Cargo features \code{password} and
   \code{wfdb}, on \\
@@ -593,14 +644,17 @@ Git ignores \file{vendor/}, \file{.cargo/} and \file{viewers/vitalstream/cpp/dep
 
 \paragraph{The demo, offline.} The installers' \opt{--demo} needs NumPy and wfdb-x in
 \file{.venv}; \cmd{pip download} above saved both in \file{../wheels}. Install them from there,
-then make and load the demo by hand (\cref{chap:quickstart}):
+then make the demo by hand, as the installer does (\cref{sec:installation-demo}), and connect it
+(\cref{chap:quickstart}):
 \begin{lstlisting}[style=shell]
 WFDBX=4a91916f5282fba44ca3056802fbc7def298af08
 .venv/bin/pip install --no-index --find-links ../wheels numpy \
   "wfdb-x @ file://$PWD/../wheels/$WFDBX.tar.gz#subdirectory=python"
-.venv/bin/python tools/make-demo-data.py ~/medorama-demo
-medorama demo add ~/medorama-demo
+.venv/bin/python tools/make-demo-data.py ~/medorama-demo --db-builder .venv/bin/db-builder
 \end{lstlisting}
+Then name the folder for \cmd{init -{}-demo}
+(\cmd{echo \textasciitilde/medorama-demo > .venv/bin/medorama.demo}), or connect each database its
+\file{demo-databases.json} lists, as \cref{sec:quickstart-later} shows.
 
 \section{Windows}
 \label{sec:installation-windows}
@@ -645,17 +699,56 @@ make help                                 # every check
 
 \paragraph{Update.} \cmd{git pull}, then the installer again with the same options (or
 \cmd{cargo build --release --locked} and \cmd{cmake --build --preset release}). Without
-\opt{--demo}, catalogs created afterwards start empty; a catalog that holds the demo keeps it.
-Restart the programs. Medorama updates its database when it starts, and an older version
-refuses a database a newer one has updated: back the catalog up first
-(\cref{chap:administration}).
+\opt{--demo}, \cmd{medorama init -{}-demo} has nothing to connect; a Medorama that connected the
+demo keeps it. Restart the programs. Medorama updates its control store when it starts, and an
+older version refuses a control store a newer one has updated: back it up first
+(\cref{sec:administration-backups}). From 0.1.0 to 0.2.0 there is no update in place
+(\cref{sec:installation-upgrade}).
 
 \paragraph{Uninstall.} Delete the clone (the programs, \file{.venv/} and the builds are inside
 it), or the installed copies (\cmd{cargo uninstall medorama},
-\file{\textasciitilde/.local/bin/vitalstream-*}). A standalone viewer's index folder is
-\file{\textasciitilde/.cache/vitalstream}, its settings and password are in
-\file{\textasciitilde/.config/vitalstream/}; Medorama's home and results folders are where
+\file{\textasciitilde/.local/bin/vitalstream-*}). A standalone viewer's index store is
+\file{\textasciitilde/.cache/vitalstream/index.sqlite}, its settings and password are in
+\file{\textasciitilde/.config/vitalstream/}; Medorama's home and workspace (with the indexes) are where
 \cmd{medorama init} put them. Recordings are never touched.
+
+\section{Upgrading from 0.1.0}
+\label{sec:installation-upgrade}
+
+Medorama 0.2.0 changes how Medorama holds data, so a 0.1.0 installation is not updated in
+place: 0.2.0 is set up in a new home, next to the old one.
+\begin{itemize}
+\item \textbf{Medorama no longer imports data.} It connects databases: OMOP, any SQL database
+  through views, or a SQLite database made with db-builder from the tables, exports (GE MUSE,
+  CLIF) and folders of recordings that 0.1.0 imported (\cref{chap:connecting,chap:importing}).
+  Make those databases again from the original files, then connect them.
+\item \textbf{The control store starts again.} Its schema is new, with no migration. 0.2.0
+  refuses a 0.1.0 control store and a 0.1.0 \file{medorama.toml}, and says so.
+\item \textbf{A workspace is required} (\cmd{medorama init -{}-workspace DIR}). It holds what
+  Medorama keeps of each database, the recordings' indexes included, encrypted with that
+  database's own key. The setting \code{index\_dir} is gone; the recordings are indexed again.
+\item \textbf{Users, grants and cohorts are not carried over.} Add the users again, grant them
+  the databases, and build the cohorts again.
+\item \textbf{Keep the 0.1.0 home}, with its audit log and seals, for as long as the
+  institution's retention rules require; 0.2.0 never writes to it.
+\end{itemize}
+On Linux or macOS, from the existing clone:
+\begin{lstlisting}[style=shell]
+cd medorama && git pull
+tools/install-medorama.sh --viewer rs          # the same options as before
+source .venv/bin/activate
+medorama init --home ~/medorama-0.2 --workspace ~/medorama-workspace   # a new home; the default
+db-builder new study.sqlite --timezone Europe/Paris
+db-builder add study.sqlite patients.csv labs.csv --issuer HOSP --mrn-authority HOSP
+db-builder recordings study.sqlite /data/icu --patients icu_patients.csv --issuer HOSP
+medorama databases connect study --kind dbb --url sqlite:$PWD/study.sqlite
+medorama user add alice --role analyst
+medorama databases grant study alice view
+medorama serve
+\end{lstlisting}
+The standalone viewers keep their settings. Their indexes are now in one store,
+\file{index.sqlite} in the cache folder (\file{\textasciitilde/.cache/vitalstream}), so the
+index folders 0.1.0 left there can be deleted.
 
 \section{When the build fails}
 \label{sec:installation-troubleshooting}
@@ -708,5 +801,5 @@ it), or the installed copies (\cmd{cargo uninstall medorama},
   \cmd{Set-ExecutionPolicy -Scope CurrentUser RemoteSigned}. \\
 \end{xltabular}
 
-Problems that appear after the build, when running a catalog, are covered in
+Problems that appear after the build, when running Medorama, are covered in
 \cref{chap:troubleshooting}.

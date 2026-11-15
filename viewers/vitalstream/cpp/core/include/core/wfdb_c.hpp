@@ -91,7 +91,9 @@ HeaderInfo read_header(const std::filesystem::path& dir, const std::string& reco
 
 // Physical values of frames [from, to) of the signals `signals` (all when empty):
 // (stored - baseline) / gain, the stored value for an uncalibrated signal (gain 0), NaN for
-// WFDB's invalid sample.  Throws std::runtime_error.
+// WFDB's invalid sample.  Every sample of each signal: spf per frame for a signal of spf samples
+// per frame (a multi-frequency record is read in WFDB's high-resolution mode).  Up to the end of
+// the data.  Throws std::runtime_error.
 std::vector<std::vector<double>> read_physical(const std::filesystem::path& dir, const std::string& record,
                                                std::int64_t from, std::int64_t to,
                                                const std::vector<std::size_t>& signals = {});

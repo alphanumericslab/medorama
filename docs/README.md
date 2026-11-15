@@ -20,8 +20,8 @@ For researchers, clinicians and anyone trying Medorama for the first time.
 | Page | What it covers |
 |---|---|
 | [Install](install.md) | Commands to install Medorama, VitalStream, and the ECG and PACS viewers' servers on Linux, macOS and Windows. |
-| [Get started](getting-started.md) | Install Medorama with the demo, sign in, take a guided tour, and remove the demo. |
-| [User guide](user-guide.md) | The web page: cohorts, the Patient Catalog and patient pages, the Databases tab, Privacy Mode, searching, the viewers, actions and history. |
+| [Get started](getting-started.md) | Install Medorama with the demo (two connected databases), sign in, take a guided tour, and remove the demo. |
+| [User guide](user-guide.md) | The web page: cohorts searched across the databases you tick, the Patient Catalog and patient pages, the Databases tab (status, variables, grants, connecting and removing a database), recordings, Privacy Mode, the viewers, actions and history. |
 | [User's manual](user-manual/medorama-user-manual.pdf) | The complete manual as a book (LaTeX and PDF): every feature, setting and interface, installation and deployment, and the formats read. |
 
 ## Running Medorama
@@ -30,10 +30,10 @@ For administrators who install Medorama and run it for other people.
 
 | Page | What it covers |
 |---|---|
-| [Administration](administration.md) | Setting up a catalog, settings, PostgreSQL, importing data, identity across databases, connected databases, add-ons, users and the PHI permission, the audit log, deployment, services, backups and troubleshooting. |
+| [Administration](administration.md) | Setting up Medorama (the control store, the workspace and its master key), settings, PostgreSQL, connecting databases, grants, identity across databases, add-ons, users and the PHI permission, the audit log, deployment, services, backups and troubleshooting. |
 | [Install](install.md) | The installation commands for each operating system. |
 | [Building and installing](building.md) | Building every part on Linux, macOS and Windows, including without administrator rights or internet access, and updating or uninstalling. |
-| [Performance](performance.md) | Measured import times, page times and query counts at 50,000 patients on SQLite and PostgreSQL, and many users at once; how fast the three VitalStream viewers index and read WFDB, EDF, BDF and `.Stp` recordings. |
+| [Performance](performance.md) | Measured page times and query counts at 50,000 patients on SQLite and PostgreSQL, and many users at once; how fast the three VitalStream viewers index and read WFDB, EDF, BDF and `.Stp` recordings. |
 
 ## Reviewing security and privacy
 
@@ -55,8 +55,10 @@ For data managers and database engineers who connect existing databases or build
 
 | Page | What it covers |
 |---|---|
-| [Databases](databases.md) | The three ways in (importing tables, connecting an OMOP database, connecting any SQL database through views), what every database must contain, and how to build and check a new database. |
-| [Importing](importing.md) | The tables to export, the columns Medorama recognizes, how rows are matched to patients, times and time zones, and linked files. |
+| [Databases](databases.md) | The kinds of database Medorama connects (OMOP, any SQL database through views, db-builder databases, recording databases), what every connected database must provide, and how to build and check one. |
+| [db-builder](../db-builder/README.md) | The separate tool that turns tables (CSV, spreadsheets, Parquet), known exports (GE MUSE, CLIF) and folders of recordings into an open SQLite database that Medorama connects. |
+| [db-builder's schema](../db-builder/docs/schema.md) | The tables and columns of a db-builder database, readable by any SQLite program. |
+| [db-builder's input](importing.md) | The tables to export for db-builder, the columns it recognizes, how rows name their patients, times and time zones, and linked files. |
 | [EDF recordings](edf.md) | Opening EDF, EDF+ and BDF files, what the viewers show, how patient identity in their headers is handled, and the exact reading rules. |
 | [WFDB records and collections](wfdb-collection.md) | How WFDB records are read: single records, multi-segment records, folders of records as one session, and the WFDB collection layout for long recordings. |
 
@@ -82,7 +84,7 @@ For anyone who uses a viewer, inside Medorama or on its own.
 | [VitalStream's specifications](../viewers/vitalstream/docs/README.md) | The [data model](../viewers/vitalstream/docs/data-model.md), the [index format](../viewers/vitalstream/docs/index-format.md), the [viewer API](../viewers/vitalstream/docs/viewer-api.md) and the [naming rules](../viewers/vitalstream/docs/naming.md) that the three viewers follow. |
 | [ECG viewer](../viewers/ecg/README.md) | 12-lead ECGs on standard paper from WFDB, GE MUSE XML, DICOM, EDF, JSON, pictures and PDF. |
 | [PACS viewer](../viewers/pacs/README.md) | DICOM studies, videos, pictures and PDFs, with calipers. |
-| [muse-py](../viewers/ecg/python/muse/README.md) and [dicom-py](../viewers/pacs/python/dicom/README.md) | The viewers' Python tools, which serve the pages and build ECG and DICOM databases to import. |
+| [muse-py](../viewers/ecg/python/muse/README.md) and [dicom-py](../viewers/pacs/python/dicom/README.md) | The viewers' Python tools, which serve the pages and build ECG and DICOM tables for db-builder. |
 
 ## Developing Medorama
 
@@ -92,9 +94,10 @@ For contributors to Medorama and its viewers.
 |---|---|
 | [Developing](developing.md) | How the code is organized, a request end to end, running on synthetic data, finding faults, common changes and the tests. |
 | [Contributing](../CONTRIBUTING.md) | The ground rules for changes, setup, coding style and the pre-commit hook. |
+| [License of the documentation](LICENSE.md) | CC BY-NC-ND 4.0 for the documentation and the manual; the examples they show are under the software's license. |
 | [To do](todo.md) | What is not built yet, each item with its design, steps and tests, and a suggested order. |
 | [Libraries](../libs/README.md) | The Rust libraries [`engine`](../libs/engine/README.md) and [`signal-core`](../libs/signal-core/README.md). |
-| [Tools](../tools/README.md) | The installers, the demo generator, the screenshot tool and the git hooks. |
+| [Tools](../tools/README.md) | The installers (which also build db-builder), the demo generator, the screenshot tool and the git hooks. |
 | [Continuous integration](../.github/README.md) | The CI workflows, releases and the website build. |
 
 ## Design notes
@@ -104,7 +107,8 @@ For designers and implementers who want the reasoning behind a part.
 | Page | What it covers |
 |---|---|
 | [The patient page](design/patient-page.md) | The patient page and its Patient Journey: layout, report and detail, viewers, and the light and dark themes. |
-| [Sources](design/sources.md) | The control store (SQLite or PostgreSQL), connected databases and their canonical views, OMOP, the person registry, and cohorts across sources. |
+| [Databases only](design/databases-only.md) | Why and how Medorama connects databases and imports none: the control store, the encrypted workspace and its keys, grants, the patient index, searching by database, cohorts with provenance, and removing a database with every trace. |
+| [Sources](design/sources.md) | The control store (SQLite or PostgreSQL), connected databases and their canonical views, OMOP, and cohorts across databases. |
 
 ## Images
 

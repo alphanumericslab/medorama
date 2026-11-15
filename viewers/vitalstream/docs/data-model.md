@@ -73,5 +73,5 @@ identification fields are never read into the index.
 
 A recording's path and file name may still identify a patient: bedside-monitor systems name
 files by unit, bed and time. Every value of a recording is patient data. Keep recordings, and
-the index folders made from them, on storage protected like the recordings themselves. In a
+the index stores made from them, on storage protected like the recordings themselves. In a
 clone of the repository, `sample_data/` is the place for them; git never pushes it.

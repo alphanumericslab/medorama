@@ -1,7 +1,39 @@
 # Changelog: recording-engine
 
-## Unreleased
+## 0.2.0 (2026-11-15, pre-release)
 
+- **Review fixes (index content changes within version 3, noted in index-format.md's Versions
+  table; the three engines write the same bytes, checked by `tests/parity/index_parity.py`, which
+  now also makes these recordings):**
+  - a WFDB header whose record line states no number of samples (or 0) is read to the end of its
+    data, as libwfdb reads it (it gave no samples); a compressed file's frames are counted by
+    decoding them;
+  - a signal of several samples per frame is a piece at its own rate (frame rate times its samples
+    per frame) with every sample, read in WFDB's high-resolution mode (it was averaged to the frame
+    rate); its markers are at the first sample of their frame; samples are read again by range of
+    the signal's own samples;
+  - records without a start time before the first record with one end where it starts, with a
+    note (they started at 0, 1970-01-01);
+  - an EDF/BDF date with a day its month does not have (`31.02.24`) states no start (it became
+    March 2).
+- **Windows:** with more pieces of a channel than pixel columns, each column keeps the piece that
+  ends latest and every piece that reaches past it (it kept the first to start, and could drop a
+  long piece) (viewer-api.md).
+- **Store:** the envelopes' chunks are read on a connection of their own (read-only), so that
+  windows are not held up while an index is packed. Tests: `tests/wfdb.rs` (no count, FLAC
+  counted, multi-frequency, leading untimed records), `edf.rs`'s and `dataset.rs`'s unit tests,
+  `store.rs`'s unit test.
+- **Index format 3: the index store** (`store`, viewers/vitalstream/docs/index-format.md,
+  "Version 3"): one SQLite database of indexes, encrypted with SQLCipher by a raw 256-bit key
+  when its owner has one. `index::build_into_store` builds an index as version 2 files in a
+  private temporary folder and packs it in one transaction (an index of the same engine kept,
+  any other replaced); `Store::load` gives the same `Dataset` as a folder, the envelopes read by
+  range from chunks of 4,096 values (a few kept in memory), the markers and vital signs whole, and
+  for an adapter's recording a private folder holding its `meta.json` for as long as it is
+  loaded. Keys are computed with version 3 (`index::cache_key_of`). `index::Values` and
+  `index::Env` hold an array of either format. Measured against format 2 in docs/performance.md
+  (`examples/store_bench.rs`). New dependency: `rusqlite` (SQLCipher, OpenSSL built from source).
+  Tests: `tests/store.rs`, and the adapter test through a store.
 - **MATLAB signal files**: a WFDB record whose signal file is a MATLAB file (`.mat`: the
   PhysioNet Challenge files, `wfdb2mat`'s) was already read by wfdb-x from the header's byte
   offset; now a `.mat` file is first checked against its header (`check_mat_files`, when a record

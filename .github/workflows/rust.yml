@@ -9,11 +9,11 @@ on:
   schedule:
     - cron: "17 5 * * 1"   # Mondays: advisories published since
   push:
-    paths: ["Cargo.toml", "Cargo.lock", "deny.toml", "rustfmt.toml", "libs/**", "medorama/**", "viewers/vitalstream/rust/**",
+    paths: ["Cargo.toml", "Cargo.lock", "deny.toml", "rustfmt.toml", "libs/**", "medorama/**", "db-builder/**", "viewers/vitalstream/rust/**",
             "viewers/vitalstream/testdata/**", "viewers/vitalstream/web/**",
             "tools/install.*", ".github/workflows/rust.yml"]
   pull_request:
-    paths: ["Cargo.toml", "Cargo.lock", "deny.toml", "rustfmt.toml", "libs/**", "medorama/**", "viewers/vitalstream/rust/**",
+    paths: ["Cargo.toml", "Cargo.lock", "deny.toml", "rustfmt.toml", "libs/**", "medorama/**", "db-builder/**", "viewers/vitalstream/rust/**",
             "viewers/vitalstream/testdata/**", "viewers/vitalstream/web/**",
             "tools/install.*", ".github/workflows/rust.yml"]
 
@@ -110,7 +110,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install (tools/install.ps1, Python and Rust)
-        run: tools\install.ps1 -Rs
+        run: tools\install.ps1 -Rs -AcceptLicense
       - name: Tests of the libraries and the viewer
         run: cargo test --release --locked -p signal-core -p recording-engine -p vitalstream-rs; if ($LASTEXITCODE) { exit 1 }
       - name: Python tests (the Python viewer)

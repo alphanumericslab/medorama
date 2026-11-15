@@ -4,25 +4,22 @@
 import { $, $$, api, privacy, esc, fail, isAdmin, canRun, phi, resetFormats, setUnauthorized, st, store, toast, viewerMode } from './core.js';
 import * as router from './router.js';
 import patients from './views/patients.js';
-import encounters from './views/encounters.js';
 import patient from './views/patient.js';
 import recordings from './views/recordings.js';
 import viewer from './views/viewer.js';
 import actions from './views/actions.js';
 import jobs, { pollJobs } from './views/jobs.js';
 import history from './views/history.js';
-import sources from './views/sources.js';
-import review, { reviewBadge } from './views/review.js';
 import admin from './views/admin.js';
 import { APPS, appView, checkApps, markIdentifiable } from './views/apps.js';
 import { invalidateBanner } from './views/banner.js';
 import { checkData, onDataChange, stopChecking } from './live.js';
-import { resume as resumeImports } from './imports.js';
+import { askPassword } from './password.js';
 import databases from './views/databases.js';
 import cohorts from './views/cohorts.js';
 
 const VIEWS = {
-  patients, encounters, patient, recordings, viewer, actions, jobs, history, sources, review, admin, databases, cohorts,
+  patients, patient, recordings, viewer, actions, jobs, history, admin, databases, cohorts,
   ...Object.fromEntries(Object.keys(APPS).map((a) => [a, appView(a)])),
 };
 
@@ -123,16 +120,19 @@ async function start() {
   $$('.run-only').forEach((e) => e.classList.toggle('hidden', !canRun()));
   const vb = $('#nav-viewer');
   vb.classList.toggle('disabled', viewerMode() !== 'embedded');
-  vb.title = viewerMode() === 'embedded' ? `The ${st.cfg.viewer.flavor || ''} viewer` : (st.cfg?.viewer?.reason || 'No viewer is linked to the catalog');
+  vb.setAttribute('aria-disabled', String(viewerMode() !== 'embedded'));
+  vb.title = viewerMode() === 'embedded' ? `The ${st.cfg.viewer.flavor || ''} viewer` : (st.cfg?.viewer?.reason || 'No viewer is linked to Medorama');
   if (viewerMode() === 'link') vb.classList.add('hidden');
   showPrivacy();
-  await router.render();
+  // signed in from here on: a first screen that fails (a 500, a 503) is said with the page shown,
+  // never taken for a failed sign-in (whose form would load the page again, and again)
+  try {
+    await router.render();
+  } catch (e) {
+    fail(e);
+  }
   pollJobs();
   checkData();
-  if (isAdmin()) {
-    reviewBadge().catch(() => {});
-    resumeImports().catch(() => {});
-  }
 }
 
 /** The Privacy Mode switch as the session is: on (highlighted) or off; locked on for users
@@ -149,16 +149,16 @@ function showPrivacy() {
       ? 'Privacy Mode is on: no identifier is shown, dates are moved back. Click to show identifiers'
       : 'Privacy Mode is off: identifiers are shown. Click to hide them';
   document.body.classList.toggle('privacy', privacy.on);
+  // out of Privacy Mode (the PHI permission): said beside the switch, on every screen
+  $('#ids-shown').classList.toggle('hidden', privacy.on);
   markIdentifiable();
 }
 
 async function changeOwnPassword() {
-  const old = prompt('Current password:');
-  if (old === null) return;
-  const pw = prompt('New password (at least 10 characters):');
-  if (pw === null) return;
-  if (prompt('Repeat the new password:') !== pw) return toast('The two entries differ', true);
-  await api('me/password', { method: 'POST', json: { old, new: pw } });
+  $('#user-pop').classList.add('hidden');
+  const r = await askPassword({ title: 'Change your password', who: st.user?.username, current: true });
+  if (!r) return;
+  await api('me/password', { method: 'POST', json: { old: r.old, new: r.password } });
   toast('Password changed; please sign in again');
   setTimeout(showLogin, 1500);
 }
@@ -186,7 +186,9 @@ function wire() {
     const t = e.target;
     if ((e.key === 'Enter' || e.key === ' ') && t instanceof Element && t.matches('[role="button"]:not(button, a, input, select, textarea)')) {
       e.preventDefault();
-      t.click();
+      // an SVG element (the journey's column names) has no click(): a click event, then
+      if (typeof t.click === 'function') t.click();
+      else t.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     }
   });
   $('#btn-password').addEventListener('click', () => changeOwnPassword().catch(fail));
@@ -197,6 +199,8 @@ function wire() {
     const a = e.target.closest('a[href^="#/"]');
     if (!a) return;
     e.preventDefault();
+    // a tab that cannot open (no viewer linked): it says why, it does not go
+    if (a.getAttribute('aria-disabled') === 'true') return toast(a.title, false);
     router.go(a.getAttribute('href')).catch(fail);
   });
   document.addEventListener('click', (e) => {
@@ -209,11 +213,9 @@ function wire() {
     router.view(name, v);
     v.wire?.();
   }
-  // Import: databases, and the recordings under it
-  router.view('import', sources);
-  // when the data change (an import, a removal; here or elsewhere): redraw what shows data,
+  // when the data change (a database connected, refreshed or removed; here or elsewhere): redraw what shows data,
   // and close viewers whose file is gone
-  const LIVE = new Set(['patients', 'patient', 'cohorts', 'databases', 'encounters', 'recordings', 'import', 'sources', 'review']);
+  const LIVE = new Set(['patients', 'patient', 'cohorts', 'databases', 'recordings']);
   onDataChange(async () => {
     for (const v of Object.values(VIEWS)) v.invalidate?.();
     invalidateBanner();
@@ -250,6 +252,8 @@ async function init() {
   try {
     await start();
   } catch (e) {
+    // signed in already (what failed came after): said, the page stays
+    if (st.user) { fail(e); return; }
     // refused with a reason (the institution's sign-in named someone without an account)
     showLogin(/no account/.test(e?.message || '') ? e.message : undefined);
   }

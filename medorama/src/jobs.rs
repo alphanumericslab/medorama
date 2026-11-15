@@ -1,6 +1,7 @@
-//! The job queue: a run (actions x a selection of encounters or recordings) becomes one job
-//! per action and recording; workers (in the server, or `medorama work`) take
-//! jobs from the queue, highest priority first.
+//! The job queue: a run (actions x a selection of patients or recordings) becomes one job per
+//! action and recording of a recording database; workers (in the server, or `medorama work`)
+//! take jobs from the queue, highest priority first.  A job's results go into its recording's
+//! database folder of the workspace, and go with it.
 //!
 //! - A job is not queued again when the same action version with the same parameters has
 //!   already succeeded on the unchanged recording (unless forced), or is queued or running.
@@ -17,7 +18,6 @@
 use crate::actions::{job_description, merge_params, params_hash, run_external, run_index, Progress, Registry};
 use crate::config::Config;
 use crate::db::{now, Db};
-use crate::query::{search_ids, Search};
 use crate::recordings::{self, Recording, Status};
 use crate::sql::{params, Connection, OptionalExtension, TransactionBehavior};
 use crate::users::User;
@@ -34,16 +34,15 @@ const HEARTBEAT: Duration = Duration::from_secs(2);
 /// Priority of indexing asked for by a person (e.g. "Index now"); automatic indexing is 0.
 pub const PRIORITY_NOW: i64 = 10;
 
-/// What a run applies to: encounters, recordings, the encounters matching a search or of a
-/// cohort's members, or all recordings.
+/// What a run applies to: recordings, the recordings of patients or of a cohort's members, or
+/// all recordings (of the databases the user may view).
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Selection {
-    /// The encounters of a cohort's members (one the user may see).
+    /// The recordings of a cohort's members (one the user may see).
     pub cohort: Option<i64>,
-    pub encounters: Option<Vec<i64>>,
+    pub patients: Option<Vec<i64>>,
     pub recordings: Option<Vec<i64>>,
-    pub search: Option<Search>,
     pub all: bool,
 }
 
@@ -60,32 +59,21 @@ pub struct RunReport {
     pub not_applicable: usize,
 }
 
-fn selected_recordings(c: &Connection, user: &User, sel: &Selection, timezone: &str) -> anyhow::Result<Vec<i64>> {
+fn selected_recordings(c: &Connection, cfg: &Config, user: &User, sel: &Selection) -> anyhow::Result<Vec<i64>> {
+    let viewable = crate::databases::granted(c, user, "view")?;
     let mut ids: Vec<i64> = vec![];
-    let mut encs: Vec<i64> = sel.encounters.clone().unwrap_or_default();
-    if let Some(s) = &sel.search {
-        encs.extend(search_ids(c, user, s, timezone)?);
-    }
+    let mut patients: Vec<i64> = sel.patients.clone().unwrap_or_default();
     if let Some(co) = sel.cohort {
-        let members = crate::cohorts::member_ids(c, user, co)?;
-        let mut st = c.prepare("SELECT id, patient FROM encounters ORDER BY id")?;
-        for r in st.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?)))? {
-            let (e, p) = r?;
-            if members.contains(&p) {
-                encs.push(e);
-            }
-        }
+        patients.extend(crate::cohorts::member_ids(c, cfg, user, co)?);
     }
     if sel.all {
-        let mut st = c.prepare("SELECT id FROM recordings ORDER BY id")?;
-        ids.extend(st.query_map([], |r| r.get::<_, i64>(0))?.collect::<Result<Vec<_>, _>>()?);
+        ids.extend(recordings::all(cfg, c)?.into_iter().filter(|r| viewable.contains(&r.database)).map(|r| r.id));
     }
     if let Some(r) = &sel.recordings {
-        ids.extend(r);
+        ids.extend(r.iter().filter(|id| viewable.contains(&recordings::split(**id).0)));
     }
-    let mut st = c.prepare("SELECT recording FROM recording_links WHERE encounter = ?1 ORDER BY recording")?;
-    for e in encs {
-        ids.extend(st.query_map([e], |r| r.get::<_, i64>(0))?.collect::<Result<Vec<_>, _>>()?);
+    for p in patients {
+        ids.extend(recordings::of_patient(cfg, c, user, p)?.into_iter().map(|r| r.id));
     }
     let mut seen = HashSet::new();
     ids.retain(|i| seen.insert(*i));
@@ -124,6 +112,7 @@ fn with_requirements(reg: &Registry, names: &[String]) -> anyhow::Result<Vec<(St
 #[allow(clippy::too_many_arguments)]
 pub fn create_run(
     c: &mut Connection,
+    cfg: &Config,
     reg: &Registry,
     user: &User,
     actions: &[String],
@@ -131,7 +120,6 @@ pub fn create_run(
     sel: &Selection,
     force: bool,
     priority: i64,
-    timezone: &str,
 ) -> anyhow::Result<RunReport> {
     if !user.can_run() {
         anyhow::bail!("running actions needs the analyst or admin role");
@@ -140,7 +128,10 @@ pub fn create_run(
         anyhow::bail!("no action chosen");
     }
     let plan = with_requirements(reg, actions)?;
-    let recs = selected_recordings(c, user, sel, timezone)?;
+    // each database's file opened once, before the transaction holds the write lock
+    let ids = selected_recordings(c, cfg, user, sel)?;
+    let mut by_id = recordings::get_many(cfg, c, &ids)?;
+    let recs: Vec<Recording> = ids.iter().filter_map(|id| by_id.remove(id)).collect();
     let t = now();
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let run = tx.insert(
@@ -154,8 +145,8 @@ pub fn create_run(
         ],
     )?;
     let mut rep = RunReport { run, recordings: recs.len(), ..Default::default() };
-    for rid in recs {
-        let Some(rec) = recordings::get(&tx, rid)? else { continue };
+    for rec in recs {
+        let rid = rec.id;
         for (name, explicit) in &plan {
             let a = reg.get(name).unwrap();
             if !rec.present || !a.applies_to(&rec.kind) {
@@ -194,9 +185,10 @@ pub fn create_run(
                 }
             }
             tx.execute(
-                "INSERT INTO jobs (run, action, action_version, params, params_hash, recording, fingerprint, state, priority, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'queued', ?8, ?9)",
-                params![run, name, a.version, p.to_string(), ph, rid, rec.fingerprint, priority, t],
+                "INSERT INTO jobs (run, action, action_version, params, params_hash, database_id, recording, fingerprint,
+                                   state, priority, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 'queued', ?9, ?10)",
+                params![run, name, a.version, p.to_string(), ph, rec.database, rid, rec.fingerprint, priority, t],
             )?;
             rep.queued += 1;
         }
@@ -208,36 +200,24 @@ pub fn create_run(
 
 /// Queue indexing for every present recording that is new or changed (automatic indexing);
 /// one server at a time, when several share a PostgreSQL database.
-pub fn queue_auto_index(c: &Connection) -> anyhow::Result<usize> {
-    c.exclusive(crate::sql::Lock::Schedule, || queue_auto_index_now(c))?
+pub fn queue_auto_index(c: &Connection, cfg: &Config) -> anyhow::Result<usize> {
+    c.exclusive(crate::sql::Lock::Schedule, || queue_auto_index_now(c, cfg))?
 }
 
-fn queue_auto_index_now(c: &Connection) -> anyhow::Result<usize> {
-    let mut st = c.prepare(recordings::REC_SELECT)?;
-    let todo: Vec<Recording> = st
-        .query_map([], recordings::row_recording)?
-        .filter_map(Result::ok)
-        .filter(|r| matches!(r.status, Status::New | Status::Stale))
-        .collect();
+fn queue_auto_index_now(c: &Connection, cfg: &Config) -> anyhow::Result<usize> {
+    let todo: Vec<Recording> =
+        recordings::all(cfg, c)?.into_iter().filter(|r| matches!(r.status, Status::New | Status::Stale)).collect();
     let ph = params_hash(&serde_json::json!({}));
     let t = now();
     for r in &todo {
         c.execute(
-            "INSERT INTO jobs (action, action_version, params, params_hash, recording, fingerprint, state, priority, created_at)
-             VALUES ('index', ?1, '{}', ?2, ?3, ?4, 'queued', 0, ?5)",
-            params![crate::actions::INDEX_VERSION_STR.as_str(), ph, r.id, r.fingerprint, t],
+            "INSERT INTO jobs (action, action_version, params, params_hash, database_id, recording, fingerprint, state,
+                               priority, created_at)
+             VALUES ('index', ?1, '{}', ?2, ?3, ?4, ?5, 'queued', 0, ?6)",
+            params![crate::actions::INDEX_VERSION_STR.as_str(), ph, r.database, r.id, r.fingerprint, t],
         )?;
     }
-    // identifiers in the files: once per recording (again when it changed)
-    let n = c.execute(
-        "INSERT INTO jobs (action, action_version, params, params_hash, recording, fingerprint, state, priority, created_at)
-         SELECT 'identify', '1', '{}', ?1, r.id, r.fingerprint, 'queued', 0, ?2 FROM recordings r
-         WHERE r.present = 1
-           AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.recording = r.id AND j.action = 'identify'
-                           AND (j.state IN ('queued', 'running') OR (j.fingerprint = r.fingerprint AND j.state IN ('done', 'failed'))))",
-        params![ph, t],
-    )?;
-    Ok(todo.len() + n)
+    Ok(todo.len())
 }
 
 #[derive(Debug, Clone)]
@@ -279,7 +259,7 @@ fn requirements(c: &Connection, reg: &Registry, action: &str, rec: &Recording) -
 }
 
 /// Take the next job that can run now, if any.
-pub fn claim(c: &mut Connection, reg: &Registry, worker: &str) -> anyhow::Result<Option<Claimed>> {
+pub fn claim(c: &mut Connection, cfg: &Config, reg: &Registry, worker: &str) -> anyhow::Result<Option<Claimed>> {
     let t = now();
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
     // servers sharing a PostgreSQL database take jobs one at a time
@@ -294,8 +274,15 @@ pub fn claim(c: &mut Connection, reg: &Registry, worker: &str) -> anyhow::Result
         st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<Result<_, _>>()?
     };
     let mut chosen = None;
+    // the candidates' recordings, each database's file opened once
+    let rids: Vec<i64> = cands.iter().map(|c| c.3).collect();
+    let recs = recordings::get_many(cfg, &tx, &rids)?;
     for (id, action, params, rid) in cands {
-        let Some(rec) = recordings::get(&tx, rid)? else { continue };
+        let Some(rec) = recs.get(&rid) else {
+            // its database removed, or being removed
+            tx.execute("DELETE FROM jobs WHERE id = ?1", [id])?;
+            continue;
+        };
         if !rec.present {
             tx.execute(
                 "UPDATE jobs SET state = 'failed', error = 'the recording is missing', finished_at = ?1 WHERE id = ?2",
@@ -303,7 +290,7 @@ pub fn claim(c: &mut Connection, reg: &Registry, worker: &str) -> anyhow::Result
             )?;
             continue;
         }
-        match requirements(&tx, reg, &action, &rec)? {
+        match requirements(&tx, reg, &action, rec)? {
             Ready::Wait => continue,
             Ready::Fail(e) => {
                 tx.execute(
@@ -378,18 +365,34 @@ pub fn execute(
     worker: &str,
     stop: &AtomicBool,
 ) -> anyhow::Result<()> {
-    let (rec, encounters) = {
+    let prepared = (|| -> anyhow::Result<_> {
         let c = db.get()?;
-        let rec = recordings::get(&c, job.recording)?
+        let rec = recordings::get(cfg, &c, job.recording)?
             .ok_or_else(|| anyhow::anyhow!("recording {} removed", job.recording))?;
-        let mut st = c.prepare(
-            // pseudonyms only: the imported IDs may be MRNs or account numbers (docs/security.md)
-            "SELECT COALESCE(e.pseudonym, ''), COALESCE(p.pseudonym, '') FROM recording_links l JOIN encounters e ON e.id = l.encounter
-             JOIN patients p ON p.id = e.patient WHERE l.recording = ?1 ORDER BY e.admit_time",
-        )?;
-        let encs: Vec<(String, String)> =
-            st.query_map([job.recording], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
-        (rec, encs)
+        // indexing: into its database's index store (opened here, with the database's key)
+        let store =
+            if job.action == "index" { Some(crate::workspace::index_store(cfg, &c, rec.database)?) } else { None };
+        // its patient's pseudonym only: a database's identifiers may be MRNs (docs/security.md)
+        let patient = match rec.patient {
+            Some(p) => crate::patient::pseudonym_of(&c, p)?,
+            None => String::new(),
+        };
+        Ok((rec, patient, store))
+    })();
+    let (rec, patient, store) = match prepared {
+        Ok(x) => x,
+        Err(e) => {
+            // failed before it ran (its recording gone, its key unreadable): written as failed,
+            // else it would be taken for a stale job and run again every STALE_S
+            let why = e.to_string();
+            retried(&format!("job {}: recording its failure", job.id), || {
+                Ok(db.get()?.execute(
+                    "UPDATE jobs SET state = 'failed', error = ?1, finished_at = ?2 WHERE id = ?3 AND worker = ?4 AND state = 'running'",
+                    params![why, now(), job.id, worker],
+                )?)
+            })?;
+            return Err(e);
+        }
     };
     let progress = Progress::default();
     let cancel = AtomicBool::new(false);
@@ -427,22 +430,13 @@ pub fn execute(
         });
         let r = match reg.get(&job.action) {
             None => Err(format!("action {} is no longer installed", job.action)),
-            Some(a) if a.builtin && a.name == "index" => run_index(cfg, &rec, &progress),
-            Some(a) if a.builtin && a.name == "identify" => db
-                .get()
-                .map_err(|e| e.to_string())
-                .and_then(|c| crate::identify::identify(&c, rec.id, Path::new(&rec.path), &rec.kind))
-                .map(|summary| crate::actions::Outcome {
-                    output_dir: PathBuf::new(),
-                    summary: summary.to_string(),
-                    derived: vec![],
-                }),
+            Some(a) if a.builtin && a.name == "index" => match &store {
+                Some(st) => run_index(st, &rec, &progress, &cancel),
+                None => Err("no index store".into()),
+            },
             Some(a) => {
-                let out =
-                    output_dir(&cfg.results_dir.join("actions").join(&a.name).join(format!("r{}", rec.id)), job.id);
-                let idx = cfg.index_dir.join(&rec.fingerprint);
-                let idx = idx.join("meta.json").is_file().then_some(idx);
-                let desc = job_description(job.id, a, &job.params, &rec, idx.as_deref(), &encounters, &out);
+                let out = output_dir(&recordings::results_dir(cfg, rec.id, &a.name), job.id);
+                let desc = job_description(job.id, a, &job.params, &rec, &patient, &out);
                 run_external(a, &desc, &out, &progress, &cancel)
             }
         };
@@ -469,17 +463,20 @@ pub fn execute(
                 )?)
             })?;
             if n == 1 && job.action == "index" {
-                let mut c = db.get()?;
-                recordings::apply_index_meta(&c, rec.id, &o.output_dir)?;
-                crate::derived::store(&c, rec.id, &o.derived)?;
-                crate::linkage::relink(&mut c, Some(&[rec.id]))?;
+                let c = db.get()?;
+                recordings::apply_index_meta(cfg, &c, rec.id, &o.meta)?;
+                recordings::store_series(cfg, &c, rec.id, &o.derived)?;
+            } else if n == 1 {
+                // the action's numbers: a derived database of its recording's database
+                crate::derived::store_result(cfg, &*db.get()?, &rec, &job.action, &o.summary)?;
             }
         }
         Err(e) => {
             retried(&format!("job {}: recording its end", job.id), || {
+                // a job cancelled meanwhile keeps its 'cancelled' error (status_of reads it)
                 Ok(db.get()?.execute(
-                    "UPDATE jobs SET state = CASE WHEN state = 'running' THEN 'failed' ELSE state END, error = ?1, finished_at = ?2
-                     WHERE id = ?3 AND worker = ?4",
+                    "UPDATE jobs SET state = 'failed', error = ?1, finished_at = ?2
+                     WHERE id = ?3 AND worker = ?4 AND state = 'running'",
                     params![e, t, job.id, worker],
                 )?)
             })?;
@@ -526,17 +523,87 @@ pub struct JobView {
     pub finished_at: Option<f64>,
     pub error: String,
     pub output_dir: String,
+    /// The database of its recording.
+    #[serde(skip)]
+    pub database: i64,
+    /// Who asked for its run.
+    #[serde(skip)]
+    pub by: Option<i64>,
 }
 
 /// Jobs, newest first: unfinished ones, or (with `state`) those in one state.
-pub fn list(c: &Connection, state: Option<&str>, run: Option<i64>, limit: i64) -> anyhow::Result<Vec<JobView>> {
-    let mut st = c.prepare(
-        "SELECT j.id, j.run, j.action, j.action_version, j.recording, r.name, j.state, j.priority, j.progress, j.created_at,
-                j.started_at, j.finished_at, j.error, j.output_dir
-         FROM jobs j JOIN recordings r ON r.id = j.recording
-         WHERE (CAST(?1 AS TEXT) IS NULL OR j.state = ?1) AND (CAST(?2 AS INTEGER) IS NULL OR j.run = ?2)
-         ORDER BY CASE j.state WHEN 'running' THEN 0 WHEN 'queued' THEN 1 ELSE 2 END, j.priority DESC, j.id DESC LIMIT ?3",
-    )?;
+pub fn list(
+    c: &Connection,
+    cfg: &Config,
+    state: Option<&str>,
+    run: Option<i64>,
+    limit: i64,
+) -> anyhow::Result<Vec<JobView>> {
+    list_in(c, cfg, state, run, limit, None)
+}
+
+/// The jobs a user may see: an admin every one; others those of the databases granted to them
+/// for viewing, and the errors of their own runs only (an error may name another user's files):
+/// another's error is `failed`.
+pub fn list_for(
+    c: &Connection,
+    cfg: &Config,
+    user: &User,
+    state: Option<&str>,
+    run: Option<i64>,
+    limit: i64,
+) -> anyhow::Result<Vec<JobView>> {
+    if user.is_admin() {
+        return list(c, cfg, state, run, limit);
+    }
+    let dbs = crate::databases::granted(c, user, "view")?;
+    let mut v = list_in(c, cfg, state, run, limit, Some(&dbs))?;
+    for j in v.iter_mut().filter(|j| j.by != Some(user.id) && !j.error.is_empty()) {
+        j.error = "failed".into();
+    }
+    Ok(v)
+}
+
+/// The number of jobs per state that [`list_for`] shows a user.
+pub fn counts_for(c: &Connection, user: &User) -> anyhow::Result<HashMap<String, i64>> {
+    if user.is_admin() {
+        return counts(c);
+    }
+    let dbs = crate::databases::granted(c, user, "view")?;
+    if dbs.is_empty() {
+        return Ok(HashMap::new());
+    }
+    // (numbers only: never typed text)
+    let ids = dbs.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", ");
+    let mut st = c.prepare(&format!("SELECT state, COUNT(*) FROM jobs WHERE database_id IN ({ids}) GROUP BY state"))?;
+    let v = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+    Ok(v)
+}
+
+/// [`list`], of these databases' recordings only.
+fn list_in(
+    c: &Connection,
+    cfg: &Config,
+    state: Option<&str>,
+    run: Option<i64>,
+    limit: i64,
+    databases: Option<&[i64]>,
+) -> anyhow::Result<Vec<JobView>> {
+    // (numbers only: never typed text)
+    let only = match databases {
+        None => String::new(),
+        Some([]) => return Ok(vec![]),
+        Some(d) => {
+            format!(" AND j.database_id IN ({})", d.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", "))
+        }
+    };
+    let mut st = c.prepare(&format!(
+        "SELECT j.id, j.run, j.action, j.action_version, j.recording, '', j.state, j.priority, j.progress, j.created_at,
+                j.started_at, j.finished_at, j.error, j.output_dir, j.database_id, r.user_id
+         FROM jobs j LEFT JOIN runs r ON r.id = j.run
+         WHERE (CAST(?1 AS TEXT) IS NULL OR j.state = ?1) AND (CAST(?2 AS INTEGER) IS NULL OR j.run = ?2){only}
+         ORDER BY CASE j.state WHEN 'running' THEN 0 WHEN 'queued' THEN 1 ELSE 2 END, j.priority DESC, j.id DESC LIMIT ?3"
+    ))?;
     let v = st
         .query_map(params![state, run, limit], |r| {
             Ok(JobView {
@@ -554,10 +621,19 @@ pub fn list(c: &Connection, state: Option<&str>, run: Option<i64>, limit: i64) -
                 finished_at: r.get(11)?,
                 error: r.get(12)?,
                 output_dir: r.get(13)?,
+                database: r.get(14)?,
+                by: r.get(15)?,
             })
         })?
-        .collect::<Result<_, _>>()?;
-    Ok(v)
+        .collect::<Result<Vec<JobView>, _>>()?;
+    let ids: Vec<i64> = v.iter().map(|j| j.recording).collect();
+    let recs = recordings::get_many(cfg, c, &ids)?;
+    Ok(v.into_iter()
+        .map(|mut j| {
+            j.recording_name = recs.get(&j.recording).map(|r| r.name.clone()).unwrap_or_default();
+            j
+        })
+        .collect())
 }
 
 /// Number of jobs per state.
@@ -614,7 +690,7 @@ pub fn work(
     let name = worker_name(n);
     while !stop.load(Ordering::Relaxed) {
         let reg_now = reg.read().unwrap().clone();
-        let job = db.get().and_then(|mut c| claim(&mut c, &reg_now, &name));
+        let job = db.get().and_then(|mut c| claim(&mut c, &cfg, &reg_now, &name));
         match job {
             Ok(Some(j)) => {
                 if let Err(e) = execute(&db, &cfg, &reg_now, &j, &name, &stop) {

@@ -46,7 +46,7 @@ adapter that lists the same extensions (`.hea`, `.edf`, `.bdf`).
 An add-on arrives as an archive for one system: `<name>-adapter-<version>-<os>-<arch>.tar.gz`
 (Linux, macOS) or `.zip` (Windows), holding the program, its license and `INSTALL.txt`. An
 administrator installs it on the server, never through the page, because an adapter is a program
-that runs with the catalog's rights.
+that runs with Medorama's rights.
 
 1. **Unpack it, and allow the system to run it.** Programs downloaded from the internet are
    blocked until you allow them. The following commands unpack the archive on Linux and macOS,
@@ -64,8 +64,8 @@ that runs with the catalog's rights.
    Unblock-File stp-adapter-0.1.0-windows-amd64\stp-adapter.exe
    ```
 
-2. **Install it, as the account that runs the catalog** (or with `--home` naming the catalog), so
-   that it goes into that catalog's adapter folder. The following commands install it and list
+2. **Install it, as the account that runs Medorama** (or with `--home` naming its home), so
+   that it goes into that home's adapter folder. The following commands install it and list
    the installed adapters (name, version, implementation, formats, program):
 
    ```bash
@@ -82,13 +82,11 @@ that runs with the catalog's rights.
    Programs list their adapters when they start. Stopping Medorama also stops the VitalStream
    viewer it runs, so the next one sees the add-on too. **Admin** › **Add-ons** then lists it.
 
-4. **Import again the tables that named such files before.** An import skips a recording that no
-   installed reader reads and no viewer opens ("line N: FILE: not a recording Medorama reads. A
-   format read by an add-on needs it installed …"), and keeps nothing of it. Once the add-on is
-   installed, remove that earlier import (**Import** › **Sources**, or `medorama imports list`
-   and then `medorama imports remove ID`) and import the table again: the files come in as
-   recordings, linked to their patients and indexed by the workers. Importing the table again
-   without removing the first import makes a second copy of the database.
+4. **Read the recording databases again.** A recording that no installed reader reads is not
+   indexed. Once the add-on is
+   installed and Medorama restarted, **Refresh** on the database's page (or
+   `medorama databases refresh NAME`) reads its recordings again, and the workers index them.
+   The recording database itself is not changed: it names the files, as before.
 
 **The viewers on their own** (without Medorama): copy the program into their adapter folder
 (by default `~/.local/share/medorama/adapters`, on Windows `%LOCALAPPDATA%\medorama\adapters`, or
@@ -101,7 +99,7 @@ in step 1, and restart the viewer.
 | `install`: describe fails, "cannot be opened", "permission denied" | The system blocks the program. Repeat step 1 (`xattr` on macOS, `Unblock-File` on Windows), or run `chmod 755`. |
 | `install`: another protocol version | The add-on was built for another Medorama version. Ask for the release that matches yours. |
 | `addons list` shows it, but `.Stp` files are still refused | The server was not restarted (step 3), or it runs as another account whose `adapters_dir` is elsewhere: run `medorama addons list` as that account. |
-| Recordings named by an earlier import are missing | They were skipped before the add-on was installed. Remove that import and import the table again (step 4). |
+| A recording database's `.Stp` recordings are still not indexed | Its recordings were read before the add-on was installed. Refresh the database (step 4). |
 
 ## How the programs use adapters
 
@@ -109,23 +107,25 @@ in step 1, and restart the viewer.
    `describe` itself, once. When two adapters have the same name, the first in name order is
    used.
 2. **Browsing:** a file whose extension an adapter lists is a recording of that adapter's kind.
-3. **Indexing:** the program creates a temporary index folder and runs `index FILE FOLDER`,
-   showing the progress lines. It then adds the fields it owns (`path`, `name`, `key`,
+3. **Indexing:** the program creates a private temporary folder next to its index store
+   (`index.tmp/<key>.<process id>.<n>.tmp/`, readable by its owner only) and runs `index FILE
+   FOLDER`, showing the progress lines. It then adds the fields it owns (`path`, `name`, `key`,
    `index_version`, `engine`, `indexed_s`, and `kind`, `format`, `adapter`) to the `meta.json`
-   the adapter wrote, and renames the folder into place
-   ([index-format.md, Writing and sharing](../viewers/vitalstream/docs/index-format.md#writing-and-sharing)).
+   the adapter wrote, checks the files, packs them into the index store in one transaction, and
+   removes the folder ([index-format.md, Version 3: the index store](../viewers/vitalstream/docs/index-format.md#version-3-the-index-store)).
+   The adapter writes plain files, as before; the store, and its encryption, are the calling
+   program's.
 4. **Viewing:** envelopes, markers and vital signs come from the index. Raw samples, when a view
    zooms in close enough, are read from the recording itself through the adapter's `serve`
    session: one session per adapter, started at the first request and kept open, and started
    again once if it has ended. The sessions of different adapters answer side by side; one
    adapter's requests are answered in turn.
-5. **Identifiers** (Medorama only): the built-in action `identify` asks the adapter for the
-   identifiers the file states (`identify FILE`), and keeps them in the catalog's database only
-   ([administration.md, Identifiers in recordings](administration.md#identifiers-in-recordings)).
+5. **Identifiers:** the protocol's `identify` command returns the identifiers the file states.
+   Medorama does not call it: a recording's patient is the one its recording database names.
 
-Indexes written through an adapter are shared like the others: the three viewers and Medorama
-read and write the same index folders, and the three implementations of the stp-adapter write
-the same bytes.
+Indexes written through an adapter are stored like the others: the three viewers and Medorama
+write the same rows into their index stores, and the three implementations of the stp-adapter
+write the same bytes.
 
 ## The protocol
 
@@ -159,7 +159,13 @@ setting.
 ```
 
 It asks for the physical samples `a` to `b - 1` of piece `piece` of the recording indexed in
-`index`, whose `meta.json` holds the recording's `path`. The answer is one line, `{"n": k}`,
+`index`, whose `meta.json` holds the recording's `path`. The index is in an index store, so
+`index` names a private temporary folder that holds only the index's `meta.json`
+(`index.tmp/<key>.<process id>.<n>.read/`, readable by its owner only), made when the program
+loads the index and removed when it closes it. An adapter reads `meta.json` there, never other
+files. Version 2 of the protocol, which sends `meta.json` itself in the request (`"meta": {…}` in
+place of `"index"`), is specified in [index-format.md](../viewers/vitalstream/docs/index-format.md#version-3-the-index-store) but
+not yet implemented by the programs or by any adapter. The answer is one line, `{"n": k}`,
 followed at once by `k` little-endian 64-bit floats (NaN for samples the recording marks
 missing), or one line `{"error": "…"}` with nothing after it. An adapter answers requests in
 order, may keep recordings open between them, and ends when standard input closes.
@@ -175,7 +181,7 @@ Python viewers apply the same.
 |---|---|---|
 | `describe` | 30 s for the whole command; at most 16 MiB of output. | The adapter is stopped (killed) and not listed. |
 | `identify` | 60 s per path of the command; at most 16 MiB of output. The paths are passed in commands whose arguments total at most 24,000 bytes (one path per command at least), far below the 32,767 characters of a Windows command line. | The adapter is stopped; the identifiers are not read. |
-| `index` | 300 s without a line of output (a progress line resets the time), and 300 s for the adapter to exit once its output ends; lines of at most 1 MiB. A cancelled index stops the adapter within a tenth of a second, without waiting for its next line. | The adapter is stopped; the index fails, and nothing is left in the index folder. |
+| `index` | 300 s without a line of output (a progress line resets the time), and 300 s for the adapter to exit once its output ends; lines of at most 1 MiB. A cancelled index stops the adapter within a tenth of a second, without waiting for its next line. | The adapter is stopped; the index fails, and nothing is left in the index store or its temporary folder. |
 | `serve` | 60 s without a byte of an answer; an answer line of at most 1 MiB. The program asks for at most 1,048,576 samples (2^20) in one request and splits longer reads. The answer's `n` must be a whole number from 0 to `b - a`; fewer samples than asked mean that the piece ends there. | See below. |
 
 **A session out of step is stopped.** After an answer that breaks the protocol (not a JSON
@@ -228,15 +234,15 @@ When to write an adapter rather than a built-in reader is discussed in
 
 ## Security
 
-- **An adapter is code that runs with the rights of the program that calls it** (the catalog's
+- **An adapter is code that runs with the rights of the program that calls it** (Medorama's
   service account, or a viewer's user). Install only adapters from their publisher, and keep the
   adapter folder writable by its owner only (the default folder is in that user's home).
 - **It reads recordings, which may hold identifiers.** It must not send anything over the
-  network, and it writes only into the index folder it is given. The stp-adapter opens no
+  network, and it writes only into the folder it is given to index into. The stp-adapter opens no
   network connection and writes no other file.
-- **Identifiers it reads** (`identify`) go only to Medorama's database, as other identifiers do
-  ([security.md, Privacy Mode and the privacy gate](security.md#7-privacy-mode-and-the-privacy-gate));
-  the index holds none.
+- **Identifiers it reads** (`identify`) are printed only on standard output, to the program that
+  asked; Medorama does not ask. The index holds none
+  ([security.md, Privacy Mode and the privacy gate](security.md#7-privacy-mode-and-the-privacy-gate)).
 - **A failing adapter** (a crash, a malformed answer) makes the recording unreadable, never the
   program: the indexing fails with the adapter's message, and a session that ended is started
   again once. An adapter that stops answering is stopped after a time limit

@@ -1,4 +1,4 @@
-// What every screen of the catalog page uses: the API, the signed-in user, formatting, small
+// What every screen of Medorama's page uses: the API, the signed-in user, formatting, small
 // DOM helpers.  Nothing here decides what a user may see: the server does (gate.rs).  In
 // Privacy Mode it sends no identifier, and dates moved back; the page shows what it is given.
 
@@ -84,6 +84,8 @@ export function qs(obj) {
 
 export function toast(msg, isErr = false) {
   const t = $('#toast');
+  // said by screen readers: a failure at once (assertive), news when they pause (polite)
+  t.setAttribute('aria-live', isErr ? 'assertive' : 'polite');
   t.textContent = msg;
   t.classList.toggle('err', isErr);
   t.classList.remove('hidden');
@@ -98,7 +100,7 @@ export const phi = () => !!st.user?.phi;
 /** Whether ages are shown (from the date of birth, on the server: PHI permission or Privacy Mode). */
 export const ages = () => !!(st.user?.phi || st.user?.privacy);
 
-// ------------------------------------------------------------ time, in the catalog's time zone
+// ------------------------------------------------------------ time, in Medorama's time zone
 const fmts = new Map();
 function parts(t, opts) {
   const key = JSON.stringify(opts);
@@ -153,7 +155,7 @@ export function fmtDayOfMonth(t) {
 export function fmtMonth(t) {
   return ok(t) ? parts(t, { month: 'short' }).month : '';
 }
-/** 2024 (in the catalog's time zone, as the view shows it) */
+/** 2024 (in Medorama's time zone, as the view shows it) */
 export function fmtYear(t) {
   return ok(t) ? parts(t, { year: 'numeric' }).year : '';
 }
@@ -180,6 +182,13 @@ export function dayKey(t) {
   const p = parts(t, { year: 'numeric', month: '2-digit', day: '2-digit' });
   return `${p.year}-${p.month}-${p.day}`;
 }
+/** The calendar days from a's day to b's, in Medorama's time zone (a stay from 22:00 to 08:00
+ * the next day: 1), as the report counts its hospital days. */
+export function daysBetween(a, b) {
+  if (!ok(a) || !ok(b)) return NaN;
+  const day = (t) => Date.parse(`${dayKey(t)}T00:00:00Z`);
+  return Math.round((day(b) - day(a)) / 86400000);
+}
 export function fmtDuration(s) {
   if (!ok(s)) return '—';
   // rounded once, then split (never "60 min" or "1 d 24 h")
@@ -189,7 +198,7 @@ export function fmtDuration(s) {
   const h = Math.round(s / 3600);
   return `${Math.floor(h / 24)} d ${h % 24} h`;
 }
-/** A date (YYYY-MM-DD) at midnight in the catalog's time zone, as Unix seconds. */
+/** A date (YYYY-MM-DD) at midnight in Medorama's time zone, as Unix seconds. */
 export function zonedMidnight(d) {
   if (!d) return undefined;
   const [y, m, day] = d.split('-').map(Number);
@@ -199,7 +208,7 @@ export function zonedMidnight(d) {
   return guess - (Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) / 1000 - guess);
 }
 
-/** The end of a date (YYYY-MM-DD) in the catalog's time zone: the next day's midnight (a day
+/** The end of a date (YYYY-MM-DD) in Medorama's time zone: the next day's midnight (a day
  * of a change of clocks lasts 23 or 25 hours). */
 export function zonedDayEnd(d) {
   if (!d) return undefined;
@@ -212,7 +221,7 @@ export function zonedDayEnd(d) {
 // ------------------------------------------------------------ recordings and the viewer
 export const STATUS_TEXT = {
   ready: 'ready', new: 'not indexed', queued: 'queued', indexing: 'indexing', stale: 'changed',
-  failed: 'failed', missing: 'missing', none: 'no recordings',
+  failed: 'failed', missing: 'missing', file: 'a file, opened by its viewer (not indexed)', none: 'no recordings',
 };
 export function dot(status, progress) {
   const s = status || 'none';
@@ -222,7 +231,7 @@ export function dot(status, progress) {
 export function statusCounts(c) {
   return Object.entries(c || {}).map(([k, n]) => `${n} ${STATUS_TEXT[k] || k}`).join(', ');
 }
-/** `embedded` (the catalog runs it), `link` (elsewhere: viewer_url) or `none`. */
+/** `embedded` (Medorama runs it), `link` (elsewhere: viewer_url) or `none`. */
 export const viewerMode = () => st.cfg?.viewer?.mode || 'none';
 /** The hash of the viewer's own page for a recording, optionally at a time span. */
 export function viewerHash(path, t0, t1) {

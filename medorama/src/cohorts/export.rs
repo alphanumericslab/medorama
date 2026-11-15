@@ -8,12 +8,13 @@ use super::*;
 /// 89 as 90+.
 pub fn export_csv(
     c: &Connection,
+    cfg: &Config,
     user: &User,
     id: i64,
     gate: Option<&crate::gate::Restricted>,
 ) -> anyhow::Result<(String, String)> {
-    let co = load(c, user, id)?;
-    let rows = all_members(c, user, id)?;
+    let co = load(c, cfg, user, id)?;
+    let rows = all_members(c, cfg, user, id)?;
     let mut w = csv::Writer::from_writer(vec![]);
     let identified = user.phi && gate.is_none();
     let mut head = vec!["patient_id", "sex", "encounters", "latest_encounter", "data", "how", "added_at"];
@@ -38,7 +39,8 @@ pub fn export_csv(
             r["kinds"].as_array().into_iter().flatten().filter_map(|k| k.as_str()).map(String::from).collect();
         let patient = match (gate, r["id"].as_i64()) {
             (Some(g), Some(p)) => g.pseudonym(p),
-            _ => s("patient_id"),
+            _ if identified => s("patient_id"),
+            _ => s("pseudonym"),
         };
         let mut rec = vec![
             patient,
@@ -99,11 +101,12 @@ pub(super) fn file_stem(name: &str) -> String {
 
 /// The definition as a JSON file: the query and the source as stored, and the whole
 /// definition in words (with the patients added and removed manually).
-pub fn export_criteria(c: &Connection, user: &User, id: i64) -> anyhow::Result<(String, String)> {
-    let co = load(c, user, id)?;
+pub fn export_criteria(c: &Connection, cfg: &Config, user: &User, id: i64) -> anyhow::Result<(String, String)> {
+    let co = load(c, cfg, user, id)?;
     let v = serde_json::json!({
         "cohort": co.name, "description": co.description, "members": co.members,
-        "criteria": co.criteria, "in_words": criteria_words(&co.criteria), "source": co.source, "definition": co.definition,
+        "criteria": co.criteria, "in_words": criteria_words(&co.criteria), "databases": co.definition.databases,
+        "source": co.source, "definition": co.definition,
         "exported_at": utc(now()),
     });
     Ok((format!("cohort-{}-criteria.json", file_stem(&co.name)), serde_json::to_string_pretty(&v)?))
@@ -118,8 +121,8 @@ pub fn criteria_words(q: &Criteria) -> serde_json::Value {
     })
 }
 
-/// One database's rows about the cohort's members: its name, headers and rows (the patient ID
-/// first, then the columns the user may see).
+/// One database's entries about the cohort's members: its name, headers and rows (the patient
+/// first, then the entry).
 pub struct MemberData {
     pub database: String,
     pub headers: Vec<String>,
@@ -128,85 +131,112 @@ pub struct MemberData {
 
 pub fn member_data(
     c: &Connection,
+    cfg: &Config,
     user: &User,
     id: i64,
     gate: Option<&crate::gate::Restricted>,
 ) -> anyhow::Result<Vec<MemberData>> {
-    let members = member_ids(c, user, id)?;
+    let members = member_ids(c, cfg, user, id)?;
     let mut ids: Vec<i64> = members.iter().copied().collect();
     ids.sort_unstable();
-    // in Privacy Mode: every column, identifying cells as placeholders (gate.rs `column_mask`)
     let shown_as = User { phi: user.phi && gate.is_none(), ..user.clone() };
-    let pid: HashMap<i64, String> = c
-        .prepare("SELECT id, patient_id FROM patients")?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<Result<_, _>>()?;
+    let viewable = crate::databases::granted(c, user, "view")?;
+    // outside Privacy Mode, the databases granted without `phi` go through the gate too
+    // (patient/restricted.rs): one built here when none is given
+    let deidentified = if gate.is_none() { crate::patient::without_phi(c, user)? } else { Default::default() };
+    let built = if gate.is_none() && viewable.iter().any(|d| deidentified.contains(d)) {
+        Some(crate::search::build_gate(c, cfg)?)
+    } else {
+        None
+    };
     let mut out = vec![];
-    for (db, dname, cols) in db_columns(c)? {
-        if cols.is_empty() {
-            continue; // a folder of recordings: no rows of its own
+    let mut identified = false;
+    for s in crate::sources::list(c)? {
+        if !viewable.contains(&s.id) {
+            continue;
         }
-        let keep: Vec<(&(usize, String, String), Option<&'static str>)> = cols
-            .iter()
-            .map(|col| (col, crate::gate::column_mask(&shown_as, gate, &col.1, &col.2)))
-            .filter(|(_, mask)| gate.is_some() || mask.is_none())
-            .collect();
+        let db_gate = gate.or(built.as_ref().filter(|_| deidentified.contains(&s.id)));
+        identified |= db_gate.is_none() && shown_as.phi;
+        let zone = s.zone(&cfg.timezone);
         let mut rows = vec![];
-        for (p, _, cells, line, cat) in db_rows_of(c, db, &ids)? {
-            if !members.contains(&p) {
+        for p in &ids {
+            let persons: Vec<String> =
+                crate::persons::persons_of(cfg, c, *p, Some(&[s.id]))?.into_iter().flat_map(|(_, keys)| keys).collect();
+            if persons.is_empty() {
                 continue;
             }
-            let shown_pid = match gate {
-                Some(g) => g.pseudonym(p),
-                None => pid.get(&p).cloned().unwrap_or_default(),
+            let shown_pid = match db_gate {
+                Some(g) => g.pseudonym(*p),
+                None => crate::patient::pseudonym_of(c, *p)?,
             };
-            let own = gate.map(|g| g.for_patient(p));
-            let gate = own.as_ref();
-            let mut r = vec![shown_pid, line.to_string()];
-            for ((pos, _, m), mask) in &keep {
-                let v = cells.get(*pos).cloned().unwrap_or_default();
-                r.push(if !shown_as.reads_notes() && cat == "note" && m == "text" && !v.is_empty() {
-                    "(the text of notes needs the PHI permission)".into()
-                } else if let (Some(g), None, true) = (gate, mask, cat == "note" && m == "text") {
-                    let (names, birth) = crate::gate::Restricted::identity_words(c, p);
-                    g.note(&v, &names, &birth)
+            let own = db_gate.map(|g| g.for_patient(*p));
+            let g = own.as_ref();
+            let (names, birth) = crate::gate::Restricted::identity_words(c, cfg, *p);
+            // every cell of text as the gate writes it (the patient's names, identifiers, contact
+            // details and dates replaced); free text withheld when it must be
+            let cell = |t: &str| g.map_or_else(|| t.to_string(), |g| g.note(t, &names, &birth));
+            let free = |t: &str| {
+                if t.trim().is_empty() {
+                    String::new()
+                } else if !shown_as.reads_notes() {
+                    "(free text needs the PHI permission, or Privacy Mode letting it through)".to_string()
                 } else {
-                    crate::gate::cell(gate, *mask, &v)
-                });
+                    g.map_or_else(|| t.to_string(), |g| g.entry_text(t, &names, &birth))
+                }
+            };
+            for e in s.entries(&persons, zone)? {
+                let time = e.time.map(|t| utc(g.map_or(t, |g| g.settings.shift(t)))).unwrap_or_default();
+                let value = match e.value_num {
+                    Some(v) => fmt_num(v),
+                    None if crate::cohorts::is_long_text(&e.value_text) => free(&e.value_text),
+                    None => cell(&e.value_text),
+                };
+                rows.push(vec![
+                    shown_pid.clone(),
+                    time,
+                    e.category.clone(),
+                    cell(&e.name),
+                    cell(&e.code),
+                    value,
+                    cell(&e.unit),
+                    cell(&e.flag),
+                    free(&e.text),
+                ]);
             }
-            rows.push(r);
         }
         if rows.is_empty() {
             continue;
         }
-        let mut headers = vec!["patient_id".to_string(), "line".to_string()];
-        headers.extend(keep.iter().map(|((_, h, _), _)| h.clone()));
-        out.push(MemberData { database: dname, headers, rows });
+        let headers =
+            ["patient", "time", "category", "name", "code", "value", "unit", "flag", "text"].map(String::from).to_vec();
+        out.push(MemberData { database: s.name.clone(), headers, rows });
     }
-    audit(c, Some(user), if shown_as.phi { "phi_export" } else { "export" }, "cohort_data", &id.to_string());
+    audit(c, Some(user), if identified { "phi_export" } else { "export" }, "cohort_data", &id.to_string());
     Ok(out)
 }
 
-/// The members' data as one long CSV: a line per cell (patient, database, line, column, value).
+/// The members' data as one CSV: a line per entry (database, patient, time, the entry).
 pub fn export_data_csv(
     c: &Connection,
+    cfg: &Config,
     user: &User,
     id: i64,
     gate: Option<&crate::gate::Restricted>,
 ) -> anyhow::Result<(String, String)> {
-    let co = load(c, user, id)?;
+    let co = load(c, cfg, user, id)?;
     let mut w = csv::Writer::from_writer(vec![]);
-    w.write_record(["patient_id", "database", "line", "column", "value"])?;
-    for d in member_data(c, user, id, gate)? {
+    let mut head = false;
+    for d in member_data(c, cfg, user, id, gate)? {
+        if !head {
+            let mut h = vec!["database".to_string()];
+            h.extend(d.headers.iter().cloned());
+            w.write_record(&h)?;
+            head = true;
+        }
         for r in &d.rows {
-            for (h, v) in d.headers.iter().zip(r).skip(2) {
-                if !v.trim().is_empty() {
-                    w.write_record(
-                        [r[0].as_str(), d.database.as_str(), r[1].as_str(), h.as_str(), v.as_str()]
-                            .map(|x| crate::databases::csv_cell(x).into_owned()),
-                    )?;
-                }
-            }
+            let mut rec = vec![d.database.clone()];
+            rec.extend(r.iter().cloned());
+            w.write_record(rec.iter().map(|x| crate::databases::csv_cell(x).into_owned()))?;
         }
     }
     Ok((
@@ -218,12 +248,13 @@ pub fn export_data_csv(
 /// The cohort as an Excel workbook: its members, its criteria, and a sheet per database.
 pub fn export_xlsx(
     c: &Connection,
+    cfg: &Config,
     user: &User,
     id: i64,
     gate: Option<&crate::gate::Restricted>,
 ) -> anyhow::Result<(String, Vec<u8>)> {
-    let co = load(c, user, id)?;
-    let (_, members) = export_csv(c, user, id, gate)?;
+    let co = load(c, cfg, user, id)?;
+    let (_, members) = export_csv(c, cfg, user, id, gate)?;
     let mut rd = csv::ReaderBuilder::new().has_headers(false).from_reader(members.as_bytes());
     let mrows: Vec<Vec<String>> =
         rd.records().filter_map(|r| r.ok()).map(|r| r.iter().map(String::from).collect()).collect();
@@ -233,7 +264,8 @@ pub fn export_xlsx(
         vec!["Description".into(), co.description.clone()],
         vec!["Members".into(), co.members.to_string()],
     ];
-    for (label, value) in [("Made", &d.origin), ("From", &d.from), ("Include", &d.include)] {
+    let dbs = d.databases.join(", ");
+    for (label, value) in [("Made", &d.origin), ("From", &d.from), ("Databases", &dbs), ("Include", &d.include)] {
         if !value.is_empty() {
             crit.push(vec![label.into(), value.clone()]);
         }
@@ -273,7 +305,7 @@ pub fn export_xlsx(
         crate::xlsx::Sheet { name: "Members".into(), rows: mrows },
         crate::xlsx::Sheet { name: "Definition".into(), rows: crit },
     ];
-    for d in member_data(c, user, id, gate)? {
+    for d in member_data(c, cfg, user, id, gate)? {
         let mut rows = vec![d.headers];
         rows.extend(d.rows);
         sheets.push(crate::xlsx::Sheet { name: d.database, rows });

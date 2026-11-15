@@ -73,3 +73,37 @@ test('edited, not confirmed; not MUSE', () => {
   assert.deepStrictEqual([...MUSE.base64('AQID')], [1, 2, 3]);
   assert.deepStrictEqual([...MUSE.base64('AQ\nI')], [1, 2]);
 });
+
+test('UTF-16 and UTF-8 files: by the byte order mark, by the zero bytes of UTF-16, by the declaration', async () => {
+  const text = MUSE.decode(bytes);
+  const golden16 = MUSE.read(bytes);
+  const as = (t, decl) => t.replace('encoding="ISO-8859-1"', `encoding="${decl}"`);
+  const le = (t) => Buffer.from(t, 'utf16le');
+  const be = (t) => { const b = le(t); for (let i = 0; i + 1 < b.length; i += 2) [b[i], b[i + 1]] = [b[i + 1], b[i]]; return b; };
+  const bom = (mark, b) => Buffer.concat([Buffer.from(mark), b]);
+  const files = {
+    'UTF-16LE, BOM': bom([0xff, 0xfe], le(as(text, 'UTF-16'))),
+    'UTF-16BE, BOM': bom([0xfe, 0xff], be(as(text, 'UTF-16'))),
+    'UTF-16LE, no BOM': le(as(text, 'UTF-16')),
+    'UTF-16BE, no BOM': be(as(text, 'UTF-16')),
+    'UTF-16LE, BOM, a wrong declaration': bom([0xff, 0xfe], le(text)),
+    'UTF-8, BOM': bom([0xef, 0xbb, 0xbf], Buffer.from(as(text, 'UTF-8'))),
+    'UTF-8, BOM, a wrong declaration': bom([0xef, 0xbb, 0xbf], Buffer.from(text)),
+    'UTF-8 declared UTF-16': Buffer.from(as(text, 'UTF-16')),
+  };
+  assert.deepStrictEqual(MUSE.encodingOf(files['UTF-16BE, no BOM']), { enc: 'utf-16be', skip: 0 });
+  assert.deepStrictEqual(MUSE.encodingOf(files['UTF-16LE, BOM']), { enc: 'utf-16le', skip: 2 });
+  assert.deepStrictEqual(MUSE.encodingOf(bytes), { enc: 'iso-8859-1', skip: 0 });
+  const Readers = require('../readers.js');
+  for (const [what, b] of Object.entries(files)) {
+    const u8 = new Uint8Array(b);
+    assert.ok(MUSE.isMuse(u8), what);
+    assert.ok(!MUSE.decode(u8).startsWith('﻿'), what);
+    const e = MUSE.read(u8);
+    assert.deepStrictEqual(e.meta, golden16.meta, what);
+    assert.deepStrictEqual(e.leads, golden16.leads, what);
+    assert.deepStrictEqual(e.meta.fields.find((f) => f[0] === 'Site'), ['Site', 'Clinique Médicale'], what);
+    assert.strictEqual(Readers.find('ecg.xml', u8).key, 'muse', what);
+    assert.strictEqual((await Readers.find('ecg.xml', u8).read('ecg.xml', u8)).leads.length, 12, what);
+  }
+});
