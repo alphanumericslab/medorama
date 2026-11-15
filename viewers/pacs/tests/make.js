@@ -2,7 +2,7 @@
 // little endian).  Everything is synthetic.
 'use strict';
 
-const LONG = new Set(['OB', 'OW', 'SQ', 'UN', 'UT']);
+const LONG = new Set(['OB', 'OV', 'OW', 'SQ', 'UN', 'UT']);
 
 /** One element; `value` is a Buffer, a number (US, UL, FD, SS) or text. */
 function el(g, e, vr, value, explicit = true) {

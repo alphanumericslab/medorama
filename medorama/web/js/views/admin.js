@@ -1,6 +1,7 @@
 // Admin: users, settings, add-ons, the audit log.
 
 import { $, api, esc, fail, fmtDay, fmtTime, resetFormats, st, toast } from '../core.js';
+import { askPassword } from '../password.js';
 
 // ------------------------------------------------------------ Privacy Mode: what it withholds
 function showDisplay(d) {
@@ -20,8 +21,20 @@ function previewDisplay() {
   st.cfg.display = saved;
 }
 
+// Withheld always, whatever is ticked (the privacy gate, gate.rs): not offered as a choice.  A
+// server that still lists them as fields keeps them as they were saved.
+export const ALWAYS = new Set(['names', 'mrn', 'birth_date', 'account_numbers']);
+
+/** What Privacy Mode withholds, as saved: the boxes ticked, and the fields always withheld. */
+export function deidFields(ticked, saved) {
+  return [...new Set([...(saved || []).filter((f) => ALWAYS.has(f)), ...ticked])];
+}
+
+let savedFields = [];
+
 function showDeid(d) {
-  $('#deid-fields').innerHTML = d.choices.map((c) => `<label class="inline"><input type="checkbox" data-deid="${esc(c.key)}"${d.fields.includes(c.key) ? ' checked' : ''}> ${esc(c.label)}${c.hipaa ? ' <span class="pill" title="An identifier of HIPAA\'s Safe Harbor list">HIPAA</span>' : ''}</label>`).join('');
+  savedFields = d.fields || [];
+  $('#deid-fields').innerHTML = d.choices.filter((c) => !ALWAYS.has(c.key)).map((c) => `<label class="inline"><input type="checkbox" data-deid="${esc(c.key)}"${d.fields.includes(c.key) ? ' checked' : ''}> ${esc(c.label)}${c.hipaa ? ' <span class="pill" title="An identifier of HIPAA\'s Safe Harbor list">HIPAA</span>' : ''}</label>`).join('');
   for (const k of ['years', 'months', 'days', 'hours']) $(`#deid-${k}`).value = d.offset[k];
   $('#deid-spread').value = d.spread_days ?? 365;
   sumDeid();
@@ -70,9 +83,9 @@ async function load() {
   $('#addon-table').innerHTML = html;
   const c = st.cfg;
   $('#cfg-list').innerHTML = [
-    ['Version', c.version], ['Results', c.results_dir], ['Indexes', c.index_dir], ['Time zone', c.timezone],
+    ['Version', c.version], ['Time zone', c.timezone],
     ['Workers', c.workers], ['Automatic indexing', c.auto_index ? 'on' : 'off'],
-    ['Viewer', { embedded: `the ${c.viewer.flavor} viewer, run by the catalog${c.viewer.running ? ' (running)' : ''}`, link: `${c.viewer.url} (viewer_url)`, none: `none: ${c.viewer.reason}` }[c.viewer.mode]],
+    ['Viewer', { embedded: `the ${c.viewer.flavor} viewer, run by Medorama${c.viewer.running ? ' (running)' : ''}`, link: `${c.viewer.url} (viewer_url)`, none: `none: ${c.viewer.reason}` }[c.viewer.mode]],
   ].map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join('');
 }
 
@@ -103,11 +116,13 @@ export default {
     });
     $('#deid-hipaa').addEventListener('click', async () => {
       const d = await api('deid');
-      showDeid({ ...d, fields: d.choices.filter((c) => c.default).map((c) => c.key), offset: { years: 0, months: 0, days: 36570, hours: 0 }, spread_days: 365 });
+      // the default choices, never weaker than now: the offset kept (a drawn one is secret; the
+      // documented default is public), the per-patient spread not narrowed
+      showDeid({ ...d, fields: d.choices.filter((c) => c.default).map((c) => c.key), spread_days: Math.max(d.spread_days || 0, 365) });
     });
     $('#deid-form').addEventListener('submit', async (e) => {
       e.preventDefault();
-      const fields = [...document.querySelectorAll('[data-deid]')].filter((x) => x.checked).map((x) => x.dataset.deid);
+      const fields = deidFields([...document.querySelectorAll('[data-deid]')].filter((x) => x.checked).map((x) => x.dataset.deid), savedFields);
       try {
         st.cfg.deid = await api('admin/deid', { method: 'PUT', json: { fields, offset: sumDeid(), spread_days: Math.max(0, Math.floor(+$('#deid-spread').value || 0)) } });
         resetFormats();
@@ -134,8 +149,8 @@ export default {
       if (b.dataset.userSignout) {
         api(`users/${b.dataset.userSignout}`, { method: 'PATCH', json: { sign_out: true } }).then(() => toast('Signed out everywhere')).catch(fail);
       } else if (b.dataset.userPass) {
-        const pw = prompt('New password (at least 10 characters):');
-        if (pw) change(+b.dataset.userPass, { password: pw });
+        const who = b.closest('tr')?.querySelector('td')?.firstChild?.textContent?.trim() || '';
+        askPassword({ title: `A new password${who ? ` for ${who}` : ''}` }).then((r) => { if (r) change(+b.dataset.userPass, { password: r.password }); }).catch(fail);
       } else if (confirm(`Delete the user ${b.dataset.name}?`)) {
         api(`users/${b.dataset.userDel}`, { method: 'DELETE' }).then(load).catch(fail);
       }

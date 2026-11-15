@@ -30,6 +30,7 @@ the engines' own ([readers.md](readers.md)).
 - [How a collection is read](#how-a-collection-is-read)
 - [One record](#one-record)
 - [MATLAB signal files](#matlab-signal-files)
+- [Multi-frequency records](#multi-frequency-records)
 - [Multi-segment records](#multi-segment-records)
 - [A folder of records: one session](#a-folder-of-records-one-session)
 - [Overlapping records](#overlapping-records)
@@ -54,7 +55,8 @@ recording/                      the collection (one recording)
 ```
 
 - Records are standard WFDB records (any signal format wfdb-x reads). Each signal of each
-  record becomes a piece of a channel.
+  record becomes a piece of a channel, at its own rate ([multi-frequency
+  records](#multi-frequency-records)).
 - Every record's header must state its sampling frequency. The readers assume none, so a
   collection with a record that does not is not read. A signal with a gain of 0 (uncalibrated)
   is shown in stored counts, with the unit `adu`; a signal whose header gives no units has none.
@@ -145,7 +147,11 @@ is its auxiliary text when it has one (`R_WAVE`), else the WFDB mnemonic of its 
 2. **Placement on the time axis.** A record with `start_unix` starts there. A record without one
    follows the data before it, after the break `gaps.csv` states before it (`gap_s` on a row of
    scope `all` whose `records_after` names it), and records of the same `stretch` start
-   together. Such records are drawn as **time not stated**: their place is known relative to
+   together. Records without one that come **before the first record with a start** are placed
+   so that they end where it starts, in the same way relative to each other (not at
+   1970-01-01); when no record has a start, the first starts at 0. The recording's notes then
+   say `The records without a start time that come before the first record with one end where it
+   starts.` Such records are drawn as **time not stated**: their place is known relative to
    their neighbours, not on the clock.
 3. **Breaks** (`gaps.csv`, except the record splits) are drawn between the data, with their
    reason and length; a break without stated times takes them from the records on each side.
@@ -162,6 +168,13 @@ signal files its header names, with its `.mrk` markers. Its start is the header'
 and time, taken as UTC; a header that states no date and time gives data marked **time not
 stated**, which starts at 0 (1970-01-01). A record whose header states no sampling frequency, or
 one that is not a finite number greater than 0 (`nan`), is not read.
+
+**A header without a number of samples.** The record line may leave out the number of samples
+(`100 2 360`), or state 0: the record is then read **to the end of its data**, as the WFDB
+library (and the ECG viewer) reads it. The number of samples is what its signal files hold (as
+below); when no file can be measured (a compressed format such as FLAC, 508, 516 and 524), the
+frames are counted by decoding them once when the record is indexed. A header that names no
+signal file (a layout header) has no samples.
 
 **Samples stated and samples held.** A header may state more samples than its signal files hold.
 The number of samples read is the least of the number the header states and, for each signal
@@ -180,8 +193,8 @@ outside its data roots, symbolic links resolved
 ([index-format.md](../viewers/vitalstream/docs/index-format.md#files-outside-the-data-roots)).
 
 **A record is opened by its header.** A signal file (`.dat`, `.mat`) is not a record of its own:
-opened or added by itself (a path typed in a viewer's file browser, `medorama add`, a table's
-`file` column), it is refused with what to open in its place: `100.dat is a WFDB signal file:
+opened or added by itself (a path typed in a viewer's file browser, a `file` that a recording
+database names), it is refused with what to open in its place: `100.dat is a WFDB signal file:
 open its header, 100.hea` when the header of the same name next to it names it, else `… open the
 header (.hea) that names it`. The ECG viewer, which reads only the files chosen in it, asks for
 the header in the same words ([its README](../viewers/ecg/README.md#wfdb-records)).
@@ -228,6 +241,17 @@ name; a `.dat` file is read as WFDB reads it, without these checks. In Privacy M
 a MAT signal file's first matrix only, with its descriptive text and the matrix's name blanked
 ([security.md](security.md)).
 
+## Multi-frequency records
+
+A signal may have several samples per frame (`100.dat 16x4 …` in its header: 4 samples of that
+signal in each frame). Such a signal is read **at its own rate**, the header's sampling frequency
+(the frame rate) times its samples per frame, with every one of its samples, as WFDB's
+high-resolution mode reads them: in a record at 125 Hz, a signal of 4 samples per frame is a piece
+at 500 Hz with 4 samples per frame, and a signal of 1 is a piece at 125 Hz. No signal is averaged
+to the frame rate. A marker (`.mrk`) is at a frame: on a signal of several samples per frame, it
+is placed at the first sample of that frame. The duration of each piece is the record's frames
+divided by the frame rate, the same for every signal.
+
 ## Multi-segment records
 
 A multi-segment record (WFDB's `name/n` record line, followed by `n` segment lines) is read as
@@ -263,16 +287,19 @@ by day, are seen together.
    header of a multi-segment record are part of that record, never records of their own.
 2. **Placement:** a record whose header states a base date and time starts there (UTC). A
    record without one is placed after the data before it (in that order), marked **time not
-   stated**.
+   stated**; records without one that come before the first record with one end where it starts
+   ([How a collection is read](#how-a-collection-is-read)).
 3. A record that cannot be read, whose header states no valid sampling frequency, or one of
    whose files leads outside the data roots, is left out; the recording's notes say how many were
    left out.
 4. A `RECORDS` file is not needed and not read. `vitals.csv`, `events.csv` and `gaps.csv`, when
    present in the folder itself, are read as for a collection.
 
-When a tree of folders is searched for recordings (Medorama's import), a folder is a recording
-when it holds records itself (a `.hea` file or a `RECORDS` file) or an `index.csv`; it is then
-taken whole, its subfolders included. The viewers' **Open multiple records…** opens any folder.
+When db-builder searches a tree of folders for recordings (`db-builder recordings`), it lists
+each record by its header (the segments of a multi-segment record are not records of their own).
+A folder to be read as one session is named as a folder instead, in the `file` column of a table
+given to `db-builder add` ([importing.md, Files](importing.md#files)). The viewers' **Open
+multiple records…** opens any folder.
 
 ## Overlapping records
 

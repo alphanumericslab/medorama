@@ -13,7 +13,7 @@ the same index ([docs/naming.md](../docs/naming.md)).
 |---|---|
 | Command | `vitalstream-rs` (default port 8060) |
 | Engine | The crate `recording-engine` ([`libs/engine`](../../../libs/engine)), shared with Medorama: the WFDB and EDF readers, the adapter protocol, the index and the queries. |
-| Build | `cargo build --release --locked -p vitalstream-rs` from the repository root (the crate is a member of its Cargo workspace) builds `target/release/vitalstream-rs`. Every system: [docs/building.md](../../../docs/building.md). |
+| Build | `cargo build --release --locked -p vitalstream-rs` from the repository root (the crate is a member of its Cargo workspace) builds `target/release/vitalstream-rs`. SQLCipher and OpenSSL, for the index store, are compiled in (rusqlite 0.42, `bundled-sqlcipher-vendored-openssl`): the build needs a C compiler and Perl. Every system: [docs/building.md](../../../docs/building.md). |
 | Install alone | `viewers/vitalstream/install.sh --viewer rs` builds it in `target/standalone` and installs `~/.local/bin/vitalstream-rs` ([VitalStream's README](../README.md#install)). |
 | Run, settings, services | [VitalStream's README](../README.md#run). |
 
@@ -58,6 +58,8 @@ C++ viewers ([VitalStream's README, Settings](../README.md#settings)). Among the
   (defaults 5000, 20 and 10 s; [docs/wfdb-collection.md, Limits](../../../docs/wfdb-collection.md#limits)).
 - `require_password` makes the viewer refuse to start without a password. Medorama sets it for
   the viewer it runs.
+- `cache_dir` is the folder of the viewer's own index store, `index.sqlite`, and
+  `index_key_file` a file of 64 hex digits, the key it is encrypted with (empty: a plain store).
 - `allowed_hosts` lists the host names the viewer answers for besides the local ones and `host`,
   and `secure_cookie` marks the sign-in cookie `Secure` ([docs/viewer-api.md, Requests](../docs/viewer-api.md#requests)).
 
@@ -75,10 +77,27 @@ The viewer is a thin HTTP layer over the engine ([docs/architecture.md](../../..
 | [`web.rs`](src/web.rs), [`build.rs`](build.rs) | The page from [`web/`](../web), built into the program. |
 | Engine: [`sources/`](../../../libs/engine/src/sources) | The built-in readers, listed in [`sources/mod.rs`](../../../libs/engine/src/sources/mod.rs). `wfdb_folder.rs` reads WFDB records: one record, multi-segment records, a collection, a folder of records read as one session, and the limits on a folder (`wfdb_files.rs` holds what needs no wfdb-x; `wfdb_none.rs` takes the reader's place without the feature `wfdb`). `edf.rs` reads EDF, EDF+, BDF and BDF+ files ([docs/edf.md](../../../docs/edf.md)). Other formats are read through adapters ([`adapters.rs`](../../../libs/engine/src/adapters.rs)). |
 | Engine: [`common.rs`](../../../libs/engine/src/common.rs) | Channels, pieces, minimum and maximum envelope pyramids, vital-sign series. |
-| Engine: [`index.rs`](../../../libs/engine/src/index.rs), [`dataset.rs`](../../../libs/engine/src/dataset.rs) | The index ([docs/index-format.md](../docs/index-format.md), version 2); the window, vital-sign and marker queries. |
+| Engine: [`index.rs`](../../../libs/engine/src/index.rs), [`store.rs`](../../../libs/engine/src/store.rs), [`dataset.rs`](../../../libs/engine/src/dataset.rs) | The index ([docs/index-format.md](../docs/index-format.md)) and the index store it is packed into ([Version 3: the index store](../docs/index-format.md#version-3-the-index-store)); the window, vital-sign and marker queries. |
+
+**The index store.** The viewer keeps its indexes in one SQLite database, `cache_dir/index.sqlite`,
+encrypted with SQLCipher when `index_key_file` is set; the C++ and Python viewers write and read
+the same stores, with the same rows. An index is built as the files of version 2 in a private
+temporary folder next to the store (`index.tmp/`), then packed in one transaction (an index of
+the same key written by the same engine is kept). Envelopes are read back by range, a chunk at
+a time; markers and vital signs whole. An adapter's recording loaded from a store gets a private
+folder holding only its `meta.json`, for the adapter to read samples again, for as long as it is
+loaded. `vitalstream-rs --index PATH` indexes into the own store and prints
+`indexed PATH -> …/index.sqlite (KEY)`.
+
+**Launched by Medorama** (`--keys-on-stdin`), the viewer reads its stores and their keys on
+standard input, one JSON line each (`{"store": PATH, "key": HEX}`, with `"own": true` for the one
+it writes; `{"forget": PATH}`), looks a recording up in the stores given, then in its own, and
+forgets them all when standard input closes. Its own store is then the one Medorama gives it, not
+`cache_dir/index.sqlite`. The keys are kept in memory only: a line that cannot be used is
+reported without being repeated.
 
 Indexing runs in background threads, `index_workers` at a time. `POST api/v1/cancel` stops one,
-and nothing of it is kept. When a view zooms in, raw samples are read from the recording: WFDB
+and nothing of it is kept in the store or next to it. When a view zooms in, raw samples are read from the recording: WFDB
 records through wfdb-x (the crate `wfdbx`; refused without the feature `wfdb`), EDF files by
 the engine's EDF reader, and other formats through the adapter's `serve` session.
 
@@ -88,7 +107,9 @@ The tests cover the viewer and its engine:
 - [`tests/viewer.rs`](tests/viewer.rs) indexes and queries the synthetic recordings of
   [`testdata/`](../testdata), and tests the HTTP API (the checks on hosts, origins, bodies and
   query parameters, a record whose signal file leads outside the data roots, a recording that
-  cannot be indexed) and sign-in (logout ending a sign-in, the `Secure` cookie);
+  cannot be indexed), sign-in (logout ending a sign-in, the `Secure` cookie), and the stores and
+  keys on a pipe (`stores_and_keys_on_a_pipe`: a database's store read, a wrong key refused, the
+  own store written encrypted, a forgotten store no longer read);
 - the unit tests of [`settings.rs`](src/settings.rs) test the viewer's root and its symbolic
   links, and the settings files (none read from the working directory, wrong types refused);
   those of [`server.rs`](src/server.rs) the delay after wrong passwords and the number grammar;
@@ -104,6 +125,10 @@ The tests cover the viewer and its engine:
   samples, the patient field never read, the limit on pieces, rates that are not finite);
 - the engine's [`tests/adapters.rs`](../../../libs/engine/tests/adapters.rs) tests the adapter
   protocol end to end;
+- the engine's [`tests/store.rs`](../../../libs/engine/tests/store.rs) tests the index store: a
+  store answers as a folder does, without its key a store is not read, an index is kept,
+  replaced and removed whole, a store of another format is refused, and what a killed program
+  left is removed a day later;
 - without the feature `wfdb`, the tests on WFDB records are ignored, and
   `without_wfdb_a_wfdb_record_is_refused` (in `tests/viewer.rs`) and the engine's
   [`tests/no_wfdb.rs`](../../../libs/engine/tests/no_wfdb.rs) check that WFDB records are

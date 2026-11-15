@@ -1,19 +1,17 @@
-//! `medorama`: the catalog's command-line tool and server (docs/administration.md).
+//! `medorama`: Medorama's command-line tool and server (docs/administration.md).
 //!
-//! Commands act directly on the database, as the operating-system user who can open it
-//! (recorded in the audit log as `local:<user>`, with admin rights); the server's web page
-//! and API act as signed-in catalog users.
+//! Commands act directly on the control store and the workspace, as the operating-system user
+//! who can open them (recorded in the audit log as `local:<user>`, with every grant); the
+//! server's web page and API act as signed-in users.
 
 use clap::{Args, Parser, Subcommand};
 use medorama::actions::Registry;
 use medorama::config::{default_home, Config, CONFIG_NAME};
 use medorama::db::{audit, Db};
-use medorama::imports::Opts;
 use medorama::jobs::{self, Selection};
-use medorama::query::{self, Search};
 use medorama::users::{self, Changes, Role, User};
 use medorama::util::{fmt_local, tz};
-use medorama::{linkage, recordings, server};
+use medorama::{recordings, server};
 use std::collections::HashMap;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
@@ -25,11 +23,11 @@ use std::sync::{Arc, RwLock};
 #[command(
     name = "medorama",
     version,
-    about = "Medorama: a unified patient-journey research platform linking EHR data, physiological waveforms, imaging and laboratory results across databases"
+    about = "Medorama: a research browser over connected clinical databases (EHR data, physiological waveforms, imaging and laboratory results), read in place"
 )]
 struct Cli {
-    /// the catalog's home folder (medorama.toml, database); default: $MEDORAMA_HOME,
-    /// else the catalog `init` created last, else ~/.local/share/medorama
+    /// Medorama's home folder (medorama.toml, the control store, the master key); default:
+    /// $MEDORAMA_HOME, else the one `init` created last, else ~/.local/share/medorama
     /// (%LOCALAPPDATA%\medorama on Windows)
     #[arg(long, global = true)]
     home: Option<PathBuf>,
@@ -38,15 +36,16 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)] // parsed once, from the command line
 enum Cmd {
-    /// Create a catalog: settings, database and the first admin
+    /// Set Medorama up: settings, the control store, the master key and the first admin
     Init(InitArgs),
     /// Run the web interface, the HTTP API and the background workers
     Serve(ServeArgs),
-    /// Make the catalog given by --home the one later commands use without --home
+    /// Make the home given by --home the one later commands use without --home
     Use,
-    /// Copy this catalog (SQLite) into an empty PostgreSQL database, every table and row; then
-    /// set database_url in medorama.toml to use it (docs/administration.md, "Settings")
+    /// Copy the control store (SQLite) into an empty PostgreSQL database, every table and row;
+    /// then set database_url in medorama.toml to use it (docs/administration.md, "Settings")
     CopyDatabase {
         /// the PostgreSQL database (postgres://user@host/db?sslmode=require), without its password
         #[arg(long)]
@@ -58,98 +57,26 @@ enum Cmd {
         #[arg(long)]
         ca_file: Option<PathBuf>,
     },
-    /// Remove recordings from the catalog (by id or path, or --search); the files are never touched
-    Remove {
-        recordings: Vec<String>,
-        /// the recordings matching a search (docs/user-guide.md, "Searching")
-        #[arg(long)]
-        search: Option<String>,
-        /// also delete the catalog's results and indexes of them
-        #[arg(long)]
-        purge_results: bool,
-        /// only say what would be removed
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// Re-check the recordings: missing, changed, index folders still there
-    Check,
-    /// Import a database: a CSV file, a Parquet file or a spreadsheet (.xlsx, .xls, .ods) of patients,
-    /// encounters, measurements, notes, links to files... in any combination, as one batch.
-    /// Several files with the same columns make one database (each read row by row).  Columns
-    /// are recognised by their names, or mapped with --mapping (JSON or TOML); a known export
-    /// (GE MUSE ECG metadata ...) is recognised and converted (--format); relative file paths
-    /// are read from the table's folder
-    ImportTable {
-        #[arg(required = true)]
-        files: Vec<PathBuf>,
-        /// a known export to convert: auto (recognised by its columns), none, or one of
-        /// ge-muse (GE MUSE ECG metadata, the patient by MRN), ge-muse-patient-id (by a patient ID)
-        #[arg(long, default_value = "auto")]
-        format: String,
-        #[arg(long)]
-        mapping: Option<PathBuf>,
-        /// the category of the table's items when it has no category column (lab, ecg, note, ...)
-        #[arg(long, default_value = "")]
-        category: String,
-        #[command(flatten)]
-        batch: BatchArgs,
-    },
-    /// Remove encounters (by encounter ID, --search or --all) with their bed stays and EHR items; recordings stay
-    RemoveEncounters {
-        encounters: Vec<String>,
-        /// the encounters matching a search (docs/user-guide.md, "Searching")
-        #[arg(long)]
-        search: Option<String>,
-        #[arg(long)]
-        all: bool,
-        /// only say what would be removed
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// Imports (batches): list them, or remove one with everything it added
+    /// The connected databases: connect, list, check, refresh, grant, remove
     #[command(subcommand)]
-    Imports(ImportsCmd),
-    /// Sources: list them, or remove everything from one
+    Databases(DatabasesCmd),
+    /// The master key: wrap every data key again with a new one
     #[command(subcommand)]
-    Sources(SourcesCmd),
-    /// The demo: invented patients in a cohort DEMO, for trying Medorama (docs/administration.md, "The demo")
-    #[command(subcommand)]
-    Demo(DemoCmd),
-    /// Connected databases: live databases read beside the catalog (OMOP, a warehouse)
-    #[command(subcommand)]
-    Connections(ConnectionsCmd),
-    /// List encounters
+    Keys(KeysCmd),
+    /// List patients (of the connected databases)
     List(ListArgs),
-    /// List recordings
+    /// List recordings (of the connected recording databases)
     Recordings {
+        /// words in their name, format, status or database
         #[arg(long, default_value = "")]
         q: String,
-        /// only recordings not linked to an encounter
-        #[arg(long)]
-        unlinked: bool,
         #[arg(long, default_value_t = 100)]
-        limit: i64,
+        limit: usize,
         #[arg(long)]
         json: bool,
     },
-    /// Import a CLIF folder (the Common Longitudinal ICU data Format: its tables as CSV or
-    /// Parquet files): each table a database (clif_patient, clif_vitals ...), in order (patients,
-    /// hospitalizations, ADT, then the rest); a table in several files, one database
-    ImportClif {
-        dir: PathBuf,
-        /// the source label (default: clif)
-        #[arg(long, default_value = "clif")]
-        source: String,
-        /// check and count only; store nothing
-        #[arg(long)]
-        dry_run: bool,
-    },
-    /// List the import formats: built in, and described in TOML files in `formats_dirs`
-    /// (docs/administration.md, "Import formats"); --check a format file before installing it
-    Formats {
-        #[arg(long)]
-        check: Option<PathBuf>,
-    },
+    /// Re-check every recording now: missing, changed, its index still there
+    Check,
     /// List the installed actions
     Actions,
     /// Add-ons: the adapters that read recording formats Medorama does not read itself
@@ -200,36 +127,104 @@ enum Cmd {
     },
 }
 
-/// How an import is labelled (docs/administration.md, "Imports and sources").
-#[derive(Args)]
-struct BatchArgs {
-    /// the batch's name (default: recordings, the folder they are in; a table, its file name)
-    #[arg(long, default_value = "")]
-    name: String,
-    /// the source label (default: the name); a table's `source` column overrides it per row
-    #[arg(long, default_value = "")]
-    source: String,
-    /// check and count only; store nothing
-    #[arg(long)]
-    dry_run: bool,
-}
-
 #[derive(Subcommand)]
-enum ImportsCmd {
-    /// List the imports (newest first)
+#[allow(clippy::large_enum_variant)] // parsed once, from the command line
+enum DatabasesCmd {
+    /// Connect a database: checked, then kept with its own key and workspace folder; its
+    /// variables read and its persons linked
+    Connect {
+        /// its name, as criteria write it (`omop.lactate`): letters, digits, - and _
+        name: String,
+        /// omop (an OMOP CDM 5.3/5.4), views (any SQL database, through views), dbb (a db-builder database)
+        #[arg(long)]
+        kind: String,
+        /// postgres://user@host/db?sslmode=require, or sqlite:/path/to/file
+        #[arg(long)]
+        url: String,
+        /// the file holding its password (else none, or $MEDORAMA_SOURCE_PASSWORD_<NAME>)
+        #[arg(long)]
+        password_file: Option<PathBuf>,
+        /// read its password from standard input (a SQLite file's: its SQLCipher key, when it is encrypted): kept wrapped by the master key
+        #[arg(long, conflicts_with = "password_file")]
+        password_stdin: bool,
+        /// certificate authorities (PEM) for its server's certificate
+        #[arg(long)]
+        ca_file: Option<PathBuf>,
+        /// a TOML file with the views (persons, visits, entries, recordings, version): kind views
+        #[arg(long)]
+        views: Option<PathBuf>,
+        /// OMOP: the schema of the CDM's tables, and of its vocabulary
+        #[arg(long, default_value = "")]
+        schema: String,
+        #[arg(long, default_value = "")]
+        vocabulary_schema: String,
+        /// OMOP: what person_source_value holds: mrn (default), patient_id or none
+        #[arg(long, default_value = "")]
+        identifier: String,
+        /// who issued its patient IDs (default: the database itself: they link only its own persons)
+        #[arg(long, default_value = "")]
+        issuer: String,
+        /// the authority of its MRNs, when a row names none
+        #[arg(long, default_value = "")]
+        mrn_authority: String,
+        /// the time zone of its times written without an offset (default: the `timezone` setting)
+        #[arg(long, default_value = "")]
+        timezone: String,
+        /// the folder relative recording files are read from (default: a SQLite file's folder)
+        #[arg(long, default_value = "")]
+        files_root: String,
+        #[arg(long, default_value_t = 0)]
+        timeout_s: u64,
+        #[arg(long, default_value_t = 0)]
+        max_rows: u64,
+    },
+    /// List the connected databases and their status
     List {
         #[arg(long)]
         json: bool,
     },
-    /// Remove one import and everything it added (what another import also added stays)
-    Remove {
-        id: i64,
-        /// also delete the catalog's results and indexes of removed recordings
+    /// Check a database now (or every one): online or offline, and read again when its data changed
+    Check {
+        name: Option<String>,
         #[arg(long)]
-        purge_results: bool,
-        #[arg(long)]
-        dry_run: bool,
+        all: bool,
     },
+    /// Read everything Medorama keeps of a database again: variables, persons, recordings
+    Refresh { name: String },
+    /// Remove a database and every trace of it: its key destroyed, its workspace folder, cohort
+    /// rows and links removed (the database itself is not touched)
+    Remove {
+        name: String,
+        /// do it without asking
+        #[arg(long)]
+        yes: bool,
+    },
+    /// What a database holds: its variables
+    Variables {
+        name: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// A database's identity conflicts: persons whose identifiers name two patients (by key)
+    Conflicts { name: String },
+    /// Who may use a database
+    Grants { name: String },
+    /// Grant a user a permission on a database: search, view, phi or manage
+    Grant { name: String, user: String, permission: String },
+    /// Revoke a permission (and the stronger ones)
+    Revoke { name: String, user: String, permission: String },
+}
+
+#[derive(Subcommand)]
+enum KeysCmd {
+    /// Wrap every data key with a new master key; the data are not touched.  The new key: a file
+    /// of 64 hex digits; then point master_key_file (or the key manager) at it
+    Rotate {
+        #[arg(long)]
+        new_key_file: PathBuf,
+    },
+    /// Make a new master key file (64 random hex digits, readable by this account only)
+    New { file: PathBuf },
 }
 
 #[derive(Subcommand)]
@@ -247,209 +242,12 @@ enum AddonsCmd {
     Remove { name: String },
 }
 
-#[derive(Subcommand)]
-enum DemoCmd {
-    /// Load the demo: its tables (the source DEMO), its OMOP database (demo_omop) and the cohort DEMO
-    Add {
-        /// a folder made by tools/make-demo-data.py (default: the one the installer made, --demo)
-        dir: Option<PathBuf>,
-    },
-    /// Remove the demo and everything it added, as deleting the cohort DEMO does (its files stay)
-    Remove {
-        /// only say what would be removed
-        #[arg(long)]
-        dry_run: bool,
-    },
-}
-
-#[derive(Subcommand)]
-enum SourcesCmd {
-    /// List the sources and what each contributes
-    List {
-        #[arg(long)]
-        json: bool,
-    },
-    /// Remove everything a source contributed, in every import
-    Remove {
-        source: String,
-        #[arg(long)]
-        purge_results: bool,
-        #[arg(long)]
-        dry_run: bool,
-    },
-}
-
-#[derive(Subcommand)]
-#[allow(clippy::large_enum_variant)] // command-line options, parsed once
-enum ConnectionsCmd {
-    /// Connect a database (docs/design/sources.md): checked first, each view must answer
-    Add {
-        /// its name, as criteria write it (omop.lactate)
-        name: String,
-        /// omop: an OMOP CDM 5.3 or 5.4 database; sql: any layout, its views in --views
-        #[arg(long)]
-        kind: String,
-        /// postgres://user@host/db?sslmode=require (no password), or sqlite:/path/to/file
-        #[arg(long)]
-        url: String,
-        /// the file holding the password (else $MEDORAMA_SOURCE_PASSWORD_<NAME>)
-        #[arg(long)]
-        password_file: Option<PathBuf>,
-        /// certificate authorities (PEM) for the server's certificate, besides the system's
-        #[arg(long)]
-        ca_file: Option<PathBuf>,
-        /// the schema of the CDM's tables
-        #[arg(long, default_value = "")]
-        schema: String,
-        /// the schema of OMOP's vocabulary, when apart from the CDM's
-        #[arg(long, default_value = "")]
-        vocabulary_schema: String,
-        /// the time zone of the database's times (default: the catalog's)
-        #[arg(long, default_value = "")]
-        timezone: String,
-        /// what OMOP's person_source_value holds: mrn, patient_id or none
-        #[arg(long, default_value = "mrn")]
-        identifier: String,
-        /// the authority that issued its MRNs
-        #[arg(long, default_value = "")]
-        mrn_authority: String,
-        /// each query's time limit, seconds (PostgreSQL)
-        #[arg(long, default_value_t = 60)]
-        timeout_s: u64,
-        /// the rows a criterion may read
-        #[arg(long, default_value_t = 1_000_000)]
-        max_rows: u64,
-        /// kind sql: a TOML file with the views (persons, visits, entries, version) as SQL
-        #[arg(long)]
-        views: Option<PathBuf>,
-    },
-    /// List the connected databases
-    List {
-        #[arg(long)]
-        json: bool,
-    },
-    /// Check that a connected database answers: each view, and its version
-    Check { name: String },
-    /// Link every person of a connected database to the catalog's patients
-    Sync { name: String },
-    /// Disconnect a database: its links and what it added to the catalog go
-    Remove { name: String },
-}
-
-/// An import's progress, shown on one line of the terminal (when there is one) as it runs.
-struct Shown {
-    progress: Option<Arc<medorama::progress::Progress>>,
-    stop: Arc<AtomicBool>,
-    thread: Option<std::thread::JoinHandle<()>>,
-}
-
-impl Shown {
-    fn start() -> Shown {
-        use std::io::IsTerminal;
-        let stop = Arc::new(AtomicBool::new(false));
-        if !std::io::stderr().is_terminal() {
-            return Shown { progress: None, stop, thread: None };
-        }
-        let p = medorama::progress::Progress::new();
-        let (q, s) = (p.clone(), stop.clone());
-        let thread = std::thread::spawn(move || {
-            while !s.load(Ordering::Relaxed) {
-                std::thread::sleep(std::time::Duration::from_millis(500));
-                let v = q.view();
-                let what = match v["phase"].as_str() {
-                    Some("index") => "building the search index",
-                    Some("match") => "matching waiting items and recordings",
-                    _ => "reading",
-                };
-                let left =
-                    v["left_s"].as_f64().map(|t| format!(" · about {} left", fmt_duration(t))).unwrap_or_default();
-                eprint!(
-                    "\r\x1b[2K  {what}: {} rows · {:.0}% · {} rows/s{left}",
-                    v["rows"],
-                    v["done"].as_f64().unwrap_or(0.0) * 100.0,
-                    v["rate"]
-                );
-            }
-            eprint!("\r\x1b[2K");
-        });
-        Shown { progress: Some(p), stop, thread: Some(thread) }
-    }
-
-    fn end(mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
-        }
-    }
-}
-
-/// Seconds as a person reads them: `40 s`, `3 min`, `1 h 20 min`.
-fn fmt_duration(t: f64) -> String {
-    let t = t.max(0.0).round() as u64;
-    match t {
-        0..=59 => format!("{t} s"),
-        60..=3599 => format!("{} min", (t + 30) / 60),
-        _ => format!("{} h {} min", t / 3600, (t % 3600) / 60),
-    }
-}
-
-fn table_opts(file: &Path, b: &BatchArgs) -> Opts {
-    let name = if b.name.is_empty() {
-        file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
-    } else {
-        b.name.clone()
-    };
-    Opts::new(&name, &b.source, b.dry_run)
-}
-
-fn print_demo(d: &medorama::demo::Loaded) {
-    println!(
-        "Demo loaded: {} patient(s), {} encounter(s), {} item(s), {} recording(s) from {} table(s){}; the cohort {} holds them",
-        d.patients,
-        d.encounters,
-        d.items,
-        d.recordings,
-        d.tables.len(),
-        if d.connected { format!(", and the OMOP database {}", medorama::demo::CONNECTION) } else { String::new() },
-        medorama::demo::NAME
-    );
-    for w in d.warnings.iter().take(10) {
-        println!("  {w}");
-    }
-    println!(
-        "Deleting the cohort {} (an admin) removes all of it: medorama demo remove does the same.",
-        medorama::demo::NAME
-    );
-}
-
-fn print_removal(r: &medorama::imports::Removal) {
-    println!(
-        "{}{} recording(s), {} patient(s), {} encounter(s), {} bed stay(s), {} EHR item(s){}",
-        if r.dry_run { "would remove " } else { "removed " },
-        r.recordings,
-        r.patients,
-        r.encounters,
-        r.bed_stays,
-        r.ehr_items,
-        if r.kept_recordings + r.kept_encounters > 0 {
-            format!(
-                "; kept, because other imports also have them: {} recording(s), {} encounter(s)",
-                r.kept_recordings, r.kept_encounters
-            )
-        } else {
-            String::new()
-        }
-    );
-}
-
 #[derive(Args)]
 struct InitArgs {
-    /// where results and indexes go (required; never a folder of recordings)
+    /// the workspace: where Medorama keeps what it generates for each database, encrypted
+    /// (required; never a folder of recordings or of a connected database)
     #[arg(long)]
-    results: PathBuf,
-    /// index folder (default: <results>/index); a viewer's cache_dir lets that viewer reuse the indexes
-    #[arg(long)]
-    index_dir: Option<PathBuf>,
+    workspace: PathBuf,
     /// the first admin's user name
     #[arg(long, default_value = "admin")]
     admin: String,
@@ -466,9 +264,10 @@ struct InitArgs {
     /// the file holding that database's password
     #[arg(long, requires = "database_url")]
     database_password_file: Option<PathBuf>,
-    /// leave out the demo the installer made (tools/install-medorama.sh --demo); medorama demo add loads it later
+    /// connect the demo's databases the installer made (tools/install-medorama.sh --demo), and
+    /// add its example action plug-in
     #[arg(long)]
-    no_demo: bool,
+    demo: bool,
 }
 
 #[derive(Args)]
@@ -480,23 +279,19 @@ struct ServeArgs {
     /// do not run jobs (another process runs `work`)
     #[arg(long)]
     no_workers: bool,
+    /// run db-builder's web interface, building databases in this folder (overrides the
+    /// setting db_builder_root)
+    #[arg(long, value_name = "DIR")]
+    db_builder_root: Option<PathBuf>,
 }
 
 #[derive(Args)]
 struct ListArgs {
-    /// search words (encounter ID, patient ID, MRN, name, date of birth)
+    /// search words (pseudonym, sex, has:…, database:…; with the PHI permission: name, MRN, date of birth)
     #[arg(long, default_value = "")]
     q: String,
-    #[arg(long, default_value = "")]
-    unit: String,
-    /// ready, new, queued, indexing, stale, failed, missing or none
-    #[arg(long, default_value = "")]
-    status: String,
     #[arg(long, default_value_t = 100)]
-    limit: i64,
-    /// show identifiers
-    #[arg(long)]
-    phi: bool,
+    limit: usize,
     #[arg(long)]
     json: bool,
 }
@@ -509,16 +304,13 @@ struct RunArgs {
     /// every recording
     #[arg(long)]
     all: bool,
-    /// encounters (encounter IDs)
-    #[arg(long = "encounter")]
-    encounters: Vec<String>,
-    /// recordings (ids)
+    /// recordings (their numbers, as `medorama recordings` shows them)
     #[arg(long = "recording")]
     recordings: Vec<i64>,
-    /// encounters matching a search
-    #[arg(long)]
-    search: Option<String>,
-    /// the encounters of a cohort's members (its number, as the Cohorts tab shows it)
+    /// the recordings of these patients (their pseudonyms)
+    #[arg(long = "patient")]
+    patients: Vec<String>,
+    /// the recordings of a cohort's members (its number, as the Cohorts tab shows it)
     #[arg(long)]
     cohort: Option<i64>,
     /// run again where already done
@@ -612,15 +404,17 @@ fn private_dir(p: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The license terms the installers ask the user to accept (tools/license-notice.txt), shown again
+/// by `init`, where Medorama is set up for others, and to whoever built it without an installer.
+const LICENSE_NOTICE: &str = include_str!("../../tools/license-notice.txt");
+
 fn init(home: &Path, a: InitArgs) -> anyhow::Result<()> {
     if home.join(CONFIG_NAME).exists() {
-        anyhow::bail!("{} exists already; a catalog is set up there", home.join(CONFIG_NAME).display());
+        anyhow::bail!("{} exists already; Medorama is set up there", home.join(CONFIG_NAME).display());
     }
-    let results = PathBuf::from(recording_engine::paths::absolute(&a.results.to_string_lossy()));
-    let mut cfg = Config::new(home, &results);
-    if let Some(i) = a.index_dir {
-        cfg.index_dir = PathBuf::from(recording_engine::paths::absolute(&i.to_string_lossy()));
-    }
+    eprintln!("{LICENSE_NOTICE}\nSetting Medorama up and using it means accepting these terms.\n");
+    let ws = PathBuf::from(recording_engine::paths::absolute(&a.workspace.to_string_lossy()));
+    let mut cfg = Config::new(home, &ws);
     cfg.timezone = a.timezone;
     cfg.port = a.port;
     if let Some(u) = &a.database_url {
@@ -632,31 +426,32 @@ fn init(home: &Path, a: InitArgs) -> anyhow::Result<()> {
     let pw = read_password(a.password_stdin, &format!("Password for the admin {}: ", a.admin))?;
     private_dir(home)?;
     std::fs::create_dir_all(home.join("actions"))?;
-    std::fs::create_dir_all(&cfg.results_dir)?;
-    std::fs::create_dir_all(&cfg.index_dir)?;
-    // the database first, the settings file last: a failed init leaves no half-made catalog
+    private_dir(&cfg.workspace_dir)?;
+    // the database first, the settings file last: a failed init leaves nothing half made
     let pg = !cfg.database_url.is_empty();
     if !pg && cfg.database.exists() {
         anyhow::bail!(
-            "{} exists already (from an earlier catalog): move it away, or choose another --home",
+            "{} exists already (from an earlier setup): move it away, or choose another --home",
             cfg.database.display()
         );
     }
+    let key_file = medorama::workspace::make_master_file(&cfg)?;
+    medorama::workspace::load(&cfg)?;
     let made = (|| -> anyhow::Result<String> {
         let db = Db::open(&cfg, true)?;
         let c = db.get()?;
         let n: i64 = c.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
         if n > 0 {
-            anyhow::bail!("this database holds a catalog already (it has users): choose an empty database");
+            anyhow::bail!("this database holds a control store already (it has users): choose an empty database");
         }
         users::add(&c, &a.admin, "", Role::Admin, true, &pw)?;
-        audit(&c, Some(&User::local()), "init", &cfg.results_dir.to_string_lossy(), "");
+        audit(&c, Some(&User::local()), "init", &cfg.workspace_dir.to_string_lossy(), "");
         Ok(db.describe())
     })();
     let shown = match made {
         Ok(d) => d,
         Err(e) if pg => {
-            anyhow::bail!("cannot create the catalog in {}: {e}", medorama::db::shown_url(&cfg.database_url))
+            anyhow::bail!("cannot create the control store in {}: {e}", medorama::db::shown_url(&cfg.database_url))
         }
         Err(e) => {
             for suffix in ["", "-wal", "-shm"] {
@@ -668,40 +463,173 @@ fn init(home: &Path, a: InitArgs) -> anyhow::Result<()> {
             );
         }
     };
-    std::fs::write(home.join(CONFIG_NAME), cfg.to_toml())?;
-    println!("Catalog created in {}", home.display());
-    println!("  settings: {}", home.join(CONFIG_NAME).display());
-    println!("  database: {shown} (holds identifiers: keep it private)");
-    println!("  results:  {}", cfg.results_dir.display());
-    println!("  indexes:  {}", cfg.index_dir.display());
-    println!("  admin:    {} (with PHI permission)", a.admin);
-    match medorama::config::remember_home(home) {
-        Ok(p) => println!("Later commands use this catalog without --home (remembered in {}).", p.display()),
-        Err(e) => println!("Could not remember this catalog ({e}): pass --home {} to later commands.", home.display()),
-    }
-    // the demo, when the installer made it (--demo), as the first admin's
-    if let Some(dir) = medorama::demo::installed().filter(|_| !a.no_demo) {
-        println!("Loading the demo from {} …", dir.display());
-        let loaded = (|| -> anyhow::Result<medorama::demo::Loaded> {
-            let db = Db::open(&cfg, false)?;
-            let mut c = db.get()?;
-            let admin = users::get_by_name(&c, &a.admin)?.ok_or_else(|| anyhow::anyhow!("no user {}", a.admin))?;
-            medorama::demo::add(&mut c, &cfg, &admin, &dir)
-        })();
-        match loaded {
-            Ok(d) => print_demo(&d),
-            Err(e) => {
-                println!("The demo was not loaded ({e}); the catalog is ready. Try again with: medorama demo add")
+    if a.demo {
+        if let Some(dir) = demo_folder() {
+            for p in demo_actions(&dir) {
+                if !cfg.actions_dirs.contains(&p) {
+                    cfg.actions_dirs.push(p);
+                }
             }
         }
     }
-    println!("Next: medorama import-table FILE (a database), then medorama serve");
+    std::fs::write(home.join(CONFIG_NAME), cfg.to_toml())?;
+    println!("Medorama set up in {}", home.display());
+    println!("  settings:      {}", home.join(CONFIG_NAME).display());
+    println!("  control store: {shown} (no patient data)");
+    println!("  workspace:     {} (encrypted per database, its indexes too)", cfg.workspace_dir.display());
+    if let Some(f) = key_file {
+        println!("  master key:    {} (keep it, and keep it apart from the workspace's backups)", f.display());
+    }
+    println!("  admin:         {} (with PHI permission)", a.admin);
+    match medorama::config::remember_home(home) {
+        Ok(p) => println!("Later commands use this home without --home (remembered in {}).", p.display()),
+        Err(e) => println!("Could not remember this home ({e}): pass --home {} to later commands.", home.display()),
+    }
+    if a.demo {
+        match demo_folder() {
+            Some(dir) => {
+                let db = Db::open(&cfg, false)?;
+                let c = db.get()?;
+                let admin = users::get_by_name(&c, &a.admin)?.ok_or_else(|| anyhow::anyhow!("no user {}", a.admin))?;
+                for d in demo_databases(&dir, &cfg.timezone) {
+                    if !d.file.is_file() {
+                        continue;
+                    }
+                    let key = match &d.key_file {
+                        Some(f) => match std::fs::read_to_string(f) {
+                            Ok(k) => k.trim().to_string(),
+                            Err(e) => {
+                                println!(
+                                    "The demo database {} was not connected (its key {}: {e})",
+                                    d.name,
+                                    f.display()
+                                );
+                                continue;
+                            }
+                        },
+                        None => String::new(),
+                    };
+                    let n = medorama::sources::NewSource {
+                        name: d.name.clone(),
+                        kind: d.kind.clone(),
+                        url: format!("sqlite:{}", d.file.display()),
+                        settings: d.settings,
+                        ..Default::default()
+                    };
+                    match medorama::databases::connect(&cfg, &c, &admin, &n, &key) {
+                        Ok(_) => println!("Connected the demo database {} (invented patients)", d.name),
+                        Err(e) => println!("The demo database {} was not connected ({e:#})", d.name),
+                    }
+                }
+            }
+            None => println!("No demo: make it with tools/install-medorama.sh --demo"),
+        }
+    }
+    println!("Next: medorama databases connect NAME --kind KIND --url URL, then medorama serve");
     Ok(())
+}
+
+/// The demo the installer made (tools/install-medorama.sh --demo): the folder named in
+/// `medorama.demo` beside this program, which holds its db-builder database (`demo.sqlite`).
+fn demo_folder() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let named = std::fs::read_to_string(exe.parent()?.join("medorama.demo")).ok()?;
+    let dir = PathBuf::from(named.trim());
+    dir.join("demo.sqlite").is_file().then_some(dir)
+}
+
+/// One database of the demo, as `init --demo` connects it.
+#[derive(Debug)]
+struct DemoDatabase {
+    name: String,
+    kind: String,
+    file: PathBuf,
+    settings: medorama::sources::Settings,
+    key_file: Option<PathBuf>,
+}
+
+/// The demo's databases: those its `demo-databases.json` lists (tools/make-demo-data.py
+/// writes it: each database's name, kind, file and settings, and the file of its key), so that
+/// a new demo database needs no change here; without that file (a demo made before it), its
+/// db-builder database and its OMOP one.  A database's time zone, when its settings give none,
+/// is `timezone`.
+fn demo_databases(dir: &Path, timezone: &str) -> Vec<DemoDatabase> {
+    let mut out = Vec::new();
+    let listed = std::fs::read_to_string(dir.join("demo-databases.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok());
+    match listed {
+        Some(m) => {
+            for d in m["databases"].as_array().into_iter().flatten() {
+                let (Some(name), Some(kind), Some(file)) = (d["name"].as_str(), d["kind"].as_str(), d["file"].as_str())
+                else {
+                    continue;
+                };
+                let mut settings: medorama::sources::Settings =
+                    serde_json::from_value(d["settings"].clone()).unwrap_or_default();
+                if settings.timezone.is_empty() && kind != "dbb" {
+                    settings.timezone = timezone.to_string();
+                }
+                out.push(DemoDatabase {
+                    name: name.into(),
+                    kind: kind.into(),
+                    file: dir.join(file),
+                    settings,
+                    key_file: d["key_file"].as_str().map(|k| dir.join(k)),
+                });
+            }
+        }
+        None => {
+            // its hospital (made by db-builder), and another hospital's OMOP database that holds
+            // two of its patients, by their MRNs
+            out.push(DemoDatabase {
+                name: "demo".into(),
+                kind: "dbb".into(),
+                file: dir.join("demo.sqlite"),
+                settings: Default::default(),
+                key_file: None,
+            });
+            out.push(DemoDatabase {
+                name: "demo_omop".into(),
+                kind: "omop".into(),
+                file: dir.join("omop").join("omop.sqlite"),
+                settings: medorama::sources::Settings {
+                    mrn_authority: "DEMO".into(),
+                    timezone: timezone.into(),
+                    ..Default::default()
+                },
+                key_file: None,
+            });
+        }
+    }
+    out
+}
+
+/// The folders of action plug-ins the demo brings (`actions_dirs` of its
+/// `demo-databases.json`: the example plug-in), to add to Medorama's.
+fn demo_actions(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_to_string(dir.join("demo-databases.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|m| m["actions_dirs"].as_array().cloned())
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str().map(|s| dir.join(s)))
+        .filter(|p| p.is_dir())
+        .collect()
 }
 
 fn open(home: &Path) -> anyhow::Result<(Config, Db)> {
     let cfg = Config::load(home).map_err(anyhow::Error::msg)?;
+    medorama::workspace::load(&cfg)?;
     let db = Db::open(&cfg, false)?;
+    // removals a crash interrupted: finished first
+    {
+        let c = db.get()?;
+        if medorama::databases::resume_removals(&cfg, &c)? > 0 {
+            recordings::sweep_index(&cfg, &c)?;
+        }
+    }
     Ok((cfg, db))
 }
 
@@ -713,54 +641,37 @@ fn t(x: Option<f64>, zone: chrono_tz::Tz) -> String {
     .unwrap_or_else(|| "-".into())
 }
 
-fn recording_ids(c: &medorama::sql::Connection, args: &[String]) -> anyhow::Result<Vec<i64>> {
-    let mut ids = vec![];
-    for a in args {
-        if let Ok(id) = a.parse::<i64>() {
-            ids.push(id);
-            continue;
-        }
-        let p = medorama::config::real(Path::new(&recording_engine::paths::absolute(a)));
-        let id: Option<i64> = medorama::sql::OptionalExtension::optional(c.query_row(
-            "SELECT id FROM recordings WHERE path = ?1",
-            [p.to_string_lossy()],
-            |r| r.get(0),
-        ))?;
-        ids.push(id.ok_or_else(|| anyhow::anyhow!("not in the catalog: {a}"))?);
-    }
-    Ok(ids)
+fn print_json(v: &impl serde::Serialize) {
+    println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
 }
 
-fn encounter_ids(c: &medorama::sql::Connection, args: &[String]) -> anyhow::Result<Vec<i64>> {
-    args.iter()
-        .map(|e| {
-            c.query_row("SELECT id FROM encounters WHERE encounter_id = ?1", [e], |r| r.get(0))
-                .map_err(|_| anyhow::anyhow!("no encounter {e}"))
-        })
-        .collect()
-}
-
-fn connections_cmd(cfg: &Config, db: &Db, me: &User, cmd: ConnectionsCmd) -> anyhow::Result<()> {
+fn databases_cmd(cfg: &Config, db: &Db, me: &User, cmd: DatabasesCmd) -> anyhow::Result<()> {
     use medorama::sources;
-    let mut c = db.get()?;
-    let named = |c: &medorama::sql::Connection, name: &str| -> anyhow::Result<sources::Source> {
-        sources::by_name(c, name)?.ok_or_else(|| anyhow::anyhow!("no connection {name} (medorama connections list)"))
+    let c = db.get()?;
+    let named = |name: &str| -> anyhow::Result<sources::Source> {
+        sources::by_name(&c, name)?.ok_or_else(|| anyhow::anyhow!("no database {name} (medorama databases list)"))
+    };
+    let user = |name: &str| -> anyhow::Result<User> {
+        users::get_by_name(&c, name)?.ok_or_else(|| anyhow::anyhow!("no user {name}"))
     };
     match cmd {
-        ConnectionsCmd::Add {
+        DatabasesCmd::Connect {
             name,
             kind,
             url,
             password_file,
+            password_stdin,
             ca_file,
+            views,
             schema,
             vocabulary_schema,
-            timezone,
             identifier,
+            issuer,
             mrn_authority,
+            timezone,
+            files_root,
             timeout_s,
             max_rows,
-            views,
         } => {
             let abs = |p: Option<PathBuf>| {
                 p.map(|p| recording_engine::paths::absolute(&p.to_string_lossy())).unwrap_or_default()
@@ -770,7 +681,9 @@ fn connections_cmd(cfg: &Config, db: &Db, me: &User, cmd: ConnectionsCmd) -> any
                 vocabulary_schema,
                 timezone: if timezone.is_empty() { cfg.timezone.clone() } else { timezone },
                 identifier,
+                issuer,
                 mrn_authority,
+                files_root,
                 timeout_s,
                 max_rows,
                 ..Default::default()
@@ -781,11 +694,18 @@ fn connections_cmd(cfg: &Config, db: &Db, me: &User, cmd: ConnectionsCmd) -> any
                     .parse()
                     .map_err(|e| anyhow::anyhow!("{}: {e}", f.display()))?;
                 let g = |k: &str| t.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                (settings.persons, settings.visits, settings.entries, settings.version) =
-                    (g("persons"), g("visits"), g("entries"), g("version"));
+                (settings.persons, settings.visits, settings.entries, settings.recordings, settings.version) =
+                    (g("persons"), g("visits"), g("entries"), g("recordings"), g("version"));
+                // optional: the stays (ICU and bed stays) within visits
+                settings.stays = g("stays");
             }
-            // a SQLite file: absolute, inside data_roots, not the catalog (as the page checks)
-            let url = sources::checked_url(cfg, &url)?;
+            let password = if password_stdin {
+                let mut line = String::new();
+                std::io::stdin().lock().read_line(&mut line)?;
+                line.trim_end_matches(['\r', '\n']).to_string()
+            } else {
+                String::new()
+            };
             let n = sources::NewSource {
                 name,
                 kind,
@@ -794,60 +714,160 @@ fn connections_cmd(cfg: &Config, db: &Db, me: &User, cmd: ConnectionsCmd) -> any
                 ca_file: abs(ca_file),
                 settings,
             };
-            let id = sources::add(&c, me, &n)?;
-            let s = sources::get(&c, id)?.ok_or_else(|| anyhow::anyhow!("not added"))?;
-            let ck = s.check()?;
+            let id = medorama::databases::connect(cfg, &c, me, &n, &password)?;
+            let d = medorama::databases::get(&c, id)?.ok_or_else(|| anyhow::anyhow!("not connected"))?;
+            let (persons, patients, conflicts) = medorama::persons::counts(cfg, &c, id)?;
             println!(
-                "Connected {} ({}): views {}; version {}",
-                s.name,
-                s.kind,
-                ck.views.join(", "),
-                if ck.version.is_empty() { "-" } else { &ck.version }
-            );
-            println!(
-                "Its persons are linked when a search finds them; `medorama connections sync {}` links them all.",
-                s.name
+                "Connected {} ({}): version {}; {persons} person(s) linked to {patients} patient(s); {} variable(s); {} recording(s){}",
+                d.source.name,
+                d.source.kind,
+                if d.data_version.is_empty() { "-" } else { &d.data_version },
+                medorama::variables::of(cfg, &c, id)?.len(),
+                recordings::count(cfg, &c, id)?,
+                if conflicts > 0 { format!("; {conflicts} identity conflict(s): medorama databases conflicts {}", d.source.name) } else { String::new() }
             );
         }
-        ConnectionsCmd::List { json } => {
-            let v = sources::shown(&c)?;
+        DatabasesCmd::List { json } => {
+            let v = medorama::databases::shown(cfg, &c, me)?;
             if json {
                 print_json(&v);
             } else if v.is_empty() {
-                println!("no connected databases (medorama connections add)");
+                println!("no connected databases (medorama databases connect)");
             } else {
-                for s in v {
-                    println!("{}\t{}\t{} ({})\t{} person(s) linked", s.name, s.kind, s.url, s.database, s.persons);
+                for d in v {
+                    println!(
+                        "{:<16} {:<6} {:<8} {:<10} {} person(s), {} recording(s){}",
+                        d.name,
+                        d.kind,
+                        d.engine,
+                        d.status,
+                        d.persons.unwrap_or(0),
+                        d.recordings,
+                        if d.status_error.is_empty() { String::new() } else { format!("  ({})", d.status_error) }
+                    );
                 }
             }
         }
-        ConnectionsCmd::Check { name } => {
-            let s = named(&c, &name)?;
-            let ck = s.check()?;
-            println!(
-                "{}: answers in {} ms; views {}; version {}",
-                s.name,
-                ck.ms,
-                ck.views.join(", "),
-                if ck.version.is_empty() { "-" } else { &ck.version }
-            );
+        DatabasesCmd::Check { name, all } => {
+            if all || name.is_none() {
+                let (on, off) = medorama::databases::check_all(cfg, &c)?;
+                println!("{on} online, {off} offline");
+            } else {
+                let s = named(name.as_deref().unwrap_or_default())?;
+                let online = medorama::databases::check(cfg, &c, s.id)?;
+                let d = medorama::databases::get(&c, s.id)?.ok_or_else(|| anyhow::anyhow!("removed"))?;
+                println!(
+                    "{}: {}{}",
+                    s.name,
+                    if online { "online" } else { "offline" },
+                    if d.status_error.is_empty() { String::new() } else { format!(" ({})", d.status_error) }
+                );
+            }
         }
-        ConnectionsCmd::Sync { name } => {
-            let s = named(&c, &name)?;
-            let (n, linked) = sources::link::sync(&c, &s, s.zone(&cfg.timezone), me)?;
-            println!("{}: {n} person(s); {linked} linked to the catalog's patients (the others are held for review, or have no valid identifier)", s.name);
+        DatabasesCmd::Refresh { name } => {
+            let s = named(&name)?;
+            medorama::databases::refresh(cfg, &c, me, s.id)?;
+            let (persons, patients, conflicts) = medorama::persons::counts(cfg, &c, s.id)?;
+            println!("{}: {persons} person(s), {patients} patient(s), {conflicts} conflict(s)", s.name);
         }
-        ConnectionsCmd::Remove { name } => {
-            let s = named(&c, &name)?;
-            sources::remove(&mut c, cfg, me, s.id)?;
-            println!("{} disconnected: its links and what it added to the catalog are removed", s.name);
+        DatabasesCmd::Remove { name, yes } => {
+            let s = named(&name)?;
+            if !yes {
+                use std::io::IsTerminal;
+                if !std::io::stdin().is_terminal() {
+                    anyhow::bail!("removing {name} cannot be undone: give --yes");
+                }
+                eprint!("Remove {name} and every trace of it from Medorama (its key, workspace folder, cohort rows)? Type its name: ");
+                let mut line = String::new();
+                std::io::stdin().lock().read_line(&mut line)?;
+                if line.trim() != name {
+                    anyhow::bail!("not removed");
+                }
+            }
+            medorama::databases::remove(cfg, &c, me, s.id)?;
+            recordings::sweep_index(cfg, &c)?;
+            println!("{name} removed: its key is destroyed, its workspace folder and cohort rows removed; the database itself is untouched");
+        }
+        DatabasesCmd::Variables { name, json } => {
+            let s = named(&name)?;
+            let v = medorama::variables::of(cfg, &c, s.id)?;
+            if json {
+                print_json(&v);
+            } else {
+                for x in v {
+                    println!(
+                        "{:<6} {:<40} {:<10} {:>8} entries, {:>6} persons{}",
+                        x.category,
+                        x.name,
+                        x.unit,
+                        x.entries,
+                        x.persons,
+                        if x.code.is_empty() { String::new() } else { format!("  {} {}", x.vocabulary, x.code) }
+                    );
+                }
+            }
+        }
+        DatabasesCmd::Conflicts { name } => {
+            let s = named(&name)?;
+            let v = medorama::persons::conflicts(cfg, &c, s.id)?;
+            if v.is_empty() {
+                println!("{}: no conflicts", s.name);
+            }
+            for (k, d) in v {
+                println!("{k}\t{d}");
+            }
+        }
+        DatabasesCmd::Grants { name } => {
+            let s = named(&name)?;
+            for (_, u, p) in medorama::grants::of_object(&c, &format!("db:{}", s.id))? {
+                println!("{u}\t{p}");
+            }
+        }
+        DatabasesCmd::Grant { name, user: who, permission } => {
+            let s = named(&name)?;
+            let u = user(&who)?;
+            medorama::grants::grant(&c, me, u.id, &format!("db:{}", s.id), &permission)?;
+            println!("{who} may {permission} {}", s.name);
+        }
+        DatabasesCmd::Revoke { name, user: who, permission } => {
+            let s = named(&name)?;
+            let u = user(&who)?;
+            medorama::grants::revoke(&c, me, u.id, &format!("db:{}", s.id), &permission)?;
+            println!("{who} no longer may {permission} {}", s.name);
         }
     }
     Ok(())
 }
 
-fn print_json(v: &impl serde::Serialize) {
-    println!("{}", serde_json::to_string_pretty(v).unwrap_or_default());
+fn keys_cmd(cfg: &Config, db: &Db, me: &User, cmd: KeysCmd) -> anyhow::Result<()> {
+    match cmd {
+        KeysCmd::New { file } => {
+            let mut c = cfg.clone();
+            c.master_key_file = Some(file.clone());
+            c.master_key_command.clear();
+            match medorama::workspace::make_master_file(&c)? {
+                Some(f) => println!("a new master key: {}", f.display()),
+                None => anyhow::bail!("{} exists already", file.display()),
+            }
+        }
+        KeysCmd::Rotate { new_key_file } => {
+            let old = medorama::workspace::loaded()?;
+            let mut c2 = cfg.clone();
+            c2.master_key_file = Some(new_key_file.clone());
+            c2.master_key_command.clear();
+            // the new key from its file alone (not the environment the old one may come from)
+            let text = std::fs::read_to_string(&new_key_file)
+                .map_err(|e| anyhow::anyhow!("{}: {e}", new_key_file.display()))?;
+            let new = medorama::workspace::master_from_hex(&text)
+                .ok_or_else(|| anyhow::anyhow!("{}: not 64 hex digits", new_key_file.display()))?;
+            let c = db.get()?;
+            let n = medorama::workspace::rotate(&c, old, &new)?;
+            audit(&c, Some(me), "keys_rotate", &new.id, &format!("{n} keys and passwords wrapped again"));
+            println!("{n} data key(s) and password(s) wrapped again with the master key {}", new.id);
+            println!("Now point master_key_file (or MEDORAMA_MASTER_KEY, master_key_command) at the new key, and keep the old one until no backup needs it.");
+        }
+    }
+    Ok(())
 }
 
 fn serve(cfg: Config, db: Db, a: ServeArgs) -> anyhow::Result<()> {
@@ -861,16 +881,14 @@ fn serve(cfg: Config, db: Db, a: ServeArgs) -> anyhow::Result<()> {
     if a.no_workers {
         cfg.workers = 0;
     }
+    if let Some(r) = a.db_builder_root {
+        cfg.db_builder_root = Some(PathBuf::from(recording_engine::paths::absolute(&r.to_string_lossy())));
+    }
     let cfg = Arc::new(cfg);
     let database = db.describe();
     let app = Arc::new(server::App::new(cfg.clone(), Arc::new(db)));
     for p in &app.reg.read().unwrap().problems {
         eprintln!("medorama: action not loaded: {p}");
-    }
-    // imports a stop or a crash interrupted: removed (nothing of them is kept)
-    match app.db.get().and_then(|mut c| medorama::imports::discard_unfinished(&mut c, &cfg, false)) {
-        Ok(_) => {}
-        Err(e) => eprintln!("medorama: imports left unfinished could not be removed yet: {e}"),
     }
     let stop = Arc::new(AtomicBool::new(false));
     let threads = server::start_background(&app, stop.clone());
@@ -880,8 +898,8 @@ fn serve(cfg: Config, db: Db, a: ServeArgs) -> anyhow::Result<()> {
             .await
             .map_err(|e| anyhow::anyhow!("cannot listen on {}:{}: {e}", cfg.host, cfg.port))?;
         println!("Medorama: open http://{}:{}/", cfg.host, cfg.port);
-        println!("  catalog: {}", cfg.home.display());
-        println!("  database: {database}");
+        println!("  home: {}", cfg.home.display());
+        println!("  control store: {database}");
         if !recording_engine::sources::wfdb_folder::SUPPORTED {
             println!("  built without WFDB support: WFDB recordings are refused (not added, not opened)");
         }
@@ -893,7 +911,9 @@ fn serve(cfg: Config, db: Db, a: ServeArgs) -> anyhow::Result<()> {
             "link" => println!("  viewer: {} (viewer_url)", v.url),
             _ => println!("  viewer: none ({})", v.reason),
         }
-        println!("  results: {}; indexes: {}", cfg.results_dir.display(), cfg.index_dir.display());
+        println!("  db-builder: {}", app.dbbuilder.describe());
+        app.dbbuilder.start();
+        println!("  workspace: {} (indexes in each database's folder)", cfg.workspace_dir.display());
         println!(
             "  {} worker(s); automatic indexing {}",
             cfg.workers,
@@ -943,6 +963,7 @@ fn serve(cfg: Config, db: Db, a: ServeArgs) -> anyhow::Result<()> {
         }
     }
     app.viewer.stop();
+    app.dbbuilder.stop();
     result
 }
 
@@ -1003,17 +1024,18 @@ fn run(home: &Path, cmd: Cmd) -> anyhow::Result<()> {
     recording_engine::paths::set_allowed_roots((!cfg.data_roots.is_empty()).then(|| cfg.data_roots.clone()));
     if let Cmd::Use = cmd {
         let p = medorama::config::remember_home(&cfg.home)?;
-        println!("Later commands use the catalog in {} (remembered in {}).", cfg.home.display(), p.display());
+        println!("Later commands use the home {} (remembered in {}).", cfg.home.display(), p.display());
         return Ok(());
     }
     let me = User::local();
     let zone = tz(&cfg.timezone);
     match cmd {
         Cmd::Init(_) | Cmd::Use => unreachable!(),
-        Cmd::Connections(cmd) => connections_cmd(&cfg, &db, &me, cmd)?,
+        Cmd::Databases(cmd) => databases_cmd(&cfg, &db, &me, cmd)?,
+        Cmd::Keys(cmd) => keys_cmd(&cfg, &db, &me, cmd)?,
         Cmd::CopyDatabase { to, password_file, ca_file } => {
             if !cfg.database_url.is_empty() {
-                anyhow::bail!("this catalog is in PostgreSQL already ({})", db.describe());
+                anyhow::bail!("the control store is in PostgreSQL already ({})", db.describe());
             }
             let mut target = cfg.clone();
             target.database_url = to.trim().to_string();
@@ -1035,280 +1057,52 @@ fn run(home: &Path, cmd: Cmd) -> anyhow::Result<()> {
             println!("The SQLite file is unchanged: keep it as a backup, then delete it securely.");
         }
         Cmd::Serve(a) => serve(cfg, db, a)?,
-        Cmd::Remove { recordings: r, search, purge_results, dry_run } => {
-            let mut c = db.get()?;
-            let mut ids = recording_ids(&c, &r)?;
-            if let Some(q) = &search {
-                ids.extend(recordings::search_ids(&c, &me, q, false, &cfg.timezone)?);
-            }
-            if dry_run {
-                println!("would remove {} recording(s) from the catalog (files untouched)", ids.len());
-                return Ok(());
-            }
-            let n = recordings::remove(&mut c, &cfg, &me, &ids, purge_results)?;
-            println!("{n} recording(s) removed from the catalog (files untouched)");
-        }
         Cmd::Check => {
-            let r = recordings::check(&*db.get()?, &cfg)?;
+            let r = recordings::check(&cfg, &*db.get()?)?;
             println!(
-                "{} checked: {} missing, {} back, {} changed, {} index folders gone",
+                "{} checked: {} missing, {} back, {} changed, {} indexes lost",
                 r.checked, r.missing, r.returned, r.changed, r.index_lost
             );
         }
-        Cmd::ImportTable { files, format, mapping, category, batch } => {
-            let map = match mapping {
-                Some(m) => linkage::read_mapping(&std::fs::read_to_string(&m)?)?,
-                None => HashMap::new(),
-            };
-            let format = medorama::formats::Choice::parse(&format, &medorama::formats::all(&cfg).0)?;
-            if files.len() > 1 && batch.name.trim().is_empty() {
-                anyhow::bail!("several files make one database: give it a name (--name)");
-            }
-            let first = &files[0];
-            let base = std::fs::canonicalize(first)
-                .map_err(|e| anyhow::anyhow!("{}: {e}", first.display()))?
-                .parent()
-                .map(|p| p.to_path_buf());
-            let parts: Vec<medorama::tables::Part> = files
-                .iter()
-                .map(|f| medorama::tables::Part {
-                    name: f.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
-                    data: medorama::tables::PartData::File(f.clone()),
-                })
-                .collect();
-            let mut c = db.get()?;
-            let mut opts = table_opts(first, &batch);
-            let shown = Shown::start();
-            opts.progress = shown.progress.clone();
-            let r = medorama::tables::import_parts(
-                &mut c,
-                &cfg,
-                &me,
-                &parts,
-                &map,
-                &category,
-                base.as_deref(),
-                &opts,
-                format,
-            );
-            shown.end();
-            let r = r?;
-            println!(
-                "{}{} rows: {} patient(s) and {} encounter(s) added, {} item(s) added ({} already there, {} waiting), {} recording(s) added, {} file(s) attached, {} row(s) held back",
-                if r.dry_run { "(dry run) ".to_string() } else { format!("import {}: ", r.import_id) },
-                r.rows, r.patients_added, r.encounters_added, r.items_added, r.duplicates, r.waiting, r.recordings_added,
-                r.attachments, r.conflicts
-            );
-            if !r.ignored_columns.is_empty() {
-                println!("  the database's own columns (in Databases and Cohorts): {}", r.ignored_columns.join(", "));
-            }
-            for w in &r.warnings {
-                println!("  {w}");
-            }
-        }
-        Cmd::RemoveEncounters { encounters, search, all, dry_run } => {
-            let mut c = db.get()?;
-            let mut ids = if all {
-                let mut st = c.prepare("SELECT id FROM encounters")?;
-
-                st.query_map([], |r| r.get(0))?.collect::<Result<Vec<i64>, _>>()?
-            } else {
-                encounter_ids(&c, &encounters)?
-            };
-            if let Some(q) = search {
-                ids.extend(query::search_ids(&c, &me, &Search { q, ..Default::default() }, &cfg.timezone)?);
-            }
-            let r = linkage::remove_encounters(&mut c, &me, &ids, dry_run)?;
-            print_removal(&r);
-            println!("(recordings stay in the catalog, unlinked)");
-        }
-        Cmd::Imports(ImportsCmd::List { json }) => {
-            let v = medorama::imports::list(&*db.get()?)?;
-            if json {
-                print_json(&v);
-                return Ok(());
-            }
-            for b in v {
-                println!(
-                    "{:>5}  {:<10} {:<8} {}  {:<24} source {:<20} {} recording(s), {} encounter(s), {} EHR item(s)",
-                    b.id,
-                    b.kind,
-                    b.state,
-                    fmt_local(b.time, zone).get(..16).unwrap_or(""),
-                    b.name,
-                    b.source,
-                    b.recordings,
-                    b.encounters,
-                    b.ehr_items
-                );
-            }
-        }
-        Cmd::Imports(ImportsCmd::Remove { id, purge_results, dry_run }) => {
-            let mut c = db.get()?;
-            let r = medorama::imports::remove_import(&mut c, &cfg, &me, id, purge_results, dry_run)?;
-            print_removal(&r);
-        }
-        Cmd::Sources(SourcesCmd::List { json }) => {
-            let v = medorama::imports::sources(&*db.get()?)?;
-            if json {
-                print_json(&v);
-                return Ok(());
-            }
-            for x in v {
-                println!(
-                    "{:<30} {} recording(s), {} patient(s), {} encounter(s), {} EHR item(s), in {} import(s)",
-                    x.source, x.recordings, x.patients, x.encounters, x.ehr_items, x.imports
-                );
-            }
-        }
-        Cmd::Demo(DemoCmd::Add { dir }) => {
-            let dir = dir.or_else(medorama::demo::installed).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "no demo was installed: give a folder made by tools/make-demo-data.py, or reinstall with --demo"
-                )
-            })?;
-            let mut c = db.get()?;
-            print_demo(&medorama::demo::add(&mut c, &cfg, &me, &dir)?);
-        }
-        Cmd::Demo(DemoCmd::Remove { dry_run }) => {
-            let mut c = db.get()?;
-            let r = medorama::demo::remove(&mut c, &cfg, &me, dry_run)?;
-            print_removal(&r);
-            if !dry_run {
-                println!(
-                    "the cohort {} and the connection {} are gone too",
-                    medorama::demo::NAME,
-                    medorama::demo::CONNECTION
-                );
-            }
-        }
-        Cmd::Sources(SourcesCmd::Remove { source, purge_results, dry_run }) => {
-            let mut c = db.get()?;
-            let r = medorama::imports::remove_source(&mut c, &cfg, &me, &source, purge_results, dry_run)?;
-            print_removal(&r);
-        }
         Cmd::List(a) => {
             let c = db.get()?;
-            let mut user = me.clone();
-            user.phi = a.phi;
-            let s = Search { q: a.q, unit: a.unit, status: a.status, limit: Some(a.limit), ..Default::default() };
-            let (total, rows) = query::search(&c, &user, &s, &cfg.timezone)?;
+            let (total, rows) = medorama::patient::list(&c, &cfg, &me, &a.q, &[], a.limit, 0)?;
             if a.json {
-                print_json(&serde_json::json!({"total": total, "items": rows}));
+                print_json(&rows);
                 return Ok(());
             }
-            println!("{total} encounter(s)");
-            println!(
-                "{:<10} {:<12} {:<9} {:<16} {:<16} {:<14} {:>4}  {}",
-                "status",
-                "encounter",
-                "patient",
-                "admit",
-                "discharge",
-                "units",
-                "recs",
-                if a.phi { "identifiers" } else { "" }
-            );
-            for e in rows {
-                let phi = e
-                    .phi
-                    .as_ref()
-                    .map(|p| format!("{} {}, {} {} {}", p.mrn, p.last_name, p.first_name, p.birth_date, p.csn))
-                    .unwrap_or_default();
+            for p in &rows {
                 println!(
-                    "{:<10} {:<12} {:<9} {:<16} {:<16} {:<14} {:>4}  {}",
-                    e.status.map_or("-", |s| s.as_str()),
-                    e.encounter_id,
-                    e.patient_id,
-                    t(e.admit_time, zone),
-                    t(e.discharge_time, zone),
-                    e.units.join(","),
-                    e.recordings,
-                    phi
+                    "{:<14} {:<2} {:>4} visit(s)  latest {}  {}  [{}]",
+                    p.pseudonym,
+                    p.sex,
+                    p.encounters,
+                    t(p.latest, zone),
+                    p.kinds.join(" "),
+                    p.sources.join(", ")
                 );
             }
+            println!("{} of {total} patient(s)", rows.len());
         }
-        Cmd::Recordings { q, unlinked, limit, json } => {
+        Cmd::Recordings { q, limit, json } => {
             let c = db.get()?;
-            let (total, rows) = recordings::list(&c, &me, &q, unlinked, limit, 0, &cfg.timezone)?;
+            let (total, rows) = recordings::list(&cfg, &c, &me, &q, limit, 0)?;
             if json {
-                print_json(&serde_json::json!({"total": total, "items": rows}));
+                print_json(&rows);
                 return Ok(());
             }
-            println!("{total} recording(s)");
-            for r in rows {
-                let progress = if r.status == recordings::Status::Indexing {
-                    format!(" {:.0}%", r.progress * 100.0)
-                } else {
-                    String::new()
-                };
+            for r in &rows {
                 println!(
-                    "{:>5}  {:<9} {:<5} {:<8} {:<16} {}{}{}",
+                    "{:>14}  {:<9} {:<10} {}  {}  {}",
                     r.id,
                     r.status.as_str(),
-                    r.kind,
-                    r.format,
-                    t(r.t_start.or(r.name_time), zone),
-                    r.path,
-                    progress,
-                    if r.error.is_empty() { String::new() } else { format!("  ({})", r.error) }
+                    r.source,
+                    t(r.t_start, zone),
+                    r.name,
+                    r.format
                 );
             }
-        }
-        Cmd::ImportClif { dir, source, dry_run } => {
-            let mut c = db.get()?;
-            let shown = Shown::start();
-            let done = medorama::formats::clif::import_folder(
-                &mut c,
-                &cfg,
-                &me,
-                &dir,
-                &source,
-                dry_run,
-                shown.progress.clone(),
-            );
-            shown.end();
-            let done = done?;
-            for f in &done.skipped {
-                println!("{}: not a CLIF table Medorama reads (skipped)", f.display());
-            }
-            for (name, files, r) in &done.imported {
-                println!(
-                    "{}{name} ({files} file(s)): {} rows: {} patient(s), {} encounter(s), {} bed stay(s), {} item(s) added, {} held back",
-                    if r.dry_run { "(dry run) ".to_string() } else { format!("import {}: ", r.import_id) },
-                    r.rows,
-                    r.patients_added,
-                    r.encounters_added,
-                    r.bed_stays_added,
-                    r.items_added,
-                    r.conflicts
-                );
-                for w in r.warnings.iter().take(5) {
-                    println!("  {w}");
-                }
-            }
-        }
-        Cmd::Formats { check } => {
-            if let Some(f) = check {
-                let text = std::fs::read_to_string(&f).map_err(|e| anyhow::anyhow!("{}: {e}", f.display()))?;
-                let d = medorama::formats::declared::Declared::parse(&text, &f)?;
-                println!(
-                    "{}: the format {} ({}), {} column(s): {}",
-                    f.display(),
-                    d.key,
-                    d.label,
-                    d.columns.len(),
-                    d.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ")
-                );
-                return Ok(());
-            }
-            let (known, problems) = medorama::formats::all(&cfg);
-            for f in &known {
-                println!("{:<22} {:<6} {}  ({})", f.key(), f.category(), f.label(), f.origin());
-            }
-            for p in &problems {
-                eprintln!("not read: {p}");
-            }
+            println!("{} of {total} recording(s)", rows.len());
         }
         Cmd::Addons(AddonsCmd::List { json }) => {
             let v = medorama::addons::list(&cfg.adapters_dir);
@@ -1400,22 +1194,21 @@ fn run(home: &Path, cmd: Cmd) -> anyhow::Result<()> {
                 let value = serde_json::from_str(v).unwrap_or_else(|_| serde_json::Value::String(v.to_string()));
                 params.entry(action.to_string()).or_insert_with(|| serde_json::json!({}))[key] = value;
             }
+            let patients: Vec<i64> = a
+                .patients
+                .iter()
+                .map(|p| medorama::pseudonyms::patient_of(&c, p)?.ok_or_else(|| anyhow::anyhow!("no patient {p}")))
+                .collect::<anyhow::Result<_>>()?;
             let sel = Selection {
                 cohort: a.cohort,
-                encounters: (!a.encounters.is_empty()).then(|| encounter_ids(&c, &a.encounters)).transpose()?,
+                patients: (!patients.is_empty()).then_some(patients),
                 recordings: (!a.recordings.is_empty()).then_some(a.recordings),
-                search: a.search.map(|q| Search { q, ..Default::default() }),
                 all: a.all,
             };
-            if sel.encounters.is_none()
-                && sel.recordings.is_none()
-                && sel.search.is_none()
-                && sel.cohort.is_none()
-                && !sel.all
-            {
-                anyhow::bail!("choose what to run on: --all, --encounter, --recording, --search or --cohort");
+            if sel.patients.is_none() && sel.recordings.is_none() && sel.cohort.is_none() && !sel.all {
+                anyhow::bail!("choose what to run on: --all, --recording, --patient or --cohort");
             }
-            let r = jobs::create_run(&mut c, &reg, &me, &a.actions, &params, &sel, a.force, a.priority, &cfg.timezone)?;
+            let r = jobs::create_run(&mut c, &cfg, &reg, &me, &a.actions, &params, &sel, a.force, a.priority)?;
             println!(
                 "run {}: {} recording(s), {} job(s) queued; {} already done, {} already queued, {} not applicable",
                 r.run, r.recordings, r.queued, r.done_already, r.pending_already, r.not_applicable
@@ -1450,7 +1243,7 @@ fn run(home: &Path, cmd: Cmd) -> anyhow::Result<()> {
         }
         Cmd::Jobs { state, limit, json } => {
             let c = db.get()?;
-            let rows = jobs::list(&c, state.as_deref(), None, limit)?;
+            let rows = jobs::list(&c, &cfg, state.as_deref(), None, limit)?;
             if json {
                 print_json(&rows);
                 return Ok(());
@@ -1578,5 +1371,40 @@ fn main() -> ExitCode {
     match run(&home, cli.cmd) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => fail(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn demo_databases_from_the_manifest_and_without_it() {
+        let dir = tempfile::tempdir().unwrap();
+        // without demo-databases.json (a demo made before it): its db-builder and OMOP databases
+        let old = demo_databases(dir.path(), "Europe/Paris");
+        assert_eq!(old.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["demo", "demo_omop"]);
+        assert_eq!(old[1].settings.mrn_authority, "DEMO");
+        std::fs::write(
+            dir.path().join("demo-databases.json"),
+            r#"{"databases": [
+                {"name": "demo", "kind": "dbb", "file": "demo.sqlite", "build": [["new", "@demo.sqlite"]]},
+                {"name": "demo_registry", "kind": "views", "file": "registry/registry.sqlite",
+                 "settings": {"persons": "SELECT 1", "entries": "SELECT 2", "mrn_authority": "DEMO"}},
+                {"name": "demo_secure", "kind": "dbb", "file": "secure/secure.sqlite", "key_file": "keys/demo_secure.key"},
+                {"kind": "dbb"}
+            ], "actions_dirs": ["actions", "missing"]}"#,
+        )
+        .unwrap();
+        let dbs = demo_databases(dir.path(), "Europe/Paris");
+        assert_eq!(dbs.iter().map(|d| d.name.as_str()).collect::<Vec<_>>(), ["demo", "demo_registry", "demo_secure"]);
+        assert_eq!(dbs[1].file, dir.path().join("registry/registry.sqlite"));
+        assert_eq!(dbs[1].settings.persons, "SELECT 1");
+        assert_eq!(dbs[1].settings.timezone, "Europe/Paris");
+        assert_eq!(dbs[0].settings.timezone, "");
+        assert_eq!(dbs[2].key_file.as_deref(), Some(dir.path().join("keys/demo_secure.key").as_path()));
+        // the plug-in folders that exist
+        std::fs::create_dir(dir.path().join("actions")).unwrap();
+        assert_eq!(demo_actions(dir.path()), [dir.path().join("actions")]);
     }
 }

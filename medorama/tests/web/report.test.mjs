@@ -40,3 +40,25 @@ test('a hidden category is left out', () => {
   assert.ok(!el.innerHTML.includes('item:9'));
   assert.ok(el.innerHTML.includes('labs:3'));
 });
+
+test('a measured value keeps its digits (12345, not 12350)', async () => {
+  const { fmtValue } = await import('../../web/js/patient/report.js');
+  assert.equal(fmtValue(12345), '12345');
+  assert.equal(fmtValue(12345.678), '12345.678');
+  assert.equal(fmtValue(0.1 + 0.2), '0.3');
+  assert.equal(fmtValue(3.14159265), '3.14159');
+  assert.equal(fmtValue(0.000123456), '0.000123456');
+});
+
+test("a stay's hospital day counts calendar days in the catalog's time zone", async () => {
+  const { context } = await import('../../web/js/patient/report.js');
+  core.cfg = { timezone: 'America/New_York' };
+  const { resetFormats } = await import('../../web/js/core.js');
+  resetFormats();
+  // admitted 22:00 on Jan 2 in New York (03:00 UTC on Jan 3), the next morning is hospital day 2
+  const admit = Date.UTC(2024, 0, 3, 3) / 1000;
+  const sum = { encounters: [{ id: 1, admit, discharge: admit + 3 * 86400, source: 'hosp' }] };
+  assert.match(context(sum, 1, admit + 10 * 3600), /^Stay · hospital day 2 · hosp$/);
+  core.cfg = { timezone: 'UTC' };
+  resetFormats();
+});

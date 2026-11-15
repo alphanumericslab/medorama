@@ -15,6 +15,8 @@
 #                  to run where one is required, as under Medorama)
 #   --no-wfdb      build it without WFDB support: no wfdb-x code in it (a WFDB record or folder
 #                  is refused; every other format is read; docs/building.md at the repository root)
+#   --accept-license  accept the license terms without being asked (scripts, CI; or
+#                  MEDORAMA_ACCEPT_LICENSE=yes); otherwise they are shown and must be accepted
 #
 # Then: vitalstream-cpp (or -rs, -py) opens the viewer in a browser; --help lists its options.
 # Licensed recording formats are read through their add-on, an adapter installed into
@@ -23,7 +25,7 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
-VIEWER=cpp PREFIX="$HOME/.local" RUSTUP=1 VROOT='~' PASSWORD=1 WFDB=1
+VIEWER=cpp PREFIX="$HOME/.local" RUSTUP=1 VROOT='~' PASSWORD=1 WFDB=1 ACCEPT_LICENSE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --viewer) VIEWER="${2:?--viewer needs a value: cpp, rs or py}"; shift 2 ;;
@@ -32,11 +34,16 @@ while [ $# -gt 0 ]; do
     --root) VROOT="${2:?--root needs a folder}"; shift 2 ;;
     --no-password) PASSWORD=0; shift ;;
     --no-wfdb) WFDB=0; shift ;;
-    -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --accept-license) ACCEPT_LICENSE=1; shift ;;
+    -h|--help) sed -n '2,/^# ~\/.local\/share/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option $1 (see --help)"; exit 2 ;;
   esac
 done
 step() { printf '\n==> %s\n' "$*"; }
+
+# the license terms, accepted before anything is built (tools/license-accept.sh)
+. "$ROOT/tools/license-accept.sh"
+accept_license
 # absolute folders: the Python viewer's link and the root fixed in the program must not depend on
 # the folder this script was started from (a root starting with ~ stays as it is: the home folder
 # of whoever runs the viewer)

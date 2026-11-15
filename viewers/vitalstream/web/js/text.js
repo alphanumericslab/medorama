@@ -29,6 +29,17 @@ const EXG = /^(eeg|eog|emg|loc|roc|chin|leg|lleg|rleg|lat|rat)(?![a-z])/i;
 const ELECTRODE = /^(e[12]|m[12]|a[12]|(fp|af|f|ft|fc|t|tp|c|cp|p|po|o)(\d{1,2}|z))(?![a-z0-9])/i;
 
 /**
+ * A channel's unit and rate, as its lane and the channel list show them (`mV · 250 Hz`): the
+ * unit as the engine states it, `adu` only when the engine says so (an uncalibrated signal);
+ * nothing for a signal whose source states no unit.
+ */
+export function channelMeta(c) {
+  const unit = String(c.unit || '');
+  const fs = Number(c.fs);
+  return [unit, fs > 0 ? `${+fs.toFixed(3)} Hz` : ''].filter(Boolean).join(' · ');
+}
+
+/**
  * A channel's group when its reader names none (a plain WFDB record, an EDF file: `wfdb`,
  * `edf`), from its label and unit: what the signal is, as monitors and sleep laboratories label
  * it.  Only for grouping and colours on the page; the index keeps the reader's modality.

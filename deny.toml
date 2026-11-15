@@ -23,7 +23,12 @@ confidence-threshold = 0.9
 # Medorama's own crates: the PolyForm Noncommercial License 1.0.0 (LICENSE).
 exceptions = [
     { allow = ["LGPL-2.1-or-later", "GPL-3.0-or-later"], crate = "wfdbx" },
+    # SQLCipher's amalgamation (rusqlite's bundled-sqlcipher): SQLCipher BSD-3-Clause, SQLite's
+    # public-domain blessing, and libtomcrypt's sources (public domain / WTFPL; not compiled:
+    # OpenSSL is the crypto provider)
+    { allow = ["blessing", "WTFPL"], crate = "sqlcipher-src" },
     { allow = ["PolyForm-Noncommercial-1.0.0"], crate = "medorama" },
+    { allow = ["PolyForm-Noncommercial-1.0.0"], crate = "db-builder" },
     { allow = ["PolyForm-Noncommercial-1.0.0"], crate = "recording-engine" },
     { allow = ["PolyForm-Noncommercial-1.0.0"], crate = "signal-core" },
     { allow = ["PolyForm-Noncommercial-1.0.0"], crate = "vitalstream-rs" },

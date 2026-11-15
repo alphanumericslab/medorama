@@ -1,17 +1,17 @@
 //! Series derived from a recording's waveforms, for recordings whose monitor reported none: a
 //! Holter recording has ECG leads only, so its heart rate is found from the ECG itself.  They
-//! are computed after indexing, kept in the catalog's database (not in the index, whose format
-//! the viewers share: docs/index-format.md), and shown with the recording on the patient page.
+//! are computed after indexing, kept in the recording database's workspace folder
+//! (recordings.rs; not in the index, whose format the viewers share: docs/index-format.md), and shown with the recording on the patient page.
 //!
 //! Heart rate: QRS complexes are found on one lead (II if there is one) with a derivative,
 //! squaring and moving-window integration detector and an adaptive threshold (after Pan and
 //! Tompkins, 1985), read an hour at a time so that a week-long recording needs little memory.
-//! Each minute gets the median of its beat-to-beat rates, and the 5th and 95th percentiles as
-//! its range; a minute with fewer than 10 plausible beats (30 to 250 bpm) is left out.
+//! Each 10 s block's threshold is a third of its 98th percentile, never below a tenth of the
+//! hour's median block (a quiet stretch, a lead off, finds no beats in its noise).  Each minute
+//! gets the median of its beat-to-beat rates, and the 5th and 95th percentiles as its range; a
+//! minute with fewer than 10 plausible beats (30 to 250 bpm), or whose beat-to-beat intervals
+//! mostly lie more than 20 % from their median (noise, interference: no rhythm), is left out.
 
-use std::path::Path;
-
-use crate::sql::{params, Connection};
 use recording_engine::dataset::Dataset;
 
 /// A derived series: per minute, a value and its range.
@@ -33,17 +33,29 @@ const LEADS: &[&str] = &[
     "ml2", "cm5", "ch1", "ch2",
 ];
 
+/// Whether a channel is an ECG lead: by its modality, its lead's name, or a label an EDF file
+/// writes (`EKG`, `ECG1-ECG2`, `ECG L`, `ECG R`, `ECG …`, in any unit: EDF sets no modality),
+/// a rate (`ECG HR`, in bpm) excepted.
 fn is_ecg(label: &str, modality: &str, unit: &str) -> bool {
     let l = label.trim().to_lowercase();
-    modality.eq_ignore_ascii_case("ecg")
-        || LEADS.contains(&l.as_str())
-        || (l.starts_with("ecg") && unit.eq_ignore_ascii_case("mv"))
+    let rate = l.contains("hr")
+        || l.contains("rate")
+        || ["bpm", "/min", "1/min"].contains(&unit.trim().to_lowercase().as_str());
+    !rate
+        && (modality.eq_ignore_ascii_case("ecg")
+            || LEADS.contains(&l.as_str())
+            || l.starts_with("ecg")
+            || l.starts_with("ekg"))
 }
 
 /// The series to derive for an index: the heart rate, when the recording has an ECG lead and
 /// no heart rate of its own.  `progress` goes from 0 to 1.
-pub fn derive(index_dir: &Path, key: &str, progress: &dyn Fn(f64)) -> anyhow::Result<Vec<Derived>> {
-    let Some((meta, arrays)) = recording_engine::index::load_index(index_dir, key) else { return Ok(vec![]) };
+pub fn derive(
+    store: &recording_engine::store::Store,
+    key: &str,
+    progress: &dyn Fn(f64),
+) -> anyhow::Result<Vec<Derived>> {
+    let Some((meta, arrays)) = store.load(key) else { return Ok(vec![]) };
     let ds = Dataset::new(meta, arrays);
     let info: serde_json::Value = serde_json::from_str(&ds.info().to_json()).unwrap_or_default();
     let has_hr = info.get("vitals").and_then(|v| v.as_array()).into_iter().flatten().any(|v| {
@@ -118,17 +130,25 @@ pub fn qrs(x: &[f64], fs: f64) -> Vec<usize> {
         }
         m[i] = acc / w as f64;
     }
-    // threshold: a third of the 98th percentile of each 10 s (a noise-robust "typical QRS")
+    // threshold: a third of the 98th percentile of each 10 s (a noise-robust "typical QRS"),
+    // never below a tenth of the stretch's (an hour's) median block: a quiet block's noise is no
+    // QRS
     let block = (10.0 * fs) as usize;
     let refractory = (0.25 * fs) as usize;
+    let tops: Vec<f64> = (0..n)
+        .step_by(block)
+        .map(|start| {
+            let mut s: Vec<f64> = m[start..(start + block).min(n)].to_vec();
+            s.sort_by(|a, b| a.total_cmp(b));
+            s[((s.len() - 1) as f64 * 0.98) as usize]
+        })
+        .collect();
+    let floor = median(&tops) * 0.1;
     let mut peaks = vec![];
     let mut last: Option<usize> = None;
-    let mut start = 0;
-    while start < n {
-        let end = (start + block).min(n);
-        let mut s: Vec<f64> = m[start..end].to_vec();
-        s.sort_by(|a, b| a.total_cmp(b));
-        let thr = s[((s.len() - 1) as f64 * 0.98) as usize] / 3.0;
+    for (b, top) in tops.iter().enumerate() {
+        let (start, end) = (b * block, ((b + 1) * block).min(n));
+        let thr = top.max(floor) / 3.0;
         if thr > 0.0 {
             let mut i = start;
             while i < end {
@@ -156,7 +176,6 @@ pub fn qrs(x: &[f64], fs: f64) -> Vec<usize> {
                 }
             }
         }
-        start = end;
     }
     peaks
 }
@@ -181,7 +200,10 @@ fn per_minute(beats: &[f64]) -> Derived {
     let mut minute = f64::NAN;
     let mut rates: Vec<f64> = vec![];
     let flush = |minute: f64, rates: &mut Vec<f64>, out: &mut Derived| {
-        if rates.len() >= 10 {
+        // a rhythm: most intervals within 20 % of the minute's median (noise has none)
+        let mid = if rates.is_empty() { 0.0 } else { percentile(rates, 0.5) };
+        let off = rates.iter().filter(|r| (*r - mid).abs() > 0.2 * mid).count();
+        if rates.len() >= 10 && off * 2 <= rates.len() {
             out.t.push(minute * 60.0 + 30.0);
             out.v.push((percentile(rates, 0.5) * 10.0).round() / 10.0);
             out.lo.push((percentile(rates, 0.05) * 10.0).round() / 10.0);
@@ -204,44 +226,138 @@ fn per_minute(beats: &[f64]) -> Derived {
     out
 }
 
-fn blob(v: &[f64]) -> Vec<u8> {
+// ------------------------------------------------------------------ results of actions
+
+/// The numbers of an action's summary, flattened one level: `{"rmssd": 41.2, "qc": {"ok": 1}}`
+/// gives `rmssd` and `qc.ok`.
+fn numbers(summary: &serde_json::Value) -> Vec<(String, f64)> {
+    let mut out = vec![];
+    if let Some(m) = summary.as_object() {
+        for (k, v) in m {
+            match v {
+                serde_json::Value::Number(n) => out.extend(n.as_f64().map(|x| (k.clone(), x))),
+                serde_json::Value::Bool(b) => out.push((k.clone(), if *b { 1.0 } else { 0.0 })),
+                serde_json::Value::Object(inner) => {
+                    for (k2, v2) in inner {
+                        if let Some(x) = v2.as_f64() {
+                            out.push((format!("{k}.{k2}"), x));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// Keep the numbers an action's job gave for a recording in the results database of the
+/// action, in its recording database's workspace folder (`results-<action>.sqlite`, with that
+/// database's key: it goes with it), registered as a derived database of it.
+pub fn store_result(
+    cfg: &crate::config::Config,
+    c: &crate::sql::Connection,
+    rec: &crate::recordings::Recording,
+    action: &str,
+    summary: &str,
+) -> anyhow::Result<usize> {
+    let v: serde_json::Value = serde_json::from_str(summary).unwrap_or_default();
+    let nums = numbers(&v);
+    if nums.is_empty() {
+        return Ok(0);
+    }
+    let safe: String =
+        action.chars().map(|ch| if ch.is_ascii_alphanumeric() || ch == '-' { ch } else { '_' }).collect();
+    let mut w = crate::workspace::open_database_file(cfg, c, rec.database, &format!("results-{safe}.sqlite"))?;
+    w.execute_batch(
+        "CREATE TABLE IF NOT EXISTS results (
+             recording   INTEGER NOT NULL,
+             person_key  TEXT NOT NULL,
+             name        TEXT NOT NULL,
+             value       REAL NOT NULL,
+             at          REAL,
+             PRIMARY KEY (recording, name)
+         );
+         CREATE INDEX IF NOT EXISTS results_name ON results(name);",
+    )?;
+    let tx = w.transaction()?;
+    for (name, x) in &nums {
+        tx.execute(
+            "INSERT INTO results (recording, person_key, name, value, at) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT (recording, name) DO UPDATE SET value = excluded.value, at = excluded.at",
+            rusqlite::params![rec.id, rec.person_key, format!("{action}.{name}"), x, rec.t_start],
+        )?;
+    }
+    tx.commit()?;
+    // the derived database, registered once: its name says which database and action it is
+    let name = format!("{}.{action}", rec.source);
+    let known: Option<i64> = crate::sql::OptionalExtension::optional(c.query_row(
+        "SELECT d.id FROM derived d JOIN derived_sources s ON s.derived_id = d.id WHERE d.action = ?1 AND s.database_id = ?2",
+        crate::sql::params![action, rec.database],
+        |r| r.get(0),
+    ))?;
+    if known.is_none() {
+        let id = c.insert(
+            "INSERT INTO derived (name, action, created_at) VALUES (?1, ?2, ?3)",
+            crate::sql::params![name, action, crate::db::now()],
+        )?;
+        c.execute("INSERT INTO derived_sources (derived_id, database_id) VALUES (?1, ?2)", [id, rec.database])?;
+    }
+    Ok(nums.len())
+}
+
+/// The results of a database's actions whose name contains `name` (any case): (person key,
+/// result name, value, time).
+pub fn results_like(
+    cfg: &crate::config::Config,
+    c: &crate::sql::Connection,
+    database: i64,
+    name: &str,
+    exact: bool,
+) -> anyhow::Result<Vec<(String, String, f64, Option<f64>)>> {
+    let dir = crate::workspace::database_dir(cfg, database);
+    let mut out = vec![];
+    let Ok(rd) = std::fs::read_dir(&dir) else { return Ok(out) };
+    let n = name.trim().to_lowercase();
+    for e in rd.flatten() {
+        let f = e.file_name().to_string_lossy().to_string();
+        if !(f.starts_with("results-") && f.ends_with(".sqlite")) {
+            continue;
+        }
+        let w = crate::workspace::open_database_file(cfg, c, database, &f)?;
+        let (sql, arg) = if exact {
+            ("SELECT person_key, name, value, at FROM results WHERE lower(name) = ?1", n.clone())
+        } else {
+            ("SELECT person_key, name, value, at FROM results WHERE lower(name) LIKE ?1", format!("%{n}%"))
+        };
+        let mut st = w.prepare(sql)?;
+        out.extend(
+            st.query_map([arg], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+    }
+    Ok(out)
+}
+
+/// The names of a database's action results (criteria complete them; `hrv.rmssd`).
+pub fn result_names(
+    cfg: &crate::config::Config,
+    c: &crate::sql::Connection,
+    database: i64,
+) -> anyhow::Result<Vec<String>> {
+    let mut names: Vec<String> = results_like(cfg, c, database, "", false)?.into_iter().map(|r| r.1).collect();
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+pub(crate) fn blob(v: &[f64]) -> Vec<u8> {
     v.iter().flat_map(|x| x.to_le_bytes()).collect()
 }
 
-fn unblob(b: &[u8]) -> Vec<f64> {
+pub(crate) fn unblob(b: &[u8]) -> Vec<f64> {
     // (by index: `as_chunks` is newer than the Rust version Medorama builds with)
     (0..b.len() / 8).map(|i| f64::from_le_bytes(b[i * 8..i * 8 + 8].try_into().unwrap())).collect()
-}
-
-/// Replace a recording's derived series.
-pub fn store(c: &Connection, recording: i64, series: &[Derived]) -> anyhow::Result<()> {
-    c.execute("DELETE FROM recording_series WHERE recording = ?1", [recording])?;
-    for s in series {
-        c.execute(
-            "INSERT INTO recording_series (recording, name, unit, t, v, lo, hi) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![recording, s.name, s.unit, blob(&s.t), blob(&s.v), blob(&s.lo), blob(&s.hi)],
-        )?;
-    }
-    Ok(())
-}
-
-/// A recording's derived series.
-pub fn load(c: &Connection, recording: i64) -> anyhow::Result<Vec<Derived>> {
-    let mut st =
-        c.prepare("SELECT name, unit, t, v, lo, hi FROM recording_series WHERE recording = ?1 ORDER BY name")?;
-    let v = st
-        .query_map([recording], |r| {
-            Ok(Derived {
-                name: r.get(0)?,
-                unit: r.get(1)?,
-                t: unblob(&r.get::<_, Vec<u8>>(2)?),
-                v: unblob(&r.get::<_, Vec<u8>>(3)?),
-                lo: unblob(&r.get::<_, Vec<u8>>(4)?),
-                hi: unblob(&r.get::<_, Vec<u8>>(5)?),
-            })
-        })?
-        .collect::<Result<_, _>>()?;
-    Ok(v)
 }
 
 #[cfg(test)]
@@ -278,6 +394,56 @@ mod tests {
         assert!(qrs(&vec![0.0; 5000], 128.0).is_empty(), "a flat line has no beats");
     }
 
+    /// Reproducible noise in [-1, 1], smoothed over `k` samples (k = 1: white).
+    fn noise(n: usize, k: usize, seed: u64) -> Vec<f64> {
+        let mut r = crate::util::Rng::new(seed);
+        let white: Vec<f64> = (0..n + k).map(|_| r.range(-1.0, 1.0)).collect();
+        (0..n).map(|i| white[i..i + k].iter().sum::<f64>() / k as f64).collect()
+    }
+
+    fn rate_of(x: &[f64], fs: f64) -> Derived {
+        let beats: Vec<f64> = qrs(x, fs).iter().map(|&s| s as f64 / fs).collect();
+        per_minute(&beats)
+    }
+
+    #[test]
+    fn noise_and_mains_hum_have_no_heart_rate() {
+        for fs in [128.0, 250.0, 500.0] {
+            let n = (fs * 180.0) as usize;
+            for k in [1, 4, 16, 64] {
+                let hr = rate_of(&noise(n, k, 7 + k as u64), fs);
+                assert!(hr.t.is_empty(), "{fs} Hz, noise smoothed over {k}: {:?}", hr.v);
+            }
+            let hum: Vec<f64> = (0..n).map(|i| (i as f64 / fs * 50.0 * std::f64::consts::TAU).sin()).collect();
+            assert!(rate_of(&hum, fs).t.is_empty(), "{fs} Hz: 50 Hz hum");
+            // hum over noise
+            let both: Vec<f64> = hum.iter().zip(noise(n, 4, 3)).map(|(a, b)| 0.5 * a + b).collect();
+            assert!(rate_of(&both, fs).t.is_empty(), "{fs} Hz: hum and noise");
+        }
+    }
+
+    #[test]
+    fn a_quiet_stretch_finds_no_beats_in_its_noise() {
+        let fs = 250.0;
+        // two minutes of ECG, then a lead off for two minutes: small noise only
+        let mut x = ecg(fs, 120.0, 72.0);
+        x.extend(noise((fs * 120.0) as usize, 4, 11).iter().map(|v| v * 0.01));
+        let hr = rate_of(&x, fs);
+        assert_eq!(hr.t.len(), 2, "{:?}", hr.t);
+        assert!(hr.v.iter().all(|v| (v - 72.0).abs() < 2.0), "{:?}", hr.v);
+        // an ECG with noise and hum over it still gives its rate
+        let n = x.len() / 2;
+        let noisy: Vec<f64> = ecg(fs, 120.0, 90.0)
+            .iter()
+            .zip(noise(n, 1, 5))
+            .enumerate()
+            .map(|(i, (v, e))| v + 0.05 * e + 0.05 * (i as f64 / fs * 60.0 * std::f64::consts::TAU).sin())
+            .collect();
+        let hr = rate_of(&noisy, fs);
+        assert_eq!(hr.t.len(), 2);
+        assert!(hr.v.iter().all(|v| (v - 90.0).abs() < 2.0), "{:?}", hr.v);
+    }
+
     #[test]
     fn ecg_leads() {
         assert!(is_ecg("II", "wfdb", "mV"));
@@ -285,5 +451,10 @@ mod tests {
         assert!(is_ecg("anything", "ecg", ""));
         assert!(!is_ecg("SPO2", "spo2", "adu"));
         assert!(!is_ecg("ABP", "wfdb", "mmHg"));
+        // EDF's labels, in any unit (EDF sets no modality)
+        for l in ["EKG", "ECG1-ECG2", "ECG L", "ECG R", "ECG", "ECG II", "EKG2"] {
+            assert!(is_ecg(l, "", "uV") && is_ecg(l, "", ""), "{l}");
+        }
+        assert!(!is_ecg("ECG HR", "", "bpm") && !is_ecg("ECG", "", "bpm") && !is_ecg("EEG Fpz-Cz", "", "uV"));
     }
 }

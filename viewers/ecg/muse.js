@@ -16,14 +16,31 @@
     return ENT[e] ?? m;
   });
 
-  /** The text of the bytes, in the encoding the XML declaration names (UTF-8 by default). */
-  function decode(bytes) {
-    const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  /**
+   * The encoding of XML bytes: a byte order mark first (EF BB BF UTF-8, FF FE UTF-16LE, FE FF
+   * UTF-16BE), then UTF-16 without one (the zero bytes of '<' in 3C 00 / 00 3C), then the
+   * encoding the XML declaration names, else UTF-8.  { enc, skip (the mark's length) }.
+   */
+  function encodingOf(u8) {
+    if (u8[0] === 0xef && u8[1] === 0xbb && u8[2] === 0xbf) return { enc: 'utf-8', skip: 3 };
+    if (u8[0] === 0xff && u8[1] === 0xfe) return { enc: 'utf-16le', skip: 2 };
+    if (u8[0] === 0xfe && u8[1] === 0xff) return { enc: 'utf-16be', skip: 2 };
+    if (u8.length >= 4 && u8[0] && !u8[1] && u8[2] && !u8[3]) return { enc: 'utf-16le', skip: 0 };
+    if (u8.length >= 4 && !u8[0] && u8[1] && !u8[2] && u8[3]) return { enc: 'utf-16be', skip: 0 };
     const head = String.fromCharCode(...u8.subarray(0, 200));
-    const enc = (/^\s*<\?xml[^>]*encoding\s*=\s*["']([\w.:-]+)["']/i.exec(head) || [])[1] || 'utf-8';
+    const named = ((/^\s*<\?xml[^>]*encoding\s*=\s*["']([\w.:-]+)["']/i.exec(head) || [])[1] || 'utf-8').toLowerCase();
+    // a declaration of UTF-16 in 8-bit text is wrong about it: the text is read as UTF-8
+    return { enc: /^(utf-?16|ucs-?2)/.test(named) ? 'utf-8' : named, skip: 0 };
+  }
+
+  /** The text of the bytes (the first `limit` of them, when given), in their encoding (encodingOf). */
+  function decode(bytes, limit) {
+    let u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const { enc, skip } = encodingOf(u8);
+    u8 = u8.subarray(skip, limit ? skip + limit : u8.length);
     let text;
     try { text = new TextDecoder(enc).decode(u8); } catch { text = new TextDecoder('utf-8').decode(u8); }
-    return text.replace(/^﻿/, '');
+    return text.replace(/^\uFEFF/, '');
   }
 
   // Markup: a comment, CDATA, a declaration or a processing instruction ends where it should or
@@ -213,8 +230,8 @@
     return { name: 'MUSE ECG', fs, leads: ls, meta: { fields, measurements, statements, notes: [] } };
   }
 
-  /** Whether the bytes look like a MUSE resting ECG. */
-  const isMuse = (bytes) => /<RestingECG[\s>]/.test(String.fromCharCode(...new Uint8Array(bytes).subarray(0, 400)));
+  /** Whether the bytes look like a MUSE resting ECG (its root element near the start, in any of the encodings of decode). */
+  const isMuse = (bytes) => /<RestingECG[\s>]/.test(decode(bytes, 800));
 
   // the reader of the page (readers.js): the JSON form, read into the record by ecg.js
   const node = typeof module !== 'undefined' && module.exports;
@@ -232,7 +249,7 @@
     });
   }
 
-  const api = { read, isMuse, parseXml, decode, base64 };
+  const api = { read, isMuse, parseXml, decode, encodingOf, base64 };
   if (node) module.exports = api;
   else root.MUSE = api;
 })(typeof self !== 'undefined' ? self : this);

@@ -8,7 +8,7 @@ commands for every operating system, for Medorama and for each viewer on its own
 
 - [What you need](#what-you-need)
 - [Install Medorama with the demo](#install-medorama-with-the-demo)
-- [Create the catalog and start the server](#create-the-catalog-and-start-the-server)
+- [Set Medorama up and start the server](#set-medorama-up-and-start-the-server)
 - [Sign in](#sign-in)
 - [A first tour](#a-first-tour)
 - [Try the viewers on their own](#try-the-viewers-on-their-own)
@@ -28,6 +28,7 @@ once the compilers are present. You need:
 |---|---|---|---|
 | Git and Python 3.9 or later | `sudo apt install git python3 python3-venv` (Debian, Ubuntu) or `sudo dnf install git python3` (Fedora, RHEL) | `xcode-select --install` (the Command Line Tools) | `winget install Git.Git` and `winget install Python.Python.3.12` |
 | A C compiler | `sudo apt install build-essential` or `sudo dnf install gcc` | the Command Line Tools | the Microsoft C++ Build Tools (workload "Desktop development with C++") |
+| Perl, to build OpenSSL for SQLCipher (the encryption of Medorama's workspace) | `sudo apt install perl` or `sudo dnf install perl` | part of macOS | `winget install StrawberryPerl.StrawberryPerl` |
 | Rust 1.88 or later | installed in your user account by the installer if it is missing | the same | the same |
 | A web browser | any recent browser | the same | the same |
 
@@ -37,14 +38,28 @@ administrator rights or without internet access.
 
 ## Install Medorama with the demo
 
-The *demo* is a set of six invented patients with encounters, laboratory results, vital signs,
-medications, notes, short ICU recordings, a 24-hour Holter, an overnight sleep study (EDF+),
-12-lead ECGs, X-rays, CT series, echo loops and a coronary angiography run. Everything in it is
-synthetic. It is meant for trying Medorama and is off by default.
+Medorama imports nothing: it **connects databases** and reads them in place. The *demo* is five
+such databases of about 40 invented patients, as three hospitals and a research registry would
+have them:
+- `demo`, made with **db-builder** (the tool that turns tables, exports and folders of
+  recordings into a database to connect): 40 patients with visits, ICU stays, laboratory
+  results, vital signs, medications, transfusions, life support, procedures, diagnoses,
+  assessments, microbiology, pathology and notes; ICU recordings, Holter ECGs, sleep studies
+  (EDF+), EEGs (BDF+), 12-lead ECGs, X-rays, CT series, echo loops and coronary angiography;
+- `demo_north`, a second hospital's db-builder database, which shares some of those patients
+  (by MRN) and has one identity conflict;
+- `demo_omop`, a third hospital's OMOP database;
+- `demo_registry`, a research registry read through SQL views;
+- `demo_secure`, an encrypted db-builder database.
 
-The installer builds Medorama, one VitalStream waveform viewer and the database tools into a
-`.venv` folder inside the clone. This guide uses the Rust viewer (`--viewer rs`), which needs
-nothing beyond Rust. The default, the C++ viewer, also needs a C++20 compiler.
+Every person in it is invented (pseudo names, `SYN` MRNs, invented dates). Its ECGs, CT series
+and some X-rays are built from real recordings and public images transformed so that they show
+no one ([tools/demo/README.md](../tools/demo/README.md)). It is meant for trying Medorama and is
+off by default.
+
+The installer builds Medorama, db-builder, one VitalStream waveform viewer and the database tools
+into a `.venv` folder inside the clone. This guide uses the Rust viewer (`--viewer rs`), which
+needs nothing beyond Rust. The default, the C++ viewer, also needs a C++20 compiler.
 
 **On Linux or macOS:**
 
@@ -88,34 +103,57 @@ nothing beyond Rust. The default, the C++ viewer, also needs a C++20 compiler.
 
 `tools/install-medorama.sh --help` lists the other options: `--viewer cpp|rs|py|none` chooses
 the viewer, `--no-tools` leaves out the database tools, `--no-rustup` refuses to install Rust,
-and `--no-wfdb` builds without WFDB support, with no wfdb-x code
-([building.md, Without WFDB](building.md#without-wfdb); not with the demo). The Windows options
-are `-Viewer`, `-NoTools`, `-NoRustup` and `-NoWfdb`.
+`--no-wfdb` builds without WFDB support, with no wfdb-x code
+([building.md, Without WFDB](building.md#without-wfdb); not with the demo), and
+`--accept-license` accepts the license terms without asking (for scripts). The Windows options
+are `-Viewer`, `-NoTools`, `-NoRustup`, `-NoWfdb` and `-AcceptLicense`.
 
-## Create the catalog and start the server
+The installer first shows Medorama's license terms and asks you to accept them: type `y` or
+`yes` to go on. Medorama is free for noncommercial use; commercial use needs a license from the
+author ([building.md, License terms](building.md#license-terms)).
 
-The *catalog* is Medorama's own database: its patients, their encounters and data, the links to
-their files, and the users. It lives in a home folder (by default `~/.local/share/medorama`, or
-`%LOCALAPPDATA%\medorama` on Windows). Results and indexes go to a separate results folder.
+## Set Medorama up and start the server
 
-1. Create the catalog. The command asks twice for the password of the first administrator, who
-   is named `admin`; use at least 10 characters. Because the installer made the demo, `init`
-   also loads it into a cohort named **DEMO**:
+`medorama init` sets Medorama up once. It makes a *home folder* (by default
+`~/.local/share/medorama`, or `%LOCALAPPDATA%\medorama` on Windows) with the settings, the
+*control store* (Medorama's own database: users, grants, the audit log, the list of databases; no
+patient data) and the *master key*, and a *workspace*: the folder where Medorama keeps what it
+generates from each database (its patients as linked, its variables, the indexes of its
+recordings) and the cohorts. Each database's files and each cohort's are encrypted with a key of
+their own, the indexes included (the files that action plug-ins write are not: keep the
+workspace on an encrypted disk).
+
+1. Set Medorama up. The command asks twice for the password of the first administrator, who is
+   named `admin`; use at least 10 characters. With `--demo`, it also connects the demo's five
+   databases, which the installer made, and adds its example action plug-in:
 
    ```bash
-   medorama init --results ~/medorama-results
+   medorama init --workspace ~/medorama-workspace --demo
    ```
 
-   On Windows, write the folder as `$HOME\medorama-results`.
+   On Windows, write the folder as `$HOME\medorama-workspace`. Without the installer's `--demo`,
+   leave `--demo` out here too, and connect your own databases instead (step 2).
 
-2. Start the server. It serves the web page and the API, and indexes the demo's recordings in
-   the background:
+2. Connect a database of your own, now or later, from the command line or from the page
+   (Databases › **Connect a database**). For example a SQLite file that db-builder made from a
+   few tables:
+
+   ```bash
+   db-builder add ~/study.sqlite patients.csv labs.csv --issuer HOSP --mrn-authority HOSP
+   medorama databases connect study --kind dbb --url sqlite:$HOME/study.sqlite
+   ```
+
+   An OMOP database, or any SQL database through views, is connected the same way
+   ([administration](administration.md#connected-databases)).
+
+3. Start the server. It serves the web page and the API, checks the databases every minute, and
+   indexes the recordings in the background:
 
    ```bash
    medorama serve
    ```
 
-3. Open <http://127.0.0.1:8090> in a browser on the same computer.
+4. Open <http://127.0.0.1:8090> in a browser on the same computer.
 
 The server listens only on this computer (127.0.0.1) by default. To reach it from another
 computer, use an SSH tunnel or an HTTPS reverse proxy, as described in
@@ -125,23 +163,28 @@ computer, use an SSH tunnel or an HTTPS reverse proxy, as described in
 
 Sign in as `admin` with the password you chose. The administrator holds the *PHI permission*
 (protected health information): the right to see identifiers such as names, medical record
-numbers (MRNs) and dates of birth. For administrators, *Privacy Mode* starts off, so the demo's
-invented names are visible. For every other user, Privacy Mode starts on.
+numbers (MRNs) and dates of birth, of the databases on which the user holds the `phi` grant. The
+administrator who connects a database is granted everything on it, so `admin` sees the demo's
+invented names. For administrators, *Privacy Mode* starts off; for every other user, it starts
+on. Other users see a database only once it is granted to them (its page, **Who may use it**).
 
 Medorama opens on the **Cohorts** tab. The top bar has three ways to the patients (**Cohorts**,
 **Patient Catalog**, **Databases**), the viewers (**ECG**, **PACS**, **VitalStream**), and the
-work tabs at the right (**History**, **Actions**, **Jobs**, **Review**, **Import**, **Admin**).
+work tabs at the right (**History**, **Actions**, **Jobs**, **Admin**).
 The **Privacy Mode** switch and the theme button (◐) are at the far right.
 
 ## A first tour
 
 ### Find a patient
 
-1. In **Cohorts**, open the cohort **DEMO** in the list. It holds the six demo patients.
-2. Click **Doe, Jane** (patient ID `P900001`).
+1. Open **Patient Catalog**. It lists the patients of the databases you may view (49 in the
+   demo), with the databases and the kinds of data each one has. Many are in more than one
+   database: Jane Doe is in `demo`, `demo_registry` and `demo_secure`.
+2. Click **Doe, Jane** (patient ID `P900001`). You can also type a name, MRN or patient ID in the
+   search line.
 
-You can also open **Patient Catalog**, which lists every patient with the kinds of data each
-one has, and type a name, MRN or patient ID in its search line.
+**Databases** lists the five demo databases, each with a green dot (online; grey would be
+offline), what it holds, its variables and who may use it.
 
 ![The Patient Catalog: every patient, with the kinds of data each has](images/screens/patients.png)
 
@@ -153,9 +196,9 @@ A patient's page shows everything known about the patient on one time line.
 
 - The **patient bar** at the top shows the name, sex, age, patient ID, pseudonym, MRN, the span
   of the data and any allergies.
-- The **Patient Journey** on the left draws every item on one time line, newest at the top, with
-  one column per clinical category (ICU, Vitals, Labs, ECG, Holter, Imaging, Medications and so
-  on). ICU stays appear as light bars with their recordings over them. Hover over a mark to see
+- The **Patient Journey** on the left draws every item, from every database that holds the
+  patient, on one time line, newest at the top, with one column per clinical category (ICU,
+  Vitals, Labs, ECG, Holter, Imaging, Medications and so on). ICU stays appear as light bars with their recordings over them. Hover over a mark to see
   what it is, and click it to open it.
 - The **report** in the center lists the entries by day. The search box above it searches
   everything the patient has, for example `lactate > 4` or `ecg icu`.
@@ -182,11 +225,12 @@ The first time you open a recording, it may still be indexing. Its status appear
 
 ### Build a cohort
 
-A *cohort* is a named set of patients, found across every database by criteria and kept.
+A *cohort* is a named set of patients, found across the databases by criteria and kept.
 
-1. Open **Cohorts** and click **New / Edit cohort**.
+1. Open **Cohorts** and click **New / Edit cohort**. **Search in** ticks the databases to search
+   (none ticked: every one you may search).
 2. Click **+ Write an expression** and type `has ecg AND female`. The patients found, and why
-   each one matched, appear below as you type.
+   each one matched, appear below as you type, with the databases searched and those left out.
 3. Type a name in **New cohort's name** and click **Save … as a new cohort**.
 
 ![The Cohorts tab: criteria, the patients found and why](images/screens/cohorts.png)
@@ -208,8 +252,8 @@ the identifiers, so none of them reaches the page.
 What changes:
 
 - The name becomes `[Patient Name]`, the MRN `[MRN]` and the date of birth `[Date of Birth]`.
-- Patient and encounter IDs are replaced by *pseudonyms*: random codes such as `MO-D5QM-Y1X5`
-  for a patient and `MO-E-QMC6-E2VA` for an encounter.
+- Patient IDs and visits are replaced by *pseudonyms*: random codes such as `MO-D5QM-Y1X5`
+  for a patient and `MO-E-QMC6-E2VA` for a visit.
 - Every date moves back by the same number of days for this patient, so the intervals between
   events stay the same.
 - File names become tokens such as `mo-f0000.hea`, and files are de-identified before they
@@ -222,6 +266,7 @@ password. Then sign in as that user in a private browser window:
 
 ```bash
 medorama user add --role viewer reader
+for d in demo demo_north demo_omop demo_registry demo_secure; do medorama databases grant $d reader view; done
 ```
 
 [Protecting patient data](protecting-patient-data.md) explains how the privacy gate works and
@@ -247,29 +292,30 @@ Each viewer is also a program of its own, without Medorama:
 
 ## Remove the demo
 
-When you are done with the demo, an administrator deletes it:
+When you are done with the demo, an administrator removes its databases, as for any other
+database:
 
-1. Open **Cohorts › DEMO**.
-2. Click **Delete…**. The page first shows what will be removed (patients, encounters, items and
-   recordings), and then removes it all in one step.
+1. Open **Databases**, then **demo**.
+2. Click **Remove…** and type its name to confirm. Do the same for **demo_north**,
+   **demo_omop**, **demo_registry** and **demo_secure**.
 
-The command `medorama demo remove` does the same from a terminal; `medorama demo remove
---dry-run` only reports what would go. The demo's files stay where the installer wrote them, so
-`medorama demo add` can load the demo again later. Only the demo cohort removes its patients
-when deleted: deleting any other cohort leaves its patients in the catalog. The
-[demo](administration.md#the-demo) section of the administration guide gives the details.
+The command `medorama databases remove NAME`, for each of the five, does the same from a
+terminal. Removing a database destroys its key, its workspace folder, its rows in
+every cohort and the patients that no other database holds; the databases themselves, and the
+demo's files, stay where the installer wrote them, so they can be connected again later
+([administration, The demo](administration.md#the-demo)).
 
-To start again from nothing, stop the server and delete the catalog's home folder and the
-results folder; to uninstall, delete the clone ([building](building.md#update-and-uninstall)).
+To start again from nothing, stop the server and delete Medorama's home folder and the
+workspace; to uninstall, delete the clone ([building](building.md#update-and-uninstall)).
 
 ## Next steps
 
 | You are | Continue with |
 |---|---|
 | A researcher or clinician | The [user guide](user-guide.md) and the [user's manual](user-manual/medorama-user-manual.pdf) |
-| An administrator | [Administration](administration.md): settings, PostgreSQL, users and roles, deployment as a service, backups |
+| An administrator | [Administration](administration.md): settings, connected databases, grants, keys, users and roles, deployment as a service, backups |
 | A security or privacy reviewer | [Security and privacy](security.md), [architecture](architecture.md), [protecting patient data](protecting-patient-data.md) and [sign-in](sign-in.md) |
-| A data manager | [Databases](databases.md) and [importing](importing.md): the tables to export, the columns Medorama recognizes, connecting OMOP or SQL databases |
+| A data manager | [Databases](databases.md): what a database must provide, connecting OMOP or SQL databases; [db-builder](../db-builder/README.md) and [importing](importing.md): tables, exports and folders of recordings made into a database, and the columns it recognizes |
 | An integrator or developer | [Readers and data models](readers.md), [adapters](adapters.md), the [HTTP API](api.md) and [developing](developing.md) |
 
 The [documentation index](README.md) lists every page.

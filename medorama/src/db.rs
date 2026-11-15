@@ -3,12 +3,12 @@
 //!
 //! SQLite runs in write-ahead-log mode (one writer at a time, readers never blocked), so the
 //! server, `medorama` commands and job workers can use it together.  PostgreSQL lets several
-//! Medorama servers share one catalog: sessions, cohorts, pseudonyms and the job queue are all in
+//! Medorama servers share one control store: sessions, cohorts, pseudonyms and the job queue are all in
 //! the database, so any server answers any request.
 //!
 //! The schema is `src/schema/sqlite/001_schema.sql` and `src/schema/postgres/001_schema.sql`
 //! (the same tables, one file per database). A later change to it comes as the next numbered
-//! file in each folder, applied when a catalog is opened; the catalog records the versions it
+//! file in each folder, applied when a control store is opened; it records the versions it
 //! has (`schema_migrations`).
 
 use crate::config::Config;
@@ -17,16 +17,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// (version, SQL), in order, per database.  Never edit one that has been released; add the next.
-const SQLITE_MIGRATIONS: &[(i64, &str)] = &[
-    (1, include_str!("schema/sqlite/001_schema.sql")),
-    (2, include_str!("schema/sqlite/002_import_links.sql")),
-    (3, include_str!("schema/sqlite/003_privacy_gate.sql")),
-];
-const PG_MIGRATIONS: &[(i64, &str)] = &[
-    (1, include_str!("schema/postgres/001_schema.sql")),
-    (2, include_str!("schema/postgres/002_import_links.sql")),
-    (3, include_str!("schema/postgres/003_privacy_gate.sql")),
-];
+const SQLITE_MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("schema/sqlite/001_schema.sql"))];
+const PG_MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("schema/postgres/001_schema.sql"))];
 
 /// The most connections to a PostgreSQL database a server opens at once (a request waits for
 /// one beyond that); idle ones kept, and how long one may be idle before it is checked.
@@ -77,6 +69,11 @@ impl Drop for Conn<'_> {
                 let mut p = self.db.pool.lock().unwrap_or_else(|e| e.into_inner());
                 if p.len() < IDLE_KEPT {
                     p.push((c, std::time::Instant::now()));
+                    drop(p);
+                    // a request waiting for a connection takes this one (PostgreSQL's limit)
+                    if let Kind::Postgres { .. } = self.db.kind {
+                        self.db.open.1.notify_one();
+                    }
                     return;
                 }
             }
@@ -94,11 +91,6 @@ fn database_key(cfg: &Config) -> anyhow::Result<Option<String>> {
             None => None,
         },
     };
-    if key.is_some() && !cfg!(feature = "encryption") {
-        anyhow::bail!(
-            "a database key is configured, but this build has no encryption (build with --features encryption)"
-        );
-    }
     Ok(key)
 }
 
@@ -218,7 +210,7 @@ impl Db {
             let mut c = db.get()?;
             if !create && c.dialect() == Dialect::Postgres && schema_version(&c)? == 0 {
                 anyhow::bail!(
-                    "the PostgreSQL database {} holds no catalog yet: create it with `medorama init`",
+                    "the PostgreSQL database {} holds no control store yet: create it with `medorama init`",
                     shown_url(&url)
                 );
             }
@@ -312,7 +304,7 @@ impl Db {
                 }
                 c.busy_timeout(std::time::Duration::from_secs(30))?;
                 c.pragma_update(None, "foreign_keys", "ON")?;
-                // the mode is kept in the file, set by the first connection to a new catalog; one
+                // the mode is kept in the file, set by the first connection to a new control store; one
                 // that sets it while another does is told "locked" at once, without the busy
                 // timeout, so it tries again
                 let since = std::time::Instant::now();
@@ -355,6 +347,19 @@ fn schema_version(c: &Connection) -> anyhow::Result<i64> {
     Ok(c.query_row("SELECT COALESCE(MAX(version), 0) FROM schema_migrations", [], |r| r.get(0))?)
 }
 
+/// Whether the control store is one of Medorama 0.1.0, which kept imported data: its schema
+/// versions 1 to 3 are not this one's, so it is recognised by its `imports` table.
+fn made_by_0_1(c: &Connection) -> anyhow::Result<bool> {
+    Ok(match c.dialect() {
+        Dialect::Sqlite => {
+            c.query_row("SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'table' AND name = 'imports'", [], |r| {
+                r.get(0)
+            })?
+        }
+        Dialect::Postgres => c.query_row("SELECT to_regclass('imports') IS NOT NULL", [], |r| r.get(0))?,
+    })
+}
+
 fn migrate(c: &mut Connection) -> anyhow::Result<()> {
     let pg = c.dialect() == Dialect::Postgres;
     if !pg {
@@ -374,11 +379,18 @@ fn migrate_locked(c: &mut Connection, pg: bool) -> anyhow::Result<()> {
     } else {
         "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL)"
     })?;
+    if made_by_0_1(c)? {
+        anyhow::bail!(
+            "this control store was made by Medorama 0.1.0, which imported data; Medorama 0.2.0 connects \
+             databases instead and cannot open it.\n  Leave it as it is (0.1.0 still opens it) and set 0.2.0 up \
+             in a new home: medorama init --home NEW_DIR --workspace DIR (docs/install.md#upgrading-from-010)"
+        );
+    }
     let list = if pg { PG_MIGRATIONS } else { SQLITE_MIGRATIONS };
     let newest = list.last().map_or(0, |m| m.0);
     for (v, sql) in list {
         // the version read with the write lock held (SQLite: several processes may open a new
-        // catalog at once; PostgreSQL: the advisory lock above): one of them applies each
+        // control store at once; PostgreSQL: the advisory lock above): one of them applies each
         let tx = c.transaction_with_behavior(crate::sql::TransactionBehavior::Immediate)?;
         let current = schema_version(&tx)?;
         if current > newest {
@@ -405,7 +417,7 @@ pub type Copied = Vec<(String, usize)>;
 /// Rows read from the source at a time (by id), and written to a statement.
 const COPY_RANGE: i64 = 20_000;
 
-/// Copy a SQLite catalog, every table and row, into an empty PostgreSQL catalog (`to`, opened
+/// Copy a SQLite control store, every table and row, into an empty PostgreSQL one (`to`, opened
 /// with `create`): the way from one to the other.  Both are at the same schema version; the
 /// source is only read.  Tables are copied parents first, in one transaction: an error leaves
 /// the target as it was.  Each table is read a range of rows at a time.  A database's table of
@@ -413,16 +425,18 @@ const COPY_RANGE: i64 = 20_000;
 /// again in the target.
 pub fn copy_to_postgres(from: &Db, to: &Db) -> anyhow::Result<Copied> {
     if from.dialect() != Dialect::Sqlite || to.dialect() != Dialect::Postgres {
-        anyhow::bail!("copies a SQLite catalog into a PostgreSQL one");
+        anyhow::bail!("copies a SQLite control store into a PostgreSQL one");
     }
     let (src, mut dst) = (from.get()?, to.get()?);
     let (v1, v2) = (schema_version(&src)?, schema_version(&dst)?);
     if v1 != v2 {
-        anyhow::bail!("the catalogs have schema versions {v1} and {v2}: open both with this version of medorama first");
+        anyhow::bail!(
+            "the control stores have schema versions {v1} and {v2}: open both with this version of medorama first"
+        );
     }
     let users: i64 = dst.query_row("SELECT COUNT(*) FROM users", [], |r| r.get(0))?;
     if users > 0 {
-        anyhow::bail!("the PostgreSQL catalog is not empty (it has users)");
+        anyhow::bail!("the PostgreSQL control store is not empty (it has users)");
     }
     // the tables both have, and their common columns
     let mut st = src.prepare(
@@ -442,7 +456,7 @@ pub fn copy_to_postgres(from: &Db, to: &Db) -> anyhow::Result<Copied> {
     for t in names {
         let target = pg_cols(&t)?;
         if target.is_empty() {
-            anyhow::bail!("the PostgreSQL catalog has no table {t}");
+            anyhow::bail!("the PostgreSQL control store has no table {t}");
         }
         let mut st = src.prepare(&format!("SELECT name FROM pragma_table_info('{t}')"))?;
         let mine: Vec<String> = st.query_map([], |r| r.get(0))?.collect::<Result<_, _>>()?;
@@ -466,7 +480,7 @@ pub fn copy_to_postgres(from: &Db, to: &Db) -> anyhow::Result<Copied> {
         order.push((t, cols));
     }
     let tx = dst.transaction()?;
-    // the rows the schema itself puts in a new catalog: the source's own take their place
+    // the rows the schema itself puts in a new control store: the source's own take their place
     tx.execute("DELETE FROM data_version", [])?;
     tx.execute("DELETE FROM id_counters", [])?;
     let mut out = vec![];
@@ -497,8 +511,6 @@ pub fn copy_to_postgres(from: &Db, to: &Db) -> anyhow::Result<Copied> {
         out.push((t.clone(), copied));
     }
     tx.commit()?;
-    // the databases' tables of numbers, built from their rows
-    crate::typed::build_missing(&mut dst)?;
     Ok(out)
 }
 
@@ -620,6 +632,23 @@ pub fn audit(c: &Connection, user: Option<&crate::users::User>, event: &str, tar
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_control_store_of_0_1_is_refused_with_what_to_do() {
+        let mut c = crate::sql::Connection::open_in_memory().unwrap();
+        c.execute_batch_native(
+            "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at REAL NOT NULL);
+             INSERT INTO schema_migrations VALUES (3, 0);
+             CREATE TABLE imports (id INTEGER PRIMARY KEY);",
+        )
+        .unwrap();
+        let e = super::migrate(&mut c).unwrap_err().to_string();
+        assert!(e.contains("Medorama 0.1.0") && e.contains("--home NEW_DIR"), "{e}");
+        // a new store migrates
+        let mut c = crate::sql::Connection::open_in_memory().unwrap();
+        super::migrate(&mut c).unwrap();
+        super::migrate(&mut c).unwrap();
+    }
+
     #[test]
     fn urls_are_shown_without_passwords() {
         assert_eq!(

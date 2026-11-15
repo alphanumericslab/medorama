@@ -1,0 +1,13 @@
+Medorama - license terms
+Copyright 2025-2026 Reza Sameni (https://github.com/alphanumericslab/medorama)
+
+  * The software is licensed under the PolyForm Noncommercial License 1.0.0 (LICENSE).
+    It is free for noncommercial purposes: personal research, study and testing, and use by
+    universities and schools, public research and public health organizations, charities
+    and government institutions.
+  * Commercial use needs a commercial license from the author: use by or for a company, in a
+    product, or as a service to customers (COMMERCIAL.md, https://sameni.info).
+  * The documentation and the manual are under CC BY-NC-ND 4.0, the demo and example data under
+    CC BY-NC 4.0; third-party components keep their own licenses (THIRD_PARTY_LICENSES.md).
+  * Medorama is research software, not a medical device, provided without warranty: it must not
+    be used to make clinical decisions.

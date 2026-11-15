@@ -5,7 +5,8 @@ designing the patient page, the split between backend and frontend, and what com
 written for contributors and for reviewers who want to understand the design. How to use the page
 is described in
 [user-guide.md, The Patient Catalog and the patient page](../user-guide.md#the-patient-catalog-and-the-patient-page);
-how data reach it, in [databases.md](../databases.md) and [importing.md](../importing.md).
+how data reach it, in [databases.md](../databases.md) and
+[design/databases-only.md](databases-only.md).
 
 ## Contents
 
@@ -27,11 +28,13 @@ values, signals and pictures.*
 ## What it is for
 
 Data about a patient live in many systems: bedside monitors (ICU waveforms), the laboratory,
-ECG carts, EEG and sleep laboratories, imaging, pharmacy, notes. Each can be exported as a table,
-with or without links to files, or connected as a database. The catalog loads each table as a
-**database**, merges the databases over the patients (by patient ID, MRN and issuing authority,
-and encounter), keeps everything in time order, and shows a patient's whole journey on one page.
-Adding a database adds its data to every patient page; removing it takes it out of all of them.
+ECG carts, EEG and sleep laboratories, imaging, pharmacy, notes. Each is connected as a
+**database**, read where it is: an OMOP instance, a warehouse through SQL views, or a SQLite file
+that db-builder made from exported tables, files and folders of recordings. Medorama links the
+databases' persons into patients by exact identifiers (an identifier and its issuer), reads each
+database's data for the patient when the page opens, keeps everything in time order, and shows a
+patient's whole journey on one page. Connecting a database adds its data to every patient page;
+removing it takes it out of all of them.
 
 ## Layout
 
@@ -41,8 +44,8 @@ was (as text).
 | Part | Width | Content |
 |---|---|---|
 | Search line | full | The patients' search. On a patient page, the patient as a chip (✕ closes it) and a search for another one. |
-| Patient bar | full | Name, sex, age and date of birth, patient ID, MRNs, the span of the data, and allergies (amber; "not recorded" when no database holds allergies). |
-| Patient column | 320 px | Encounters (click one to show only it), medications of the latest stay, conditions. |
+| Patient bar | full | Name, sex, age and date of birth, patient ID, MRNs (from the databases granted `phi`), the span of the data, the databases, those not answering, and allergies (amber; "not recorded" when no database holds allergies). |
+| Patient column | 320 px | Visits, each with its database (click one to show only it), medications of the latest stay, conditions. |
 | Journey | 330 px | The picture of the patient's data, newest on top. |
 | Report | the rest | The entries (left) and the selected entry's detail (right). |
 
@@ -65,9 +68,9 @@ open.
   and observation categories). One database may fill several columns (an imaging index holds
   imaging and echo), and several databases one; only the categories that some database provides
   are shown. The list is [categories.rs](../../medorama/src/categories.rs)
-  ([importing.md, Categories](../importing.md#categories)).
+  ([importing.md, Categories](../importing.md#categories), db-builder's input).
 - **ICU is the stay, not the monitor:** the column shows the whole time spent in an
-  intensive-care unit (from the bed stays, start to end) as a light bar, and each recording
+  intensive-care unit (from the ICU visits, start to end) as a light bar, and each recording
   made during it as a solid bar over it, from its first sample to its last (known once it is
   indexed; before that, an hour is shown, dashed). Each bar opens its entry, however short: its
   target is at least 8 px tall. A Holter recording, an EEG and a sleep study each have a column
@@ -77,7 +80,7 @@ open.
   takes either color. Red is reserved for alarms. The warning on viewer tabs whose file may show
   identifiers in Privacy Mode is an amber triangle.
 - **Folding.** Quiet stretches shrink to a hatched band, so that busy days get the room. Choosing
-  an encounter (in the left column) shows only it, unfolded, with − and + to zoom; its chip above
+  a visit (in the left column) shows only it, unfolded, with − and + to zoom; its chip above
   the journey (✕) shows all of them again.
 - **A long history scrolls.** A busy day keeps at least 12 px. When years of care no longer fit,
   the journey scrolls vertically under fixed column names. It opens at the top (the newest), and
@@ -87,7 +90,7 @@ open.
 
 ## The report and the detail
 
-- **Three views:** **Timeline** (by day, with the encounter, hospital day and unit), **By
+- **Three views:** **Timeline** (by day, with the visit, hospital day and unit), **By
   category**, or **Trends** (every measurement as a sparkline). Laboratory results of one moment
   form one panel; vital signs form one entry a day.
 - **Search** covers every text the patient has, notes included: literal (any part of a word, any
@@ -103,7 +106,7 @@ open.
 - **The detail** shows what the entry is: a panel's values with ranges, flags, the previous value
   and the trend; a note or report; an ECG or image; a recording at a glance (length, gaps,
   waveforms; for ICU recordings, the main vital signs). Notes written around that time follow,
-  since notes belong to their encounter.
+  since notes belong to their visit.
 
 ![Searching a patient](../images/screens/patient-search.png)
 
@@ -120,7 +123,7 @@ Every viewer, like the page itself, has a light and a dark theme and follows the
 **A viewer always says whose file it shows.** Inside Medorama a file's name is of no use, so the
 viewer's title says whose file it is: the patient (as the user may see them: identifiers only
 with the PHI permission, placeholders and the pseudonym in Privacy Mode), never cut short, then
-what the file is, when, and in which encounter. ‹ Patient returns to its entry on the patient's
+what the file is, when, and in which visit. ‹ Patient returns to its entry on the patient's
 page, and ‹ 3 of 4 › steps through the patient's files of that kind. The title row is the patient
 bar, so the viewer keeps its full width and height. Clinical systems keep such a banner against
 wrong-patient errors. Standalone, a viewer shows its file's name.
@@ -150,15 +153,18 @@ that moment.
 
 **Cohorts** (first, since a researcher's work is the cohorts they build), the **Patient
 Catalog** (each patient's journey) and **Databases** sit together on the left of the top bar. The
-viewers follow a separator. The work tabs (History, Actions, Jobs, Review, Import, Admin) sit,
-quieter, at the right, by the theme switch.
+viewers follow a separator. The work tabs (History, Actions, Jobs, Admin) sit, quieter, at the
+right, by the theme switch.
 
-- **Databases** shows the same data organized by database. A database can be large, so the list
-  folds: ▸ unfolds one table in place, as imported, with each row's patient and its file linked to
-  its viewer. Databases are the only way in: a file always comes with its patient.
-- **Cohorts:** criteria build a structured query (the same one an NLP engine will write), the
-  matches show with the reason they match, and a cohort keeps them until it is refreshed.
-- Imports and deletions show in every open page within seconds.
+- **Databases** lists the connected databases granted to the user, each with its status (a
+  green dot online, a grey one offline; red is for alarms) and what it holds; a database's page
+  shows its variables, who may use it and its identity conflicts. Its Recordings subtab lists the
+  recordings of the recording databases. Databases are the only way in: a file always comes with
+  its patient.
+- **Cohorts:** criteria build a structured query (the same one an NLP engine will write), sent
+  to the databases ticked; the matches show with the reason they match and the databases
+  searched and left out, and a cohort keeps them until it is refreshed.
+- Connecting, refreshing and removing databases show in every open page within seconds.
 
 ![The Databases tab](../images/screens/databases.png)
 
@@ -180,16 +186,17 @@ so every color is a class or an SVG attribute.
 
 ## Databases
 
-![Adding databases](../images/screens/import.png)
+![Connecting a database](../images/screens/connect.png)
 
-There is one kind of import for every source: a table (a CSV file, a Parquet file or a
-spreadsheet). Each column is mapped once onto the catalog's columns (patient, encounter,
-location, item, file); the mapping is guessed from the headers and can be saved. The table's
-category ("Items are…") is guessed from its file name. Rows may describe patients, encounters,
-items, recordings or attached files, in any combination, so a "linkage table", a laboratory
-export, an ECG index pointing to pictures and an ICU index pointing to recordings are all the
-same kind of thing. Databases that stay where they are (OMOP, other SQL databases) are connected
-instead, and their entries fill the same columns ([databases.md](../databases.md)).
+Medorama imports nothing: every source is a connected database, read where it is, whose rows
+fill the same canonical columns (persons, visits, entries, recordings). OMOP and other SQL
+databases stay where they are ([databases.md](../databases.md)). Tables (CSV, Parquet,
+spreadsheets) and folders of recordings are made into a database by db-builder first
+([db-builder/README.md](../../db-builder/README.md)): it recognizes the columns from the headers
+(or a mapping), guesses a table's category from its file name, and lets rows describe patients,
+visits, entries, recordings or attached files in any combination, so that a laboratory export,
+an ECG index pointing to pictures and an ICU index pointing to recordings are all the same kind
+of thing.
 
 ## Backend and frontend
 
@@ -197,9 +204,9 @@ The backend decides what is shown; the frontend only draws it.
 
 | Backend (`medorama/src`) | Does |
 |---|---|
-| `tables.rs` | reads CSV, Parquet and spreadsheets, guesses mappings and categories, imports rows |
-| `linkage.rs`, `identity.rs` | patients and encounters, identity rules, held-back rows |
-| `ehr.rs` | items: matching to encounters and patients, duplicates, provenance |
+| `sources/` | reads each connected database through its views: OMOP's, a site's, db-builder's tables |
+| `persons.rs`, `grants.rs` | the patient index (exact identifiers and their issuers); who may see each database's data and identifiers |
+| `recordings.rs` | the recordings of recording databases, their presence and indexes |
 | `categories.rs` | the categories, their names and words; which are recordings (ICU, Holter, EEG, Sleep); ICU units |
 | `derived.rs` | series found from waveforms: a Holter's heart rate (QRS detection) |
 | `patient/` | the patient list, summary, journey (already binned), report and search, details, trends, recordings' overviews from the index and derived series, attached files and the viewer for each |
@@ -208,10 +215,11 @@ The backend decides what is shown; the frontend only draws it.
 | Frontend (`medorama/web/js`) | Does |
 |---|---|
 | `core.js`, `router.js`, `main.js` | the API, formatting, addresses (back and forward), sign-in |
-| `views/*.js` | one module per screen (patients, patient, recordings, viewer, sources, review, …); `apps.js`: the ECG and PACS viewers' tabs |
+| `views/*.js` | one module per screen (cohorts, patients, patient, databases, recordings, viewer, …); `apps.js`: the ECG and PACS viewers' tabs |
 | `patient/journey.js`, `report.js`, `detail.js`, `charts.js` | the patient page's parts |
 
-Identifiers are sent only to users with the PHI permission who have left Privacy Mode. In Privacy
+Identifiers are sent only to users with the PHI permission who have left Privacy Mode, and only
+from the databases granted to them with `phi`. In Privacy
 Mode, the text of notes is sent with the patient's own names and date of birth replaced, or
 withheld, as the administrator chooses. The page cannot show what it is not sent
 ([security.md](../security.md)). There is no build step: the modules are served as they are.

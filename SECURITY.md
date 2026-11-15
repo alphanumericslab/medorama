@@ -27,7 +27,8 @@ synthetic data instead; `tools/make-demo-data.py` makes some.
 
 ## Supported versions
 
-Medorama is at version 0.1.0 and has not been released yet. Fixes go to the `main` branch.
+Medorama is at version 0.2.0, a pre-release. Only the latest version is supported: fixes go to the
+`main` branch and into the next version.
 
 ## How Medorama is secured
 

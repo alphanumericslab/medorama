@@ -593,8 +593,8 @@ files under the root. The security model shared by the viewers is described in
 \label{sec:ecg-viewer-muse-py}
 
 \cmd{muse-py} reads GE MUSE resting ECG XML files with no dependencies, as the page does: to the
-JSON form, to a WFDB record whose header comments carry the report, or to an ECG database to
-import into Medorama.
+JSON form, to a WFDB record whose header comments carry the report, or to a table of ECGs that
+db-builder makes into a database for Medorama to connect (\cref{chap:importing}).
 
 \begin{lstlisting}[style=shell]
 pip install -e viewers/ecg/python/muse
@@ -629,8 +629,8 @@ it become spaces), which the ECG viewer reads back as the report.
 muse-py index FOLDER -o CSV
 \end{lstlisting}
 Reads every MUSE file (\file{.xml}) under \file{FOLDER}, passing over hidden files and folders,
-and writes a CSV, one row per file, to
-import into Medorama (\cref{chap:ecg-imaging}). It prints \code{CSV: N ECG(s)}, and
+and writes a CSV, one row per file, for db-builder to add to a database that Medorama connects
+(\cref{chap:ecg-imaging,chap:importing}). It prints \code{CSV: N ECG(s)}, and
 \code{; M file(s) not read} with each of them on the standard error.
 \begin{params}
 \item[-o, --output CSV] The CSV to write (required); the file paths in it are relative to its

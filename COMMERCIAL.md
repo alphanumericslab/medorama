@@ -1,7 +1,8 @@
 # Commercial licensing
 
 Medorama is free to use, study, change and share for noncommercial purposes under the
-[PolyForm Noncommercial License 1.0.0](LICENSE). Any other use needs a separate commercial
+[PolyForm Noncommercial License 1.0.0](LICENSE) (its documentation and data under the
+Creative Commons licenses below). Any other use needs a separate commercial
 license from the author. This page explains the difference and how to obtain a commercial
 license. The license text itself is authoritative; this page summarizes it.
 
@@ -36,6 +37,25 @@ If you are unsure whether your use is commercial, ask before you use it.
 
 Contact the author, Reza Sameni (<https://sameni.info>), with a short description of your
 organization and the intended use. Commercial licenses are agreed case by case, in writing.
+
+## The documentation and the data
+
+The documentation (the `docs/` folders), the user's manual and their figures are licensed under
+[CC BY-NC-ND 4.0](docs/LICENSE.md): they may be shared unchanged, for noncommercial purposes and
+with credit; sharing changed versions (translations and adapted course material included) and
+commercial use need the author's permission. The commands, settings and code they show are under
+the software's license. The demo library and the viewers' examples are licensed under
+[CC BY-NC 4.0](LICENSES/CC-BY-NC-4.0.txt). A commercial license can cover them too.
+[REUSE.toml](REUSE.toml) gives the license of every file.
+
+## Accepting the terms
+
+Every installer shows a summary of these terms and goes on only if the user accepts them, by
+typing `y` or `yes`; scripts accept them with `--accept-license` (Windows: `-AcceptLicense`) or
+`MEDORAMA_ACCEPT_LICENSE=yes`. The acceptance is recorded in the user's settings folder
+(`~/.config/medorama/license-accepted`, Windows `%APPDATA%\medorama\license-accepted`), and
+`medorama init` shows the same summary ([docs/building.md](docs/building.md#license-terms)).
+The license applies however Medorama is obtained or built, with or without an installer.
 
 ## Components under other licenses
 

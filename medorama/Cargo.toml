@@ -4,7 +4,7 @@
 # background job queue, a command-line tool and a web interface (docs/architecture.md).
 [package]
 name = "medorama"
-version = "0.1.0"
+version = "0.2.0"
 description = "Medorama: patients, encounters, EHR data, recordings and images from many databases, on one page, for research"
 readme = "README.md"
 edition.workspace = true
@@ -28,10 +28,6 @@ default = ["wfdb"]
 # (`--no-default-features`) Medorama holds no wfdb-x code: adding or opening a WFDB recording is
 # refused ("this build has no WFDB support"); every other format works as usual.
 wfdb = ["recording-engine/wfdb"]
-# Encrypt the database file (SQLCipher, with OpenSSL built from source: needs Perl and a C
-# compiler).  The key comes from the environment variable MEDORAMA_KEY or the
-# settings key `key_file`.
-encryption = ["rusqlite/bundled-sqlcipher-vendored-openssl"]
 
 [dependencies]
 recording-engine.workspace = true
@@ -50,23 +46,28 @@ hyper-util = { version = "0.1", features = ["client-legacy", "http1", "tokio"] }
 include_dir = "0.7"
 mime_guess = "2"
 rpassword = "7"
-rusqlite = { version = "0.37", features = ["bundled"] }
+# SQLCipher: the workspace's files are always encrypted, and the SQLite control store when a key
+# is set (OpenSSL built from source: needs Perl and a C compiler)
+rusqlite = { version = "0.42", features = ["bundled-sqlcipher-vendored-openssl"] }
+# the master key's cipher wiped from memory when dropped (`zeroize`), as are keys' hex copies
+aes-gcm = { version = "0.10", features = ["zeroize"] }
+zeroize = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync", "process", "io-util", "fs"] }
 futures-util = { version = "0.3", default-features = false }
 toml = { version = "0.8", default-features = false, features = ["parse", "display"] }
-calamine = { version = "0.38", features = ["dates"] }
 tokio-postgres-rustls = "0.14"
 rustls-native-certs = "0.8"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 bytes = "1"
 tokio-postgres = "0.7"
-parquet = { version = "60.0.0", default-features = false, features = ["snap", "zstd", "lz4", "flate2", "flate2-rust_backend"] }
 
 [dev-dependencies]
 tempfile = "3"
+# the spreadsheets Medorama writes, read back in the tests
+calamine = { version = "0.38", features = ["dates"] }
 # a spreadsheet written in the tests (calamine already depends on it)
 zip = { version = "9", default-features = false, features = ["deflate"] }
 tower = { version = "0.5", features = ["util"] }

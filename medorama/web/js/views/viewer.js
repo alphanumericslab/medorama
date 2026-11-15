@@ -1,4 +1,4 @@
-// The Viewer screen: the one viewer instance the catalog runs (an iframe kept while switching
+// The Viewer screen: the one viewer instance Medorama runs (an iframe kept while switching
 // screens).  #/viewer?path=…&t0=…&t1=… shows a recording at a time span; the viewer's page
 // follows its own address without reloading.  The page's theme goes with it (#theme=), and
 // main.js passes a change on.
@@ -11,7 +11,7 @@ async function show(r) {
   const frame = $('#viewer-frame');
   const msg = $('#viewer-msg');
   if (viewerMode() !== 'embedded') {
-    msg.textContent = st.cfg?.viewer?.reason || 'No viewer is linked to the catalog.';
+    msg.textContent = st.cfg?.viewer?.reason || 'No viewer is linked to Medorama.';
     msg.classList.remove('hidden');
     return;
   }

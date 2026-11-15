@@ -8,70 +8,33 @@ contributors. The design behind these numbers is in
 
 ## Contents
 
-- [The measurement](#the-measurement): [Imports](#imports) · [Pages](#pages) ·
-  [Query counts](#query-counts)
+- [The measurement](#the-measurement): [Pages](#pages) · [Query counts](#query-counts)
 - [Many users at once](#many-users-at-once)
 - [The VitalStream viewers](#the-vitalstream-viewers): [Recordings tested](#recordings-tested) ·
   [Indexing](#indexing) · [Reading](#reading) · [STP files](#stp-files) ·
   [What the numbers show](#what-the-numbers-show) · [Repeating it](#repeating-it)
+- [Index format 3](#index-format-3)
 - [How each part grows](#how-each-part-grows)
 - [Repeating the measurement](#repeating-the-measurement)
 
 ## The measurement
 
+**These server figures come from the earlier design**, in which Medorama imported tables into a
+catalog of its own. Medorama now imports nothing: it reads the connected databases in place, and
+keeps only its patient index, variables and summaries in its workspace
+([design/databases-only.md](design/databases-only.md)). The figures below have not been measured
+again on this design, and the time a request takes now includes the connected database's own.
+They remain a guide to the page's cost on SQLite and PostgreSQL. How fast db-builder makes a
+database has not been measured.
+
 The numbers below were measured under these conditions:
 
 | Condition | Value |
 |---|---|
-| Data | 50,000 synthetic patients, 50,000 encounters and 500,000 laboratory results (four tests, ten results per patient), made by a script like `tools/make-demo-data.py` and imported as three tables. |
+| Data | 50,000 synthetic patients, 50,000 encounters and 500,000 laboratory results (four tests, ten results per patient), made by a script like `tools/make-demo-data.py` and imported as three tables (the earlier design). |
 | Program | `medorama` built with `--release`; the server ran with no workers. |
 | Machine | A laptop (Apple silicon, 2026), with PostgreSQL 17 on the same machine. A database across a network adds its round trips on top ([Query counts](#query-counts)). |
 | Times | One request each, after a first request had warmed the caches, measured with `curl`, in seconds, for SQLite and for PostgreSQL. |
-
-### Imports
-
-The imports were measured with synthetic GE MUSE ECG lists (one row per ECG with its
-measurements, 125,000 rows for 25,000 patients), and with synthetic tables of 5,000 patients,
-5,000 encounters and 100,000 laboratory results. Each was imported into a new catalog. Times are
-in seconds.
-
-| Table | Rows | SQLite | PostgreSQL |
-|---|---|---|---|
-| ECG list, preview (`--dry-run`) | 125,000 | 6.0 | 18 |
-| ECG list | 125,000 | 8.3 | 19 |
-| ECG list (four files, one database) | 500,000 | 44 | 74 |
-| Patients | 5,000 | 0.3 | 1.1 |
-| Encounters | 5,000 | 0.3 | 1.1 |
-| Laboratory results | 100,000 | 2.4 | 8.7 |
-
-Four things make an import fast
-([administrator's guide, Imports and sources](administration.md#imports-and-sources)):
-- **Rows are processed a chunk at a time.** Rows are read 5,000 at a time. The patients and
-  encounters of a chunk are read for all its rows at once and decided in memory, with the rows
-  about the same patient grouped together. Those that follow the plain rules are written as
-  multi-row statements (new patients and encounters with their IDs reserved, MRNs, field values,
-  provenance and bed stays); the others are written row by row. For the chunk's items, a few
-  queries find their patients and encounters, one query per few hundred items finds those
-  imported before, and the new items are written many to a statement. This matters most on
-  PostgreSQL, where each statement is a round trip. The resulting catalog is the same either way,
-  as `tests/bulk.rs` checks.
-- **The search index is written once a chunk.** SQLite's full-text index of the items is written
-  for each chunk's items at once, as the chunk is committed, instead of being flushed and merged
-  at every statement, which would take most of an import's time.
-- **The write lock is free between chunks.** On SQLite, which has one writer at a time, a table
-  is committed a chunk at a time (with a pause of 30 ms after each), under a batch that stays
-  *loading* until the end; other writes (a page's change, the audit log) wait for at most one
-  chunk, not for the whole import. On PostgreSQL an import is one transaction. What a loading
-  batch holds is left out of every page by one indexed subquery, which costs a few milliseconds
-  on the 50,000-patient catalog when no import runs.
-- **Waiting items are matched as sets** after each import, however many are waiting.
-- **Each database has a table of its numbers** (`dbcol_<import>`), written with the rows, so that
-  criteria on a database's columns read an index. On 500,000 ECGs, `ecg.QTc > 600` takes 0.02 s
-  on SQLite and 0.32 s on PostgreSQL; `ecg.QTc > 470`, which keeps a fifth of the rows, takes
-  0.45 s and 1.2 s.
-
-The catalog of 500,000 ECGs takes 503 MB on SQLite. An import holds 0.2 to 0.6 GB of memory,
-whatever its size. SQLite's times vary by about a fifth between runs on this machine.
 
 ### Pages
 
@@ -82,14 +45,12 @@ whatever its size. SQLite's times vary by about a fifth between runs on this mac
 | The same, filtered by a category (`has=labs`) | 0.18 s | 0.22 s |
 | The same, a text search (`q=SYN0012345`) | 0.45 s | 0.48 s |
 | A patient's summary, journey and report | 0.02, 0.02 and 0.001 s | 0.07, 0.07 and 0.001 s |
-| A database's rows, one page | 0.03 s | 0.11 s |
-| The same, sorted by a column | 0.55 s | 0.99 s |
 | Cohort search `female AND lactate > 5.5` | 0.22 s | 0.62 s |
 | Cohort search `latest troponin t > 290` | 0.006 s | 0.013 s |
 | Making a cohort of 4,326 patients | 0.31 s | 0.50 s |
 | A cohort's members, one page | 0.09 s | 0.12 s |
 | A cohort's members as CSV | 0.17 s | 0.22 s |
-| A cohort's data as CSV (every database's rows for 5,091 members) | 0.86 s | 1.7 s |
+| A cohort's data as CSV (the data of 5,091 members) | 0.86 s | 1.7 s |
 
 ### Query counts
 
@@ -99,7 +60,6 @@ is across a network. With PostgreSQL at 1 ms per round trip, each query adds 1 m
 | Request | Queries |
 |---|---|
 | Patient Catalog, a page of 100 | 12 to 17 |
-| A database's rows, a page | About 11 |
 | A cohort search | About 19 (one or two per criterion, and per connected database) |
 | A cohort's members as CSV | About 19 |
 | A cohort's data as CSV | About 60 (a few per database) |
@@ -110,8 +70,8 @@ query per row.
 ## Many users at once
 
 [`tools/load-test.py`](../tools/load-test.py) signs in 20 users at once. Each asks without pause
-for catalog pages (at random places), a filtered list, patients' summaries, journeys and reports,
-a database's rows and cohort searches. Because no time is spent reading pages, this makes many
+for Patient Catalog pages (at random places), a filtered list, patients' summaries, journeys and
+reports, a database's rows (a page of the earlier design) and cohort searches. Because no time is spent reading pages, this makes many
 more requests than 20 people would. The test used the same data and machine as above and ran for
 60 seconds. Times are in seconds per request.
 
@@ -121,7 +81,7 @@ more requests than 20 people would. The test used the same data and machine as a
 | The same, filtered by a category | 0.19–0.26 / 0.31–0.38 | 0.49 / 0.70 |
 | A patient's summary or report | 0.00 / 0.02 | 0.00 / 0.03 |
 | A patient's journey | 0.02 / 0.06 | 0.04 / 0.15 |
-| A database's rows, one page | 0.01 / 0.04 | 0.13 / 0.48 |
+| A database's rows, one page (the earlier design) | 0.01 / 0.04 | 0.13 / 0.48 |
 | A cohort search | 0.26–0.29 / 0.72–0.91 | 0.44 / 1.72 |
 | **Requests per second, all together** | **230–288** | **122** |
 
@@ -131,17 +91,17 @@ different days, with the machine under different loads.
 
 **How the list's queries differ by database.** On PostgreSQL, the list's category filter is read
 as one set of patients (`p.id IN (…)`), and every patient's latest encounter in one grouped pass,
-rather than with an index probe per patient. The same set forms are slower on SQLite with many
+rather than with an index probe per patient. The same set forms were slower on SQLite with many
 users, because each builds a temporary table: the filtered page took 0.36 s and the plain page
-0.72 s. SQLite therefore keeps the probe per patient, and the list's queries are chosen by
-database (`patient/list.rs`). The "has none" filter (`!lab`) is a probe on both databases, because
-PostgreSQL cannot hash a `NOT IN` over 500,000 rows (it took 27 s).
+0.72 s. The "has none" filter (`!lab`) was a probe on both databases, because PostgreSQL cannot
+hash a `NOT IN` over 500,000 rows (it took 27 s). (In this design the list is read from each
+database's per-person summaries in the workspace, which are SQLite files.)
 
 **Memory-mapped reads on SQLite.** Every SQLite connection reads the file memory-mapped
 (`mmap_size`). With its own 2 MB page cache instead, each connection copies pages over and over,
-and the same test gives 12 requests a second, with a catalog page taking 4.3 s.
+and the same test gave 12 requests a second, with a Patient Catalog page taking 4.3 s.
 
-PostgreSQL's numbers include a round trip per query. Its filtered catalog is the slowest request
+PostgreSQL's numbers include a round trip per query. Its filtered list was the slowest request
 and the first to improve; [S4](todo.md#s4-the-patient-catalogs-text-search-in-sql) touches the
 same queries.
 
@@ -272,30 +232,91 @@ python3 tools/bench-viewers.py report results.json
 For `.Stp` files, give an adapter folder holding the add-on (`--adapters DIR`) and a label for
 each combination (`--label rs-viewer-py-addon`).
 
+## Index format 3
+
+Index format 3 keeps a recording's index in an SQLite store, encrypted with its database's key
+([index-format.md, Version 3](../viewers/vitalstream/docs/index-format.md#version-3-the-index-store)),
+where format 2 kept it in a folder of memory-mapped files. Format 2 goes only if format 3 is no
+slower in a way a user notices. This compares the two in the Rust engine, on the same synthetic
+recordings as the viewers' measurement (`tools/bench-viewers.py make-data`): the recording
+indexed into a folder, into a plain store and into an encrypted store (4,096 values per chunk),
+then opened afresh and read as the page reads it: the whole recording at 1200 points, and 40
+windows each of 10 minutes, 1 hour and 10 seconds (raw samples) at random places, every channel.
+Apple M2 Max, 32 GB, release build; times in milliseconds (median / 95th percentile).
+
+| Recording | Read | Format 2 (folder) | Format 3 (store) | Format 3 (encrypted) |
+|---|---|---|---|---|
+| WFDB, one day, 8 channels | open | 0.9 | 0.3 | 0.5 |
+| | whole recording | 8.5 / 8.9 | 8.6 / 9.1 | 8.5 / 9.4 |
+| | 10 min windows | 17.7 / 18.2 | 18.8 / 19.8 | 21.5 / 21.8 |
+| | 1 h windows | 6.3 / 6.6 | 7.1 / 7.3 | 7.4 / 7.7 |
+| | 10 s windows | 5.0 / 5.2 | 5.0 / 5.1 | 5.0 / 5.1 |
+| EDF, one day | open | 0.9 | 0.3 | 0.5 |
+| | whole recording | 14.6 / 14.7 | 14.6 / 15.3 | 14.6 / 15.3 |
+| | 10 min windows | 29.7 / 30.0 | 30.9 / 31.1 | 33.7 / 34.0 |
+| | 1 h windows | 10.5 / 10.6 | 11.2 / 11.4 | 11.6 / 11.9 |
+| | 10 s windows | 8.5 / 8.6 | 8.6 / 8.9 | 8.5 / 8.6 |
+| WFDB, three days | open | 1.1 | 0.4 | 0.5 |
+| | whole recording | 6.4 / 6.7 | 6.5 / 7.7 | 6.6 / 7.3 |
+| | 10 min windows | 17.5 / 18.1 | 18.8 / 19.5 | 23.0 / 23.7 |
+| | 1 h windows | 6.3 / 6.4 | 7.1 / 7.2 | 8.8 / 9.3 |
+| | 10 s windows | 5.2 / 5.2 | 5.0 / 5.3 | 5.2 / 5.4 |
+
+Indexing takes 15 to 35 % longer (1.2 s against 1.5 s for a day; 3.7 s against 5.0 s for three
+days, encrypted), and the store is 3 % larger than the folder. A window reads at most 5 ms more
+from an encrypted store, under a third of one screen refresh: not a difference a user notices.
+
+**The chunk size was chosen by these measurements.** With 65,536 values per chunk, an encrypted
+store took 67 ms for a 10-minute window (each window decrypted whole 256 KB chunks per channel);
+with 16,384, 29 ms; 8,192, 24 ms; 4,096, 21.6 ms. Opening an encrypted store took 130 to 320 ms
+while readers summed the chunks' lengths (decrypting every chunk); with the arrays' lengths in a
+table of their own (`arrays`), under 1 ms. To repeat:
+
+```bash
+python3 tools/bench-viewers.py make-data DIR
+cargo run --release -p recording-engine --example store_bench -- DIR/wfdb_day/day.hea WORKDIR
+CHUNK_VALUES=16384 cargo run --release -p recording-engine --example store_bench -- …   # another chunk size
+```
+
+**The three viewers on format 3**, through their HTTP API (`tools/bench-viewers.py`, each with its
+own plain store, the same machine), against their format 2 numbers above (Rust / C++ / Python):
+
+| Recording | Index (s) | Whole recording (ms) | 10-minute window (ms) | 10-second window (ms) | Peak memory (MB) |
+|---|---|---|---|---|---|
+| WFDB, one day, format 2 | 1.24 / 1.54 / 1.10 | 9 / 4 / 9 | 18 / 8 / 17 | 6 / 3 / 18 | 227 / 221 / 358 |
+| WFDB, one day, format 3 | 1.21 / 1.51 / 1.07 | 9 / 4 / 9 | 19 / 9 / 20 | 5 / 3 / 19 | 213 / 259 / 442 |
+| EDF, one day, format 2 | 1.24 / 1.07 / 0.51 | 15 / 4 / 9 | 31 / 7 / 17 | 9 / 2 / 6 | 221 / 214 / 360 |
+| EDF, one day, format 3 | 1.21 / 1.03 / 0.44 | 15 / 4 / 10 | 32 / 8 / 20 | 9 / 2 / 6 | 233 / 232 / 440 |
+
+Every read is within 3 ms of format 2, and every viewer answered the same data. The Python
+viewer's peak memory is about 80 MB higher (its SQLCipher binding and the chunks it keeps); the
+others' are within 40 MB.
+
 ## How each part grows
 
 | Part | Grows with | Why it holds up |
 |---|---|---|
-| Patient Catalog (browsing, filters, a cohort's members) | The number of patients, for ordering IDs; the page size, for everything else. | Filtering and ordering happen in the database, and the page's details are read for that page only. |
-| Patient Catalog (text search) | Every patient's identifiers and encounters. | The search matches every field of every patient in memory. Moving it into SQL is planned ([S4](todo.md#s4-the-patient-catalogs-text-search-in-sql)). |
-| A patient's page | That patient's data. | The data are indexed by patient. |
-| A database's rows | The page size; sorting reads the whole table. | The rows are indexed by import and line. |
-| Cohort criteria | The rows of the result named (through an index on its name), or the whole table for text and `has` criteria. | Criteria are evaluated as sets of patient IDs. A threshold reads only the values that may pass, per unit (with the threshold converted), and tests them in Medorama. |
-| A cohort's data | The members' rows, found through their items (`ehr_items` by patient, `import_rows` by item); the rows of patients and encounters, every one. | The data are read from the items to their rows, with SQLite told the order (`CROSS JOIN`). |
+| Patient Catalog (browsing, filters, a cohort's members) | The number of patients of the databases the user may view. | The list is read from the per-person summaries Medorama keeps of each database (`persons.sqlite` in the workspace), not from the databases themselves, so it also answers while a database is offline. |
+| Patient Catalog (text search) | Every patient's summary. | The search matches every field of every patient in memory. Moving it into SQL is planned ([S4](todo.md#s4-the-patient-catalogs-text-search-in-sql)). |
+| A patient's page | That patient's data in each database. | It is read from each database the user may view, by the patient's person keys there. |
+| Cohort criteria | The rows a criterion reads in each database searched (`max_rows`). | A criterion goes only to the databases whose variables may hold it, and its filters run in the connected database. Criteria are combined as sets of patient numbers. A threshold reads only the values that may pass, per unit (with the threshold converted), and tests them in Medorama. |
+| A cohort's data | The members' data in each database. | Read from the connected databases, as a patient's page is. |
 | A connected database | Its own indexes; the rows a criterion reads (`max_rows`). | The filters run in the connected database, and a page's reads are kept for 30 seconds. |
-| Several servers | The database server. | Sessions, cohorts and jobs are in PostgreSQL, and advisory locks ensure that work meant to happen once does. |
+| Several servers | | Not in this version: the workspace is one server's folder ([design/databases-only.md](design/databases-only.md)). |
 
 ## Repeating the measurement
 
-These commands make the data, build Medorama, create a catalog, import a table (time each import),
-start the server without workers (then time the requests above with `curl`), and run the load
-test:
+These commands make the data, build Medorama and db-builder, make the tables into a database,
+set Medorama up and connect it, start the server without workers (then time the requests above
+with `curl`), and run the load test:
 
 ```bash
-.venv/bin/python tools/make-demo-data.py        # or any synthetic tables of the size wanted
-cargo build --release -p medorama
-medorama init --results /tmp/r --home /tmp/h     # (--database-url postgres://… for PostgreSQL)
-medorama --home /tmp/h import-table patients.csv
+.venv/bin/python tools/make-demo-data.py /tmp/d  # or any synthetic tables of the size wanted
+cargo build --release -p medorama -p db-builder
+db-builder new /tmp/d/data.sqlite
+db-builder add /tmp/d/data.sqlite /tmp/d/databases/patients.csv /tmp/d/databases/encounters.xlsx /tmp/d/databases/*.csv
+medorama --home /tmp/h init --workspace /tmp/w   # (--database-url postgres://… for the control store in PostgreSQL)
+medorama --home /tmp/h databases connect data --kind dbb --url sqlite:/tmp/d/data.sqlite
 medorama --home /tmp/h serve --no-workers
 MEDORAMA_PASSWORD=… python3 tools/load-test.py --url http://127.0.0.1:8090 --users 20 --seconds 60
 ```

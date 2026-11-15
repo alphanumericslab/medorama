@@ -8,26 +8,23 @@ one piece of work: one branch and one review.
 
 Read these first: [architecture.md](architecture.md) for the parts, [developing.md](developing.md)
 for the code, a request end to end and the SQL rules for both databases,
-[design/sources.md](design/sources.md) for connected databases, and [security.md](security.md)
-for what must not break.
+[design/databases-only.md](design/databases-only.md) for connected databases, the workspace and
+its keys, [design/sources.md](design/sources.md) for reading connected databases, and
+[security.md](security.md) for what must not break. db-builder's own work (more input formats,
+the rest of CLIF, HL7 v2 files) is tracked in [db-builder/](../db-builder/README.md), not here.
 
 ## Contents
 
 - [Rules for every item](#rules-for-every-item)
+- **Workspace and keys:**
+  [H2 Built-in key managers](#h2-built-in-key-managers)
 - **Connected databases:**
-  [A2 Files held by a connected database](#a2-files-held-by-a-connected-database) ·
+  [A2 Recordings of an OMOP database](#a2-recordings-of-an-omop-database) ·
   [A3 Value thresholds pushed down](#a3-value-thresholds-pushed-down) ·
-  [A4 Visits as encounters; the list's columns](#a4-visits-as-encounters-the-lists-columns) ·
-  [A5 Notes near an entry, from every source](#a5-notes-near-an-entry-from-every-source) ·
-  [A6 Access rules per connection](#a6-access-rules-per-connection) ·
   [A7 A Source interface; FHIR](#a7-a-source-interface-fhir) ·
   [A8 SQL Server, Oracle, Snowflake, BigQuery](#a8-sql-server-oracle-snowflake-bigquery)
-- **Identity:**
-  [B1 Scored matching](#b1-scored-matching) ·
-  [B2 Undoing a merge](#b2-undoing-a-merge) ·
-  [B3 ADT events](#b3-adt-events) ·
-  [B4 Snapshots: reproducible cohorts](#b4-snapshots-reproducible-cohorts)
-- **Imports:** [C1 HL7 v2](#c1-hl7-v2) · [C2 CLIF, the rest of it](#c2-clif-the-rest-of-it)
+- **Cohorts:** [B4 Snapshots: reproducible cohorts](#b4-snapshots-reproducible-cohorts) ·
+  [B5 Age at the index event](#b5-age-at-the-index-event)
 - **Actions and the toolbox:**
   [D1 Encounter-scope actions](#d1-encounter-scope-actions) ·
   [D2 The toolbox and the results format](#d2-the-toolbox-and-the-results-format) ·
@@ -45,7 +42,7 @@ for what must not break.
   [E8 An annotation-only EDF+ file over another file's signals](#e8-an-annotation-only-edf-file-over-another-files-signals)
 - **Privacy and security:**
   [F1 Built-in OpenID Connect sign-in and multi-factor authentication](#f1-built-in-openid-connect-sign-in-and-multi-factor-authentication) ·
-  [F2 Per-study access lists](#f2-per-study-access-lists) ·
+  [F2 Access by cohort](#f2-access-by-cohort) ·
   [F3 Free-text de-identification](#f3-free-text-de-identification) ·
   [F4 Text burned into pixels](#f4-text-burned-into-pixels)
 - **Scalability:**
@@ -58,74 +55,99 @@ for what must not break.
 
 An item is done when all of the following hold. Reviews check them.
 
-1. **The rules stay true** ([administrator's guide, Rules](administration.md#rules)). Data
-   sources and connected databases are only read; removal affects the database only; identifiers
-   live only in the database; a file comes in only with its patient; and columns are never merged
-   across sources.
-2. **The server decides.** Matching, access, privacy and search are decided in `medorama/src`.
-   The page (`medorama/web`) draws what it is sent and has no build step.
+1. **The rules stay true** ([design/databases-only.md](design/databases-only.md)). Medorama imports
+   nothing: connected databases and the files they name are only read. Identifiers are kept only
+   in the databases and in each database's encrypted workspace folder, never in the control store.
+   Databases are joined on exact (issuer, identifier) pairs only. Removing a database leaves no
+   trace of it. Columns are never merged across databases.
+2. **The server decides.** Access, privacy and search are decided in `medorama/src`. The page
+   (`medorama/web`) draws what it is sent and has no build step.
 3. **Both databases work.** New SQL follows the rules in
    [developing.md, "SQL that both databases run"](developing.md#tests). A schema change is the
    next numbered pair of files (`src/schema/sqlite/0NN_….sql` and
    `src/schema/postgres/0NN_….sql`), both listed in `db.rs`. The tests pass with `cargo test` and
-   with `MEDORAMA_TEST_POSTGRES=postgres://…` (PostgreSQL 14 and 17).
+   with `MEDORAMA_TEST_POSTGRES=postgres://…`.
 4. **Privacy Mode holds.** Everything a user can see passes the privacy gate. A new field that can
-   identify a patient gets a canary in `tests/privacy.rs` (or in `tests/connections.rs` for
-   connected data) that fails if it leaks. A new kind of file is refused in Privacy Mode until a
-   de-identifier exists for it (`gate.rs` `FileKind`).
-5. **Access is audited.** Anything that reads identifiers, changes data or changes access writes an
-   audit event (`db::audit`), listed in the audit section of [security.md](security.md).
-6. **Lint and format pass:** `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`;
+   identify a patient gets a canary in `tests/privacy.rs` that fails if it leaks. A new kind of
+   file is refused in Privacy Mode until a de-identifier exists for it (`gate.rs` `FileKind`).
+5. **Access is granted and audited.** A new way to read a database's data checks its grants
+   (`grants.rs`); anything that reads identifiers, changes data or changes access writes an audit
+   event (`db::audit`), listed in the audit section of [security.md](security.md).
+6. **What Medorama generates goes into the workspace**, in the folder of the database it came
+   from, encrypted with its key, and goes with it when the database is removed
+   (`databases::remove`; `tests/databases.rs`, `removing_a_database_leaves_no_trace`).
+7. **Lint and format pass:** `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`;
    `node --test` for the viewers; `pytest` for the Python packages; and `make audit` when a
    dependency is added. A new endpoint gets its operation in `medorama/openapi.yaml`, and a new
    screen gets a step in `tests/browser.rs`.
-7. **The documents are updated:** the [user's guide](user-guide.md), the
+8. **The documents are updated:** the [user's guide](user-guide.md), the
    [administrator's guide](administration.md) and the [API](api.md);
    [security.md](security.md) and [protecting-patient-data.md](protecting-patient-data.md) when
    the item touches access or privacy; and the [CHANGELOG](../medorama/CHANGELOG.md). Remove the
    item from this page and from the "not yet" lists ([user-guide.md](user-guide.md),
-   [design/sources.md](design/sources.md#what-is-not-there-yet), [architecture.md](architecture.md)).
-8. **The wording rules hold.** Write "male", "female" and "sex" (never man, woman or gender), and
+   [design/sources.md](design/sources.md#what-is-not-there-yet), [architecture.md](architecture.md#status)).
+9. **The wording rules hold.** Write "male", "female" and "sex" (never man, woman or gender), and
    "added manually". Imported column names are never changed. Red is used for alarms only, and
    colors come from the color-blind-safe palette in `web/style.css`.
-9. **No patient data** goes into the repository, the tests or the examples. Use synthetic data only
-   (`tools/make-demo-data.py`). Tests build real-looking recording names (`UNIT_BED-<Unix time>`)
-   at run time.
+10. **No patient data** goes into the repository, the tests or the examples. Use synthetic data
+    only (`tools/make-demo-data.py`). Tests build real-looking recording names
+    (`UNIT_BED-<Unix time>`) at run time.
+
+---
+
+## Workspace and keys
+
+### H2 Built-in key managers
+
+**Why.** The master key comes from `$MEDORAMA_MASTER_KEY`, from `master_key_command` (a command
+that prints it) or from `master_key_file`. A keyring, HashiCorp Vault or a cloud KMS is reached
+only through `master_key_command`, so the master key itself always reaches Medorama's memory,
+and a site has to write the command.
+
+**Design.** Key managers as sources of the master key, in `workspace.rs`, beside today's three:
+- **The operating system's keyring** (macOS Keychain, the Secret Service on Linux, Windows
+  Credential Manager), the default on a single machine.
+- **Vault's transit engine and cloud KMS** (AWS KMS, Azure Key Vault, Google Cloud KMS): the key
+  manager wraps and unwraps the data keys itself, so that the master key never leaves it. The
+  `keys` table's `master_id` then names the key manager's key and its version.
+- **Per-user wrapped keys**, if wanted: a `keys` row per (owner, user), wrapped with a key only
+  that user's sign-in unlocks, so that the server's own administrators cannot read a database
+  they are not granted. It changes who can unwrap a key, so it needs a decision on recovery (a
+  user who leaves) first.
+
+**Steps.** (1) A `KeySource` trait (`load`, `wrap`, `unwrap`) with today's three as
+implementations. (2) The keyring (the `keyring` crate). (3) Vault transit over HTTPS (rustls), then
+the cloud KMS clients behind Cargo features. (4) Settings (`master_key_source`, its address and
+credentials, in files only); `medorama keys rotate` moves data keys between sources.
+
+**Tests.** A fake Vault in the test process (axum); a wrapped key unwraps only through its source;
+rotation from a file to the fake Vault keeps every database readable.
+
+**Docs.** design/databases-only.md (Keys and encryption), security.md (data at rest, key
+management), the administrator's guide (settings).
 
 ---
 
 ## Connected databases
 
-### A2 Files held by a connected database
+### A2 Recordings of an OMOP database
 
-**Why.** A connected database's entries carry no attachment, although an OMOP `note` may point
-to a PDF and a warehouse may point to ECG files or DICOM studies.
+**Why.** A recording database lists its files in a `recordings` view (kind `views`) or table
+(kind `dbb`). An OMOP database has no such table in the CDM, although a site may keep the paths
+of ECG files, DICOM studies or monitor recordings in a table of its own, or in `note_nlp`.
 
-**Design.** Add a fourth, optional canonical column to `entries`: `file`, a path inside the
-catalog's `data_roots`, as for imports. Entries with a file are attached like catalog items: the
-same viewers, the same file rules and the same gate.
+**Design.** Let a database of kind `omop` take a `recordings` view in its settings, as `views`
+does, with the same canonical columns; its persons are OMOP's. Everything else (the
+workspace's `recordings.sqlite`, `data_roots`, the viewers, the gate) is unchanged.
 
 **Steps.**
-1. `src/sources/mod.rs`: add `file` to `ENTRY_COLS` and `Entry.file`. Views without the column
-   must keep working: either read the column by name only when the view has it (probe once in
-   `check` and keep the answer in the pool's state), or require `NULL AS file` in mapped views and
-   add it to OMOP's.
-2. `src/patient/items.rs` and `detail.rs`: set `It.file` for live entries with a file, and build
-   the detail's `Attachment` from it. Live items have no catalog ID, so the file route needs
-   another key: `GET patients/{id}/live-file/{connection}/{token}` (and `…/{name}` for folders),
-   which finds the entry again by its token (`live_items`), checks `cfg.import_allowed(path)`, and
-   then calls the same `attachment_response` as `patient_file` (the gate by `FileKind`).
-3. `src/server.rs`: add the two routes. In Privacy Mode they behave as for catalog files: names
-   become tokens, and refused kinds stay refused.
-4. OMOP has no file column in the CDM, but `note_nlp` or a site's own table may hold paths.
-   Document how to add one in a `sql` view.
+1. `src/sources/omop.rs` `views`: use `settings.recordings` when it is set.
+2. `src/main.rs` and the page: `--views` (or a `--recordings` query) accepted for `omop`.
+3. Document how to write the view over a site's table in databases.md.
 
-**Tests.** In `tests/connections.rs`, a WFDB ECG and a DICOM file under a test `data_roots`, named
-by a `sql` view, are opened identified and in Privacy Mode (DICOM rewritten, names as tokens),
-and a path outside `data_roots` is refused.
-
-**Done when** a connected database's ECG opens in the ECG viewer from the patient page, in both
-modes, and the privacy canaries pass.
+**Tests.** In `tests/databases.rs`, an OMOP fixture with a `recordings` view naming a WFDB ECG
+under a test `data_roots`: the ECG opens from the patient page, identified and in Privacy Mode,
+and a path outside `data_roots` is listed with its problem.
 
 ### A3 Value thresholds pushed down
 
@@ -133,90 +155,26 @@ modes, and the privacy canaries pass.
 units may differ from row to row. On a large OMOP database, that is millions of rows per
 criterion.
 
-**Design.** When the criterion has a value and a unit, ask the source once for the units it holds
-for that name (`SELECT DISTINCT unit …`). For each unit, convert the threshold (`expr::convert`)
-and push down `(unit = ?u AND value_num > ?v)` terms joined by `OR`. Rows of a unit that does not
-convert are refused, as now. `latest` cannot be pushed down, because it needs every row of a
-person: keep it in Medorama, or push it down as a window query on PostgreSQL only.
+**Design.** The database's `variables.sqlite` already lists the units it holds for each name.
+For each unit, convert the threshold (`expr::convert`) and push down `(unit = ?u AND value_num >
+?v)` terms joined by `OR`. Rows of a unit that does not convert are refused, as now. `latest`
+cannot be pushed down, because it needs every row of a person: keep it in Medorama, or push it
+down as a window query on PostgreSQL only.
 
 **Steps.**
 1. `src/sources/mod.rs`: `Find` gains `values: Vec<(String unit, String cmp, f64 value)>` (or a
-   range); `find_sql` writes the terms; add `units(name)`, cached with `names`.
+   range); `find_sql` writes the terms; the units come from `variables::of`.
 2. `src/cohorts/in_sources.rs`, `meets_source` (`"measurement"`): fill `values` when `k.latest` is
    false, and still test each row, which is cheap and a safety net.
 3. Indexes: say in design/sources.md which OMOP indexes make this fast
    (`measurement (measurement_concept_id, value_as_number)`).
 
-**Tests.** In `tests/connections.rs`: the same answers with and without push-down; a unit that
-does not convert is still refused; and a query plan check on PostgreSQL (`EXPLAIN` uses an index
-on a fixture that has one).
+**Tests.** In `tests/databases.rs`: the same answers with and without push-down; a unit that does
+not convert is still refused; and a query plan check on PostgreSQL (`EXPLAIN` uses an index on a
+fixture that has one).
 
 **Done when** the rows read for `omop.lactate > 4` equal the rows that match, and the answers are
 unchanged.
-
-### A4 Visits as encounters; the list's columns
-
-**Why.** A connected database's stays appear under Encounters, but they cannot be chosen to filter
-the patient page. The Patient Catalog's columns (encounters, latest, data, items) also count the
-catalog's data only.
-
-**Design.** Give visits an encounter key of their own, `live:<connection>:<token>` (the visit key
-hashed, as entries are). The page's encounter filter accepts it, and live entries carry their
-visit's token, so filtering works for both kinds. For the list, compute a per-patient summary of
-each connected database (counts by category, latest visit) for the page shown only (`query_in`
-over the linked persons), cached per data version and source version.
-
-**Steps.**
-1. `src/sources/mod.rs`: keep `Visit.key`; `Entry.visit` is already read.
-2. `src/patient/summary.rs` and `items.rs`: `LiveVisit` gains `key` (the token), and `It` gains
-   `visit_token`. The journey and report take an encounter filter that is either a catalog ID or a
-   token. Today `pp.enc` in `web/js/views/patient.js` is an ID: make it a string.
-3. `src/patient/list.rs`, `list_browse`: for the page's rows only, make one query per source,
-   `SELECT person_key, category, COUNT(*), MAX(time) FROM (entries) GROUP BY person_key, category`
-   over the page's linked keys, and merge the result into `kinds`, `items` and `latest`.
-4. `web/js/views/patient.js`: make the live visit rows clickable (`data-enc` set to the token).
-
-**Tests.** In `tests/connections.rs`: filtering the journey by an OMOP visit shows that visit's
-entries only, and the list shows OMOP's counts for linked patients.
-
-**Done when** a patient known only to OMOP looks in the list like an imported one.
-
-### A5 Notes near an entry, from every source
-
-**Why.** An entry's detail shows the notes written within a day of it (`notes_near`), but from the
-catalog only.
-
-**Steps.** In `src/patient/detail.rs`, `notes_near` also takes the live items already read
-(`live_items`, category `note`, with a time in the window), in the same order and with the same
-text rule (`read_notes`); their keys are live tokens. Pass the items in rather than reading the
-source again.
-
-**Tests.** In `tests/connections.rs`: the OMOP lactate's detail lists OMOP's discharge summary,
-and in Privacy Mode its names are replaced (canaries).
-
-### A6 Access rules per connection
-
-**Why.** Every Medorama user sees the linked persons' connected data, as their mode allows, so only
-databases that all users may use can be connected (see the known limitations in
-[security.md](security.md)).
-
-**Design.** A connection may name the users, or a role, allowed to read it. For other users the
-connection does not exist: no entries on pages, no criteria, no names in the resolver and no
-`sources` in the list. Linked patients stay in the registry, because they may be in the catalog
-too.
-
-**Steps.**
-1. Migration pair: `connection_access (connection, user_id)`. An empty list means everyone, as
-   today.
-2. `src/sources/mod.rs`: add `list_for(c, user)`. Every caller that today uses `sources::list` or
-   `link::persons_of` for a user's answer uses the filtered form (`cohorts::meets`, the resolver,
-   `patient::live_items`, `live_visits`, `list_core`, `cohorts::source_versions`).
-3. `GET` and `PUT connections/{id}/access` (administrators); Import › Connected databases shows the
-   list.
-4. Audit changes to `connection_access`.
-
-**Tests.** In `tests/connections.rs`: a user who is not allowed sees no OMOP entry, cannot write
-`omop.lactate`, and sees no `omop` in the list; a user who is allowed sees them.
 
 ### A7 A Source interface; FHIR
 
@@ -231,31 +189,31 @@ pub trait Reader: Send + Sync {
     fn persons(&self, keys: &[String]) -> anyhow::Result<Vec<Person>>;
     fn entries(&self, keys: &[String], zone: Tz) -> anyhow::Result<Vec<Entry>>;
     fn visits(&self, keys: &[String], zone: Tz) -> anyhow::Result<Vec<Visit>>;
+    fn recordings(&self, keys: &[String], zone: Tz) -> anyhow::Result<Vec<Recording>>;
     fn find(&self, f: &Find, zone: Tz) -> anyhow::Result<Vec<Entry>>;
     fn find_persons(&self, f: &Find) -> anyhow::Result<Vec<String>>;
     fn visit_persons(&self, icu: bool) -> anyhow::Result<Vec<String>>;
-    fn names(&self) -> anyhow::Result<Arc<Vec<(String, String, bool)>>>;
     fn version(&self) -> anyhow::Result<String>;
     fn check(&self) -> anyhow::Result<Checked>;
 }
 ```
 
-`Source` keeps the connection's row and returns a `Box<dyn Reader>` for its kind: `omop` and `sql`
-(today's code, moved into `sources/views.rs`) and `fhir` (`sources/fhir.rs`). The canonical model
-and the planner do not change.
+`Source` keeps the database's row and returns a `Box<dyn Reader>` for its kind: `omop`, `views`
+and `dbb` (today's code, moved into `sources/views.rs`) and `fhir` (`sources/fhir.rs`). The
+canonical model, the variables and the planner do not change.
 
 **FHIR mapping (R4).**
 
 | Canonical | FHIR |
 |---|---|
-| persons | `Patient`: `identifier` with the MRN's `system` gives `mrn` and `mrn_authority`; `birthDate`; `gender` gives `F` or `M`; names only if the site allows. |
+| persons | `Patient`: each `identifier` gives a pair, its `system` the issuer (the MRN's system gives `mrn` and `mrn_authority`); `birthDate`; `gender` gives `F` or `M`; names only if the site allows. |
 | visits | `Encounter`: `period`, `location`, `class` (`IMP`, `ICU` and so on). |
 | entries | `Observation` (`category` laboratory gives `lab`, vital-signs gives `vit`; `code` in LOINC; `valueQuantity`, `referenceRange`, `interpretation` gives `flag`), `Condition` (`dx`), `MedicationRequest` and `MedicationAdministration` (`med`), `Procedure` (`proc`), `DocumentReference` (`note`, with its text through `content.attachment`). |
 
 - **Searching** maps `Find` to FHIR search parameters, for example
   `Observation?code=http://loinc.org|2524-7&value-quantity=gt4|http://unitsofmeasure.org|mmol/L`.
-  Bulk criteria over a whole server use **Bulk Data** (`$export`, NDJSON) into a cache, or are
-  refused with a message, because FHIR servers limit search sizes.
+  Reading every person (at connect and refresh) and the variables uses **Bulk Data** (`$export`,
+  NDJSON), because FHIR servers limit search sizes.
 - **Authentication** uses SMART Backend Services (a signed JWT, `client_credentials`), with keys in
   files (never in the database) and tokens kept in memory only.
 - **The client** is `hyper-util` (already a dependency) with rustls, or `reqwest` with rustls, with
@@ -264,10 +222,10 @@ and the planner do not change.
 **Steps.** (1) Add the trait and move the code, with no change in behavior and all tests passing.
 (2) Write `fhir.rs` with `check`, `persons`, `entries` and `visits`. (3) Implement `find` for the
 criteria kinds (`measurement`, `diagnosis`, `medication`, `has`, `encounter`). (4) Add the `fhir`
-kind to `connections add` (`--client-id`, `--key-file`, `--token-url`).
+kind to `databases connect` (`--client-id`, `--key-file`, `--token-url`).
 
 **Tests.** A small FHIR server in the test process (axum, serving fixed Bundles), with the same
-assertions as `tests/connections.rs` makes for OMOP, Privacy Mode included.
+assertions as `tests/databases.rs` makes for db-builder databases, Privacy Mode included.
 
 **Docs.** design/sources.md (FHIR and its limits); security.md (keys, tokens, the network path).
 
@@ -277,8 +235,8 @@ assertions as `tests/connections.rs` makes for OMOP, Privacy Mode included.
 foreign-data wrapper (`tds_fdw`, `oracle_fdw` and others).
 
 **Design.** Add a backend per engine in `src/sql/`, beside `pg.rs`, used only by connected
-databases; the catalog's own database stays SQLite or PostgreSQL. The SQL that Medorama writes
-around a view must then be written per dialect:
+databases; the control store stays SQLite or PostgreSQL. The SQL that Medorama writes around a
+view must then be written per dialect:
 
 | | PostgreSQL, SQLite | SQL Server | Oracle | Snowflake, BigQuery |
 |---|---|---|---|---|
@@ -293,148 +251,48 @@ Server first, with `tiberius`: it is the most requested, and pure Rust. (3) Add 
 Cargo features, so that a default build stays small.
 
 **Tests.** Per engine, behind an environment variable as for `MEDORAMA_TEST_POSTGRES`
-(`MEDORAMA_TEST_MSSQL=…`), with the OMOP fixture of `tests/connections.rs` created in it; CI with
-a SQL Server container.
+(`MEDORAMA_TEST_MSSQL=…`), with an OMOP fixture created in it; CI with a SQL Server container.
 
 ---
 
-## Identity
-
-### B1 Scored matching
-
-**Why.** Two records are one patient only through a shared ID or MRN, or a reviewer's merge
-(`identity.rs`, and "possible duplicates" in `review.rs`). Exports from several systems without a
-common MRN need scored suggestions.
-
-**Design.** Compute a score over name, date of birth, sex and other fields that hold no postcode
-(Fellegi-Sunter weights: an agreement and a disagreement weight per field, with Jaro-Winkler
-similarity for names), **only for reviewers with the PHI permission**, in the Review tab. The
-scores are suggestions only: nothing is merged without a reviewer. Pairs that a reviewer marked as
-different people (`patient_pairs`) are never suggested again, which is already the rule.
-
-**Steps.** (1) `src/identity.rs`: `candidates(c) -> Vec<(a, b, score, reasons)>`, with blocking
-(the same birth year, or the same first letters of the surname) so that it stays near-linear.
-(2) `review.rs` lists the candidates above a threshold (a setting), with the reasons. (3) The
-weights are settings, with documented defaults.
-
-**Tests.** In `tests/identity.rs`: synthetic near-duplicates (a typing mistake, a swapped day and
-month) are suggested, distinct pairs are not, and no suggestion reaches a user without the PHI
-permission, because suggestions are PHI.
-
-### B2 Undoing a merge
-
-**Why.** A wrong merge (`identity::merge`) cannot be undone today: encounters, items, MRNs, values
-and links move to the other patient.
-
-**Design.** Record what a merge moved, so that it can be moved back: a `merge_log` (merge ID,
-table, row ID) written by `identity::merge`. `unmerge(merge_id)` moves those rows back to a
-patient recreated with the old patient ID and its old pseudonym (from `pseudonym_aliases`).
-Cohorts whose members came through the merged patient are told, with an event in each cohort's
-history, rather than changed silently.
-
-**Steps.** A migration pair (`patient_merges` gains an ID; add `merge_log`); `identity::merge`
-writes the log; add `identity::unmerge` and `POST review/unmerge` (administrators with the PHI
-permission); the Review tab lists past merges; audit `unmerge_patients`.
-
-**Tests.** In `tests/identity.rs`: a merge followed by an unmerge returns the catalog to the same
-rows (compare table dumps), pseudonyms included, on both databases.
-
-### B3 ADT events
-
-**Why.** Encounters and bed stays come from linkage tables, while live feeds send ADT events:
-admit (A01), transfer (A02), discharge (A03), update (A08), cancels (A11, A12, A13) and merge
-(A40).
-
-**Design.** An event table (`adt_events`: time, kind, patient keys, encounter keys, unit, bed and
-the message's ID), applied in order to `encounters` and `bed_stays` by the same rules as a linkage
-row (`linkage::apply_row`), with each cancel undoing the event it cancels. Events come from HL7 v2
-([C1](#c1-hl7-v2)) or from a table import.
-
-**Steps.** (1) The table and `linkage::apply_event`. (2) Cancels. (3) A40 through
-`identity::merge`, held for review when the MRNs' authorities differ. (4) A command that rebuilds
-encounters from the events (`medorama adt replay`).
-
-**Tests.** A synthetic event stream (an admission, two transfers, a cancel of the second, a
-discharge) gives the expected bed stays and times, and a replay gives the same catalog.
+## Cohorts
 
 ### B4 Snapshots: reproducible cohorts
 
-**Why.** A cohort records its sources' versions, but not the data. Refreshing it after new imports
-changes its members, and an old result cannot be rebuilt.
+**Why.** A cohort records its databases' versions, but not the data. Refreshing it after a
+database changed changes its members, and an old result cannot be rebuilt.
 
 **Design.** Let a user freeze a cohort. Freezing stores, at that moment, the members and the rows
 the criteria used (the reasons, with their values and times), and for exports the data exported,
-with a content hash. A frozen cohort is never refreshed. Rebuilding the whole catalog as it was at
-a date is not the aim, since imports can be removed; the frozen cohort is the record.
+with a content hash, in the cohort's encrypted workspace file. A frozen cohort is never
+refreshed. Removing a database still removes every frozen row it contributed to (the rule that a
+removal leaves no trace wins), and the snapshot says so.
 
-**Steps.** A migration pair (`cohort_snapshots`: cohort, time, versions, members as JSON, data
-hash; `cohort_snapshot_rows` for the values); `POST cohorts/{id}/freeze`;
+**Steps.** In the cohort's file: `snapshots` (time, versions, members, data hash) and
+`snapshot_rows` (the values, with their provenance); `POST cohorts/{id}/freeze`;
 `GET cohorts/{id}/snapshots/{n}/export`; the page shows frozen cohorts as such; exports name the
 snapshot and its hash.
 
-**Tests.** In `tests/databases.rs`: freeze, import more data, check that a refresh is refused and
-that the export is unchanged (the same hash).
+**Tests.** In `tests/databases.rs`: freeze, change a db-builder database (a new version), check
+that a refresh is refused and that the export is unchanged (the same hash); remove the database
+and check that its rows are gone from the snapshot.
 
----
+### B5 Age at the index event
 
-## Imports
+**Why.** `age` is the patient's age today. A study asks for the age at an event: "over 65 when
+the QT was long", "under 18 at admission". Today `age > 65 AND QT > 470` finds patients over 65
+now who had a long QT at any age.
 
-### C1 HL7 v2
+**Design.** A comparison of age bound to the measurement, diagnosis or encounter it is written
+with (`QT > 470 at age > 65`, or `age at admission > 65`): the age at that row's time, from the
+date of birth (PHI, as `age` is). A date of birth known by its year alone (OMOP's
+`year_of_birth`, read as 1 July) gives ages within six months; the reasons say so.
 
-**Why.** Hospitals send ADT messages (encounters, stays), ORU messages (results) and waveform
-messages over HL7 v2 (MLLP). Today these data must be exported as tables.
+**Steps.** `expr.rs` (the words), `cohorts/` (the age at each row's time, in the test of its
+criterion), the builder's page, docs/user-guide.md and the manual's cohorts chapter.
 
-**Design.** A reader of HL7 v2.x messages (segments, fields, components, escapes and MSH-18
-encodings) in `src/hl7.rs`, which turns them into the rows that the importers already take:
-- **ADT** messages become events ([B3](#b3-adt-events)) or linkage rows: PID-3 is the MRN with its
-  authority, PID-5 the names, PID-7 the birth date, PID-8 the sex, PV1-19 the encounter, and PV1-3
-  the location (unit and bed).
-- **ORU^R01** messages become items (OBR and OBX: OBX-3 the code, OBX-5 the value, OBX-6 the unit,
-  OBX-7 the range, OBX-8 the flag, OBX-14 the time), as `tables::import` writes them, one batch per
-  file or per hour of a feed.
-- **Waveforms** (OBX segments with NA or MA values) become a recording kind, written as WFDB by a
-  converter, never into the data folders.
-
-The input is files first (`medorama import-hl7 FILE…`), and later an MLLP listener
-(`medorama listen-hl7 --port`), on the loopback address or behind TLS, which acknowledges each
-message (ACK) only after it is stored.
-
-**Tests.** Synthetic messages only (no real ones in the repository): parsing (escapes, repetitions,
-empty fields), each message kind to the expected rows, malformed messages refused with their line,
-and privacy canaries for the PID fields.
-
-**Docs.** importing.md (an HL7 section), the administrator's guide (Import formats), security.md
-(the listener).
-
-### C2 CLIF, the rest of it
-
-**Done so far.** Every table of CLIF 2.1, and CLIF 3.0's `input`, `output`,
-`intermittent_dialysis`, `validated_diagnosis` and `clinical_notes_facts`, are import formats
-([clif.rs](../medorama/src/formats/clif.rs); CSV or Parquet; `medorama import-clif FOLDER`, or
-Import › A CLIF folder on the server). They cover patients, hospitalizations, ADT, vitals, invasive
-hemodynamics, intake and output, labs, respiratory support, ECMO and MCS, CRRT, intermittent
-dialysis, medication administration and orders, transfusions, assessments, position, code status,
-key ICU orders, therapy details, the care team's roles, place-based indices, clinical trials,
-cultures, non-culture tests, susceptibilities (on the folder's cultures, by `organism_id`),
-procedures, diagnoses (hospital, patient, validated) and the facts of notes.
-
-**What is left.**
-1. **The rest of CLIF 3.0.** Its other new tables (`mcs`, `renal_replacement_therapy`, `airway`,
-   `line`, `drain`, `scores`, `consult_orders`, `misc_icu_orders` and others) and its renamed
-   columns, once 3.0 is released. `clinical_notes_text` has no columns in CLIF, because 3.0 keeps
-   note text out of CLIF and fetches it from the site's warehouse when needed. When it has columns,
-   its text becomes an item's `text` in the `note` category, under the privacy gate's rules for
-   notes. A susceptibility table imported without its cultures is left out, because the link is
-   read from the folder's files, not from cultures imported before.
-2. **Size.** A site's vitals and respiratory tables reach hundreds of millions of rows, and an
-   import of that size takes an hour or more. For such tables, read CLIF where it is: a `clif` kind
-   of connection, with its views (persons, visits, entries) written once over CLIF's tables, in
-   PostgreSQL or in DuckDB over the Parquet files if a driver is added, as for `omop`.
-3. **mCIDE versions.** Check a table's categories against the mCIDE lists of its CLIF version,
-   reporting unknown categories as clifpy's validator does, and keep the version per import.
-
-**Tests.** `tests/clif.rs`, one table at a time; the connection kind as `tests/connections.rs` does
-for OMOP.
+**Tests.** A patient of 70 today with a QT of 480 at 50 and one at 68: `QT > 470 at age > 65`
+finds the second row only.
 
 ---
 
@@ -446,22 +304,24 @@ for OMOP.
 `action.toml` and listed, but refused when run (`actions.rs`). Trends across all of a stay's
 recordings need the whole encounter.
 
-**Design.** A job on an encounter. The job description lists every recording of the encounter in
-order (paths, index folders, times), the encounter's and the patient's pseudonyms, and an output
-folder `actions/<action>/e<encounter>/j<job>/`.
+**Design.** A job on a visit of a recording database. The job description lists every recording
+of the visit in order (paths, times), the visit's and the patient's pseudonyms, and
+an output folder `results/<action>/e<visit>/j<job>/` in the database's workspace folder.
 
 **Steps.**
-1. Migration pair: `jobs.recording` becomes nullable; add `jobs.encounter` (a foreign key) and a
-   check that exactly one of the two is set. The queue's index on `(state, priority, id)` is
+1. Schema pair: `jobs.recording` becomes nullable; add `jobs.visit` (the visit's keyed hash, as
+   `visit_pseudonyms` keeps it, with `jobs.database_id`) and a check that exactly one of the two is
+   set. The queue's index on `(state, priority, id)` is
    unchanged.
-2. `src/jobs.rs`: `create_run` makes one job per encounter for encounter-scope actions; `claim` and
-   `execute` build the encounter's description. A requirement (`requires`) is met when the
-   required action is done on every recording of the encounter.
+2. `src/jobs.rs`: `create_run` makes one job per visit for encounter-scope actions; `claim` and
+   `execute` build the visit's description from its database's `recordings.sqlite`. A requirement
+   (`requires`) is met when the required action is done on every recording of the visit.
 3. `src/actions.rs`: remove the refusal, and describe the description's schema in actions.md (The
    contract).
-4. Results: `GET jobs` and the patient page show encounter results under the encounter.
+4. Results: `GET jobs` and the patient page show a visit's results under the visit; their numbers
+   go into `results-<action>.sqlite` as for recordings.
 
-**Tests.** In `tests/catalog.rs`: an example plug-in with `scope = "encounter"` that writes the
+**Tests.** In `tests/databases.rs`: an example plug-in with `scope = "encounter"` that writes the
 number of recordings it saw; requirements across two recordings; cancelling; Privacy Mode (only
 pseudonyms in the description).
 
@@ -485,7 +345,7 @@ design calls for one toolbox, usable as an action, a command, a Python function 
    (QRS detection, `derived::qrs`), with the same numbers.
 4. **Four ways to use a tool:** Medorama lists the registered tools as built-in actions;
    `vs-tool run TOOL RECORDING` runs one from the command line; a Python package (PyO3) exposes
-   them; and the viewers read `series` and `events` from the results folder
+   them; and the viewers read `series` and `events` from the job's output folder
    ([E1](#e1-ehr-items-and-results-on-vitalstreams-time-axis)).
 
 **Tests.** The moved heart rate gives the same series as `derived.rs` gives now, on the synthetic
@@ -563,8 +423,8 @@ the opened recording, shifted in Privacy Mode).
 MPEG-2 and MPEG-4 video (`.4.100` to `.4.106`) are refused.
 
 **Design.** Decode on the server. On request, Medorama converts a frame to PNG (lossless) or a
-video to an MP4 the browser can play, caches the result in the results folder (never next to the
-file), and the viewer asks for the converted frame when the transfer syntax is one it cannot
+video to an MP4 the browser can play, caches the result in the recording database's workspace folder,
+encrypted with its key (never next to the file), and the viewer asks for the converted frame when the transfer syntax is one it cannot
 decode. Rust decoders: `charls` bindings or a pure decoder for JPEG-LS; `openjpeg` (C, through a
 crate) or `jpeg2k` for JPEG 2000; and video through `ffmpeg` as an external program, if installed,
 like a plug-in.
@@ -593,13 +453,14 @@ header as their little-endian twins.
 
 ### E4 A PACS as a source (DICOMweb)
 
-**Why.** Imaging comes in as DICOM files listed in a table, whereas a PACS answers DICOMweb
+**Why.** Imaging comes in as DICOM files listed in a recording database, whereas a PACS answers DICOMweb
 (QIDO-RS to search, WADO-RS to fetch).
 
-**Design.** A connected source of studies, in the style of [A7](#a7-a-source-interface-fhir),
-whose entries are studies (`img`, `echo` or `cath` by modality), linked to persons by PatientID
-with its issuer. Opening a study fetches its instances through Medorama (WADO-RS), de-identified by
-`dicom.rs` in Privacy Mode, and never stored outside the results folder's cache.
+**Design.** A connected database of studies, in the style of [A7](#a7-a-source-interface-fhir),
+whose recordings are studies (`img`, `echo` or `cath` by modality), linked to persons by PatientID
+with its issuer (`IssuerOfPatientID`). Opening a study fetches its instances through Medorama
+(WADO-RS), de-identified by `dicom.rs` in Privacy Mode, and never stored outside the database's
+workspace folder, encrypted.
 
 **Tests.** A small DICOMweb server in the test process (QIDO JSON, WADO multipart), with Privacy
 Mode canaries in the fetched headers.
@@ -673,16 +534,16 @@ A file that cannot be read is left out, and the recording's notes say so, as for
    that a folder of WFDB records is read as before), and `format_label` names it (`EDF files`).
 4. The same reader in the C++ engine (`viewers/vitalstream/cpp/engine/src/sources.cpp`) and the
    Python engine (`vitalstream_py/sources/edf.py`).
-5. Medorama: the folder search (`recordings.rs` `find`) follows the engine's `kind_of`, so it
-   takes such a folder whole; `writes_into` must treat an `edf` folder as it treats a WFDB folder
-   (nothing written anywhere inside it). `identify.rs` `read` reads the identification fields of
-   every file and flags a folder whose files name different patients.
+5. db-builder: the folder search of `db-builder recordings` follows the engine's `kind_of`, so it
+   takes such a folder whole, as one `recordings` row. Medorama: `writes_into` must treat an `edf`
+   folder as it treats a WFDB folder (nothing written anywhere inside it).
 6. Remove the limit from edf.md, the user's guide and the administrator's guide.
 
 **Tests.** A synthetic folder of three EDF+ files made in `testdata/generate.py` (two consecutive
 hours and one overlapping file): `make parity` gives the same index from the three viewers; the
-channels, lanes, breaks and annotations are as expected; in Medorama, a row naming the folder
-makes one recording, and `tests/privacy.rs` shows no identification field from any of the files.
+channels, lanes, breaks and annotations are as expected; a db-builder database whose recording
+is the folder makes one recording in Medorama, and `tests/privacy.rs` shows no identification
+field from any of the files.
 
 **Done when** a folder of hourly EDF files opens in VitalStream, alone and in Medorama, as one
 recording with one time axis.
@@ -769,30 +630,28 @@ refused; an unknown name is refused with its reason. TOTP with fixed times.
 **Docs.** sign-in.md (the method and its settings), the administrator's guide (Settings, Choose the
 sign-in method), security.md (authentication, the deployment checklist).
 
-### F2 Per-study access lists
+### F2 Access by cohort
 
-**Why.** Every user sees every patient of a catalog, as their mode allows.
+**Why.** Grants are per database and per cohort: a user granted `view` on a database sees every
+one of its patients. A study often may see only its own patients of a shared database.
 
-**Design.** A **study** is a named set of patients (a cohort can define it) with a list of users. A
-user who is on some study's list sees only those studies' patients, everywhere: lists, pages,
-cohorts, exports, files and the gateway. Users on no list see every patient, as today, so a
-deployment opts in. The rule is enforced in one place: a patient filter that every query of
-patients goes through.
+**Design.** A grant on a database can be limited to a cohort's members: (user, `db:N`,
+permission, `cohort:M`). Such a user sees, of that database, only the patients of that cohort,
+everywhere: lists, pages, criteria, exports, files and the gateway. A grant without a cohort sees
+every patient, as today. The rule is enforced in one place: a patient filter that every query of a
+database's patients goes through.
 
 **Steps.**
-1. Migration pair: `studies`, `study_patients` and `study_users`.
-2. `src/users.rs`: `User.scope: Option<HashSet<i64>>`, loaded at sign-in and cached per data
-   version.
-3. One function, `patient::visible(c, user, id)`, and one filter, `patient::visible_ids`, used by
-   `list_core`, `summary`, `journey`, `report`, `detail`, `trends`, the file routes,
-   `cohorts::search` (results filtered), `cohorts::members`, the exports, `databases::rows` (rows
-   of other patients hidden), the `gateway` (recordings of visible encounters only) and `jobs`
-   (selections filtered).
-4. A test that walks every route as a scoped user, as `tests/privacy.rs` walks them for
-   identifiers, and finds no patient outside the scope.
+1. Schema pair: `grants.cohort` (nullable).
+2. `src/grants.rs`: `scope(c, user, database) -> Option<HashSet<i64>>`, cached per data version.
+3. One function, `patient::visible(c, user, id)`, and one filter used by `list.rs`, `summary`,
+   `journey`, `report`, `detail`, `trends`, the file routes, `cohorts::evaluate` (results
+   filtered), `cohorts::members`, the exports, the `gateway` and `jobs` (selections filtered).
+4. A test that walks every route as a limited user, as `tests/privacy.rs` walks them for
+   identifiers, and finds no patient outside the cohort.
 
-**Docs.** security.md (authorization; known limitations), the administrator's guide (Users, roles
-and the PHI permission).
+**Docs.** security.md (authorization; known limitations), the administrator's guide (users,
+grants), design/databases-only.md (grants).
 
 ### F3 Free-text de-identification
 
@@ -801,7 +660,7 @@ Privacy Mode replaces the patient's own names and dates, and lets an administrat
 
 **Design.** A local, rule-based layer first, with no external service: patterns for phone numbers,
 email addresses, URLs, IP addresses, street addresses, ID-like numbers and dates in every format
-that `deid.rs` knows; dictionaries of staff names (from the authors and providers in the catalog)
+that `deid.rs` knows; dictionaries of staff names (from the authors and providers the databases give)
 and of first names (a public list, shipped as data); and each match replaced by its placeholder.
 Then an optional model (a clinical de-identification NER model run through
 [D5](#d5-onnx-inference)'s ONNX runtime), off by default, measured on a public annotated corpus
@@ -820,7 +679,7 @@ their pixels. Privacy Mode sends them as they are and marks their tab with a war
 
 **Design.** Run OCR on the server (Tesseract as an external program, if installed) over the frame,
 compare the words with the patient's identifiers and the dictionary, and black out the regions
-that match in a copy, cached in the results folder. For ultrasound, blank the known header band by
+that match in a copy, cached in the database's workspace folder, encrypted. For ultrasound, blank the known header band by
 rule (`SequenceOfUltrasoundRegions` says where the image is; the rest may hold text). The marking
 stays when OCR is not available.
 
@@ -836,25 +695,26 @@ These items address what grows fastest in the measurements on 50,000 patients in
 
 ### S4 The Patient Catalog's text search in SQL
 
-**Why.** Browsing and filtering the list run in the database (`patient/list.rs`, `list_browse`),
-but a text search still reads every patient's identifiers, encounters and categories into memory
-(0.45 s for 50,000 patients).
+**Why.** The Patient Catalog reads each database's `persons.sqlite` (its persons and their
+summaries), and a text search matches every field of every patient in memory (`patient/list.rs`).
+It grows with the number of patients of every database a user may view.
 
-**Design.** A search table with one row per patient and field (`patient`, `field`, `value`, with
-the PHI fields marked), kept up to date by the importers and matched in SQL (`LIKE` on SQLite,
-`ILIKE` with `pg_trgm` on PostgreSQL). Identifier fields are searched only for users with the PHI
-permission, as now (`search::check`).
+**Design.** A search table in each database's `persons.sqlite` (`person_key`, `field`, `value`,
+with the PHI fields marked), written when the database is connected or refreshed and matched in
+SQL there (`LIKE`, with an FTS5 index when it helps); the answers of each database are merged by
+patient. Identifier fields are searched only for users with the PHI permission and `phi` on that
+database, as now (`search::check`).
 
 **Tests.** The list's search tests give the same answers, and the privacy tests pass (no PHI search
 without the permission).
 
 ### S5 Files in object storage
 
-**Why.** Recordings, ECGs and images are read from folders (`data_roots`). Several servers need
-them on shared storage, and cloud deployments keep them in object storage (S3, Azure Blob).
+**Why.** Recordings, ECGs and images are read from folders (`data_roots`), as the recording
+databases name them. Cloud deployments keep them in object storage (S3, Azure Blob).
 
 **Design.** A file layer (`src/files.rs`) with a local backend (today's code) and an object-storage
-backend (`s3://bucket/prefix/…` paths in the tables), which reads byte ranges for the viewers,
+backend (`s3://bucket/prefix/…` paths in the recording databases), which reads byte ranges for the viewers,
 under the same `data_roots` rule (allowed prefixes). It needs a decision first: which stores, and
 how Medorama authenticates to them (instance roles, keys in files).
 
@@ -869,7 +729,7 @@ how Medorama authenticates to them (instance roles, keys in files).
 **Design.** A small package (`medorama-client`, in `clients/python/`, pure Python with `requests`
 or `httpx`) that signs in (with a password or an API token, step 2), works with cohorts (search,
 create, members, exports as pandas DataFrames), reads a patient's entries and trends, and
-downloads files through the API, and so through the gate. It never reads the database. Privacy
+downloads files through the API, and so through the gate. It never reads a database itself. Privacy
 Mode is decided by the server, and the client shows what the server sends.
 
 **Steps.** (1) The package, with typed results (dataclasses) and errors taken from the API's
@@ -879,7 +739,7 @@ must also be accepted there, or the proxy must let token requests through; decid
 design. (3) A notebook example on the demo data, saved without outputs (the pre-commit hook
 checks).
 
-**Tests.** `pytest` against a real `medorama serve` on the demo catalog, started by the test.
+**Tests.** `pytest` against a real `medorama serve` on the demo databases, started by the test.
 
 ---
 
@@ -887,15 +747,13 @@ checks).
 
 | Order | Items | Why in this order |
 |---|---|---|
-| 1 | A5, A4, C2 | They finish connected databases on the page, and the rest of CLIF. |
-| 2 | F2 | Per-study access is what institutions most often require before real data, now that their sign-in works through a proxy. |
-| 3 | A6 | It hardens access to connected databases. |
-| 4 | A3, A7 (the trait, then FHIR) | They improve the scale and reach of connected databases. |
-| 5 | E7, E8 | They complete EDF for EEG monitoring and sleep studies. |
-| 6 | D2, D3, D1 | The toolbox and its first tools; encounter-scope actions use them. |
-| 7 | E2, E3, E1, E6 | Imaging and viewer completeness; recordings as they grow. |
-| 8 | B2, B4, B1 | Identity tools, as the data grow. |
-| 9 | F1 | For sites that cannot run an authenticating proxy, and a second factor for passwords. |
-| 10 | C1, B3 | Live hospital feeds. |
-| 11 | S4 | As the data grow ([performance.md](performance.md)). |
-| 12 | A2, A8, E4, E5, F3, F4, S5, D4, D5, G1 | As needs arise. |
+| 1 | F2 | Access limited to a study's patients is what institutions ask for before real data. |
+| 2 | H2 | Key managers without a command to write; the master key kept inside them. |
+| 3 | A3, A7 (the trait, then FHIR) | They improve the scale and reach of connected databases. |
+| 4 | E7, E8 | They complete EDF for EEG monitoring and sleep studies. |
+| 5 | D2, D3, D1 | The toolbox and its first tools; encounter-scope actions use them. |
+| 6 | E2, E3, E1, E6 | Imaging and viewer completeness; recordings as they grow. |
+| 7 | B4, B5 | Reproducible cohorts, as the databases change; ages at the events studied. |
+| 8 | F1 | For sites that cannot run an authenticating proxy, and a second factor for passwords. |
+| 9 | S4 | As the data grow ([performance.md](performance.md)). |
+| 10 | A2, A8, E4, E5, F3, F4, S5, D4, D5, G1 | As needs arise. |

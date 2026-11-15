@@ -7,8 +7,8 @@
      low values blue: the Okabe-Ito hues, told apart with every common colour-vision deficiency */
   --alarm: #c8102e; --alarm-soft: #fde8eb;
   --warn: #a84f00; --warn-soft: #fff3e3; --abn: #e69f00; --crit: #c25e00; --low: #0072b2; --low-soft: #e6f2fa;
-  --ok: #007a5a; --busy: #a87000;
-  --stale: #6a3d9a; --mark: #fff0b3; --shadow: 0 8px 28px rgba(16, 24, 40, .12); --band: #f5f8fc; --grid: #eef1f5; --hatch: #eef1f4;
+  --ok: #007a5a; --busy: #8f5f00; --on-busy: #ffffff;
+  --stale: #6a3d9a; --tip-warn: #f5a524; --mark: #fff0b3; --shadow: 0 8px 28px rgba(16, 24, 40, .12); --band: #f5f8fc; --grid: #eef1f5; --hatch: #eef1f4;
   /* categories: families of hues (monitoring blues, cardiology greens and teals, imaging violets,
      laboratory olives, treatments plums and slates, records greys).  Never red (alarms) nor
      amber and orange (abnormal and critical values), so that those stand out in any column */
@@ -24,8 +24,8 @@
   --muted: #a3adb9; --faint: #909ba8; --accent: #6ea8ff; --accent-text: #0b1220; --accent-soft: #16243a; --accent-line: #24406a;
   --alarm: #ff4d5e; --alarm-soft: #3d151b;
   --warn: #f5a524; --warn-soft: #3a2a10; --abn: #e6a23c; --crit: #ff8c2e; --low: #56b4e9; --low-soft: #13283a;
-  --ok: #3ccf9d; --busy: #e8b23a;
-  --stale: #b48ee8; --mark: #5a4a12; --shadow: 0 10px 40px rgba(0, 0, 0, .5); --band: #141b24; --grid: #1d2530; --hatch: #1b232d;
+  --ok: #3ccf9d; --busy: #e8b23a; --on-busy: #111111;
+  --stale: #b48ee8; --tip-warn: #f5a524; --mark: #5a4a12; --shadow: 0 10px 40px rgba(0, 0, 0, .5); --band: #141b24; --grid: #1d2530; --hatch: #1b232d;
   --c-enc: #3a4554; --c-icu: #3b9ae1; --c-vit: #7cc8f0; --c-ecg: #2fbf94; --c-holter: #5cc2b0; --c-echo: #85d6bd; --c-cath: #8a7fe0;
   --c-eeg: #6f9fd8; --c-sleep: #9aa8e6; --c-img: #a58ae6; --c-lab: #9dbf4f; --c-micro: #6fb0ad; --c-path: #c3a3de; --c-proc: #44aa66; --c-med: #b98ac9; --c-blood: #b39589;
   --c-support: #7d94d9; --c-dx: #7d8a9b; --c-obs: #8fb0cc; --c-note: #b8ab92; --c-allergy: #f5a524; --c-other: #5f6b79;
@@ -116,9 +116,10 @@ nav.ops + .right { margin-left: 4px; padding-left: 10px; border-left: 1px solid 
 header.top > * { flex: none; }
 header.top > nav { flex: 0 1 auto; }
 @media (max-width: 1340px) { header.top { gap: 10px; padding: 0 12px; } nav a { padding: 5px 7px; } nav .navsep { margin: 0 4px; } nav.ops a { padding: 5px 6px; } }
-@media (max-width: 1180px) { button.privacy .dl { display: none; } button.privacy { padding: 0 8px; } }
+/* Privacy Mode's switch keeps a word at every width: "Privacy" when the bar is narrow */
+@media (max-width: 1180px) { button.privacy .dl { display: none; } button.privacy .ds { display: inline; } button.privacy { padding: 0 8px; } }
 @media (max-width: 1100px) { .brand { display: none; } nav.ops a { padding: 5px 4px; font-size: 12px; } }
-.count { min-width: 16px; padding: 0 4px; border-radius: 8px; background: var(--busy); color: #111; font-size: 10px; line-height: 15px; text-align: center; font-weight: 600; }
+.count { min-width: 16px; padding: 0 4px; border-radius: 8px; background: var(--busy); color: var(--on-busy); font-size: 10px; line-height: 15px; text-align: center; font-weight: 600; }
 .count.alert { background: var(--warn); color: var(--bg); }
 .right { margin-left: auto; display: flex; gap: 10px; align-items: center; }
 .usermenu { position: relative; }
@@ -132,6 +133,13 @@ button.menu { text-align: left; border: 0; background: none; padding: 6px 8px; b
 button.privacy { height: 28px; padding: 0 10px; border-radius: 7px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; margin-right: 6px; cursor: pointer; }
 button.privacy:hover { color: var(--text2); border-color: var(--soft2); }
 button.privacy .sh { font-size: 12px; }
+button.privacy .ds { display: none; }
+/* out of Privacy Mode (users with the PHI permission): said beside the switch, in amber */
+.pill.ids { color: var(--warn); border-color: var(--warn); background: var(--warn-soft); white-space: nowrap; font-weight: 600; }
+/* in Privacy Mode: a line of the accent colour along the top of every screen, and the mode
+   named at the end of each screen's search line (main.js sets body.privacy) */
+body.privacy header.top { box-shadow: inset 0 3px 0 var(--accent); }
+body.privacy .sline::after { content: "Privacy Mode"; margin-left: auto; flex: none; padding: 1px 8px; border-radius: 6px; border: 1px solid var(--accent); color: var(--accent); background: var(--accent-soft); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
 .checks { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
 .privacy-offset input { width: 84px; }
 button.privacy.on { background: var(--text); color: var(--bg); border-color: var(--text); }
@@ -244,10 +252,19 @@ table.list .kinds { display: inline-flex; gap: 3px; align-items: center; color: 
 .jbody svg.jhead { position: sticky; top: 0; z-index: 1; background: var(--bg); }
 .jbody svg text { font: 10.5px Inter, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
 .jbody .lanehead { cursor: pointer; }
+/* a column's name: a button (Enter or Space shows or hides the column), its focus drawn */
+.jbody .lanehead .lhit { fill: transparent; stroke: none; }
+.jbody .lanehead:focus-visible .lhit { stroke: var(--accent); stroke-width: 2; }
+/* "Columns…": the journey's columns, shown or hidden, as a list of boxes to tick */
+.jcols { position: relative; margin: 0 6px 0 0; }
+.jcols summary { font-size: 12px; padding: 1px 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); list-style: none; }
+.jcols summary::-webkit-details-marker { display: none; }
+.jcolpop { position: absolute; right: 0; top: 26px; z-index: 6; min-width: 200px; max-height: 60vh; overflow: auto; display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 9px; box-shadow: var(--shadow); }
+.jcolpop label { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text2); white-space: nowrap; }
 .jbody .hit { cursor: pointer; }
 .tip { position: absolute; background: #18212b; color: #fff; border-radius: 7px; padding: 6px 9px; font-size: 11.5px; box-shadow: var(--shadow); white-space: nowrap; pointer-events: none; z-index: 5; }
 :root[data-theme="dark"] .tip { background: #2a3442; }
-.tip b { font-weight: 600; } .tip .bd { color: #ff9b93; font-weight: 600; } .tip small { color: #aeb8c4; display: block; }
+.tip b { font-weight: 600; } .tip .bd { color: var(--tip-warn); font-weight: 600; } .tip small { color: #aeb8c4; display: block; }
 
 /* the report */
 .col.rcol { min-width: 0; }
@@ -272,6 +289,8 @@ table.list .kinds { display: inline-flex; gap: 3px; align-items: center; color: 
 .it.sel { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
 .badge { font-size: 10.5px; font-weight: 600; padding: 0 5px; border-radius: 5px; background: var(--warn-soft); color: var(--warn); margin-left: 3px; white-space: nowrap; }
 .badge.lo { background: var(--low-soft); color: var(--low); }
+/* critical: told from abnormal by more than a shade of amber (its word, an outline) */
+.badge.crit { box-shadow: inset 0 0 0 1px var(--warn); }
 .trend { display: grid; grid-template-columns: minmax(120px, 1fr) 90px 180px; gap: 10px; align-items: center; padding: 7px 8px; margin: 0 -8px; border-radius: 8px; cursor: pointer; }
 .trend:hover { background: var(--sub); }
 .trend small { color: var(--muted); }
@@ -291,7 +310,7 @@ table.t { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 table.t th { text-align: left; font-weight: 500; color: var(--faint); font-size: 11.5px; padding: 4px 8px; }
 table.t td { padding: 5px 8px; border-top: 1px solid var(--line); vertical-align: middle; }
 table.t .num { text-align: right; }
-table.t .v { text-align: right; font-weight: 500; white-space: nowrap; } table.t .v.bad { color: var(--warn); font-weight: 600; } table.t .v.low { color: var(--low); font-weight: 600; }
+table.t .v { text-align: right; font-weight: 500; white-space: nowrap; } table.t .v.bad { color: var(--warn); font-weight: 600; } table.t .v.crit { color: var(--warn); font-weight: 750; text-decoration: underline; text-underline-offset: 2px; } table.t .v.low { color: var(--low); font-weight: 600; }
 table.t .u { color: var(--muted); white-space: nowrap; }
 dl.fields { display: grid; grid-template-columns: max-content 1fr; gap: 4px 16px; margin: 0; }
 dl.fields dt { color: var(--muted); } dl.fields dd { margin: 0; }
@@ -338,6 +357,7 @@ table.grid td.nowrap, table.grid th.nowrap { white-space: nowrap; }
 .dot.indexing { animation: pulse 1.2s ease-in-out infinite; }
 .dot.stale { background: transparent; border: 2px solid var(--stale); } .dot.failed, .dot.missing { background: var(--warn); }
 .dot.none { background: transparent; border: 1px dashed var(--faint); }
+.dot.file { background: transparent; border: 2px solid var(--faint); }
 @keyframes pulse { 50% { opacity: .35; } }
 .status { white-space: nowrap; } .status small { color: var(--muted); margin-left: 4px; }
 .bar { display: inline-block; width: 80px; height: 6px; border-radius: 3px; background: var(--soft); vertical-align: middle; overflow: hidden; }
@@ -351,6 +371,9 @@ dialog.sf::backdrop { background: rgb(0 0 0 / .35); }
 .sf-head { display: flex; align-items: center; }
 .sf-head h2 { font-size: 16px; margin: 0; flex: 1; }
 #sf-dir { flex: 1; min-width: 0; }
+dialog.pw { width: min(420px, calc(100vw - 32px)); }
+.pwl { display: flex; flex-direction: column; gap: 4px; color: var(--muted); }
+#pw-msg:empty { display: none; }
 .sf-list { overflow: auto; min-height: 160px; max-height: 50vh; border: 1px solid var(--line); border-radius: 8px; padding: 4px; }
 .sf-item button.menu { width: 100%; }
 .sf-file { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; cursor: pointer; }
@@ -375,11 +398,20 @@ dialog.sf::backdrop { background: rgb(0 0 0 / .35); }
   .cols { grid-template-columns: 280px 300px minmax(0, 1fr); }
   .rsplit { grid-template-columns: minmax(320px, 1fr) minmax(380px, 1fr); }
 }
+/* a tablet's width: the patient page scrolls, the journey and the report each keep room */
 @media (max-width: 1100px) {
-  .cols { grid-template-columns: 260px minmax(0, 1fr); }
+  #view-patient { overflow: auto; }
+  .cols { flex: none; grid-template-columns: 260px minmax(0, 1fr); grid-template-rows: minmax(320px, 55vh) minmax(420px, calc(100vh - 150px)); }
   .col.rcol { grid-column: 1 / -1; border-top: 1px solid var(--line); }
-  .rsplit { grid-template-columns: 1fr; }
+  .rsplit { grid-template-columns: minmax(280px, 1fr) minmax(320px, 1fr); }
   .cards { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) {
+  .cols { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(320px, 60vh) minmax(420px, auto); }
+  .col { border-right: 0; }
+  .col.info { border-bottom: 1px solid var(--line); }
+  .rsplit { grid-template-columns: 1fr; grid-template-rows: minmax(260px, 50vh) auto; }
+  .rlist { border-right: 0; border-bottom: 1px solid var(--line); }
 }
 
 /* sub-tabs (Import: databases and files, recordings) */
@@ -523,18 +555,9 @@ details.cohist td.what { white-space: normal; }
 .formgrid label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text2); }
 .formgrid small { font-size: 11px; }
 .formgrid textarea { font-size: 12px; }
-.clifbox { margin: 8px 0 10px; }
-.clifbox summary { cursor: pointer; color: var(--text2); font-size: 13px; }
 
-/* importing: the drop zone, the progress of imports (here and in the top bar) */
+/* progress blocks */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
-.dropzone { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; padding: 18px 16px; margin: 8px 0 10px;
-  border: 1.5px dashed var(--soft2); border-radius: 10px; background: var(--bg); transition: border-color .15s; }
-.dropzone:hover { border-color: var(--accent); }
-.dropzone.over { border-color: var(--accent); background: var(--accent-soft); }
-.dropzone:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: 2px; }
-.dropzone:has(input:disabled) { opacity: .6; cursor: default; }
-.dropzone label.like-link { cursor: pointer; }
 .like-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
 .running { margin: 10px 0; display: flex; flex-direction: column; gap: 8px; }
 .running h4 { margin: 0; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
@@ -559,3 +582,12 @@ tr.running td { color: var(--muted); font-style: italic; }
 .panel table.list th { position: sticky; top: 0; background: var(--bg); }
 .refleave { margin: 10px 0; } .refleave summary { cursor: pointer; color: var(--text2); }
 .refleave .table-wrap { margin-top: 6px; }
+
+/* a connected database's status: green online, grey offline (never red: red is for alarms) */
+.dbstat { display: inline-flex; align-items: center; gap: 5px; margin-right: 6px; }
+.dbstat .dot { background: var(--faint); }
+.dbstat.on .dot { background: var(--ok); }
+.dbstat.off { color: var(--text2); }
+tr.off td { color: var(--text2); }
+.dbtick { display: inline-flex; align-items: center; gap: 4px; margin-right: 12px; }
+.dbtick.off { color: var(--faint); }

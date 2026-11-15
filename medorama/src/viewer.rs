@@ -1,25 +1,29 @@
-//! The viewer the catalog runs for its users (docs/architecture.md, "Running separately and
+//! The viewer Medorama runs for its users (docs/architecture.md, "Running separately and
 //! together"): which one, starting it on first use, restarting it, stopping it.
 //!
 //! - **Which:** the setting `viewer`: `auto` (the default: the choice recorded by
-//!   tools/install-medorama in `medorama.viewer` next to the catalog's program, else
+//!   tools/install-medorama in `medorama.viewer` next to Medorama's program, else
 //!   the first of vitalstream-cpp, vitalstream-rs, vitalstream-py found), `cpp`, `rs`, `py`,
-//!   `none`, or the path of a viewer program.  With `viewer_url` set, the catalog links to that
+//!   `none`, or the path of a viewer program.  With `viewer_url` set, Medorama links to that
 //!   viewer instead and runs none.
 //! - **How:** as its own process on 127.0.0.1 and a free port, with a settings file the
-//!   catalog writes (`<home>/viewer/vitalstream.toml`: index folder, adapter folder, time zone,
+//!   Medorama writes (`<home>/viewer/vitalstream.toml`: cache folder, adapter folder, time zone,
 //!   folders), and a private password file (`<home>/viewer/auth.json`) whose signing key only
-//!   the catalog knows: the catalog's gateway signs every request it passes on, and the
+//!   Medorama knows: its gateway signs every request it passes on, and the
 //!   viewer's port is useless to anyone else.  Output goes to `<home>/viewer/viewer.log`.
 //! - **When:** at the first request for it; again if its process has ended, or if a request
 //!   cannot reach it and it fails its health check.  A request to a running viewer costs no
 //!   check and waits for no other request (only starting one is done one at a time), so that a
-//!   viewer busy with a large recording is never taken for a dead one.  The catalog stops it when
+//!   viewer busy with a large recording is never taken for a dead one.  Medorama stops it when
 //!   it stops itself (Ctrl-C, or a service manager's SIGTERM).  A viewer left running by an
 //!   earlier run that ended otherwise (`viewer.pid`) is stopped and a new one started, so that
-//!   the viewer always has the catalog's current settings and add-ons.
-//! - **Indexes and adapters:** the viewer uses the catalog's `index_dir` (every viewer writes
-//!   the index format of docs/index-format.md) and its `adapters_dir`.
+//!   the viewer always has Medorama's current settings and add-ons.
+//! - **Indexes and adapters:** the viewer reads the index stores of the recording databases
+//!   (index format 3, viewers/vitalstream/docs/index-format.md), whose paths and keys Medorama
+//!   writes on its standard input (`--keys-on-stdin`: at every start, then a line when a database
+//!   is connected or removed; never on a command line, in the environment or in a file); what it
+//!   indexes itself goes into its own store (`<workspace>/viewer/index.sqlite`, with a key of its
+//!   own).  It uses Medorama's `adapters_dir`.
 
 use crate::config::Config;
 use hmac::{Hmac, Mac};
@@ -28,9 +32,10 @@ use sha2::Sha256;
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// Viewers that can run under the catalog, in the order `auto` tries them.
+/// Viewers that can run under Medorama, in the order `auto` tries them.
 const FLAVORS: &[(&str, &str)] = &[("cpp", "vitalstream-cpp"), ("rs", "vitalstream-rs"), ("py", "vitalstream-py")];
 /// The file tools/install-medorama writes next to the programs.
 pub const CHOICE_FILE: &str = "medorama.viewer";
@@ -47,7 +52,7 @@ fn exe(name: &str) -> String {
 /// Folders to look in: next to this program (as called, e.g. `.venv/bin`, and as resolved,
 /// e.g. `target/release`), the clone's `.venv`, the C++ viewer's build folders and the
 /// workspace's `target/release`, then the `PATH`.
-fn search_dirs() -> Vec<PathBuf> {
+pub(crate) fn search_dirs() -> Vec<PathBuf> {
     let mut dirs = vec![];
     if let Some(a) = std::env::args_os().next() {
         let p = PathBuf::from(a);
@@ -101,17 +106,16 @@ pub fn choose(cfg: &Config) -> Result<Choice, String> {
     let dirs = search_dirs();
     let mut want = cfg.viewer.trim().to_string();
     if want.is_empty() || want == "auto" {
-        // the installer's choice, next to the catalog's program
+        // the installer's choice, next to Medorama's program
         want = installer_choice(CHOICE_FILE).unwrap_or_else(|| "auto".into());
     }
     match want.as_str() {
-        "none" => Err("no viewer is installed with the catalog (viewer = \"none\")".into()),
+        "none" => Err("no viewer is installed with Medorama (viewer = \"none\")".into()),
         "auto" => FLAVORS
             .iter()
             .find_map(|(f, n)| find_program(n, &dirs).map(|p| Choice { flavor: f.to_string(), program: p }))
             .ok_or_else(|| {
-                "no viewer found next to the catalog: install one with tools/install-medorama.sh --viewer cpp|rs|py"
-                    .into()
+                "no viewer found next to Medorama: install one with tools/install-medorama.sh --viewer cpp|rs|py".into()
             }),
         f if FLAVORS.iter().any(|(k, _)| *k == f) => {
             let name = FLAVORS.iter().find(|(k, _)| *k == f).unwrap().1;
@@ -147,12 +151,62 @@ fn now() -> u64 {
 struct Running {
     port: u16,
     child: Child,
+    /// The stores' lines to the viewer's standard input, written by a thread of their own (a
+    /// viewer that stops reading never blocks the server).
+    lines: Option<std::sync::mpsc::Sender<String>>,
 }
 
-/// What the catalog's page needs to know about the viewer.
+/// The thread that writes lines to a child's standard input until the sender is dropped or
+/// the child stops reading.
+fn pipe_writer(mut stdin: std::process::ChildStdin) -> std::sync::mpsc::Sender<String> {
+    use std::io::Write;
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        for line in rx {
+            if writeln!(stdin, "{line}").and_then(|_| stdin.flush()).is_err() {
+                break;
+            }
+        }
+    });
+    tx
+}
+
+/// The lines that give the viewer its index stores: `{"store": PATH, "key": HEX}` (`"own":
+/// true` for the one it writes), from Medorama's control store at each start.
+pub type StoreLines = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+
+/// The viewer's store lines now: each recording database's index store with its key, and the
+/// viewer's own store (`"own": true`).  A database whose key cannot be had is left out.
+pub fn store_lines(cfg: &Config, c: &crate::sql::Connection) -> anyhow::Result<Vec<String>> {
+    let line = |path: &Path, k: &crate::workspace::Key, own: bool| {
+        serde_json::json!({"store": path.to_string_lossy(), "key": crate::workspace::key_hex(k), "own": own})
+            .to_string()
+    };
+    let m = crate::workspace::loaded()?;
+    let mut out = vec![];
+    for s in crate::sources::list(c)? {
+        if !s.has_recordings() {
+            continue;
+        }
+        if let Ok(Some(k)) = crate::workspace::key(c, m, &crate::workspace::database_owner(s.id)) {
+            out.push(line(&crate::workspace::database_dir(cfg, s.id).join("index.sqlite"), &k, false));
+        }
+    }
+    let (own, k) = crate::workspace::viewer_store(cfg, c)?;
+    out.push(line(&own, &k, true));
+    Ok(out)
+}
+
+/// The line that makes the viewer forget a database's store (before it is removed).
+pub fn forget_line(cfg: &Config, database: i64) -> String {
+    let path = crate::workspace::database_dir(cfg, database).join("index.sqlite");
+    serde_json::json!({"forget": path.to_string_lossy()}).to_string()
+}
+
+/// What Medorama's page needs to know about the viewer.
 #[derive(Debug, Clone, Serialize)]
 pub struct Status {
-    /// `embedded` (the catalog runs a viewer), `link` (viewer_url), or `none`.
+    /// `embedded` (Medorama runs a viewer), `link` (viewer_url), or `none`.
     pub mode: String,
     pub flavor: Option<String>,
     pub running: bool,
@@ -161,12 +215,13 @@ pub struct Status {
     pub url: String,
 }
 
-/// The viewer under the catalog.
+/// The viewer under Medorama.
 pub struct Supervisor {
     choice: Result<Choice, String>,
     link: String,
     dir: PathBuf,
-    index_dir: PathBuf,
+    /// The viewer's cache folder (its own store is given on its standard input).
+    cache_dir: PathBuf,
     adapters_dir: PathBuf,
     timezone: String,
     data_roots: Vec<String>,
@@ -176,6 +231,8 @@ pub struct Supervisor {
     state: std::sync::Mutex<Option<Running>>,
     /// One start (and one recovery) at a time.
     starting: tokio::sync::Mutex<()>,
+    /// The stores' lines (set by the server: [`Supervisor::set_store_lines`]).
+    store_lines: std::sync::Mutex<Option<StoreLines>>,
 }
 
 impl Supervisor {
@@ -187,7 +244,7 @@ impl Supervisor {
             choice,
             link: cfg.viewer_url.clone(),
             dir,
-            index_dir: cfg.index_dir.clone(),
+            cache_dir: cfg.workspace_dir.join("viewer"),
             adapters_dir: cfg.adapters_dir.clone(),
             timezone: cfg.timezone.clone(),
             data_roots: cfg.data_roots.clone(),
@@ -195,10 +252,25 @@ impl Supervisor {
             secret,
             state: std::sync::Mutex::new(None),
             starting: tokio::sync::Mutex::new(()),
+            store_lines: std::sync::Mutex::new(None),
         }
     }
 
-    /// The private password file (created once, readable only by the catalog's account).
+    /// What lists the stores' lines, written to the viewer at each start.
+    pub fn set_store_lines(&self, f: StoreLines) {
+        *self.store_lines.lock().unwrap() = Some(f);
+    }
+
+    /// One line to the running viewer (a database connected: its store; removed: `forget`).
+    pub fn tell(&self, line: &str) {
+        if let Some(r) = self.state.lock().unwrap().as_ref() {
+            if let Some(w) = &r.lines {
+                let _ = w.send(line.to_string());
+            }
+        }
+    }
+
+    /// The private password file (created once, readable only by Medorama's account).
     fn auth_secret(dir: &Path) -> std::io::Result<Vec<u8>> {
         let file = dir.join("auth.json");
         if let Ok(t) = std::fs::read_to_string(&file) {
@@ -224,7 +296,7 @@ impl Supervisor {
         }
         let secret = random(32);
         // The viewers' password-file format (scrypt hash, salt, signing key).  The hash is of
-        // no password anyone knows: nobody signs in to this viewer with a password; the catalog
+        // no password anyone knows: nobody signs in to this viewer with a password; Medorama
         // signs requests with the key.
         let data = serde_json::json!({
             "scheme": "scrypt", "salt": hex(&random(16)), "hash": hex(&random(32)), "secret": hex(&secret),
@@ -293,7 +365,7 @@ impl Supervisor {
         s.read_exact(&mut head).is_ok() && &head[9..12] == b"200"
     }
 
-    /// The port of the viewer this catalog started, while its process runs (no request made).
+    /// The port of the viewer this Medorama started, while its process runs (no request made).
     fn running_port(&self) -> Option<u16> {
         let mut st = self.state.lock().unwrap();
         let r = st.as_mut()?;
@@ -316,7 +388,7 @@ impl Supervisor {
         if let Some(port) = self.running_port() {
             return Ok(port);
         }
-        // a viewer left by an earlier run of the catalog that did not stop it: its settings and
+        // a viewer left by an earlier run of Medorama that did not stop it: its settings and
         // add-ons may be out of date
         if let Some((pid, port)) = std::fs::read_to_string(self.dir.join("viewer.pid")).ok().and_then(|t| {
             let mut w = t.split_whitespace();
@@ -352,7 +424,7 @@ impl Supervisor {
             "# Written by medorama for the viewer it runs; rewritten at every start.\n\
              host = \"127.0.0.1\"\nport = {port}\ncache_dir = {}\nadapters_dir = {}\nauth_file = {}\ntimezone = {}\n\
              data_roots = [{}]\nrequire_password = true\n",
-            q(&self.index_dir),
+            q(&self.cache_dir),
             q(&self.adapters_dir),
             q(&self.dir.join("auth.json")),
             toml::Value::String(self.timezone.clone()),
@@ -369,7 +441,7 @@ impl Supervisor {
 
     fn start(&self, choice: &Choice) -> Result<u16, String> {
         std::fs::create_dir_all(&self.dir).map_err(|e| format!("{}: {e}", self.dir.display()))?;
-        let _ = std::fs::create_dir_all(&self.index_dir);
+        let _ = std::fs::create_dir_all(&self.cache_dir);
         let port = TcpListener::bind(("127.0.0.1", 0))
             .and_then(|l| l.local_addr())
             .map(|a| a.port())
@@ -378,15 +450,28 @@ impl Supervisor {
         let log_path = self.dir.join("viewer.log");
         let log = std::fs::File::create(&log_path).map_err(|e| format!("{}: {e}", log_path.display()))?;
         let err = log.try_clone().map_err(|e| e.to_string())?;
-        let mut child = Command::new(&choice.program)
+        let mut cmd = Command::new(&choice.program);
+        // none of Medorama's secrets in its environment (its keys come on its standard input)
+        for n in crate::actions::secret_env(std::env::vars_os().map(|(k, _)| k)) {
+            cmd.env_remove(n);
+        }
+        let mut child = cmd
             .arg("--config")
             .arg(&settings)
             .arg("--no-browser")
-            .stdin(Stdio::null())
+            .arg("--keys-on-stdin")
+            .stdin(Stdio::piped())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(err))
             .spawn()
             .map_err(|e| format!("cannot start {}: {e}", choice.program.display()))?;
+        // its stores, with their keys, before anything is asked of it
+        let lines = child.stdin.take().map(pipe_writer);
+        if let (Some(w), Some(f)) = (&lines, self.store_lines.lock().unwrap().clone()) {
+            for l in f() {
+                let _ = w.send(l);
+            }
+        }
         let t0 = Instant::now();
         while t0.elapsed() < START_TIMEOUT {
             if let Ok(Some(status)) = child.try_wait() {
@@ -400,7 +485,7 @@ impl Supervisor {
             }
             if self.healthy(port) {
                 let _ = std::fs::write(self.dir.join("viewer.pid"), format!("{} {port}\n", child.id()));
-                *self.state.lock().unwrap() = Some(Running { port, child });
+                *self.state.lock().unwrap() = Some(Running { port, child, lines });
                 return Ok(port);
             }
             std::thread::sleep(Duration::from_millis(200));
@@ -415,7 +500,7 @@ impl Supervisor {
         ))
     }
 
-    /// Stop the viewer this catalog started.
+    /// Stop the viewer this Medorama started.
     pub fn stop(&self) {
         if let Some(mut r) = self.state.lock().unwrap().take() {
             let _ = r.child.kill();
@@ -464,7 +549,7 @@ mod tests {
         s.choice = Ok(Choice { flavor: "custom".into(), program: PathBuf::from("/bin/sleep") });
         let port = TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
         let child = Command::new("/bin/sleep").arg("30").spawn().unwrap();
-        *s.state.lock().unwrap() = Some(Running { port, child });
+        *s.state.lock().unwrap() = Some(Running { port, child, lines: None });
         (dir, s, port)
     }
 

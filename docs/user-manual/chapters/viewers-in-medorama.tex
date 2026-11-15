@@ -21,14 +21,13 @@ and its privacy gate, and tells them whose file it is.
 \midrule
 \ui{VitalStream} & Waveform recordings (ICU monitoring, Holter, EEG, sleep studies): every
   channel, vital signs, alarms or annotations and breaks on one time axis, from days down to
-  single samples & \ui{View} by a recording; a recording's entry on the patient page, at its
-  moment; a database's row; the tab itself \\
+  single samples & \ui{View} by a recording in the Databases tab's \ui{Recordings}; a
+  recording's entry on the patient page, at its moment; the tab itself \\
 \ui{ECG} & 12-lead ECGs on standard paper (3 $\times$ 4 with a rhythm strip, 6 $\times$ 2,
-  12 $\times$ 1), with calipers, and their report & \ui{Open in ECG} on the patient page; a
-  database's row \\
+  12 $\times$ 1), with calipers, and their report & \ui{Open in ECG} on the patient page \\
 \ui{PACS} & DICOM studies (echo and angiography loops at their frame rate, CT, MR, X-ray,
   reports), videos, pictures and PDFs, with calipers in millimeters & \ui{Open in PACS} on the
-  patient page; a database's row \\
+  patient page \\
 \bottomrule
 \end{tabularx}
 \end{table}
@@ -41,10 +40,8 @@ A file opens in its viewer from any of the places where Medorama shows it:
 \item \textbf{the patient's page} (\cref{chap:patients}): \ui{Open in ECG} and \ui{Open in PACS}
   in the detail of an ECG, an echo loop, an image or a series; for a recording, \ui{Open in
   VitalStream} (at its start) or a click on its overview (at that moment);
-\item \textbf{the Databases tab} (\cref{chap:databases-tab}): the link by a row's file
-  (\ui{VitalStream}, \ui{ECG}, \ui{PACS});
-\item \textbf{an encounter's panel} and the recordings of \ui{Import}: \ui{View} by a recording,
-  which opens it whole.
+\item \textbf{the Databases tab's \ui{Recordings}} (\cref{sec:databases-tab-recordings}):
+  \ui{View} by a recording, which opens it whole in VitalStream.
 \end{itemize}
 
 The viewer's tab then shows the file. Each viewer keeps its state while the user goes to other
@@ -55,8 +52,9 @@ The \ui{VitalStream} tab can be opened directly: it shows the viewer's own page,
 \ui{Open record\dots} and \ui{Open multiple records\dots} dialogs, limited by the gateway's
 rules (\cref{sec:viewers-in-medorama-gateway}).
 
-\paragraph{Which viewer shows which file.} The server decides, from the item's category
-(\cref{chap:patients}) and the file's kind:
+\paragraph{Which viewer shows which file.} Every file is a recording of a recording database
+(\cref{sec:recordings-databases}). The server decides, from the recording's category
+(\cref{sec:patients-categories}) and the file's kind:
 \begin{itemize}
 \item the recordings of the ICU, Holter, EEG and Sleep categories open in VitalStream;
 \item the files of the ECG category (WFDB records, GE MUSE XML, DICOM ECGs, EDF and BDF files,
@@ -74,7 +72,7 @@ the ECG viewer and framed in the detail, or a picture, a PDF or a video.
   seconds);
 \item \code{\#/ecg?src=\dots}: an ECG file; \code{\#/pacs?src=\dots}: one file;
   \code{\#/pacs?list=\dots}: a folder, its files listed by the API;
-\item and, when the file was opened from a patient's page or a database's row,
+\item and, when the file was opened from a patient's page,
   \code{patient=\dots\&entry=\dots}: whose file it is (\cref{sec:viewers-in-medorama-context}).
 \end{itemize}
 Back and forward move between the patient's page and the viewers.
@@ -89,7 +87,7 @@ parts:
 \item \textbf{who}: the patient as the user may see them (the name, the patient ID, the MRN,
   sex and age for users with the PHI permission out of Privacy Mode; in Privacy Mode, the
   placeholders and the pseudonym), never cut short;
-\item \textbf{what}: the entry's title, its date and time, and its encounter;
+\item \textbf{what}: the entry's title, and its date and time;
 \item \textbf{where among the patient's files}: ``3 of 4'', the place of this file among the
   patient's files of that kind, in time order.
 \end{itemize}
@@ -124,23 +122,29 @@ path, none, or a viewer running elsewhere. By default it is the one the installe
 \begin{itemize}
 \item \textbf{It starts at first use}, at the first \ui{View} or the first visit of the tab
   (``Starting the viewer\dots''), as its own process on 127.0.0.1 and a free port. It is
-  restarted if it stops, and stopped with the catalog. If it cannot start, the tab says why
+  restarted if it stops, and stopped with Medorama. If it cannot start, the tab says why
   (``The viewer cannot start: \dots'').
 \item \textbf{Its settings} are a file that Medorama writes at each start
-  (\file{<home>/viewer/vitalstream.toml}). It names the catalog's index folder (so that every
-  viewer writes and reads the same index), its adapter folder, its time zone and
-  \code{data\_roots}, and requires a password, so that a viewer built without password support
-  refuses to run under the catalog. A user's own \file{vitalstream.toml} cannot conflict with
+  (\file{<home>/viewer/vitalstream.toml}). It names its adapter folder (Medorama's), its time zone and \code{data\_roots}, and requires a password, so that a viewer
+  built without password support refuses to run under Medorama. A user's own \file{vitalstream.toml} cannot conflict with
   these settings. The limits on a folder of records (\cref{sec:vitalstream-limits}) are
   VitalStream settings; Medorama has no such settings, and indexes a recording's folder within
   the defaults.
-\item \textbf{Its password} has a signing key that only the catalog knows. The catalog signs
-  every request it passes on, users never see the viewer's sign-in, and the viewer's port is of
+\item \textbf{Its indexes.} Medorama starts the viewer with \opt{-{}-keys-on-stdin} and writes on
+  its standard input one line of JSON per index store: each recording database's store,
+  \file{<workspace>/db-NNNN/index.sqlite}, with that database's key, and the viewer's own store,
+  \file{<workspace>/viewer/index.sqlite}, with a key of its own (\code{"own": true}), where the
+  viewer writes what it indexes itself. It writes them at each start, again when a database is
+  connected, and a line that makes the viewer forget a store before its database is removed. The
+  viewer keeps the keys in memory only; a key is never on a command line, in the environment, in
+  a file or in a log (\cref{sec:formats-reference-writing}).
+\item \textbf{Its password} has a signing key that only Medorama knows. Medorama signs every
+  request it passes on, users never see the viewer's sign-in, and the viewer's port is of
   no use to anyone else on the machine.
-\item \textbf{No viewer.} When none is installed beside the catalog, or the setting is
+\item \textbf{No viewer.} When none is installed beside Medorama, or the setting is
   \code{none}, the \ui{VitalStream} tab and the \ui{View} buttons are grayed out, with the
   reason in their tooltip (``No viewer is linked to the catalog'').
-\item \textbf{A viewer elsewhere} (the setting \code{viewer\_url}). The catalog runs no viewer,
+\item \textbf{A viewer elsewhere} (the setting \code{viewer\_url}). Medorama runs no viewer,
   the tab is absent, and \ui{View} opens that viewer in a browser tab of its own.
 \end{itemize}
 
@@ -148,7 +152,7 @@ path, none, or a viewer running elsewhere. By default it is the one the installe
 \label{sec:viewers-in-medorama-gateway}
 
 The VitalStream viewer is reached only through Medorama, at \file{/viewer/}, so that users have
-one address and one sign-in, and browsing is controlled. After the catalog's sign-in, Medorama's
+one address and one sign-in, and browsing is controlled. After Medorama's sign-in, its
 \emph{gateway} decides each request by a rule (\cref{tab:viewers-in-medorama-gateway}). Anything
 else, the viewer's own \code{login} and \code{logout} included, is refused (default deny); so is
 any endpoint that a newer viewer may add, until it is given a rule. The gateway's place in the
@@ -169,14 +173,14 @@ architecture is described in \cref{sec:architecture-gateway}.
 \endfoot
 The page and its files & Passed & Passed \\
 \code{GET api/v1/config} & As the viewer answers & Its places, start and home folders point
-  into the folders of the catalog's recordings \\
+  into the folders of the user's recordings \\
 \code{GET api/v1/browse}, \code{complete} (the Open dialogs) & Inside \code{data\_roots}
-  (anywhere when it is empty) & Only folders that lead to recordings in the catalog, listing
-  only those recordings \\
+  (anywhere when it is empty) & Only folders that lead to the user's recordings, listing only
+  those recordings \\
 \code{GET api/v1/scan} (what a folder of records holds, before it opens) & Inside
-  \code{data\_roots} & A recording in the catalog; refused in Privacy Mode \\
-\code{POST api/v1/open} & A recording inside \code{data\_roots} & A recording in the
-  catalog \\
+  \code{data\_roots} & One of the user's recordings; refused in Privacy Mode \\
+\code{POST api/v1/open} & A recording inside \code{data\_roots} & One of the user's
+  recordings \\
 \code{POST api/v1/cancel} (stop an index being built) & Datasets the user opened through the
   gateway & The same \\
 \code{GET api/v1/datasets/\{key\}\dots} (windows, vital signs, markers) & Datasets the user
@@ -184,10 +188,14 @@ The page and its files & Passed & Passed \\
 Anything else & Refused & Refused \\
 \end{xltabular}
 
+A user's recordings, for analysts and viewers, are the recordings of the recording databases on
+which they hold the \code{view} grant (\cref{sec:users-privacy-grants}); a recording of a
+database removed, or no longer granted, can no longer be opened.
+
 \begin{itemize}
 \item Every recording opened is written to the audit log (\code{view}).
 \item Paths are compared after resolving symbolic links, as the viewers do.
-\item The viewer's page may be framed only by the catalog's own page.
+\item The viewer's page may be framed only by Medorama's own page.
 \item The viewer receives paths and recordings, never identifiers.
 \item A request body over 1\,MiB is answered with \code{413}. A \code{POST api/v1/open} whose
   body is not sent as \code{application/json} is answered with \code{415}, and one whose body is
@@ -196,9 +204,10 @@ Anything else & Refused & Refused \\
 
 The ECG and PACS viewers need no gateway. They are static pages that Medorama serves (at
 \file{/viewers/ecg/} and \file{/viewers/pacs/}), and they read only the files of an entry,
-through \code{api/v1/patients/\{id\}/file/\{item\}}. Medorama checks these requests like every
-other request: only the patient's file, inside the data roots, and, for a WFDB header, only the
-signal files it names, are served (\cref{chap:http-api}).
+through \code{api/v1/patients/\{id\}/file/\{item\}}, where \code{item} is the recording's
+number (\cref{sec:recordings-numbers}). Medorama checks these requests like every other request:
+only a recording of that patient, in a database the user may view, inside the data roots, and,
+for a WFDB header, only the signal files it names, are served (\cref{chap:http-api}).
 
 \section{Privacy Mode in the viewers}
 \label{sec:viewers-in-medorama-privacy}
@@ -230,7 +239,7 @@ in \cref{chap:protecting} and \cref{chap:security}.
 \section{When the data change}
 \label{sec:viewers-in-medorama-changes}
 
-When a database is deleted, in this browser or in another, every open page learns of it within
+When a database is removed, in this browser or in another, every open page learns of it within
 seconds (\cref{chap:page}). An ECG or PACS tab whose file is gone closes and says so (``What
 this ECG tab showed was removed from the catalog (its database was deleted).''), and the tab is
 dimmed again.

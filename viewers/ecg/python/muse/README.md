@@ -40,6 +40,7 @@ ecg = read_muse('ECG.xml')   # {name, fs, leads: [{name, units: 'uV', samples}],
 
 | Part | Read from |
 |---|---|
+| Encoding | The byte order mark's (UTF-8, UTF-16LE, UTF-16BE), whatever the XML declaration says; else UTF-16 without a mark, or the encoding the declaration names. A declaration of UTF-16 in 8-bit text is read as UTF-8. The same as the ECG viewer reads it. |
 | Leads | The rhythm waveform (`Waveform` of type `Rhythm`): base64 little-endian int16 samples, multiplied by `LeadAmplitudeUnitsPerBit`. Leads III, aVR, aVL and aVF are derived from I and II, as the carts derive them. |
 | Sampling rate | `SampleBase` × 10^`SampleExponent`. A base that is not a positive number is taken as 500 Hz, and an exponent beyond ±6 is refused, as the ECG viewer reads it. Numbers that are not finite (`NaN`) are not read. |
 | Details | `TestDemographics`: the acquisition time, device, site, location, reason, status and filters; the patient's age and sex. |
@@ -124,5 +125,5 @@ patient and invented signals. `synthetic_muse.json` is this reader's output, aga
 JavaScript reader's tests compare.
 
 The reader was written from the format, independently of GE's GPL-licensed `musexmlex.py`. It
-is licensed, like the rest of the repository, under the PolyForm Noncommercial License 1.0.0
-([LICENSE](../../../../LICENSE), [COMMERCIAL.md](../../../../COMMERCIAL.md)).
+is licensed, like the rest of the repository's software, under the PolyForm Noncommercial
+License 1.0.0 ([LICENSE](../../../../LICENSE), [COMMERCIAL.md](../../../../COMMERCIAL.md)).

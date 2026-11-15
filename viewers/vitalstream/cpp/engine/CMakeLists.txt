@@ -9,9 +9,9 @@ else()
   set(_vs_wfdb src/sources_wfdb_none.cpp)
 endif()
 add_library(vs_engine STATIC
-  src/adapters.cpp src/common.cpp src/dataset.cpp src/index.cpp src/sources.cpp src/sources_edf.cpp
+  src/adapters.cpp src/common.cpp src/dataset.cpp src/index.cpp src/sources.cpp src/sources_edf.cpp src/store.cpp
   src/sources_wfdb_files.cpp ${_vs_wfdb})
 target_include_directories(vs_engine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(vs_engine PRIVATE VS_ENGINE_VERSION="${PROJECT_VERSION}")
-target_link_libraries(vs_engine PUBLIC vs_core)
+target_link_libraries(vs_engine PUBLIC vs_core vs_sqlite)
 vs_warnings(vs_engine)

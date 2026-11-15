@@ -1,0 +1,88 @@
+{
+ "waveforms": {
+  "ecg": {
+   "renderings": {
+    "n": 684,
+    "min": 0.207,
+    "median": 0.366,
+    "p95": 0.53,
+    "max": 0.672
+   },
+   "source_windows": 204
+  },
+  "abp": {
+   "renderings": {
+    "n": 32,
+    "min": 0.193,
+    "median": 0.535,
+    "p95": 0.814,
+    "max": 0.861
+   },
+   "source_windows": 17,
+   "note": "model renderings (no pulse of a recording is kept): for reference",
+   "reference_sources": {
+    "n": 8,
+    "min": 0.173,
+    "median": 0.202,
+    "p95": 0.602,
+    "max": 0.695
+   }
+  },
+  "pleth": {
+   "renderings": {
+    "n": 32,
+    "min": 0.256,
+    "median": 0.817,
+    "p95": 0.902,
+    "max": 0.919
+   },
+   "source_windows": 58,
+   "note": "model renderings (no pulse of a recording is kept): for reference",
+   "reference_sources": {
+    "n": 29,
+    "min": 0.316,
+    "median": 0.508,
+    "p95": 0.781,
+    "max": 0.944
+   }
+  }
+ },
+ "wave_threshold": 0.9,
+ "image_threshold": 0.9,
+ "images": {
+  "same_geometry_raw": {
+   "n": 98,
+   "min": 0.545,
+   "median": 0.722,
+   "p95": 0.872,
+   "max": 0.879
+  },
+  "same_geometry_fine": {
+   "n": 98,
+   "min": -0.01,
+   "median": 0.025,
+   "p95": 0.074,
+   "max": 0.079
+  },
+  "all_sources_64": {
+   "n": 816,
+   "min": -0.058,
+   "median": 0.274,
+   "p95": 0.734,
+   "max": 0.835
+  },
+  "reference_other_collections_64": {
+   "n": 360,
+   "min": 0.458,
+   "median": 0.818,
+   "p95": 0.889,
+   "max": 0.893
+  },
+  "equal": 0
+ },
+ "strings": {
+  "files": 36,
+  "source_strings": 4752,
+  "files_with_a_source_string": 0
+ }
+}

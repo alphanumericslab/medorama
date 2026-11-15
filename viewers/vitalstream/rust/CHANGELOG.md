@@ -1,6 +1,43 @@
 # Changelog: vitalstream-rs
 
-## Unreleased
+## 0.2.0 (2026-11-15, pre-release)
+
+- `viewers/vitalstream/install.sh` and `install.ps1` show the license terms and go on only if
+  they are accepted (`y` or `yes`; `--accept-license`, `-AcceptLicense` or
+  `MEDORAMA_ACCEPT_LICENSE=yes` in scripts). The documentation (`docs/`) is now under
+  CC BY-NC-ND 4.0; the software's license is unchanged.
+- With the engine's review fixes (libs/engine/CHANGELOG.md): WFDB headers without a number of
+  samples, multi-frequency signals at their own rates, leading records without a start time, EDF
+  dates checked against the month, window thinning that keeps long pieces, envelope reads not held
+  up by packing.
+- **The page:** a channel's unit is shown as the engine states it: `adu` only for an uncalibrated
+  signal (gain 0), nothing for a calibrated signal whose source states no unit (it showed `adu`
+  for both) (`web/js/text.js` `channelMeta`, `tests/web/text.test.mjs`).
+- **Index format 3, the index store** (viewers/vitalstream/docs/index-format.md, "Version 3: the
+  index store"): the viewer keeps its indexes in one SQLite database, `cache_dir/index.sqlite`,
+  encrypted with SQLCipher 4 when the new setting `index_key_file` names a file of 64 hex digits
+  (a raw key, SQLCipher 4's defaults), the same stores and rows as the C++ and Python viewers
+  (keys of version 3; `store`, `indexes`, `arrays` and `chunks` tables, 4096 values per chunk in
+  a new store). An index is built as the version 2 files in a private folder next to the store
+  (`index.tmp/`), then packed in one transaction: an index of the key written by the same engine
+  is kept, any other replaced. Envelopes are read by range, a chunk at a time (16 chunks of an
+  array kept); markers and vital signs whole. An adapter's recording loaded from a store gets a
+  private folder holding only its `meta.json`, removed when the index is closed. What a killed
+  program left in `index.tmp/` is removed once untouched for a day. The engine's new module
+  `store.rs` (`Store`, `index::build_into_store`) is shared with Medorama. `--index PATH` writes
+  into the own store and prints `indexed PATH -> …/index.sqlite (KEY)`.
+- `--keys-on-stdin`: launched by Medorama, the viewer reads its stores and their keys on standard
+  input, one JSON line each (`{"store": PATH, "key": HEX}`, `"own": true` for the store it
+  writes; `{"forget": PATH}`), looks recordings up in the stores given, then in its own, and
+  forgets every store when standard input closes. Keys are kept in memory only; a line that
+  cannot be used is reported without being repeated.
+- New dependency: rusqlite 0.42 with `bundled-sqlcipher-vendored-openssl` (SQLCipher and
+  OpenSSL compiled from source), for encrypted and plain stores: the build needs a C compiler
+  and Perl ([docs/building.md](../../../docs/building.md)).
+- Tests: the engine's `tests/store.rs` (a store answers as a folder does; without its key a store
+  is not read; an index kept, replaced and removed whole; a store of another format refused;
+  what a killed program left removed a day later) and the viewer's `stores_and_keys_on_a_pipe`.
+  `tests/parity/index_parity.py` compares the viewers' stores.
 
 - Documentation: the speed of the three viewers, measured on WFDB (with `.dat` and `.mat`
   files), EDF, BDF and `.Stp` recordings, indexing and reading, in place of the estimates ("about

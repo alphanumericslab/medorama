@@ -47,6 +47,18 @@ pub(super) fn value_text(it: &It) -> String {
     }
 }
 
+/// [`value_text`] as a session may read it: without the text when it is free text and the
+/// session may not read free text (Privacy Mode withholding the text of notes and reports).
+pub(super) fn shown_value(it: &It, read_notes: bool) -> String {
+    if read_notes || !is_free_text(it) {
+        return value_text(it);
+    }
+    match it.num {
+        Some(v) => format!("{} {}", fmt_num(v), it.unit).trim().to_string(),
+        None => String::new(),
+    }
+}
+
 /// H, L or critical after a value outside its range.
 pub(super) fn flag_mark(it: &It) -> &'static str {
     match it.level {
@@ -60,8 +72,7 @@ pub(super) fn flag_mark(it: &It) -> &'static str {
 
 /// Build the report's entries from items and recordings; `keep`: only those items.
 pub(super) fn entries(
-    c: &Connection,
-    patient: i64,
+    d: &Data,
     items: &[It],
     read_notes: bool,
     privacy: bool,
@@ -90,7 +101,7 @@ pub(super) fn entries(
             let summary = shown
                 .iter()
                 .take(4)
-                .map(|i| format!("{} {}{}", i.name, value_text(i), flag_mark(i)))
+                .map(|i| format!("{} {}{}", i.name, shown_value(i, read_notes), flag_mark(i)))
                 .collect::<Vec<_>>()
                 .join(" · ");
             (title, summary)
@@ -133,11 +144,7 @@ pub(super) fn entries(
             } else {
                 format!("{} · {}", first.name, first.code)
             };
-            let mut s = value_text(first);
-            if !read_notes && first.category == "note" {
-                s.clear();
-            }
-            (title, s)
+            (title, shown_value(first, read_notes))
         };
         let times: Vec<f64> = its.iter().filter_map(|i| i.time).collect();
         out.push(Entry {
@@ -150,38 +157,31 @@ pub(super) fn entries(
             abnormal,
             encounter: first.encounter,
             snippet: None,
-            attachment: its.iter().any(|i| i.file),
+            attachment: its.iter().any(|i| i.file.is_some()),
         });
     }
-    for (rid, a, b, enc, cat) in recordings_of(c, patient)? {
-        if recs.is_some_and(|r| !r.contains(&rid)) {
+    for r in &d.recordings {
+        if d.attached.contains(&r.id) || recs.is_some_and(|x| !x.contains(&r.id)) {
             continue;
         }
-        let r = crate::recordings::get(c, rid)?;
-        let Some(r) = r else { continue };
-        let place = [r.unit.as_str(), r.bed.as_str()]
-            .iter()
-            .filter(|s| !s.is_empty())
-            .copied()
-            .collect::<Vec<_>>()
-            .join(" bed ");
+        let (a, b) = (r.t_start, r.t_end);
         let dur = match (a, b) {
             (Some(a), Some(b)) => duration(b - a),
             _ => String::new(),
         };
         out.push(Entry {
-            key: format!("rec:{rid}"),
+            key: format!("rec:{}", r.id),
             time: a,
             end: b,
-            category: cat.clone(),
-            title: recording_title(&cat).into(),
-            summary: [place, dur, r.format.clone()]
+            category: r.category.clone(),
+            title: recording_title(&r.category).into(),
+            summary: [r.label.clone(), dur, r.format.clone()]
                 .into_iter()
                 .filter(|s| !s.is_empty())
                 .collect::<Vec<_>>()
                 .join(" · "),
             abnormal: 0,
-            encounter: Some(enc),
+            encounter: visit_of_recording(d, r),
             snippet: None,
             attachment: true,
         });
@@ -286,15 +286,16 @@ pub(super) fn duration(seconds: f64) -> String {
     }
 }
 
-pub fn report(c: &Connection, user: &User, id: i64, q: &str) -> anyhow::Result<Report> {
-    patient_exists(c, id)?;
+pub fn report(c: &Connection, cfg: &Config, user: &User, id: i64, q: &str) -> anyhow::Result<Report> {
+    patient_exists(c, user, id)?;
     // notes' text: with the PHI permission, or in a de-identified session that lets notes through
     let read_notes = user.reads_notes();
-    let items = items_of(c, id)?;
-    // notes' text only for the PHI permission: without it, notes are found by name only
-    let visible = |it: &It| read_notes || it.category != "note";
+    let mut d = load(cfg, c, user, id)?;
+    let items = std::mem::take(&mut d.items);
+    // free text only for who may read it: else entries are found by name only
+    let visible = |it: &It| read_notes || !is_free_text(it);
     if q.trim().is_empty() {
-        let mut e = entries(c, id, &items, read_notes, user.privacy, None, None)?;
+        let mut e = entries(&d, &items, read_notes, user.privacy, None, None)?;
         if !read_notes {
             for x in e.iter_mut().filter(|x| x.category == "note") {
                 x.summary.clear();
@@ -303,79 +304,63 @@ pub fn report(c: &Connection, user: &User, id: i64, q: &str) -> anyhow::Result<R
         return Ok(Report { entries: e, counts: vec![], terms: vec![], fuzzy: vec![] });
     }
     let (words, cmps) = search_words(q);
-    let ids: HashSet<i64> = items.iter().map(|i| i.id).collect();
     let shown_ids: HashSet<i64> = items.iter().filter(|i| visible(i)).map(|i| i.id).collect();
     // in Privacy Mode, an entry is found by its text as the session is shown it (gate.rs): not by
     // the patient's names, identifiers or staff it does not show
-    let gate = if user.privacy && !user.phi { Some(crate::search::build_gate(c)?.for_patient(id)) } else { None };
-    let identity = gate.as_ref().map(|_| crate::gate::Restricted::identity_words(c, id));
-    let shown_text: HashMap<i64, String> = match (&gate, &identity) {
+    let gate = if user.privacy && !user.phi { Some(crate::search::build_gate(c, cfg)?.for_patient(id)) } else { None };
+    let identity = gate.as_ref().map(|_| crate::gate::Restricted::identity_words(c, cfg, id));
+    // (name, text) of each entry as shown, and all its fields as one, lower case
+    let shown: HashMap<i64, (String, String, String)> = match (&gate, &identity) {
         (Some(g), Some((names, birth))) => items
             .iter()
             .map(|it| {
-                let text = if it.category == "note" { g.note(&it.text, names, birth) } else { g.text(&it.text) };
-                let t = [g.text(&it.name), g.text(&it.code), text, g.text(&it.unit), g.text(&it.service)].join(" ");
-                (it.id, t.to_lowercase())
+                let name = g.note(&it.name, names, birth);
+                let text = if visible(it) { g.note(&it.text, names, birth) } else { String::new() };
+                let all =
+                    [name.clone(), g.text(&it.code), text.clone(), g.text(&it.unit), g.text(&it.service)].join(" ");
+                (it.id, (name, text, all.to_lowercase()))
             })
             .collect(),
         _ => HashMap::new(),
     };
+    // what a search reads of an entry: as shown in Privacy Mode, else as it is
+    let name_of = |it: &It| shown.get(&it.id).map_or(it.name.clone(), |s| s.0.clone());
+    let text_of = |it: &It| shown.get(&it.id).map_or(it.text.clone(), |s| s.1.clone());
     let mut keep: HashSet<i64> = HashSet::new();
     let mut recs: HashSet<i64> = HashSet::new();
     let mut highlight: Vec<String> = vec![];
     let mut fuzzy = vec![];
-    let patient_recs = recordings_of(c, id)?;
+    let patient_recs = &d.recordings;
     for w in &words {
         let w = w.to_lowercase();
         if let Some(cat) = categories::named(&w) {
             keep.extend(items.iter().filter(|i| i.category == cat).map(|i| i.id));
-            recs.extend(patient_recs.iter().filter(|r| r.4 == cat).map(|r| r.0));
+            recs.extend(patient_recs.iter().filter(|r| r.category == cat).map(|r| r.id));
             continue;
         }
         let mut hits: HashSet<i64> = HashSet::new();
-        // a connected database's entries: by their text, here
-        for it in items.iter().filter(|i| i.live.is_some()) {
+        for it in &items {
             if [&it.name, &it.code, &it.text, &it.unit].iter().any(|f| f.to_lowercase().contains(&w)) {
                 hits.insert(it.id);
             }
         }
-        if w.chars().count() >= 3 {
-            // the patient's items only (not the whole catalog's text, then filtered)
-            let (cond, phrase) = c.text_contains("item_text", 1, &w);
-            let mut st = c.prepare(&format!(
-                "SELECT rowid FROM item_text WHERE {cond} AND rowid IN (SELECT id FROM ehr_items WHERE patient = ?2)"
-            ))?;
-            for r in st.query_map(crate::sql::params![phrase, id], |r| r.get::<_, i64>(0))? {
-                let r = r?;
-                if ids.contains(&r) {
-                    hits.insert(r);
-                }
-            }
-        } else {
-            for it in &items {
-                if [&it.name, &it.code, &it.text, &it.unit].iter().any(|f| f.to_lowercase().contains(&w)) {
-                    hits.insert(it.id);
-                }
-            }
-        }
         hits.retain(|h| shown_ids.contains(h));
         if gate.is_some() {
-            hits.retain(|h| shown_text.get(h).is_some_and(|t| t.contains(&w)));
+            hits.retain(|h| shown.get(h).is_some_and(|t| t.2.contains(&w)));
         }
-        // recordings by name, unit, bed
-        for (rid, ..) in &patient_recs {
-            if let Some(r) = crate::recordings::get(c, *rid)? {
-                if [&r.name, &r.unit, &r.bed].iter().any(|f| f.to_lowercase().contains(&w)) {
-                    recs.insert(*rid);
-                }
+        // recordings by their label and format (not by file name: it may identify)
+        for r in patient_recs.iter() {
+            if [&r.label, &r.format].iter().any(|f| f.to_lowercase().contains(&w)) {
+                recs.insert(r.id);
             }
         }
         if hits.is_empty() && w.chars().count() >= 5 {
-            // fuzzy: a word of this patient's text within one or two edits
+            // fuzzy: a word of this patient's text, as the session is shown it, within one or
+            // two edits (in Privacy Mode, never a word the gate replaced: it would go back)
             let max = if w.chars().count() >= 8 { 2 } else { 1 };
             let mut vocab: HashSet<String> = HashSet::new();
             for it in items.iter().filter(|i| visible(i)) {
-                for t in [&it.name, &it.text] {
+                for t in [name_of(it), text_of(it)] {
                     for x in t.split(|ch: char| !ch.is_alphanumeric()).filter(|x| x.chars().count() >= 4) {
                         vocab.insert(x.to_lowercase());
                     }
@@ -384,7 +369,8 @@ pub fn report(c: &Connection, user: &User, id: i64, q: &str) -> anyhow::Result<R
             if let Some(best) = vocab.iter().filter(|v| distance(v, &w) <= max).min_by_key(|v| distance(v, &w)) {
                 fuzzy.push((w.clone(), best.clone()));
                 for it in items.iter().filter(|i| visible(i)) {
-                    if it.name.to_lowercase().contains(best.as_str()) || it.text.to_lowercase().contains(best.as_str())
+                    if name_of(it).to_lowercase().contains(best.as_str())
+                        || text_of(it).to_lowercase().contains(best.as_str())
                     {
                         hits.insert(it.id);
                     }
@@ -413,12 +399,13 @@ pub fn report(c: &Connection, user: &User, id: i64, q: &str) -> anyhow::Result<R
         highlight.push(n);
     }
     let matched: Vec<It> = items.into_iter().filter(|i| keep.contains(&i.id)).collect();
-    let mut e = entries(c, id, &matched, read_notes, user.privacy, None, Some(&recs))?;
+    let mut e = entries(&d, &matched, read_notes, user.privacy, None, Some(&recs))?;
     for x in e.iter_mut() {
-        if x.key.starts_with("item:") {
-            if let Some(it) = matched.iter().find(|i| format!("item:{}", i.id) == x.key) {
+        if x.key.starts_with("live:") {
+            if let Some(it) = matched.iter().find(|i| entry_key(i) == x.key) {
                 if (it.text.chars().count() > 60 || it.category == "note") && visible(it) {
-                    x.snippet = snippet(&it.text, &highlight);
+                    // in Privacy Mode, around the match in the text as shown
+                    x.snippet = snippet(&text_of(it), &highlight);
                 }
             }
         }

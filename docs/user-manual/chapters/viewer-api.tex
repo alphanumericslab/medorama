@@ -215,7 +215,7 @@ path separator, \code{/} or \code{\textbackslash}), \code{version} (of the viewe
 \begin{lstlisting}[language=JSON]
 {"timezone": "America/New_York", "data_roots": ["/data/icu"], "home": "/home/reader1",
  "start": "/data/icu", "places": [{"name": "/data/icu", "path": "/data/icu"}], "sep": "/",
- "version": "0.1.0", "qc_verbose": false,
+ "version": "0.2.0", "qc_verbose": false,
  "limits": {"max_records": 5000, "max_depth": 20, "max_scan_s": 10.0}}
 \end{lstlisting}
 
@@ -342,7 +342,7 @@ curl -s -H 'Content-Type: application/json' -d '{"path": "/data/icu/demo/rec0001
 POST api/v1/cancel   {"key": KEY}
 \end{lstlisting}
 Stops the index being built under a key. The dataset's state then becomes \code{cancelled},
-and nothing of it is left in the index folder.
+and nothing of it is left in the index store or next to it.
 \begin{params}
 \item[key] The dataset's key, as \code{open} answered it.
 \end{params}
@@ -471,15 +471,16 @@ gateway, or \md{} refuses the new request.
 \code{GET /}, \code{GET static/...} & The page, for signed-in users; without a session, a
   redirection to \md{}'s page. \\
 \code{GET api/v1/config} & Passes. For users who are not admins, \code{places}, \code{start}
-  and \code{home} point into the folders of the catalog's recordings, and \code{data\_roots} is
+  and \code{home} point into the folders of the recordings of the databases the user may view,
+  and \code{data\_roots} is
   empty; in Privacy Mode all four are empty. \\
 \code{GET api/v1/browse}, \code{GET api/v1/complete} & Admins: inside \md{}'s
   \code{data\_roots} (anywhere when it is empty). Other users: only the folders that lead to
-  recordings in the catalog, showing only those recordings (\code{browse} needs a
+  recordings of the databases the user may view, showing only those recordings (\code{browse} needs a
   \code{path}). Refused in Privacy Mode (\code{403}: folder and file names may identify). \\
 \code{GET api/v1/scan} & As \code{open}; refused in Privacy Mode. \\
-\code{POST api/v1/open} & Admins: inside \code{data\_roots}; other users: only recordings in
-  the catalog. In Privacy Mode, a recording is opened by its token (\code{mo-rec:<id>}), never
+\code{POST api/v1/open} & Admins: inside \code{data\_roots}; other users: only recordings of
+  the databases granted to them for viewing (\code{view}). In Privacy Mode, a recording is opened by its token (\code{mo-rec:<id>}), never
   by a path. Audited (\code{view}). A JSON body is required (\code{415} otherwise). \\
 \code{POST api/v1/cancel} & Only the indexes of datasets the user opened through the gateway. \\
 \code{GET api/v1/datasets/\{key\}...} & Only the datasets the user opened through the gateway.

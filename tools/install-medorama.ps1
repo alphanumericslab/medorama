@@ -12,12 +12,16 @@
     -Viewer rs     the Rust viewer vitalstream-rs
     -Viewer py     the Python viewer vitalstream-py and its packages
     -Viewer none   Medorama alone
-  The database tools, which build databases to import and the demo's DICOM examples, go into
+  db-builder is always built.  The database tools, which read exports for db-builder and the
+  demo's DICOM examples, go into
   .venv too: muse-py (GE MUSE ECGs) and dicom-py (DICOM studies, with pydicom); -NoTools leaves
   them out.
 
-  -Demo also makes the demo: invented patients that `medorama init` loads into a cohort DEMO,
+  -Demo also makes the demo: invented patients' databases that `medorama init --demo` connects,
   for trying Medorama (off by default; docs/administration.md, "The demo").
+
+  -AcceptLicense accepts the license terms without asking (scripts, CI; or
+  MEDORAMA_ACCEPT_LICENSE=yes); otherwise they are shown and must be accepted.
 
   -NoWfdb builds Medorama and the viewer without WFDB support: no wfdb-x code in them (a WFDB
   recording is refused, not added; every other format is read; not with -Demo, whose recordings
@@ -40,7 +44,8 @@ param(
   [switch]$NoRustup,
   [switch]$NoTools,
   [switch]$Demo,
-  [switch]$NoWfdb
+  [switch]$NoWfdb,
+  [switch]$AcceptLicense
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,6 +53,10 @@ $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
 function Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
+
+# the license terms, accepted before anything is built (tools\license-accept.ps1)
+. (Join-Path $Root 'tools\license-accept.ps1')
+Confirm-License -Accepted:$AcceptLicense
 
 # Runs a program and stops on a non-zero exit code (PowerShell does not, for programs).
 function Run {
@@ -124,7 +133,10 @@ if ($NoWfdb -and $Demo) { throw "-Demo needs WFDB support (the demo's recordings
 $noWfdbArgs = if ($NoWfdb) { @('--no-default-features') } else { @() }
 Run cargo build --release --locked -p medorama @noWfdbArgs
 Copy-Item 'target\release\medorama.exe' '.venv\Scripts\medorama.exe' -Force
-$commands = 'medorama'
+# db-builder: tables, exports and folders of recordings made into a database to connect
+Run cargo build --release --locked -p db-builder @noWfdbArgs
+Copy-Item 'target\release\db-builder.exe' '.venv\Scripts\db-builder.exe' -Force
+$commands = 'medorama db-builder'
 
 # --- the viewer ----------------------------------------------------------------------------
 switch ($Viewer) {
@@ -183,7 +195,7 @@ if (-not $NoTools) {
   $commands += ' muse-py dicom-py'
 }
 
-# --- the demo (-Demo): invented patients, loaded by `medorama init` (docs\administration.md) --
+# --- the demo (-Demo): invented patients' databases, connected by `medorama init --demo` ---------
 $demoDir = Join-Path $Root '.venv\share\medorama\demo'
 $demoFile = Join-Path $Root '.venv\Scripts\medorama.demo'
 if ($Demo) {
@@ -195,11 +207,18 @@ if ($Demo) {
     $wfdbx = (Select-String -Path 'viewers\vitalstream\python\vitalstream\pyproject.toml' -Pattern '"(wfdb-x @ [^"]*)"').Matches[0].Groups[1].Value
     Run $vpip install --quiet numpy $wfdbx
   }
-  Run $vpy tools\make-demo-data.py $demoDir
-  # `medorama init` loads the demo from the folder named here (UTF-8 without a byte-order mark)
+  # the full demo (its parts: tools\README.md, "The demo's features"), and its db-builder
+  # databases built as a site would build them (the steps in its demo-databases.json)
+  $builder = Join-Path $Root '.venv\Scripts\db-builder.exe'
+  if (Test-Path $builder) {
+    Run $vpy tools\make-demo-data.py $demoDir --db-builder $builder
+  } else {
+    Run $vpy tools\make-demo-data.py $demoDir
+  }
+  # `medorama init --demo` connects the demo's databases from the folder named here (UTF-8 without a byte-order mark)
   [System.IO.File]::WriteAllText($demoFile, $demoDir)
 } elseif (Test-Path $demoFile) {
-  # without -Demo, new catalogs start empty (a catalog that holds the demo keeps it)
+  # without -Demo, `init --demo` has nothing to connect
   Remove-Item $demoFile
 }
 
@@ -238,9 +257,10 @@ Step "Done"
 Write-Host "Installed in .venv\Scripts: $commands"
 Write-Host "Next, in each new PowerShell window:  .venv\Scripts\Activate.ps1"
 if ($Demo) {
-  Write-Host "  medorama init --results DIR      (once; docs\administration.md): it loads the demo, the cohort DEMO"
+  Write-Host "  medorama init --workspace DIR --demo   (once; docs\administration.md): it connects the demo's databases"
 } else {
-  Write-Host "  medorama init --results DIR      (once; docs\administration.md)"
+  Write-Host "  medorama init --workspace DIR    (once; docs\administration.md)"
+  Write-Host "  medorama databases connect NAME --kind KIND --url URL"
 }
 Write-Host "  medorama serve                   (http://127.0.0.1:8090)"
 Write-Host "Licensed formats: medorama addons install PROGRAM   (docs\adapters.md)"

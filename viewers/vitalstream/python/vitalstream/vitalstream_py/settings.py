@@ -16,9 +16,15 @@ max_records, max_depth, max_scan_s
 require_password
               refuse to start without a password (Medorama sets it for the viewer it runs; a
               build without password support then never starts).
-cache_dir     the index cache, shared by the three viewers (they write the same index).
+cache_dir     the index cache, shared by the three viewers (they write the same index): its
+              index store index.sqlite (index format 3).
               Default, run from a clone of the repository: <viewer>/sample_data/outputs/index
               (sample_data/ is never pushed); installed elsewhere: ~/.cache/vitalstream.
+index_key_file
+              a file holding 64 hex digits, the key the viewer's index store
+              (cache_dir/index.sqlite, index format 3) is encrypted with (SQLCipher); empty:
+              a plain store.  Not used when Medorama gives the stores and their keys on standard
+              input (--keys-on-stdin).
 adapters_dir  the folder of adapters, programs that read formats the viewer does not read
               itself (docs/adapters.md).  Default: ~/.local/share/medorama/adapters.
 qc_verbose    also mark the irregularities a reader repaired (data blocks it put back in
@@ -117,6 +123,7 @@ CHECKS = {'timezone': (_text, 'a string'),
           'port': (_port, 'an integer from 0 to 65535'),
           'index_workers': (_count, 'a whole number, 0 or more'),
           'auth_file': (_text, 'a string'),
+          'index_key_file': (_text, 'a string'),
           'adapters_dir': (_text, 'a string'),
           'qc_verbose': (_switch, 'true or false'),
           'require_password': (_switch, 'true or false'),
@@ -136,6 +143,7 @@ class Settings:
     port: int = 8050
     index_workers: int = 2
     auth_file: str = '~/.config/vitalstream/auth.json'
+    index_key_file: str = ''
     adapters_dir: str = ''
     qc_verbose: bool = False
     max_records: int = 5000
@@ -178,6 +186,7 @@ class Settings:
         self._real_roots = [_realpath(r) for r in self.data_roots]
         self.cache_dir = str(Path(os.path.expanduser(self.cache_dir)).resolve())
         self.auth_file = os.path.expanduser(self.auth_file)
+        self.index_key_file = os.path.expanduser(self.index_key_file) if self.index_key_file else ''
         self.adapters_dir = absolute(self.adapters_dir) if self.adapters_dir else default_folder()
         try:
             from zoneinfo import ZoneInfo
@@ -245,8 +254,8 @@ def load_settings(path=None, **overrides):
                     raise ValueError(f'{p}: bad value for {k}')
             if 'data_roots' in values:
                 values['data_roots'] = [_relative_to(base, r) for r in values['data_roots']]
-            for k in ('cache_dir', 'auth_file', 'adapters_dir'):
-                if k in values:
+            for k in ('cache_dir', 'auth_file', 'adapters_dir', 'index_key_file'):
+                if k in values and (values[k] or k != 'index_key_file'):    # an empty key file: none
                     values[k] = _relative_to(base, values[k])
             source = str(p.resolve())
             break

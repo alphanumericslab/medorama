@@ -129,9 +129,14 @@
   // ---------------------------------------------------------------- leads
   const STANDARD = ['I', 'II', 'III', 'aVR', 'aVL', 'aVF', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6'];
 
-  /** The standard name of a lead label ("ECG II", "avr", "MLII" → "II", "aVR", null). */
+  /**
+   * The standard name of a lead label ("ECG II", "avr", "MLII" → "II", "aVR", null).  A coded
+   * lead's meaning (DICOM, SCP-ECG) reads as its name: what is in parentheses and what follows a
+   * comma are left out ("I (Einthoven)", "aVR, augmented voltage, right", "Lead V1" → "I", "aVR", "V1").
+   */
   function standardLead(label) {
-    const l = String(label).trim().replace(/^(ecg|ekg|lead)[\s_-]*/i, '').replace(/\s+/g, '');
+    const l = String(label ?? '').replace(/\([^)]*\)?/g, ' ').replace(/,.*$/, '').trim()
+      .replace(/^(ecg|ekg|lead)[\s_-]*/i, '').replace(/\s+/g, '');
     for (const s of STANDARD) if (l.toLowerCase() === s.toLowerCase()) return s;
     if (/^mlii$/i.test(l)) return 'II';
     return null;

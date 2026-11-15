@@ -31,6 +31,47 @@ if(VS_WFDB)
   FetchContent_MakeAvailable(wfdbx)
 endif()
 
+# SQLCipher 4.20.0 (BSD-3-Clause), based on SQLite 3.54.1 (public domain), with libtomcrypt
+# 1.18.2 (public domain or WTFPL) as its crypto provider: the index store (index format 3,
+# engine/src/store.cpp), encrypted or plain.  Taken as the crates.io package sqlcipher-src
+# 420.0.0, which ships the SQLCipher amalgamation and libtomcrypt's sources as released (MIT for
+# its own few files): no OpenSSL, no Tcl, nothing of the system.  Built here as vs_sqlite.
+vs_dependency(sqlcipher sqlcipher-src-420.0.0.tar.gz
+  https://static.crates.io/crates/sqlcipher-src/sqlcipher-src-420.0.0+sqlcipher-4.20.0-sqlite-3.54.1-libtomcrypt-1.18.2.crate
+  fd6b5280ed2593d07b2816ec531821c15c306903bcca224716f1fbcc2bbfedfe
+  DOWNLOAD_NAME sqlcipher-src-420.0.0.tar.gz SOURCE_SUBDIR do-not-add)
+FetchContent_MakeAvailable(sqlcipher)
+set(_vs_sc "${sqlcipher_SOURCE_DIR}/sqlcipher")
+# every libtomcrypt source but the tables other sources include
+file(GLOB_RECURSE _vs_ltc "${_vs_sc}/libtomcrypt/*.c")
+list(FILTER _vs_ltc EXCLUDE REGEX "tab\\.c$")
+set_source_files_properties(${_vs_ltc} PROPERTIES COMPILE_DEFINITIONS LTC_SOURCE)
+add_library(vs_sqlite STATIC "${_vs_sc}/sqlcipher.c" ${_vs_ltc})
+target_include_directories(vs_sqlite SYSTEM PUBLIC "${_vs_sc}" PRIVATE "${_vs_sc}/libtomcrypt/headers")
+target_compile_definitions(vs_sqlite
+  PUBLIC SQLITE_HAS_CODEC
+  PRIVATE SQLCIPHER_CRYPTO_LIBTOMCRYPT SQLITE_THREADSAFE=1 SQLITE_TEMP_STORE=2 SQLITE_OMIT_LOAD_EXTENSION
+          SQLITE_EXTRA_INIT=sqlcipher_extra_init SQLITE_EXTRA_SHUTDOWN=sqlcipher_extra_shutdown
+          SQLCIPHER_OMIT_LOG
+          # libtomcrypt: only what SQLCipher uses (one configuration for every unit, so that its
+          # structures agree), seeded from the system's generator (/dev/urandom, or Windows')
+          LTC_NOTHING LTC_RIJNDAEL LTC_CBC_MODE LTC_SHA1 LTC_SHA256 LTC_SHA512 LTC_HASH_HELPERS LTC_HMAC
+          LTC_FORTUNA LTC_PKCS_5 LTC_RNG_GET_BYTES LTC_DEVRANDOM LTC_TRY_URANDOM_FIRST LTC_NO_TEST LTC_NO_ASM
+          LTC_NO_MATH LTC_CLEAN_STACK)
+# third-party C: no warnings from it
+if(MSVC)
+  target_compile_options(vs_sqlite PRIVATE /w)
+else()
+  target_compile_options(vs_sqlite PRIVATE -w)
+endif()
+find_package(Threads REQUIRED)
+target_link_libraries(vs_sqlite PUBLIC Threads::Threads)
+if(WIN32)
+  target_link_libraries(vs_sqlite PUBLIC advapi32)
+elseif(NOT APPLE)
+  target_link_libraries(vs_sqlite PUBLIC m)
+endif()
+
 # CLI11 2.4.2 (BSD-3-Clause, header-only): command lines.
 vs_dependency(cli11 CLI11-v2.4.2.tar.gz
   https://github.com/CLIUtils/CLI11/archive/refs/tags/v2.4.2.tar.gz

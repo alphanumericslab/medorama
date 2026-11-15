@@ -134,8 +134,85 @@ def test_a_header_stating_too_much_is_read_to_the_end_of_its_data(tmp_path):
 def test_reading_stops_at_the_end_of_the_data(tmp_path):
     # a format whose size is not counted (here: a header of 100 samples, 8 held, read past)
     record(tmp_path, 'r', 'r 1 250 100', [1, 2, 3, 4, 5, 6, 7, 8])
-    x = wfdb_folder._read(tmp_path / 'r', 1, 0, 100)
-    assert x[:, 0].tolist() == [v / 200 for v in range(1, 9)]
+    x = wfdb_folder._read(tmp_path / 'r', wfdb_folder._header(tmp_path / 'r'), 0, 100)
+    assert x[0].tolist() == [v / 200 for v in range(1, 9)]
+
+
+@needs_wfdb
+def test_a_header_without_a_sample_count_is_read_to_the_end_of_its_data(tmp_path):
+    # a record line with no number of samples (wfdb-x gives 0): every sample the file holds
+    record(tmp_path, 'r', 'r 1 250', [1, 2, 3, 4, 5, 6, 7, 8])
+    meta, _, _ = meta_of(tmp_path / 'r.hea', tmp_path / 'cache')
+    assert meta['pieces'][0]['n'] == 8
+    assert wfdb_folder.scan(str(tmp_path / 'r.hea'), Limits())['duration_s'] == 8 / 250
+
+
+@needs_wfdb
+def test_a_compressed_record_without_a_sample_count_is_counted(tmp_path):
+    import wfdbx
+    wfdbx.write_record('z', [[k] for k in range(300)], 250, fmt=516, units=['mV'], gains=[1], adcres=[16],
+                       names=['II'], dir=str(tmp_path))
+    lines = (tmp_path / 'z.hea').read_text().splitlines()
+    (tmp_path / 'z.hea').write_text('\n'.join(['z 1 250'] + lines[1:]) + '\n')
+    meta, arrays, folder = meta_of(tmp_path / 'z.hea', tmp_path / 'cache')
+    assert meta['pieces'][0]['n'] == 300
+    assert Dataset(meta, arrays, folder).samples(0, 297, 400).tolist() == [297.0, 298.0, 299.0]
+
+
+def multi_frequency(d):
+    """A multi-frequency record `mf` in `d`: signals A (4 samples per frame), B (1) and C (2), 5
+    frames at 100 Hz; A's sample j is j, B's 1000 + j, C's 2000 + 10 (j // 2) + j % 2; a marker N
+    at frame 2 of A."""
+    frames = [[4 * f + k for k in range(4)] + [1000 + f] + [2000 + 10 * f + k for k in range(2)] for f in range(5)]
+    cols = [[v for x in frames for v in x[0:4]], [x[4] for x in frames], [v for x in frames for v in x[5:7]]]
+    sums = [(sum(c) + 32768) % 65536 - 32768 for c in cols]
+    (d / 'mf.hea').write_text(f'mf 3 100 5\nmf.dat 16x4 1/mV 16 0 0 {sums[0]} 0 A\n'
+                              f'mf.dat 16 1/mV 16 0 0 {sums[1]} 0 B\nmf.dat 16x2 1/mV 16 0 0 {sums[2]} 0 C\n')
+    (d / 'mf.dat').write_bytes(b''.join(struct.pack('<7h', *x) for x in frames))
+    (d / 'mf.mrk').write_bytes(bytes([2, 4, 0, 0]))
+
+
+@needs_wfdb
+def test_a_multi_frequency_record_keeps_every_sample_of_each_signal(tmp_path):
+    multi_frequency(tmp_path)
+    meta, arrays, folder = meta_of(tmp_path / 'mf.hea', tmp_path / 'cache')
+    assert [p['fs'] for p in meta['pieces']] == [400, 100, 200]
+    assert [p['n'] for p in meta['pieces']] == [20, 5, 10]
+    ds = Dataset(meta, arrays, folder)
+    assert ds.samples(0, 0, 20).tolist() == list(range(20))
+    assert ds.samples(0, 7, 13).tolist() == list(range(7, 13))
+    assert ds.samples(1, 1, 4).tolist() == [1001, 1002, 1003]
+    assert ds.samples(2, 3, 7).tolist() == [2011, 2020, 2021, 2030]
+    assert ds.samples(2, 8, 50).tolist() == [2040, 2041]
+    assert (folder / 'mk_sample.i64').read_bytes() == struct.pack('<q', 8)
+
+
+@needs_wfdb
+def test_records_without_a_start_before_the_first_with_one_end_where_it_starts(tmp_path):
+    d = tmp_path / 'f'
+    T0 = 1709287200.0
+    record(d, 'a', 'a 1 250 4', [1, 2, 3, 4])
+    record(d, 'b', 'b 1 250 4 10:00:00 01/03/2024', [1, 2, 3, 4])
+    record(d, 'c', 'c 1 250 4', [1, 2, 3, 4])
+    meta, _, _ = meta_of(d, tmp_path / 'cache')
+    p = meta['pieces']
+    assert (p[0]['t0'], p[1]['t0'], p[2]['t0']) == (T0 - 4 / 250, T0, T0 + 4 / 250)
+    assert p[0]['timed'] is False
+    assert any('before the first record with one' in n for n in meta['notes'])
+    (d / 'b.hea').unlink()
+    meta, _, _ = meta_of(d, tmp_path / 'cache2')
+    assert meta['pieces'][0]['t0'] == 0.0
+
+
+def test_thinning_keeps_long_pieces():
+    from vitalstream_py.dataset import thin
+
+    def piece(t0, n):
+        return {'t0': t0, 'n': n, 'fs': 1.0}
+    p = [piece(0.0, 0), piece(0.1, 8), piece(0.2, 0), piece(9.0, 0), piece(9.1, 0), piece(9.2, 0)]
+    assert thin(p, list(range(6)), 0.0, 10.0, 5.0) == [1, 5]
+    p = [piece(0.0, 3), piece(0.5, 2), piece(5.0, 0), piece(5.5, 0), piece(7.0, 0), piece(7.0, 0)]
+    assert thin(p, list(range(6)), 0.0, 10.0, 10.0) == [0, 1, 3, 4]
 
 
 @needs_wfdb
@@ -331,6 +408,13 @@ def test_an_index_that_disagrees_with_its_arrays_is_not_used(tmp_path):
 
 
 # -------------------------------------------------------------------- server
+def nothing_left(cache):
+    """No index in the viewer's store, and nothing of a build next to it."""
+    from vitalstream_py.store import Store
+    tmp = cache / 'index.tmp'
+    return Store(cache / 'index.sqlite').keys() == [] and (not tmp.exists() or list(tmp.iterdir()) == [])
+
+
 def client(tmp_path, roots=None, password=None, **more):
     from fastapi.testclient import TestClient
     from vitalstream_py.server import create_app
@@ -435,7 +519,7 @@ def test_a_recording_that_cannot_be_indexed_is_an_error(tmp_path):
     c = client(tmp_path)
     _, v = opened(c, folder)
     assert v['state'] == 'error' and 'no record column' in v['error']
-    assert list((tmp_path / 'cache').iterdir()) == []          # nothing left behind
+    assert nothing_left(tmp_path / 'cache')                    # nothing left behind
 
 
 def _hang_adapter(folder):

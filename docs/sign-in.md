@@ -47,7 +47,7 @@ does not depend on the method.
 
 ## Settings
 
-The settings below are read from `medorama.toml` in the catalog's home folder
+The settings below are read from `medorama.toml` in Medorama's home folder
 (`config.rs`, `sign_in_method`). Medorama reads them when it starts; restart it after a change.
 
 | Setting | Default | Meaning |
@@ -260,7 +260,7 @@ server {
     server_name medorama.hospital.org;
     ssl_certificate     /etc/ssl/certs/medorama.pem;
     ssl_certificate_key /etc/ssl/private/medorama.key;
-    client_max_body_size 1g;               # Medorama accepts imports up to 1 GiB
+    client_max_body_size 2m;               # Medorama accepts requests up to 2 MB
 
     location / {
         proxy_pass http://127.0.0.1:4180;  # oauth2-proxy
@@ -469,14 +469,15 @@ name the proxy sends (case does not matter).
 
 | Role | May |
 |---|---|
-| `viewer` | Look at patients, encounters, recordings and databases; build and keep cohorts. |
+| `viewer` | Look at patients, recordings and databases granted to them; build and keep cohorts. |
 | `analyst` | Everything a viewer may do, and run actions (indexing, plug-ins). |
-| `admin` | Everything, including importing and removing databases, managing users and settings, reviewing identities and reading the audit log. |
+| `admin` | Everything, including connecting databases and granting them, managing users and settings, and reading the audit log. Who manages a database (its `manage` grant) removes it. |
 
 The **PHI permission** is separate from the role. It decides whether a user may leave Privacy
 Mode and see identifiers ([protecting-patient-data.md, Privacy Mode and the PHI
 permission](protecting-patient-data.md#privacy-mode-and-the-phi-permission)). Medorama does not
-read groups or roles from the identity provider: an administrator assigns them in Medorama.
+read groups, roles or grants from the identity provider: an administrator assigns them in
+Medorama.
 
 ## Adding another sign-in method in code
 

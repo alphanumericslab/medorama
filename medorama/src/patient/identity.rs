@@ -1,72 +1,57 @@
 //! Who a patient is: identifiers (PHI), placeholders for Privacy Mode, pseudonyms, ages.
+//!
+//! A patient's identifiers are what the databases that link them say, as kept in each one's
+//! persons file (persons.rs).  A user sees those of the databases granted to them with `phi`,
+//! with the PHI permission and outside Privacy Mode.
 
 use super::*;
 
 /// The journey's time cells: six hours.
 pub const BIN_S: f64 = 6.0 * 3600.0;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Identity {
     pub last_name: String,
     pub first_name: String,
     pub birth_date: String,
-    /// (authority, MRN); '' = the default authority.
+    /// (authority, MRN); '' = the database's.
     pub mrns: Vec<(String, String)>,
+    /// (issuer, patient ID).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub patient_ids: Vec<(String, String)>,
 }
 
-pub(super) fn identity(c: &Connection, patient: i64) -> crate::sql::Result<Identity> {
-    let (last_name, first_name, birth_date): (String, String, String) = c
-        .query_row(
-            "SELECT last_name, first_name, birth_date FROM patient_identifiers WHERE patient = ?1",
-            [patient],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .optional()?
-        .unwrap_or_default();
-    let mut st = c.prepare(
-        "SELECT authority, mrn FROM patient_mrns WHERE patient = ?1 GROUP BY authority, mrn
-         ORDER BY authority != '', authority, mrn",
-    )?;
-    let mrns = st.query_map([patient], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
-    Ok(Identity { last_name, first_name, birth_date, mrns })
+/// A patient's identity from what the databases say: the first name and birth date given, every
+/// MRN and patient ID.
+pub(super) fn identity_of(records: &[crate::persons::Known]) -> Identity {
+    let mut i = Identity::default();
+    for k in records {
+        if i.last_name.is_empty() && !k.last_name.is_empty() {
+            (i.last_name, i.first_name) = (k.last_name.clone(), k.first_name.clone());
+        }
+        if i.birth_date.is_empty() {
+            i.birth_date = k.birth_date.clone();
+        }
+        if !k.mrn.is_empty() && !i.mrns.iter().any(|m| m.0 == k.mrn_authority && m.1 == k.mrn) {
+            i.mrns.push((k.mrn_authority.clone(), k.mrn.clone()));
+        }
+        if !k.patient_id.is_empty() && !i.patient_ids.iter().any(|m| m.0 == k.patient_id_issuer && m.1 == k.patient_id)
+        {
+            i.patient_ids.push((k.patient_id_issuer.clone(), k.patient_id.clone()));
+        }
+    }
+    i
 }
 
-/// The identities of many patients at once (as `identity` for each).
-pub(super) fn identities(c: &Connection, ids: &[i64]) -> crate::sql::Result<HashMap<i64, Identity>> {
-    let mut out: HashMap<i64, Identity> = ids
-        .iter()
-        .map(|&p| {
-            (
-                p,
-                Identity {
-                    last_name: String::new(),
-                    first_name: String::new(),
-                    birth_date: String::new(),
-                    mrns: vec![],
-                },
-            )
-        })
-        .collect();
-    for (p, last, first, birth) in c.query_in(
-        "SELECT patient, last_name, first_name, birth_date FROM patient_identifiers WHERE patient IN ({})",
-        ids,
-        |r| Ok((r.get::<_, i64>(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-    )? {
-        if let Some(i) = out.get_mut(&p) {
-            (i.last_name, i.first_name, i.birth_date) = (last, first, birth);
-        }
-    }
-    for (p, a, m) in c.query_in(
-        "SELECT patient, authority, mrn FROM patient_mrns WHERE patient IN ({}) GROUP BY patient, authority, mrn
-         ORDER BY patient, authority != '', authority, mrn",
-        ids,
-        |r| Ok((r.get::<_, i64>(0)?, r.get(1)?, r.get(2)?)),
-    )? {
-        if let Some(i) = out.get_mut(&p) {
-            i.mrns.push((a, m));
-        }
-    }
-    Ok(out)
+/// A patient's identity from the databases `user` may see the identifiers of.
+pub(super) fn identity(cfg: &Config, c: &Connection, user: &User, patient: i64) -> anyhow::Result<Identity> {
+    let phi = crate::databases::granted(c, user, "phi")?;
+    Ok(identity_of(&crate::persons::records_of(cfg, c, patient, Some(&phi))?))
+}
+
+/// The sex the databases give (the first given).
+pub(super) fn sex_of(records: &[crate::persons::Known]) -> String {
+    records.iter().map(|k| k.sex.clone()).find(|s| !s.is_empty()).unwrap_or_default()
 }
 
 /// A patient's identity as Privacy Mode shows it: placeholders where it would be.
@@ -76,10 +61,11 @@ pub fn placeholder_identity() -> Identity {
         first_name: String::new(),
         birth_date: crate::gate::BIRTH_DATE.into(),
         mrns: vec![(String::new(), crate::gate::MRN.into())],
+        patient_ids: vec![],
     }
 }
 
-pub(super) fn pseudonym_of(c: &Connection, id: i64) -> anyhow::Result<String> {
+pub fn pseudonym_of(c: &Connection, id: i64) -> anyhow::Result<String> {
     Ok(c.query_row("SELECT COALESCE(pseudonym, '') FROM patients WHERE id = ?1", [id], |r| r.get(0))
         .optional()?
         .unwrap_or_default())

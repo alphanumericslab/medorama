@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { displayModality, escapeHtml, infoContent } from '../../web/js/text.js';
+import { channelMeta, displayModality, escapeHtml, infoContent } from '../../web/js/text.js';
 
 const ds = {
   format: 'WFDB records', description: '', channels: [], pieces: [], vitals: [], alarms: [], gaps: [],
@@ -61,4 +61,13 @@ test('channel groups from common monitor and sleep-study labels', () => {
   }
   // a reader's own modality is kept
   assert.equal(displayModality({ modality: 'pressure', label: 'C3' }), 'pressure');
+});
+
+test('a channel shows its unit as the engine states it: adu only for an uncalibrated signal', () => {
+  assert.equal(channelMeta({ unit: 'mV', fs: 250 }), 'mV · 250 Hz');
+  assert.equal(channelMeta({ unit: 'adu', fs: 125 }), 'adu · 125 Hz');   // gain 0: the engine says adu
+  assert.equal(channelMeta({ unit: '', fs: 125 }), '125 Hz');            // calibrated, no unit stated
+  assert.equal(channelMeta({ unit: '', fs: 1000 / 3 }), '333.333 Hz');
+  assert.equal(channelMeta({ unit: 'mmHg' }), 'mmHg');
+  assert.equal(channelMeta({}), '');
 });

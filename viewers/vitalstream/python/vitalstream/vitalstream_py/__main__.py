@@ -38,6 +38,9 @@ def main(argv=None):
     ap.add_argument('--clear-password', action='store_true', help='remove the password, then exit')
     ap.add_argument('--no-auth', action='store_true', help='run without asking for the password')
     ap.add_argument('--index', metavar='PATH', help='index PATH into the cache and exit')
+    ap.add_argument('--keys-on-stdin', action='store_true',
+                    help='the index stores and their keys come on standard input, one JSON line each (Medorama, '
+                         'which launches the viewer: viewers/vitalstream/docs/index-format.md, "The key on a pipe")')
     ap.add_argument('-V', '--version', action='version', version=f'vitalstream-py {__version__}')
     args = ap.parse_args(argv)
     try:
@@ -82,12 +85,14 @@ def main(argv=None):
         print('Password removed.')
         return 0
     if args.index:
-        from .index import build_index
+        import os
+        from .index import build_into_store
+        from .store import Stores
         try:
-            key = build_index(absolute(args.index), settings.cache_dir)
+            key = build_into_store(absolute(args.index), Stores.own_from(settings).own())
         except Exception as e:
             return _fail(e)
-        print(f'indexed {args.index} -> {settings.cache_dir}/{key}/')
+        print(f'indexed {args.index} -> {os.path.join(settings.cache_dir, "index.sqlite")} ({key})')
         return 0
 
     protected = not args.no_auth and auth.load(settings.auth_file) is not None
@@ -97,10 +102,15 @@ def main(argv=None):
                         else ', and this viewer was built without password support'))
     import uvicorn
     from .server import create_app
+    from .store import Stores, read_keys
     try:
-        app = create_app(settings, protected=protected)
-    except RuntimeError as e:
+        # launched by Medorama: its stores and their keys arrive on standard input, and are
+        # forgotten when it closes
+        app = create_app(settings, protected=protected, stores=Stores() if args.keys_on_stdin else None)
+    except (RuntimeError, ValueError) as e:
         return _fail(e)
+    if args.keys_on_stdin:
+        threading.Thread(target=read_keys, args=(app.state.stores, sys.stdin, _fail), daemon=True).start()
     host = f'[{settings.host}]' if ':' in settings.host else settings.host   # IPv6 in brackets
     url = f'http://{host}:{settings.port}/'
     print(f'VitalStream: open {url}', flush=True)

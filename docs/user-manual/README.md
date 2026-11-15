@@ -7,8 +7,9 @@ patient data. It covers every feature in one book:
 
 - installing and deploying Medorama and each viewer;
 - every screen and feature of the page;
-- bringing data in: imported tables, connected databases, CLIF, recordings (WFDB, EDF and
-  formats read by add-ons), ECGs and imaging;
+- connecting data: connected databases (OMOP, any SQL database through views, db-builder
+  databases), building a database with db-builder (tables, CLIF, folders of recordings),
+  recordings (WFDB, EDF and formats read by add-ons), ECGs and imaging;
 - the viewers on their own: VitalStream, the ECG viewer and the PACS viewer;
 - administration: users and privacy, sign-in (Medorama's passwords or the institution's sign-in
   through a proxy), deployment, add-ons, readers and new formats, troubleshooting;
@@ -32,7 +33,7 @@ and with the code.
 | `Makefile`, `latexmkrc` | The build: `latexmk` with pdfLaTeX, auxiliary files in `build/`. |
 | `check_manual.py` | Static checks of the sources, without a TeX engine. |
 
-The manual has seven parts and appendices: getting started; using Medorama; bringing data in;
+The manual has seven parts and appendices: getting started; using Medorama; connecting data;
 the viewers on their own; administration (including the chapters on sign-in and on readers and
 new formats); architecture and security (the architecture, how patient data are protected, and
 the security review); and the reference. The appendices hold the glossary and the licenses.
@@ -103,16 +104,16 @@ These conventions keep the chapters reading as one manual.
 - **Reference entries.** Each command, request or setting of a reference chapter is one entry:
 
   ```latex
-  \apientry{medorama import-table}{Import a table}
+  \apientry{medorama databases connect}{Connect a database}
   \begin{lstlisting}[style=signature]
-  medorama import-table FILE... [--mapping FILE] [--category CAT] [--dry-run]
+  medorama databases connect NAME --kind omop|views|dbb --url URL [--issuer ISSUER] ...
   \end{lstlisting}
   What it does, in a few sentences.
   \begin{params}
-  \item[--mapping FILE] ...
+  \item[--issuer ISSUER] ...
   \end{params}
   \begin{lstlisting}[style=shell]
-  medorama import-table labs.csv --dry-run
+  medorama databases connect demo --kind dbb --url sqlite:/data/demo/demo.sqlite
   \end{lstlisting}
   ```
 

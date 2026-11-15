@@ -1,0 +1,170 @@
+<!doctype html>
+<!-- db-builder's web interface (README.md, "Web interface"): one page, no framework; the
+     server (src/serve/) decides everything, and keeps every path inside its root folder. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>db-builder</title>
+  <link rel="stylesheet" href="static/style.css">
+  <script type="module" src="static/app.js"></script>
+</head>
+<body>
+  <!-- sign-in: its own account, not Medorama's -->
+  <section id="login" class="login hidden">
+    <form id="login-form" class="card" aria-labelledby="login-title">
+      <h1 id="login-title">db-builder</h1>
+      <p class="muted">Sign in to build databases in this server's root folder.</p>
+      <p class="asis" role="note"><span aria-hidden="true">▲</span> This page shows the data as it is, identifiers included. Not for presentation.</p>
+      <label>User name <input id="login-user" autocomplete="username" required value="admin"></label>
+      <label>Password <input id="login-pass" type="password" autocomplete="current-password" required></label>
+      <button class="primary">Sign in</button>
+      <p id="login-msg" class="err" role="alert"></p>
+    </form>
+  </section>
+
+  <div id="app" class="hidden">
+    <header class="top">
+      <span class="brand">db-builder</span>
+      <span class="muted small" id="root-path" title="The root folder: nothing above it is read or written"></span>
+      <span class="spacer"></span>
+      <span id="enc" class="badge hidden" title="Databases are opened and made encrypted (--encrypt)">encrypted</span>
+      <button id="btn-theme" class="icon" title="Light or dark" aria-label="Light or dark">◐</button>
+      <button id="btn-logout" class="small">Sign out</button>
+    </header>
+    <p class="asis banner" role="note"><span aria-hidden="true">▲</span> This page shows the data as it is, identifiers included. Not for presentation.</p>
+    <div class="layout">
+      <aside class="side" aria-label="Databases">
+        <div class="ftools"><h2>Databases</h2><span class="spacer"></span>
+          <button id="db-refresh" class="small" title="List them again" aria-label="List the databases again">↻</button></div>
+        <ul id="db-list" class="dblist" role="listbox" aria-label="The databases in the root"></ul>
+        <div class="ftools"><button id="db-new" class="primary">New…</button><button id="db-open">Open…</button></div>
+      </aside>
+      <main id="main">
+        <div id="none" class="empty">
+          <h2>No database open</h2>
+          <p class="muted">Choose a database on the left, open a <code>.sqlite</code> file of the root, or make a new one. Then add tables, exports and folders of recordings to it; Medorama connects the database it makes.</p>
+        </div>
+        <div id="open" class="hidden">
+          <div class="ftools"><h2 id="db-title"></h2><span id="db-sub" class="muted small"></span><span class="spacer"></span>
+            <button id="db-copy">Save a copy…</button></div>
+          <div class="tabs" role="tablist" aria-label="The database">
+            <button role="tab" id="tab-tables" aria-controls="pane-tables" data-tab="tables">Tables</button>
+            <button role="tab" id="tab-import" aria-controls="pane-import" data-tab="import">Import</button>
+            <button role="tab" id="tab-recordings" aria-controls="pane-recordings" data-tab="recordings">Recordings</button>
+            <button role="tab" id="tab-rules" aria-controls="pane-rules" data-tab="rules">Rules</button>
+            <button role="tab" id="tab-check" aria-controls="pane-check" data-tab="check">Check</button>
+            <button role="tab" id="tab-sources" aria-controls="pane-sources" data-tab="sources">Sources</button>
+            <button role="tab" id="tab-info" aria-controls="pane-info" data-tab="info">Info</button>
+          </div>
+
+          <section id="pane-tables" role="tabpanel" aria-labelledby="tab-tables" class="pane">
+            <div class="ftools wrap">
+              <label class="inline">Table <select id="t-table">
+                <option>persons</option><option>visits</option><option>entries</option><option>recordings</option><option>extras</option><option>sources</option>
+              </select></label>
+              <input id="t-filter" type="search" placeholder="Filter: rows holding this text" aria-label="Filter the rows">
+              <span class="spacer"></span>
+              <span id="t-count" class="muted small" aria-live="polite"></span>
+              <button id="t-prev" title="Previous page" aria-label="Previous page">‹</button><button id="t-next" title="Next page" aria-label="Next page">›</button>
+            </div>
+            <div class="table-wrap"><table id="t-grid" class="grid"></table></div>
+          </section>
+
+          <section id="pane-import" role="tabpanel" aria-labelledby="tab-import" class="pane hidden">
+            <p class="muted">Tables (CSV, Excel, OpenDocument, Parquet), known exports (GE MUSE, a site's declared format) and CLIF folders, each a source. <b>Preview</b> reads them and says what would be added, writing nothing; <b>Add</b> adds them, all or nothing. The database's rules (Rules) apply to both.</p>
+            <h3>Inputs</h3>
+            <ul id="im-inputs" class="chosen"></ul>
+            <div class="ftools"><button id="im-choose">Choose files or folders…</button><button id="im-clear" class="link">Clear</button></div>
+            <h3>Options</h3>
+            <div class="formgrid">
+              <label>Format <select id="im-format"><option value="auto">Recognised by its columns</option><option value="none">None: a plain table</option></select></label>
+              <label>Issuer of the patient IDs <input id="im-issuer" placeholder="(when a row names none)"></label>
+              <label>MRN authority <input id="im-auth" placeholder="(when a row names none)"></label>
+              <label>Category <select id="im-category" class="categories"><option value="">From the rows, the file or its columns</option></select></label>
+              <label>Mapping file <span class="ftools"><input id="im-mapping" placeholder="(none: columns recognised by name)"><button id="im-mapping-pick" type="button">Choose…</button></span></label>
+              <label>Declared formats <span class="ftools"><input id="im-formats" placeholder="(TOML files or a folder, comma-separated)"><button id="im-formats-pick" type="button">Choose…</button></span></label>
+              <label class="check"><input id="im-dayfirst" type="checkbox"> Dates with slashes are day first (03/02/2024 is 3 February)</label>
+            </div>
+            <div class="ftools"><button id="im-preview">Preview</button><button id="im-add" class="primary">Add</button></div>
+            <div id="im-task" class="task" aria-live="polite"></div>
+          </section>
+
+          <section id="pane-recordings" role="tabpanel" aria-labelledby="tab-recordings" class="pane hidden">
+            <p class="muted">A folder of recordings and its subfolders (WFDB records, EDF and BDF files, files an installed adapter reads), one source; each recording's patient from a patients table (its file and patient), or from a pattern of the files' names.</p>
+            <div class="formgrid">
+              <label>Folder <span class="ftools"><input id="re-folder" placeholder="recordings/icu"><button id="re-folder-pick" type="button">Choose…</button></span></label>
+              <label>Patients table <span class="ftools"><input id="re-patients" placeholder="(a table: file, patient_id …)"><button id="re-patients-pick" type="button">Choose…</button></span></label>
+              <label>Or a pattern <input id="re-pattern" placeholder="{patient}_*.edf" aria-describedby="re-pattern-hint"><small id="re-pattern-hint" class="muted"><code>{patient}</code> the ID, <code>*</code> any text; with a <code>/</code>, the path below the folder.</small></label>
+              <label>Issuer of the patient IDs <input id="re-issuer" placeholder="(when a row names none)"></label>
+              <label>MRN authority <input id="re-auth"></label>
+              <label>Category <select id="re-category" class="categories"><option value="">ICU (unless a row says)</option></select></label>
+              <label class="check"><input id="re-dayfirst" type="checkbox"> Dates with slashes are day first</label>
+            </div>
+            <div class="ftools"><button id="re-preview">Preview</button><button id="re-add" class="primary">Add</button></div>
+            <div id="re-task" class="task" aria-live="polite"></div>
+          </section>
+
+          <section id="pane-rules" role="tabpanel" aria-labelledby="tab-rules" class="pane hidden">
+            <p class="muted">Rewrite rules, kept beside the database (<code id="ru-file"></code>) and applied to every add from this page: files' paths (<code>[[path]]</code>: a prefix or a regular expression) and identifiers (<code>[patient_id]</code>, <code>[mrn]</code>, <code>[encounter_id]</code>: replacements and case). Checked before they are saved.</p>
+            <label for="ru-text" class="sr-only">Rules (TOML)</label>
+            <textarea id="ru-text" rows="16" spellcheck="false" placeholder='[[path]]
+prefix = "/labs/data"
+to = "/mnt/data"
+
+[mrn]
+case = "upper"'></textarea>
+            <div class="ftools"><button id="ru-save" class="primary">Save the rules</button><span id="ru-msg" class="muted" aria-live="polite"></span></div>
+            <h3>Rewrite the paths the database lists</h3>
+            <p class="muted">For data moved or mounted elsewhere since it was built: its recordings', entries' files' and sources' paths rewritten by the saved <code>[[path]]</code> rules. The files are not read again; Check then lists any still missing.</p>
+            <div class="ftools"><button id="ru-dry">Count what would change</button><button id="ru-rewrite">Rewrite…</button><span id="ru-rw" class="muted" aria-live="polite"></span></div>
+          </section>
+
+          <section id="pane-check" role="tabpanel" aria-labelledby="tab-check" class="pane hidden">
+            <p class="muted">What a reader cannot rely on: patient IDs without an issuer, MRNs without an authority, identifiers given to two persons, keys naming nothing, entries whose person is not their visit's, missing files. Named by key, never by name or MRN.</p>
+            <div class="ftools"><button id="ck-run" class="primary">Check</button></div>
+            <div id="ck-out" aria-live="polite"></div>
+          </section>
+
+          <section id="pane-sources" role="tabpanel" aria-labelledby="tab-sources" class="pane hidden">
+            <p class="muted">Each file added (each table of a CLIF folder, each folder of recordings) is a source. Removing one takes out its entries, recordings and extras, and the persons and visits nothing else names.</p>
+            <div class="table-wrap"><table id="so-grid" class="grid"></table></div>
+            <div class="ftools"><button id="so-remove" class="danger" disabled>Remove…</button><span id="so-msg" class="muted" aria-live="polite"></span></div>
+          </section>
+
+          <section id="pane-info" role="tabpanel" aria-labelledby="tab-info" class="pane hidden">
+            <div id="in-out"></div>
+          </section>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <!-- the file chooser: folders and files of the root, never above it -->
+  <dialog id="fc" class="dlg" aria-labelledby="fc-title">
+    <form method="dialog" class="dlg-body">
+      <div class="ftools"><h2 id="fc-title">Choose</h2><span class="spacer"></span><button type="button" data-close class="icon" title="Close" aria-label="Close">✕</button></div>
+      <div class="ftools"><button type="button" id="fc-up" title="One folder up" aria-label="One folder up">↑</button>
+        <code id="fc-dir" class="path"></code></div>
+      <div id="fc-list" class="fc-list" role="list"></div>
+      <p id="fc-msg" class="muted small"></p>
+      <div class="ftools"><span id="fc-count" class="muted"></span><span class="spacer"></span>
+        <button type="button" data-close>Cancel</button><button id="fc-here" type="button" class="hidden">Choose this folder</button><button id="fc-ok" value="ok" class="primary">Choose</button></div>
+    </form>
+  </dialog>
+
+  <!-- a file name in the root: a new database, a copy -->
+  <dialog id="nd" class="dlg" aria-labelledby="nd-title">
+    <form method="dialog" class="dlg-body" id="nd-form">
+      <h2 id="nd-title">New database</h2>
+      <p id="nd-hint" class="muted"></p>
+      <label>File in the root <input id="nd-path" placeholder="study.sqlite" required spellcheck="false"></label>
+      <label id="nd-tz-l">Time zone of the local times in its inputs <input id="nd-tz" placeholder="America/New_York"></label>
+      <p id="nd-msg" class="err" role="alert"></p>
+      <div class="ftools"><span class="spacer"></span><button type="button" data-close>Cancel</button><button id="nd-ok" value="ok" class="primary">Make it</button></div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+</body>
+</html>

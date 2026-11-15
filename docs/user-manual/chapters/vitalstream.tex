@@ -150,7 +150,7 @@ The folders are those of \file{viewers/vitalstream}. The three serve the same pa
 (\file{viewers/vitalstream/web}: the Rust and C++ viewers have it built in, the Python viewer
 serves it from its package), answer the same HTTP API with the same JSON
 (\cref{chap:viewer-api}), write the same index byte for byte (\cref{sec:vitalstream-index}), and
-share one settings file, one password, one index folder and one adapter folder. Every name a
+share one settings file, one password, one index store and one adapter folder. Every name a
 user meets ends in the implementation's suffix, \code{-py}, \code{-rs} or \code{-cpp}; without a
 suffix, a name refers to what the three have in common (``the viewer'', \file{vitalstream.toml}).
 The three read WFDB records with wfdb-x, in each language.
@@ -161,7 +161,7 @@ The three read WFDB records with wfdb-x, in each language.
 The three viewers were measured on the same recordings through their HTTP API
 (\cref{tab:vitalstream-speed}), on a laptop (Apple M2 Max, 32\,GB, SSD) with the files in the
 system's cache, using \file{tools/bench-viewers.py}. Each recording got a viewer of its own with
-an empty index folder. Indexing is the time from the \code{open} request until the recording is
+nothing indexed yet. Indexing is the time from the \code{open} request until the recording is
 ready, the median of three runs. A 10-second window is the median of 20 requests for raw
 samples at random places, every channel. The full tables (opening again, the whole recording,
 10-minute windows, vital signs, memory) and the commands to repeat the measurement are in
@@ -222,6 +222,8 @@ viewers/vitalstream/install.sh --root /data/icu        # it opens nothing outsid
 viewers/vitalstream/install.sh --no-password           # a viewer without password support
 viewers/vitalstream/install.sh --no-wfdb               # a viewer without WFDB support (no wfdb-x)
 \end{lstlisting}
+The script first shows the license terms and goes on only if they are accepted
+(\cref{sec:installation-license}).
 
 On Windows, the following command runs the installer in PowerShell (for the C++ viewer, in a
 ``Developer PowerShell for VS''):
@@ -246,7 +248,8 @@ powershell -ExecutionPolicy Bypass -File viewers\vitalstream\install.ps1 -Viewer
 \opt{-{}-viewer cpp}, \opt{rs} or \opt{py} & \opt{-Viewer} & \code{cpp} & The viewer to build: C++
   (a C++20 compiler, CMake and Ninja; \file{install.sh} installs CMake and Ninja into a build
   environment, \file{viewers/vitalstream/cpp/build/tools}, when they are missing), Rust
-  (\file{install.sh} installs Rust in your account when \cmd{cargo} is missing), Python \\
+  (\file{install.sh} installs Rust in your account when \cmd{cargo} is missing; the build
+  compiles SQLCipher and OpenSSL, for the index store, which needs Perl and a C compiler), Python \\
 \opt{-{}-prefix DIR} & \opt{-Prefix} & \file{\textasciitilde/.local} (Windows:
   \code{\%LOCALAPPDATA\%\textbackslash vitalstream}) & The program goes into \file{DIR/bin}; the
   Python viewer's environment into \file{DIR/share/vitalstream/venv} (Windows:
@@ -261,6 +264,9 @@ powershell -ExecutionPolicy Bypass -File viewers\vitalstream\install.ps1 -Viewer
 \opt{-{}-no-wfdb} & \opt{-NoWfdb} & WFDB support & Build it without WFDB support: it contains no
   wfdb-x code, refuses a WFDB record or folder with a message (``this build has no WFDB
   support''), and reads every other format (\cref{sec:installation-no-wfdb}) \\
+\opt{-{}-accept-license} & \opt{-AcceptLicense} & Asked & Accept the license terms without
+  being asked (scripts, CI; or \code{MEDORAMA\_ACCEPT\_LICENSE=yes};
+  \cref{sec:installation-license}) \\
 \opt{-{}-no-rustup} & & & Fail, rather than install Rust, when \cmd{cargo} is missing (the Rust
   viewer); \file{install.ps1} never installs Rust \\
 \opt{-h}, \opt{-{}-help} & & & Print the options and exit \\
@@ -310,8 +316,8 @@ password (\cref{chap:viewers-in-medorama,chap:administration}).
 
 \paragraph{Update and uninstall.} To update, \cmd{git pull} and run the installer again with the
 same options, then restart the viewer. To uninstall, delete \file{\textasciitilde/.local/bin/vitalstream-*}
-(and, for the Python viewer, \file{\textasciitilde/.local/share/vitalstream}); the index folder is
-\file{\textasciitilde/.cache/vitalstream}, the settings and the password are in
+(and, for the Python viewer, \file{\textasciitilde/.local/share/vitalstream}); the index store is
+\file{\textasciitilde/.cache/vitalstream/index.sqlite}, the settings and the password are in
 \file{\textasciitilde/.config/vitalstream/}. Recordings are never touched.
 
 % ==========================================================================================
@@ -335,7 +341,8 @@ The three viewers take the same options. Each option overrides the setting of th
 \begin{lstlisting}[style=signature]
 vitalstream-cpp [--config FILE] [--host HOST] [--port N] [--timezone ZONE] [--root DIR]...
                 [--cache-dir DIR] [--adapters-dir DIR] [--qc-verbose] [--no-browser]
-                [--set-password | --clear-password] [--no-auth] [--index PATH] [-V]
+                [--set-password | --clear-password] [--no-auth] [--index PATH]
+                [--keys-on-stdin] [-V]
 \end{lstlisting}
 
 \begin{params}
@@ -351,7 +358,8 @@ vitalstream-cpp [--config FILE] [--host HOST] [--port N] [--timezone ZONE] [--ro
   An unknown zone is an error (\code{unknown time zone}).
 \item[--root DIR] A folder the viewer may open, inside its root; repeatable. Default: its root
   (the setting \code{data\_roots}).
-\item[--cache-dir DIR] The index folder (\cref{sec:vitalstream-index}).
+\item[--cache-dir DIR] The folder of the viewer's index store, \file{index.sqlite}
+  (\cref{sec:vitalstream-index}).
 \item[--adapters-dir DIR] The adapter folder (\cref{sec:vitalstream-adapters}).
 \item[--qc-verbose] Also mark the data a reader repaired, such as data blocks put back in order
   (\cref{sec:vitalstream-qc}).
@@ -364,13 +372,16 @@ vitalstream-cpp [--config FILE] [--host HOST] [--port N] [--timezone ZONE] [--ro
   viewer built without password support.
 \item[--no-auth] Run without asking for the password, even when one is set.
 \item[--index PATH] Index \file{PATH} (a record's \file{.hea}, a folder, a file an adapter reads)
-  into the index folder, print \code{indexed PATH -> FOLDER/KEY/}, and exit.
-\item[-V, --version] Print the program's name and version (\code{vitalstream-py 0.1.0}), then
+  into the index store, print \code{indexed PATH -> CACHE/index.sqlite (KEY)}, and exit.
+\item[--keys-on-stdin] Read index stores and their keys on the standard input, one line of JSON
+  each, and forget them when it closes: how Medorama starts the viewer it runs
+  (\cref{sec:vitalstream-index}).
+\item[-V, --version] Print the program's name and version (\code{vitalstream-py 0.2.0}), then
   exit.
 \end{params}
 
 When it starts, the viewer prints the settings file it read, its address, its root, its data
-roots, the index folder and the time zone, and whether a password protects it:
+roots, the folder of its index store (\code{cache}) and the time zone, and whether a password protects it:
 
 \begin{lstlisting}[style=text]
 vitalstream-rs: settings from /home/user/.config/vitalstream/vitalstream.toml
@@ -562,7 +573,7 @@ without records, is refused at this step (\cref{sec:vitalstream-limits}).
 The first opening of a recording indexes it: a progress bar shows how far it is (\code{Indexing
 NAME \dots{} 40 \%{} $\cdot$ about 12 s left. This is done once; the index is cached.}), and
 \ui{Cancel} stops it: \code{Cancelled: nothing was kept.} Later openings are instant: the index
-is kept in the index folder (\cref{sec:vitalstream-index}). Once it is ready, the dialog closes
+is kept in the index store (\cref{sec:vitalstream-index}). Once it is ready, the dialog closes
 and the recording opens, whole, in the lanes. A recording that cannot be read is reported in the
 dialog (\code{Error: \dots}) and in the status bar (\code{Could not open: \dots}).
 
@@ -583,8 +594,8 @@ describe it (\cref{chap:formats-reference}).
   \file{gaps.csv} in the folder itself is read as for a collection.
 \item \textbf{Placement.} A record starts at its header's base date and time, taken as UTC. A
   record without one is placed after the data before it, and shaded \emph{time not stated}
-  (\cref{sec:vitalstream-untimed}). One record alone without a time starts at 0
-  (1970-01-01).
+  (\cref{sec:vitalstream-untimed}); records without one that come before the first record with
+  one end where it starts. One record alone without a time starts at 0 (1970-01-01).
 \item A record that cannot be read, or whose header states no sampling frequency, is left out;
   the recording's notes say how many.
 \end{itemize}
@@ -898,8 +909,11 @@ strings. Start from
   browser sends it over HTTPS only: set it for a viewer behind an HTTPS proxy \\
 \code{index\_workers} & 2 & The recordings indexed at the same time (0 is taken as 1) \\
 \code{cache\_dir} (\opt{-{}-cache-dir}) & \file{\textasciitilde/.cache/vitalstream} (run from a
-  clone: \file{viewers/vitalstream/sample\_data/outputs/index}) & The index folder; shared by the
-  three viewers, and with Medorama when set to its \code{index\_dir} \\
+  clone: \file{viewers/vitalstream/sample\_data/outputs/index}) & The folder of the index store,
+  \file{index.sqlite}; the three viewers can share it \\
+\code{index\_key\_file} & empty & A file of 64 hex digits: the key the index store is encrypted
+  with (SQLCipher 4, a raw key). Empty: a plain store. A store made with a key opens only with
+  it \\
 \code{adapters\_dir} (\opt{-{}-adapters-dir}) & \file{\textasciitilde/.local/share/medorama/adapters}
   (Windows: \code{\%LOCALAPPDATA\%\textbackslash medorama\textbackslash adapters}) & The adapter
   folder \\
@@ -938,19 +952,27 @@ indexed the first time it is opened, or ahead of time with \opt{-{}-index PATH};
 are instant.
 
 \begin{itemize}
-\item The index folder (\code{cache\_dir}) holds one folder per recording, named by its
+\item The viewer keeps its indexes in one SQLite database, its \emph{index store},
+  \file{index.sqlite} in \code{cache\_dir}, encrypted with SQLCipher when
+  \code{index\_key\_file} names a key, else plain. An index is found there by the recording's
   \emph{key}: the first 20 hexadecimal digits of a SHA-256 of the index format's version, the
   recording's real path, and its files' sizes and modification times. A recording that is changed, moved or replaced gets a new
   key, so an outdated index is never used.
-\item The three viewers and Medorama write the same index for the same recording, byte for byte,
-  and may share one index folder at the same time.
-\item An index is written into a temporary folder and renamed into place, so that a reader sees
-  a complete index or none; it is never written next to a recording.
+\item The three viewers write the same rows for the same recording, byte for byte, and may share
+  one store at the same time.
+\item An index is built as files in a private temporary folder next to the store, then packed
+  into the store in one transaction, so that a reader sees the old index or the new one, never a
+  mixture; it is never written next to a recording. Envelopes are read back by range, a chunk at
+  a time.
+\item Started by Medorama (\opt{-{}-keys-on-stdin}), the viewer is given the stores of
+  Medorama's recording databases and their keys on its standard input, and its own store in
+  Medorama's workspace (\cref{chap:viewers-in-medorama}). It keeps the keys in memory only.
 \end{itemize}
 
 \begin{phibox}
 An index holds no name, identifier or date of birth, but it holds the recording's path and its
-values, which are patient data. Keep index folders on storage protected like the recordings.
+values, which are patient data. Keep the index store on storage protected like the recordings,
+or encrypt it with \code{index\_key\_file}, the key file kept readable by you only.
 \end{phibox}
 
 The index format is specified in \cref{chap:formats-reference}.
@@ -1067,14 +1089,15 @@ the viewer. Installing add-ons for Medorama, and the adapters' protocol, are des
 \cmd{pytest viewers/vitalstream/python/vitalstream/tests} & The Python viewer: the same recordings
   and adapter, sign-in, the file browser, a build without password support, and the limits and
   checks shared with the Rust engine and viewer (\file{test\_limits.py}) \\
-\cmd{make parity} & The viewers that are built: byte-identical indexes under the specified key,
+\cmd{make parity} & The viewers that are built: byte-identical index stores under the specified key,
   and the same API answers (\file{viewers/vitalstream/tests/parity}) \\
 \end{xltabular}
 
 \cmd{make parity} runs \file{tests/parity/index\_parity.py}, which indexes recordings with every
 viewer that is built and checks that each key equals the one computed from the specification,
-by an independent implementation, and that the index files are byte-identical (\file{meta.json}
-compared without its informative fields), and \file{tests/parity/viewer\_parity.py}, which checks
+by an independent implementation, and that the viewers' index stores hold byte-identical rows
+(\code{store}, \code{meta} compared without its informative fields, \code{arrays},
+\code{chunks}), and \file{tests/parity/viewer\_parity.py}, which checks
 that the viewers give the same answers to the same requests, and the same statuses and errors
 to the requests they refuse (the \code{Host} check, \code{Origin}, \code{415}, \code{413}, the
 query grammar, a record whose signal file leads outside the data roots). The first also takes recordings an
@@ -1097,6 +1120,6 @@ read); and four EDF files in \file{testdata/edf/} (\cref{sec:formats-reference-e
 \section{License}
 \label{sec:vitalstream-licence}
 
-VitalStream is licensed, like all of Medorama, under the PolyForm Noncommercial License 1.0.0,
-with commercial licenses by agreement. The three viewers read WFDB records with wfdb-x, a
+VitalStream is licensed, like all of Medorama's software, under the PolyForm Noncommercial
+License 1.0.0, with commercial licenses by agreement; its documentation is under CC BY-NC-ND 4.0. The three viewers read WFDB records with wfdb-x, a
 separate project whose library is under the GNU LGPL version 2.1 or later (\cref{chap:licences}).

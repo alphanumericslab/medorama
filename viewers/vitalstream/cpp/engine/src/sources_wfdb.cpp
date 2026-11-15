@@ -187,12 +187,16 @@ std::int64_t frames_held(const fs::path& record, const core::wfdbc::HeaderInfo& 
 
 // The header of a record (no signal file is opened); an error for a record that states no
 // sampling frequency (or one that is not a finite positive number).  The number of samples is at
-// most what the signal files can hold (frames_held).  record: the record's path without .hea.
+// most what the signal files can hold (frames_held); a header that states none (0, or no count on
+// its record line) is read to the end of its data, as libwfdb reads it: up to what the files hold,
+// INT64_MAX when no file can be measured (counted then counts them).  record: the record's path
+// without .hea.
 core::wfdbc::HeaderInfo header(const fs::path& record) {
   auto h = core::wfdbc::read_header(record.parent_path(), core::path_utf8(record.filename()));
   if (!(h.fs > 0 && std::isfinite(h.fs)))
     throw std::runtime_error(shown(record) + ": the header states no sampling frequency");
-  h.sig_len = std::min(std::max<std::int64_t>(h.sig_len, 0), frames_held(record, h));
+  const std::int64_t held = frames_held(record, h);
+  h.sig_len = h.sig_len > 0 ? std::min(h.sig_len, held) : held;
   return h;
 }
 
@@ -200,6 +204,40 @@ core::wfdbc::HeaderInfo header(const fs::path& record) {
 std::int64_t chunk_frames(std::size_t nsig) {
   return std::max<std::int64_t>(CHUNK_SAMPLES / static_cast<std::int64_t>(std::max<std::size_t>(nsig, 1)),
                                 MIN_CHUNK_FRAMES);
+}
+
+// a * b for b >= 1, saturating.
+std::int64_t sat_mul(std::int64_t a, std::int64_t b) {
+  if (a > INT64_MAX / b) return INT64_MAX;
+  if (a < INT64_MIN / b) return INT64_MIN;
+  return a * b;
+}
+
+// Samples per frame of a signal (at least 1).
+std::int64_t spf_of(const core::wfdbc::SignalInfo& s) { return std::max(s.spf, 1); }
+
+// header, with the frames counted by decoding them when the header states no number of samples
+// and no signal file can be measured (compressed formats): 0 for a header that names no signal
+// file (a layout segment's).
+core::wfdbc::HeaderInfo counted(const fs::path& record) {
+  auto h = header(record);
+  if (h.sig_len != INT64_MAX) return h;
+  bool has_file = false;
+  for (const auto& sig : h.signals) has_file = has_file || signal_file(record, sig.file_name).has_value();
+  std::int64_t frames = 0;
+  if (has_file) {
+    const std::int64_t chunk = chunk_frames(h.signals.size());
+    const std::int64_t spf0 = spf_of(h.signals[0]);
+    for (;;) {
+      auto x = core::wfdbc::read_physical(record.parent_path(), core::path_utf8(record.filename()), frames,
+                                          frames + chunk, {0});
+      const auto got = static_cast<std::int64_t>(x.empty() ? 0 : x[0].size()) / spf0;
+      frames += got;
+      if (got < chunk) break;
+    }
+  }
+  h.sig_len = frames;
+  return h;
 }
 
 // A record name from index.csv that stays inside its folder: relative, without "..".
@@ -524,7 +562,7 @@ void check_mat_files(const fs::path& hea) {
 Unit unit(const fs::path& base, const std::string& name, std::optional<Row> row) {
   check_files(base, name);
   fs::path path = join(base, name);
-  auto h = header(path);
+  auto h = counted(path);
   // a MAT signal file is read as frames from the header's byte offset: one of another layout
   // would be read as noise
   check_mat_files(with_ext(path, ".hea"));
@@ -550,7 +588,7 @@ Unit unit(const fs::path& base, const std::string& name, std::optional<Row> row)
       if (n > 0) u.nulls.emplace_back(offset, n);
     } else if (n > 0) {
       std::string rec = beside(name, seg);
-      u.parts.push_back(Part{rec, offset, header(join(base, rec))});
+      u.parts.push_back(Part{rec, offset, counted(join(base, rec))});
     }
     std::int64_t k = std::max<std::int64_t>(n, 0);  // a layout segment has no samples
     offset = offset > INT64_MAX - k ? INT64_MAX : offset + k;
@@ -621,9 +659,45 @@ std::string rec_path(const std::vector<Unit>& units, const std::string& name) {
   return name;
 }
 
+// Placement with the first record without a start (and no data before it) at origin.
+std::vector<std::pair<double, bool>> place(const std::vector<Unit>& units, std::size_t count,
+                                           const OrderedMap<std::string, double>& counted, double origin) {
+  std::vector<std::pair<double, bool>> out;
+  out.reserve(count);
+  std::optional<double> last_end;
+  OrderedMap<std::string, double> untimed_group;
+  for (std::size_t i = 0; i < count; ++i) {
+    const Row& r = units[i].row;
+    double dur = static_cast<double>(units[i].n) / units[i].fs;
+    std::pair<double, bool> s;
+    if (auto t = fl(at(r, "start_unix"))) {
+      s = {*t, true};
+    } else {
+      const std::string* st = at(r, "stretch");
+      std::string g = (st && !st->empty()) ? *st : "record " + std::to_string(i);
+      const double* c = counted.get(units[i].name);
+      double& t0 = untimed_group.entry(g, last_end.value_or(origin) + (c ? *c : 0.0));
+      s = {t0, false};
+    }
+    out.push_back(s);
+    double end = s.first + dur;
+    last_end = last_end ? std::max(*last_end, end) : end;
+  }
+  return out;
+}
+
+// The position of the first record with a start, if any.
+std::optional<std::size_t> first_timed(const std::vector<Unit>& units) {
+  for (std::size_t i = 0; i < units.size(); ++i)
+    if (fl(at(units[i].row, "start_unix"))) return i;
+  return std::nullopt;
+}
+
 // Start of each record on the time axis, and whether it is stated: records in order; those
 // without a start follow the data before them, after the break gaps.csv states before them
-// (gap_s), if any; records of the same stretch start together.
+// (gap_s), if any; records of the same stretch start together.  Records without a start that come
+// before the first record with one (the leading ones) are placed so that they end just where it
+// starts; when no record has a start, the first starts at 0.
 std::vector<std::pair<double, bool>> placement(const std::vector<Unit>& units, const std::vector<Row>& gap_rows) {
   OrderedMap<std::string, double> counted;
   for (const auto& g : gap_rows) {
@@ -634,28 +708,17 @@ std::vector<std::pair<double, bool>> placement(const std::vector<Unit>& units, c
       for (const auto& name : split(after ? *after : std::string(), ';')) counted.insert(rec_path(units, name), *gs);
     }
   }
-  std::vector<std::pair<double, bool>> out;
-  out.reserve(units.size());
-  std::optional<double> last_end;
-  OrderedMap<std::string, double> untimed_group;
-  for (std::size_t i = 0; i < units.size(); ++i) {
-    const Row& r = units[i].row;
-    double dur = static_cast<double>(units[i].n) / units[i].fs;
-    std::pair<double, bool> s;
-    if (auto t = fl(at(r, "start_unix"))) {
-      s = {*t, true};
-    } else {
-      const std::string* st = at(r, "stretch");
-      std::string g = (st && !st->empty()) ? *st : "record " + std::to_string(i);
-      const double* c = counted.get(units[i].name);
-      double& t0 = untimed_group.entry(g, last_end.value_or(0.0) + (c ? *c : 0.0));
-      s = {t0, false};
-    }
-    out.push_back(s);
-    double end = s.first + dur;
-    last_end = last_end ? std::max(*last_end, end) : end;
+  double origin = 0.0;
+  auto f = first_timed(units);
+  if (f && *f > 0) {
+    // the leading records, placed from 0: where they end
+    auto lead = place(units, *f, counted, 0.0);
+    double end = -std::numeric_limits<double>::infinity();
+    for (std::size_t i = 0; i < *f; ++i)
+      end = std::max(end, lead[i].first + static_cast<double>(units[i].n) / units[i].fs);
+    origin = *fl(at(units[*f].row, "start_unix")) - end;
   }
-  return out;
+  return place(units, units.size(), counted, origin);
 }
 
 // Lanes of each channel: the time spans taken in each, to put a piece in the first lane it does
@@ -734,7 +797,9 @@ Built build_wfdb_folder(const fs::path& path, const Progress& progress, const Ca
           label = name + " (" + std::to_string(lane) + ")";
         }
         std::size_t cid = channels.get(key, label, unit_, modality);
-        ps.push_back(pieces.start(cid, part.h.fs, Dict{{"t0", Value(tp)}, {"timed", Value(timed)}}));
+        // a signal of several samples per frame at its own rate
+        const double fs = part.h.fs * static_cast<double>(spf_of(part.h.signals[j]));
+        ps.push_back(pieces.start(cid, fs, Dict{{"t0", Value(tp)}, {"timed", Value(timed)}}));
         piece_info.emplace_back(part.rec, j);
         by_name.entry(name, j);
       }
@@ -747,7 +812,8 @@ Built build_wfdb_folder(const fs::path& path, const Progress& progress, const Ca
         if (cancelled()) throw std::runtime_error("indexing cancelled");
         std::int64_t b = n - a > chunk ? a + chunk : n;
         auto x = core::wfdbc::read_physical(ppath.parent_path(), core::path_utf8(ppath.filename()), a, b);
-        std::size_t got = x.empty() ? 0 : x[0].size();
+        // frames read: signal 0 has spf samples in each
+        std::size_t got = x.empty() ? 0 : x[0].size() / static_cast<std::size_t>(spf_of(part.h.signals[0]));
         for (std::size_t j = 0; j < ps.size() && j < x.size(); ++j) {
           xf.assign(x[j].begin(), x[j].end());
           pieces.add(ps[j], xf.data(), xf.size());
@@ -780,9 +846,10 @@ Built build_wfdb_folder(const fs::path& path, const Progress& progress, const Ca
         std::string mname = trim(a.aux);
         if (mname.empty()) mname = trim(core::wfdbc::mnemonic(a.code));
         std::int64_t s = a.time;
+        // a marker is at a frame: the first sample of that frame of its signal
         if (!master_names) {
           const auto& ps = part_pieces[0].first;
-          if (c < ps.size()) pieces.marker(ps[c], s, mname);
+          if (c < ps.size()) pieces.marker(ps[c], sat_mul(s, spf_of(u.parts[0].h.signals[c])), mname);
         } else {
           if (c >= master_names->size()) continue;
           const std::string& sig = (*master_names)[c].first;
@@ -793,7 +860,8 @@ Built build_wfdb_folder(const fs::path& path, const Progress& progress, const Ca
           }
           if (!k) continue;
           const auto& [ps, by_name] = part_pieces[*k];
-          if (const std::size_t* j = by_name.get(sig)) pieces.marker(ps[*j], s - u.parts[*k].offset, mname);
+          if (const std::size_t* j = by_name.get(sig))
+            pieces.marker(ps[*j], sat_mul(s - u.parts[*k].offset, spf_of(u.parts[*k].h.signals[*j])), mname);
         }
       }
     }
@@ -935,6 +1003,9 @@ Built build_wfdb_folder(const fs::path& path, const Progress& progress, const Ca
       break;
     }
   }
+  if (auto f = first_timed(units); f && *f > 0)
+    notes.push_back(
+        Value("The records without a start time that come before the first record with one end where it starts."));
   for (const auto& [key, l] : lanes.taken)
     if (l.size() > 1) {
       notes.push_back(Value(
@@ -1118,15 +1189,38 @@ class WfdbReader : public Reader {
       check_files(folder_, rec);
       fs::path path = join(folder_, rec);
       auto h = header(path);
-      std::int64_t a = a0, b = std::min(b0, std::max<std::int64_t>(h.sig_len, 0));
+      const std::int64_t frames = std::max<std::int64_t>(h.sig_len, 0);
+      // samples [a, b) of a signal of spf samples per frame: in frames [a / spf, ceil(b / spf))
+      struct Span {
+        std::int64_t fa, fb, b;
+      };
+      auto span = [&](std::size_t sig) {
+        const std::int64_t k = spf_of(h.signals[sig]);
+        const std::int64_t b = std::min(b0, sat_mul(frames, k));
+        const std::int64_t fa = a0 / k;
+        return Span{fa, std::max(fa, b / k + (b % k != 0 ? 1 : 0)), b};
+      };
       std::vector<std::size_t> sigs;
+      std::int64_t fa = INT64_MAX, fb = 0;
       for (const auto& [k, sig] : items)
-        if (sig < h.signals.size()) sigs.push_back(sig);
+        if (sig < h.signals.size()) {
+          sigs.push_back(sig);
+          fa = std::min(fa, span(sig).fa);
+          fb = std::max(fb, span(sig).fb);
+        }
       if (sigs.empty()) continue;
-      auto x = core::wfdbc::read_physical(path.parent_path(), core::path_utf8(path.filename()), a, std::max(a, b), sigs);
+      auto x = core::wfdbc::read_physical(path.parent_path(), core::path_utf8(path.filename()), fa, std::max(fa, fb), sigs);
       std::size_t j = 0;
       for (const auto& [k, sig] : items)
-        if (sig < h.signals.size()) out[k] = j < x.size() ? x[j++] : std::vector<double>();
+        if (sig < h.signals.size()) {
+          std::vector<double> y = j < x.size() ? std::move(x[j++]) : std::vector<double>();
+          // the samples read start at frame fa
+          const std::int64_t first = fa * spf_of(h.signals[sig]);
+          const auto lo = static_cast<std::size_t>(std::max<std::int64_t>(a0 - first, 0));
+          const auto hi = std::min(static_cast<std::size_t>(std::max<std::int64_t>(span(sig).b - first, 0)), y.size());
+          out[k] = lo < hi ? std::vector<double>(y.begin() + static_cast<std::ptrdiff_t>(lo), y.begin() + static_cast<std::ptrdiff_t>(hi))
+                           : std::vector<double>();
+        }
     }
     return out;
   }

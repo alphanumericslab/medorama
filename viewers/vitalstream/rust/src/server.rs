@@ -18,9 +18,10 @@ use axum::routing::{get, post};
 use axum::Router;
 use indexmap::IndexMap;
 use recording_engine::dataset::Dataset;
-use recording_engine::index::{build_index_until, cache_key, load_index};
+use recording_engine::index::{build_into_store, cache_key_of};
 use recording_engine::sources::wfdb_folder;
 use recording_engine::sources::{kind_of, unreadable};
+use recording_engine::store::{Store, STORE_FORMAT};
 use signal_core::dict;
 use signal_core::value::Value;
 use std::collections::{HashMap, HashSet};
@@ -68,6 +69,9 @@ pub struct App {
     jobs: Mutex<HashMap<String, Job>>,
     loaded: Mutex<IndexMap<String, Arc<Dataset>>>,
     opened: Mutex<HashSet<String>>,
+    /// The index stores (index format 3): those given on standard input (`--keys-on-stdin`:
+    /// Medorama's databases'), looked in first, and the viewer's own, where it writes.
+    stores: Stores,
     workers: Arc<tokio::sync::Semaphore>,
     /// one password checked at a time (scrypt takes 16 MiB and tens of milliseconds)
     checking: tokio::sync::Semaphore,
@@ -78,6 +82,88 @@ pub struct App {
 }
 
 type Shared = Arc<App>;
+
+/// The index stores a viewer reads, and the one it writes (viewers/vitalstream/docs/index-format.md,
+/// "Version 3: the index store").
+#[derive(Default)]
+pub struct Stores {
+    given: Mutex<Vec<Arc<Store>>>,
+    own: Mutex<Option<Arc<Store>>>,
+}
+
+impl Stores {
+    /// The viewer's own store: `cache_dir/index.sqlite`, encrypted with the key in
+    /// `index_key_file` when one is set.
+    pub fn own_from(settings: &Settings) -> Result<Stores, String> {
+        let key = if settings.index_key_file.as_os_str().is_empty() {
+            None
+        } else {
+            let text = std::fs::read_to_string(&settings.index_key_file)
+                .map_err(|e| format!("{}: {e}", settings.index_key_file.display()))?;
+            Some(
+                key_of(text.trim())
+                    .ok_or_else(|| format!("{}: not 64 hex digits", settings.index_key_file.display()))?,
+            )
+        };
+        let store = Store::open(&settings.cache_dir.join("index.sqlite"), key.as_ref()).map_err(|e| e.to_string())?;
+        Ok(Stores { given: Mutex::new(vec![]), own: Mutex::new(Some(Arc::new(store))) })
+    }
+
+    /// One line of the pipe: `{"store": PATH, "key": HEX}` (with `"own": true`, the store the
+    /// viewer writes), or `{"forget": PATH}`.  The keys are kept in memory only.
+    pub fn apply(&self, line: &str) -> Result<(), String> {
+        let v = Value::from_json(line).map_err(|_| "not JSON".to_string())?;
+        if let Some(p) = v.get("forget").and_then(Value::as_str) {
+            self.given.lock().unwrap().retain(|s| s.path() != Path::new(p));
+            let mut own = self.own.lock().unwrap();
+            if own.as_ref().is_some_and(|s| s.path() == Path::new(p)) {
+                *own = None;
+            }
+            return Ok(());
+        }
+        let path = v.get("store").and_then(Value::as_str).ok_or("no store")?;
+        let key = v.get("key").and_then(Value::as_str).and_then(key_of).ok_or("no key")?;
+        let store = Arc::new(Store::open(Path::new(path), Some(&key)).map_err(|e| e.to_string())?);
+        if matches!(v.get("own"), Some(Value::Bool(true))) {
+            *self.own.lock().unwrap() = Some(store);
+        } else {
+            let mut given = self.given.lock().unwrap();
+            given.retain(|s| s.path() != Path::new(path));
+            given.push(store);
+        }
+        Ok(())
+    }
+
+    /// The store holding the index of `key`, if any.
+    fn holding(&self, key: &str) -> Option<Arc<Store>> {
+        let given = self.given.lock().unwrap().clone();
+        let own = self.own.lock().unwrap().clone();
+        given.into_iter().chain(own).find(|s| s.engine_of(key).is_some())
+    }
+
+    /// The paths of every store held.
+    pub fn paths(&self) -> Vec<String> {
+        let given = self.given.lock().unwrap().clone();
+        given.into_iter().chain(self.own()).map(|s| s.path().to_string_lossy().to_string()).collect()
+    }
+
+    /// The store the viewer writes.
+    pub fn own(&self) -> Option<Arc<Store>> {
+        self.own.lock().unwrap().clone()
+    }
+}
+
+/// A key's 64 hex digits as bytes.
+fn key_of(hex: &str) -> Option<[u8; 32]> {
+    if hex.len() != 64 {
+        return None;
+    }
+    let mut k = [0u8; 32];
+    for (i, b) in k.iter_mut().enumerate() {
+        *b = u8::from_str_radix(hex.get(2 * i..2 * i + 2)?, 16).ok()?;
+    }
+    Some(k)
+}
 
 pub struct ApiError(StatusCode, String);
 
@@ -199,7 +285,14 @@ fn q_bool(q: &Q, k: &str) -> bool {
 }
 
 impl App {
+    /// The viewer with its own index store (`cache_dir`), or with the stores Medorama gives it on
+    /// standard input (`stores`: [`Stores::default`], filled by [`Stores::apply`]).
     pub fn new(settings: Settings, protected: Option<bool>) -> Result<App, String> {
+        let stores = Stores::own_from(&settings)?;
+        App::with_stores(settings, protected, stores)
+    }
+
+    pub fn with_stores(settings: Settings, protected: Option<bool>, stores: Stores) -> Result<App, String> {
         let creds = auth::load(&settings.auth_file);
         let settings_auth_file = settings.auth_file.clone();
         let protected = protected.unwrap_or(creds.is_some());
@@ -215,6 +308,7 @@ impl App {
             jobs: Mutex::new(HashMap::new()),
             loaded: Mutex::new(IndexMap::new()),
             opened: Mutex::new(HashSet::new()),
+            stores,
             checking: tokio::sync::Semaphore::new(1),
             failures: Mutex::new(HashMap::new()),
             revoked: Mutex::new(auth::revoked(&settings_auth_file)),
@@ -223,6 +317,10 @@ impl App {
 
     pub fn protected(&self) -> bool {
         self.protected
+    }
+
+    pub fn stores(&self) -> &Stores {
+        &self.stores
     }
 
     /// The value of this server's sign-in cookie in a request, if any.
@@ -296,7 +394,7 @@ impl App {
         if let Some(ds) = self.loaded.lock().unwrap().get(key).cloned() {
             return Ok(Some(ds));
         }
-        let Some((meta, arrays)) = load_index(&self.settings.cache_dir, key) else { return Ok(None) };
+        let Some((meta, arrays)) = self.stores.holding(key).and_then(|s| s.load(key)) else { return Ok(None) };
         let ds = Arc::new(Dataset::new(meta, arrays));
         let path = ds.meta.get("path").and_then(Value::as_str).unwrap_or("").to_string();
         if !self.opened.lock().unwrap().contains(key) && !self.settings.allowed(&path) {
@@ -590,7 +688,7 @@ async fn open(State(app): State<Shared>, req: Request) -> Result<Response, ApiEr
     }
     let key = {
         let p = p.clone();
-        blocking(move || cache_key(Path::new(&p))).await?
+        blocking(move || cache_key_of(Path::new(&p), STORE_FORMAT)).await?
     };
     app.opened.lock().unwrap().insert(key.clone());
     if !req.reindex {
@@ -613,12 +711,15 @@ async fn open(State(app): State<Shared>, req: Request) -> Result<Response, ApiEr
             let (a, k, workers) = (app.clone(), key.clone(), app.workers.clone());
             tokio::spawn(async move {
                 let _permit = workers.acquire_owned().await;
-                let cache = a.settings.cache_dir.clone();
+                let own = a.stores.own();
                 let path = p.clone();
                 let f = fraction.clone();
                 let stop = cancel.clone();
                 let result = tokio::task::spawn_blocking(move || {
-                    build_index_until(Path::new(&path), &cache, &|x| *f.lock().unwrap() = x.clamp(0.0, 1.0), &|| {
+                    let Some(own) = own else {
+                        return Err(signal_core::Error::Format("no index store to write into".into()));
+                    };
+                    build_into_store(Path::new(&path), &own, &|x| *f.lock().unwrap() = x.clamp(0.0, 1.0), &|| {
                         stop.load(Ordering::Relaxed)
                     })
                 })

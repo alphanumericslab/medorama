@@ -1,4 +1,4 @@
-add_executable(viewer_tests test_viewer.cpp test_edf.cpp test_limits.cpp test_server.cpp)
+add_executable(viewer_tests test_viewer.cpp test_edf.cpp test_limits.cpp test_server.cpp test_store.cpp)
 target_link_libraries(viewer_tests PRIVATE vs_viewer GTest::gtest_main)
 # the synthetic recordings (viewers/vitalstream/testdata) and the mock adapters of the engine's
 # tests (libs/engine/tests/fake_adapter.py, misbehaving_adapter.py)

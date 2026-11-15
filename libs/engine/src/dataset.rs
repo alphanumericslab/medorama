@@ -93,6 +93,33 @@ fn search(v: &[f64], x: f64, right: bool) -> usize {
     }
 }
 
+/// Of `found` (pieces of one channel, by start then id), with more than `px` of them over
+/// [t0, t1]: of the pieces that start in each pixel column, the one that ends latest (the first
+/// of those) and every one that reaches past the column, so that a long piece is never lost
+/// among short ones.
+fn thin(pieces: &[Piece], found: &[usize], t0: f64, t1: f64, px: f64) -> Vec<usize> {
+    let col_of = |t: f64| ((t.max(t0) - t0) / (t1 - t0) * px).floor() as i64;
+    let mut kept = vec![];
+    let mut k = 0;
+    while k < found.len() {
+        let col = col_of(pieces[found[k]].t0);
+        let (mut j, mut latest) = (k, k);
+        while j < found.len() && col_of(pieces[found[j]].t0) == col {
+            if pieces[found[j]].end() > pieces[found[latest]].end() {
+                latest = j;
+            }
+            j += 1;
+        }
+        for (q, &i) in found.iter().enumerate().take(j).skip(k) {
+            if q == latest || col_of(pieces[i].end()) > col {
+                kept.push(i);
+            }
+        }
+        k = j;
+    }
+    kept
+}
+
 impl Dataset {
     pub fn new(meta: Dict, arrays: Loaded) -> Dataset {
         let pieces: Vec<Piece> = meta
@@ -203,7 +230,8 @@ impl Dataset {
     }
 
     /// The channels' pieces that lie in [t0, t1], in order of id.  With more than `px` of a
-    /// channel, only the first (by start, then id) to start in each pixel column.
+    /// channel, of the pieces that start in each pixel column only the one that ends latest (the
+    /// first, by start then id, of those) and those that reach past the column.
     fn pieces_in(&self, ch: i64, t0: f64, t1: f64, px: f64) -> Vec<usize> {
         let Some(c) = self.by_channel.get(&ch) else { return vec![] };
         let hi = c.order.partition_point(|&i| self.pieces[i].t0 < t1 + c.margin);
@@ -217,13 +245,7 @@ impl Dataset {
             })
             .collect();
         if found.len() as f64 > px {
-            let mut last = None;
-            found.retain(|&i| {
-                let col = ((self.pieces[i].t0.max(t0) - t0) / (t1 - t0) * px).floor() as i64;
-                let keep = last != Some(col);
-                last = Some(col);
-                keep
-            });
+            found = thin(&self.pieces, &found, t0, t1, px);
         }
         found.sort_unstable();
         found
@@ -310,16 +332,12 @@ impl Dataset {
         let (off, length) = p.env.get(lvl).copied().unwrap_or((0, 0));
         let i0 = (a / size) as usize;
         let i1 = (length as i64).min((b + size - 1) / size) as usize;
-        let (lo, hi) = if i1 > i0 {
-            let mn = self.arrays.env_min[lvl].as_slice();
-            let mx = self.arrays.env_max[lvl].as_slice();
-            (
-                mn[off + i0..off + i1].iter().map(|&x| x as f64).collect::<Vec<_>>(),
-                mx[off + i0..off + i1].iter().map(|&x| x as f64).collect::<Vec<_>>(),
-            )
-        } else {
-            (vec![], vec![])
+        // (a store that cannot be read gives an empty block)
+        let read = |e: &crate::index::Env| -> Vec<f64> {
+            e.range(off + i0, i1 - i0).map(|v| v.iter().map(|&x| x as f64).collect()).unwrap_or_default()
         };
+        let (lo, hi) =
+            if i1 > i0 { (read(&self.arrays.env_min[lvl]), read(&self.arrays.env_max[lvl])) } else { (vec![], vec![]) };
         format!(
             "{{\"piece\":{},\"kind\":\"env\",\"t0\":{},\"dt\":{},\"min\":{},\"max\":{}}}",
             p.id,
@@ -428,5 +446,41 @@ impl Dataset {
             }
         }
         Value::Dict(dict! { "names" => names, "items" => Value::List(items), "truncated" => false })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn piece(id: usize, t0: f64, n: i64) -> Piece {
+        Piece { id, ch: 0, fs: 1.0, n, t0, timed: true, env: vec![] }
+    }
+
+    #[test]
+    fn thinning_keeps_long_pieces() {
+        // 5 columns of 2 s over [0, 10]: in column 0, a short piece, a long one (to 8.1 s) and
+        // another short one; in column 4, three short ones (the last ends latest)
+        let p = vec![
+            piece(0, 0.0, 0),
+            piece(1, 0.1, 8),
+            piece(2, 0.2, 0),
+            piece(3, 9.0, 0),
+            piece(4, 9.1, 0),
+            piece(5, 9.2, 0),
+        ];
+        let found: Vec<usize> = (0..6).collect();
+        assert_eq!(thin(&p, &found, 0.0, 10.0, 5.0), [1, 5]);
+        // columns of 1 s: two pieces that reach past their column (overlapping): both kept;
+        // ends equal: the first
+        let p = vec![
+            piece(0, 0.0, 3),
+            piece(1, 0.5, 2),
+            piece(2, 5.0, 0),
+            piece(3, 5.5, 0),
+            piece(4, 7.0, 0),
+            piece(5, 7.0, 0),
+        ];
+        assert_eq!(thin(&p, &[0, 1, 2, 3, 4, 5], 0.0, 10.0, 10.0), [0, 1, 3, 4]);
     }
 }

@@ -281,3 +281,121 @@ async fn the_phi_permission_is_given_by_those_who_have_it() {
     let admin = login("admin").await;
     assert_eq!(call(admin, "PATCH", format!("/api/v1/users/{alice}"), phi).await, StatusCode::OK);
 }
+
+/// An admin without the PHI permission cannot lift its protections: withhold less in Privacy
+/// Mode (untick a choice, a smaller offset), nor reset the password of a user who has it (and
+/// sign in as them); an admin with it may, and such a reset ends that user's sessions, audited.
+#[tokio::test]
+async fn an_admin_without_the_phi_permission_cannot_lift_it() {
+    let f = fixture(Method::Password);
+    let app = &f.app;
+    medorama::users::add(&f.db.get().unwrap(), "plain", "", Role::Admin, false, "0123456789ab").unwrap();
+    let send = |cookie: String, method: &'static str, uri: String, body: Option<Value>| {
+        let app = app.clone();
+        async move {
+            let b = Request::builder().method(method).uri(uri).header("Cookie", cookie).header("X-Medorama", "1");
+            let req = match body {
+                Some(v) => b.header("Content-Type", "application/json").body(Body::from(v.to_string())).unwrap(),
+                None => b.body(Body::empty()).unwrap(),
+            };
+            let r = app.oneshot(req).await.unwrap();
+            let status = r.status();
+            let bytes = r.into_body().collect().await.unwrap().to_bytes();
+            (status, serde_json::from_slice::<Value>(&bytes).unwrap_or(Value::Null))
+        }
+    };
+    let login = |u: &'static str| {
+        let app = app.clone();
+        async move {
+            let body = serde_json::json!({"username": u, "password": "0123456789ab"});
+            let req = Request::builder()
+                .method("POST")
+                .uri("/api/v1/login")
+                .header("X-Medorama", "1")
+                .header("Content-Type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap();
+            let r = app.oneshot(req).await.unwrap();
+            r.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_string()
+        }
+    };
+    let plain = login("plain").await;
+    let admin = login("admin").await;
+    let (_, d) = send(plain.clone(), "GET", "/api/v1/deid".into(), None).await;
+    let mut weaker = d.clone();
+    weaker["fields"] = serde_json::json!(["dates"]);
+    let (st, _) = send(plain.clone(), "PUT", "/api/v1/admin/deid".into(), Some(weaker.clone())).await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "age_over_89 unticked");
+    let mut zero = d.clone();
+    zero["offset"] = serde_json::json!({"years": 0, "months": 0, "days": 0, "hours": 0});
+    let (st, _) = send(plain.clone(), "PUT", "/api/v1/admin/deid".into(), Some(zero)).await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "no offset");
+    let mut more = d.clone();
+    more["fields"] = serde_json::json!(["dates", "age_over_89", "notes"]);
+    let (st, _) = send(plain.clone(), "PUT", "/api/v1/admin/deid".into(), Some(more)).await;
+    assert_eq!(st, StatusCode::OK, "withholding more is anyone's");
+    let (st, _) = send(admin.clone(), "PUT", "/api/v1/admin/deid".into(), Some(weaker)).await;
+    assert_eq!(st, StatusCode::OK, "an admin with the PHI permission");
+    // the identifiers always withheld are no choice
+    let (_, d) = send(admin.clone(), "GET", "/api/v1/deid".into(), None).await;
+    let choices: Vec<&str> = d["choices"].as_array().unwrap().iter().map(|c| c["key"].as_str().unwrap()).collect();
+    assert!(!choices.iter().any(|c| ["names", "mrn", "birth_date", "account_numbers"].contains(c)), "{choices:?}");
+    // passwords
+    let id = |name: &str| -> i64 {
+        f.db.get().unwrap().query_row("SELECT id FROM users WHERE username = ?1", [name], |r| r.get(0)).unwrap()
+    };
+    let reset = serde_json::json!({"password": "another-password-1"});
+    let (st, _) = send(plain.clone(), "PATCH", format!("/api/v1/users/{}", id("admin")), Some(reset.clone())).await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "a PHI user's password");
+    let (st, _) = send(admin.clone(), "GET", "/api/v1/me".into(), None).await;
+    assert_eq!(st, StatusCode::OK, "still signed in");
+    let (st, _) =
+        send(plain.clone(), "PATCH", format!("/api/v1/users/{}", id("alice@hospital.org")), Some(reset.clone())).await;
+    assert_eq!(st, StatusCode::OK, "a user without it");
+    medorama::users::add(&f.db.get().unwrap(), "phi2", "", Role::Analyst, true, "0123456789ab").unwrap();
+    let phi2 = login("phi2").await;
+    let (st, _) = send(admin.clone(), "PATCH", format!("/api/v1/users/{}", id("phi2")), Some(reset)).await;
+    assert_eq!(st, StatusCode::OK);
+    let (st, _) = send(phi2, "GET", "/api/v1/me".into(), None).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED, "their sessions ended");
+    let n: i64 =
+        f.db.get()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM audit WHERE event = 'phi_password_reset' AND target = 'phi2'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+    assert_eq!(n, 1);
+}
+
+/// db-builder's page is named to admins only (`GET config`), and only when Medorama runs it or
+/// links to it; Medorama shares no sign-in with it.
+#[tokio::test]
+async fn db_builder_is_named_to_admins_only() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cfg = common::config(&tmp.path().join("home"), &tmp.path().join("results"));
+    cfg.sign_in = proxy();
+    cfg.db_builder_root = Some(tmp.path().join("build"));
+    cfg.db_builder_port = 18091;
+    let db = Arc::new(Db::open(&cfg, true).unwrap());
+    let c = db.get().unwrap();
+    medorama::users::add(&c, "alice@hospital.org", "Alice", Role::Analyst, false, "0123456789ab").unwrap();
+    medorama::users::add(&c, "admin", "", Role::Admin, true, "0123456789ab").unwrap();
+    drop(c);
+    let off = cfg.clone();
+    let app = medorama::server::router(Arc::new(medorama::server::App::new(Arc::new(cfg), db.clone())));
+    let proxy = "127.0.0.1:50000";
+    let (st, v) = send(&app, "GET", "/api/v1/config", proxy, Some("admin"), None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["db_builder"]["mode"], "run");
+    assert_eq!(v["db_builder"]["url"], "http://127.0.0.1:18091/");
+    assert!(v["db_builder"]["running"] == false, "not started by a router alone");
+    let (_, v) = send(&app, "GET", "/api/v1/config", proxy, Some("alice@hospital.org"), None).await;
+    assert!(v["db_builder"].is_null(), "not named to others: {v}");
+    // off: the page hides "Create a database…"
+    let mut off = off;
+    off.db_builder_root = None;
+    let app = medorama::server::router(Arc::new(medorama::server::App::new(Arc::new(off), db)));
+    let (_, v) = send(&app, "GET", "/api/v1/config", proxy, Some("admin"), None).await;
+    assert_eq!(v["db_builder"]["mode"], "off");
+}

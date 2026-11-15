@@ -4,21 +4,16 @@ use super::*;
 
 // ------------------------------------------------------------------ ICU monitoring from the index
 
-pub(super) fn read_f64(path: &Path, offset: u64, n: usize) -> Option<Vec<f64>> {
-    let mut f = std::fs::File::open(path).ok()?;
-    f.seek(SeekFrom::Start(offset * 8)).ok()?;
-    let mut buf = vec![0u8; n * 8];
-    f.read_exact(&mut buf).ok()?;
-    Some(buf.as_chunks::<8>().0.iter().map(|b| f64::from_le_bytes(*b)).collect())
-}
-
 /// What a recording's index holds: waveform and vital-sign names, the main vital signs over
 /// the whole recording (at most 600 points each), its gaps.
 pub(super) fn index_overview(c: &Connection, cfg: &Config, r: &crate::recordings::Recording) -> Option<Monitoring> {
     let key = r.index_key.clone().unwrap_or_else(|| r.fingerprint.clone());
-    let folder = cfg.index_dir.join(key);
-    let meta: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(folder.join("meta.json")).ok()?).ok()?;
+    // the index, from its database's index store
+    let (dict, arrays) = crate::workspace::index_store(cfg, c, r.database).ok()?.load(&key)?;
+    let meta: serde_json::Value = serde_json::from_str(&signal_core::value::Value::Dict(dict).to_json()).ok()?;
+    let read = |a: &recording_engine::index::Values<f64>, off: u64, n: usize| -> Option<Vec<f64>> {
+        a.as_slice().get(off as usize..off as usize + n).map(<[f64]>::to_vec)
+    };
     let mut waveforms: Vec<String> = vec![];
     for ch in meta.get("channels").and_then(|v| v.as_array()).into_iter().flatten() {
         if let Some(l) = ch.get("label").and_then(|v| v.as_str()) {
@@ -71,7 +66,7 @@ pub(super) fn index_overview(c: &Connection, cfg: &Config, r: &crate::recordings
     // derived series first: at most 600 points over the whole recording (a week: one per 17 min),
     // each the mean of its minutes, with the lowest and highest of their ranges
     let mut trends = vec![];
-    let derived = crate::derived::load(c, r.id).unwrap_or_default();
+    let derived = crate::recordings::load_series(cfg, c, r.id).unwrap_or_default();
     for d in &derived {
         let step = (d.t.len() / 600).max(1);
         let mut st =
@@ -89,9 +84,7 @@ pub(super) fn index_overview(c: &Connection, cfg: &Config, r: &crate::recordings
     picked.truncate(4usize.saturating_sub(trends.len()));
     for i in picked {
         let (name, unit, off, n) = &vit[i];
-        let (Some(t), Some(v)) =
-            (read_f64(&folder.join("vit_t.f64"), *off, *n), read_f64(&folder.join("vit_v.f64"), *off, *n))
-        else {
+        let (Some(t), Some(v)) = (read(&arrays.vit_t, *off, *n), read(&arrays.vit_v, *off, *n)) else {
             continue;
         };
         let pts: Vec<(f64, f64)> = t.into_iter().zip(v).filter(|(a, b)| a.is_finite() && b.is_finite()).collect();

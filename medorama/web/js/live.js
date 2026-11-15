@@ -10,7 +10,7 @@ let version = null;
 let timer = null;
 const listeners = [];
 
-/** The catalog's data version as last asked (null before the first answer). */
+/** Medorama's data version as last asked (null before the first answer). */
 export function dataVersion() { return version; }
 
 /** Call `fn` whenever the data have changed. */

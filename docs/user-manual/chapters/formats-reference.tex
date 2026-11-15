@@ -114,37 +114,69 @@ break & a place where contiguity is not proven: its reason, its length when know
 The viewers never read, keep or show a patient's identity: the index holds no name, identifier or
 date of birth, and neither do the viewers' answers. A recording's path and file name may still
 identify a patient (bedside-monitor systems name files by unit, bed and time), and every value of
-a recording is patient data: keep the recordings, and the index folders made from them, on
-storage protected like the recordings.
+a recording is patient data: keep the recordings, and the index stores made from them, on
+storage protected like the recordings (or encrypted, \cref{sec:formats-reference-folder}).
 
 \section{The index}
 \label{sec:formats-reference-index}
 
 The index of a recording holds its structure (its channels, and the pieces each channel is made
 of), the min/max envelopes of every waveform, and its markers, vital-sign series, alarms and
-breaks. This section specifies the index, version 2, so that programs written independently write
-and read the same files and can share one index folder: the viewers \cmd{vitalstream-rs} (with
-the Rust engine), \cmd{vitalstream-cpp} (with the C++ engine) and \cmd{vitalstream-py}, Medorama
-(with the Rust engine), and the adapters. All of them write the same bytes for the same
-recording.
+breaks. This section specifies the index, so that programs written independently write and read
+the same rows: the viewers \cmd{vitalstream-rs} (with the Rust engine), \cmd{vitalstream-cpp}
+(with the C++ engine) and \cmd{vitalstream-py}, Medorama (with the Rust engine), and the
+adapters. An index is built as the files of version 2 (\cref{sec:formats-reference-files}), then
+packed into an \emph{index store} (version 3). All of these programs write the same bytes for the
+same recording.
 
-\subsection{The index folder}
+\subsection{The index store}
 \label{sec:formats-reference-folder}
 
-An index folder holds one subfolder per indexed recording, named by its key
-(\cref{sec:formats-reference-key}):
+An index store is one SQLite database of indexes, \file{index.sqlite}:
+
+\begin{xltabular}{\linewidth}{@{}P{3.5cm}L@{}}
+\caption{Where the index stores are.}
+\label{tab:formats-reference-stores}\\
+\toprule
+\tabhead Who & \tabhead Store \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead Who & \tabhead Store \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Medorama & One store per recording database, \file{<workspace>/db-NNNN/index.sqlite}, encrypted
+  with that database's data key. Removing the database destroys the key first, then the folder:
+  no index of it can be read again. \\
+The viewer Medorama runs & The stores of the recording databases, whose paths and keys Medorama
+  writes on its standard input (\cref{sec:formats-reference-writing}), and its own store,
+  \file{<workspace>/viewer/index.sqlite}, with a key of its own, for what it indexes itself. \\
+A viewer on its own & \file{index.sqlite} in its \code{cache\_dir}; encrypted when its setting
+  \code{index\_key\_file} names a key, else plain (\cref{chap:settings-reference}). \\
+\end{xltabular}
+
+\paragraph{Encryption.} An encrypted store is a SQLCipher 4 database with SQLCipher 4's default
+settings, opened with a raw 256-bit key (\code{PRAGMA key = "x'<64 hex digits>'"}, the first
+statement on the connection; no key derivation). Without the key, nothing of the file can be read.
+A plain store is an ordinary SQLite database.
+
+\paragraph{Tables.}
 \begin{lstlisting}[style=text]
-<index folder>/
-    0f38a5788406244247a4/            one recording
-        meta.json
-        env_min_0.f32  env_max_0.f32  env_min_1.f32 ...
-        mk_piece.i32  mk_sample.i64  mk_code.i16
-        vit_t.f64  vit_v.f64
-    ...
+store    (name, value)              ('format', '3'), ('chunk_values', '4096')
+indexes  (key, meta, engine, written_at)
+                                    one row per index: meta.json's text, byte for byte
+arrays   (key, array, n_values)     one row per array: its version 2 file name, its length
+chunks   (key, array, n, data)      the array's values, little-endian, 4096 to a chunk
 \end{lstlisting}
-Any other entry of an index folder (temporary folders, the Python viewer's progress files
-\file{<key>.progress.json}) is ignored by readers. Medorama's index folder is its
-\code{index\_dir}, a viewer's its \code{cache\_dir} (\cref{chap:settings-reference}).
+An array is cut into chunks of \code{chunk\_values} values (4\,096, written when the store is
+made and never changed); the last chunk may be shorter, and an array with no values has one chunk
+of zero bytes. A reader takes an array's length from \code{arrays}, loads \file{meta.json} and
+the small arrays (markers, vital signs) whole, and reads the envelopes by range, a chunk at a
+time; a chunk whose length is not the one \code{n\_values} implies fails that read. The full
+specification is \file{viewers/vitalstream/docs/index-format.md}, ``Version 3: the index
+store''.
 
 \subsection{The key}
 \label{sec:formats-reference-key}
@@ -168,7 +200,8 @@ key = the first 20 hex digits (lowercase) of SHA-256( JSON text of [version, pat
 \endhead
 \bottomrule
 \endfoot
-\code{version} & the index format's version, \code{2} \\
+\code{version} & the index format's version: \code{3} for an index in a store (\code{2} for an
+  index folder of version 2) \\
 \code{path} & the recording's absolute path with every symbolic link resolved (the real path). On
   Windows, without the \code{\textbackslash\textbackslash?\textbackslash} prefix:
   \code{C:\textbackslash data\textbackslash x.Stp}, and
@@ -204,10 +237,15 @@ integers are in decimal.
 \begin{lstlisting}[style=text]
 [2,"/data/rec.Stp",[1000,1700000000500000000]]
 \end{lstlisting}
-and the key, the first 20 hex digits of that text's SHA-256, is \code{f61f534c1e1a4d244d7a}.
+and the key, the first 20 hex digits of that text's SHA-256, is \code{f61f534c1e1a4d244d7a}. In a
+store (version 3) the text is \code{[3,"/data/rec.Stp",[1000,1700000000500000000]]}, and the key
+\code{b8a4e2e03a427033c9c7}.
 
 \subsection{The files of one index}
 \label{sec:formats-reference-files}
+
+An index is built as these files, in a temporary folder, then packed into the store: each array
+file becomes a row of \code{arrays} and its chunks, under the file's name.
 
 \begin{xltabular}{\linewidth}{@{}P{5.0cm}L@{}}
 \caption{The files of one index.}
@@ -257,7 +295,7 @@ written as \code{null}.
 \endhead
 \bottomrule
 \endfoot
-\code{index\_version} & integer & \code{2} \\
+\code{index\_version} & integer & \code{3} in a store (\code{2} in an index folder of version 2) \\
 \code{key} & string & the key (\cref{sec:formats-reference-key}) \\
 \code{path} & string & the real path used in the key \\
 \code{name} & string & the file or folder name as opened \\
@@ -305,7 +343,7 @@ other keys & & source-specific; readers ignore the keys they do not know \\
 
 \paragraph{The order of the keys.} The reader's keys come first, in the order it writes them, then
 \code{kind}, \code{format} and \code{adapter}, then \code{path}, \code{name}, \code{key},
-\code{index\_version}, \code{engine}, \code{indexed\_s}. Programs that share an index folder write
+\code{index\_version}, \code{engine}, \code{indexed\_s}. Programs that share an index store write
 the same order, so that they write the same bytes.
 
 \subsection{Arrays}
@@ -330,27 +368,36 @@ within a series, values are sorted by time; only finite times and values are sto
 \label{sec:formats-reference-writing}
 
 \begin{itemize}
-\item \textbf{Atomic writing:} a writer builds the index in a temporary folder next to the final
-  one, named uniquely for that writer (\file{<key>.<process id>.<n>.tmp}, \code{n} counting the
-  writer's builds), then renames it to \file{<key>}. The temporary folder is removed on every way
-  out (an error, a cancellation, a failure of the program).
+\item \textbf{Built, then packed:} a writer builds the version 2 files of an index in a temporary
+  folder of its own next to the store (\file{index.tmp/<key>.<process id>.<n>.tmp}, readable by
+  its owner only, \code{n} counting the writer's builds), then packs them into the store in
+  \textbf{one transaction}: it deletes the key's rows, if any, and inserts the new ones. The
+  temporary folder is removed on every way out (an error, a cancellation, a failure of the
+  program); what a program that was killed leaves there is removed when a program next opens the
+  store, once untouched for a day.
 \item \textbf{One writer per key:} within a program, builds of the same key wait for each other.
-\item \textbf{Keeping or replacing:} when the build is complete, the writer checks the folder
-  \file{<key>}. If it holds a complete index (\cref{sec:formats-reference-loading}) written by
-  the same program version (\code{engine}), it is kept and the new build is discarded. Otherwise
-  the old folder, if any, is first renamed aside (\file{<key>.<process id>.<n>.old}), the new one
-  renamed to \file{<key>}, and the old one removed. Readers therefore see a complete index, or
-  none for the moment between the two renames.
-\item \textbf{Shared folders:} several programs (Medorama and the three viewers) may use one index
-  folder at the same time; when two write the same key, the content is identical, and either one
-  is kept.
-\item \textbf{Read only after writing:} an index is never modified after it is written, so that
-  readers may memory-map its arrays.
-\item \textbf{Version check:} a reader uses an index only if \file{meta.json} exists, its
+\item \textbf{Keeping or replacing:} within the transaction, an index of the key written by the
+  same program version (\code{engine}) is kept and the new build discarded; any other is
+  replaced. Readers see the old index or the new one, never a mixture.
+\item \textbf{Shared stores:} several programs (Medorama and the viewer it runs) may open one
+  store at once: SQLite's locking serialises the writers, and the store is in WAL mode, so that
+  readers are not blocked by a writer.
+\item \textbf{Adapters:} an adapter writes the version 2 files of its \code{index} command into
+  the folder it is given, and the calling program packs them. To read samples again, an adapter
+  is given a private temporary folder holding only the index's \file{meta.json}
+  (\file{index.tmp/<key>.<process id>.<n>.read}, one per load), removed when the index is closed.
+\item \textbf{Keys on a pipe:} Medorama starts its viewer with \opt{-{}-keys-on-stdin} and writes
+  one line of JSON per store on its standard input: \code{\{"store": PATH, "key": HEX\}} (with
+  \code{"own": true} for the store the viewer writes) at each start and when a database is
+  connected, \code{\{"forget": PATH\}} before a database is removed. The viewer keeps the keys in
+  memory only, and forgets them all when its standard input closes. A key never appears on a
+  command line, in the environment, in a file or in a log.
+\item \textbf{Removing:} an index is removed by deleting its key's rows; a whole store goes with
+  its folder (Medorama: after the database's key is destroyed).
+\item \textbf{Version check:} a reader uses an index only if its \file{meta.json}'s
   \code{index\_version} equals the version it implements, and the index passes the checks of
   \cref{sec:formats-reference-loading}; otherwise it indexes again.
-\item \textbf{Never next to the recording:} an index folder is never inside a folder of
-  recordings.
+\item \textbf{Never next to the recording:} a store is never inside a folder of recordings.
 \end{itemize}
 
 \subsection{Loading an index}
@@ -362,8 +409,9 @@ checks on what it has just built, and refuses to keep an index that fails them (
 or rates that are not finite numbers, which \file{meta.json} would hold as \code{null}).
 \begin{enumerate}
 \item \file{meta.json} is a JSON object whose \code{index\_version} is the reader's version.
-\item Every array file exists (\code{env\_max\_L} for every \code{env\_min\_L} found, the levels
-  counted from 0 until \code{env\_min\_L} is missing), and its size is a whole number of values.
+\item Every array exists (\code{env\_max\_L} for every \code{env\_min\_L} found, the levels
+  counted from 0 until \code{env\_min\_L} is missing), and its size is a whole number of values
+  (in a store, its length is its \code{n\_values}).
 \item \code{channels}, \code{pieces}, \code{vitals} and \code{marker\_names} are lists when
   present (missing: empty).
 \item Piece \code{i}: \code{id} is the integer \code{i}; \code{ch} is an integer with
@@ -438,14 +486,17 @@ The Rust engine does this once a program calls \code{recording\_engine::paths::s
   bounded (the keys of folders without links, of at most 200\,000 files within \code{max\_depth}
   levels, are unchanged); a WFDB header that states more samples than its signal files hold is
   read to the end of its data; the limits and the checks on loading \\
+3 & the index store: the same \file{meta.json} and arrays as version 2, packed into one SQLite
+  database, encrypted when its owner has a key (\cref{sec:formats-reference-folder}); the key
+  computed with version 3 \\
 \end{xltabular}
 
 Any change to the files, to \file{meta.json} or to the key makes a new version, and indexes of
 other versions are built again. The script \file{viewers/vitalstream/tests/parity/index\_parity.py}
 indexes recordings with every viewer that is built and checks that each key equals the one
 computed from this specification, by an independent implementation in the script, and that the
-viewers' index files are byte-identical (\file{meta.json} compared without its informative
-\code{engine} and \code{indexed\_s}):
+viewers' stores hold byte-identical rows (\code{store}, \code{meta} compared without its
+informative \code{engine} and \code{indexed\_s}, \code{arrays} and \code{chunks}):
 \begin{lstlisting}[style=shell]
 python tests/parity/index_parity.py                             # the synthetic test recordings
 python tests/parity/index_parity.py --adapters-dir DIR FILE...  # recordings an adapter reads
@@ -702,8 +753,9 @@ and \cref{sec:vitalstream-edf}; the specifications of the formats are published 
   year is used: the day and the month always come from the header's date, and the second word's
   dashes and month are not checked. The header's year positions are then ignored; any two
   characters are accepted there, typically \code{yy}, which EDF+ writes after 2084.
-\item The month must be 1 to 12, the day 1 to 31 (not checked against the month: 31.02 becomes
-  March 2), the hour 0 to 23, and the minute and second 0 to 59.
+\item The month must be 1 to 12, the day 1 to the days of that month in that year (Gregorian: 29
+  February only in leap years, so \code{31.02.24} is invalid), the hour 0 to 23, and the minute
+  and second 0 to 59.
 \item The start, in Unix seconds, is that date and time taken as UTC.
 \item An invalid date or time means that the file states no start. Times then count from 0, and
   every piece is marked untimed (\code{timed: false}).

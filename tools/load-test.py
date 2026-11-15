@@ -2,8 +2,8 @@
 """Many users at once on an Medorama server: how long its pages take while they all work.
 
 Each simulated user signs in (a session of their own) and then, without pause, asks for what
-people do most: a page of the Patient Catalog, a patient's summary, journey and report, a page
-of a database's rows, a cohort search.  At the end it prints, for each kind of request, how many
+people do most: a page of the Patient Catalog, a patient's summary, journey and report, a
+database's variables, a cohort search.  At the end it prints, for each kind of request, how many
 were made, the median, the 95th percentile and the slowest time, and the errors.
 
 Synthetic data only: it reads what the server answers and keeps nothing.  It changes nothing
@@ -65,12 +65,12 @@ def setup(s):
     _, first = s.ask("GET", "patients?limit=100")
     total = (first or {}).get("total", 0)
     if not total:
-        raise SystemExit("the catalog has no patient: import some synthetic data first")
+        raise SystemExit("no patient: connect a database of synthetic data first (the demo: medorama init --demo)")
     ids = [p["id"] for p in first["items"]]
     _, far = s.ask("GET", f"patients?limit=100&offset={max(0, total // 2)}")
     ids += [p["id"] for p in (far or {}).get("items", [])]
     _, dbs = s.ask("GET", "databases")
-    dbs = [d["id"] for d in (dbs or {}).get("items", []) if d.get("rows")]
+    dbs = [d["id"] for d in (dbs or {}).get("items", []) if d.get("status") == "online"]
     return {"total": total, "ids": ids, "dbs": dbs}
 
 
@@ -86,7 +86,7 @@ def requests_mix(ctx):
         (1, "cohort search", lambda: ("POST", "cohorts/search", {"criteria": {"version": 2, "include": {"kind": "expression", "text": random.choice(["female AND age > 60", "has labs", "male AND age < 40"])}}, "limit": 100})),
     ]
     if ctx["dbs"]:
-        mix.append((2, "database rows", lambda: ("GET", f"databases/{random.choice(ctx['dbs'])}/rows?limit=100&offset={random.randrange(0, 1000)}", None)))
+        mix.append((2, "database variables", lambda: ("GET", f"databases/{random.choice(ctx['dbs'])}/variables", None)))
     return mix
 
 

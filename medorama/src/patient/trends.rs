@@ -18,46 +18,14 @@ pub struct Trend {
 
 /// Every numeric series of a patient (laboratory, vital signs, other measurements), most
 /// measured first.
-pub fn trends(c: &Connection, user: &User, id: i64) -> anyhow::Result<Vec<Trend>> {
-    let _ = user;
-    patient_exists(c, id)?;
-    let mut st = c.prepare(&format!(
-        "SELECT name, category, unit, ref_low, ref_high, time, value_num, flag FROM ehr_items
-         WHERE patient = ?1 AND value_num IS NOT NULL AND time IS NOT NULL AND category IN ('lab', 'vit', 'obs', 'ecg', 'echo')
-           AND {}
-         ORDER BY time, id",
-        item_shown("")
-    ))?;
+pub fn trends(c: &Connection, cfg: &Config, user: &User, id: i64) -> anyhow::Result<Vec<Trend>> {
+    patient_exists(c, user, id)?;
     // a series per name and unit: values in mg/dL and in mmol/L are not one line
     let key = |cat: &str, name: &str, unit: &str| {
         (cat.to_string(), name.to_lowercase(), unit.trim().to_lowercase().replace(['µ', 'μ'], "u"))
     };
     let mut by: BTreeMap<(String, String, String), Trend> = BTreeMap::new();
-    let mut rows = st.query([id])?;
-    while let Some(r) = rows.next()? {
-        let (name, cat, unit, lo, hi, t, v, flag): (
-            String,
-            String,
-            String,
-            Option<f64>,
-            Option<f64>,
-            f64,
-            f64,
-            String,
-        ) = (r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?);
-        let e = by.entry(key(&cat, &name, &unit)).or_insert(Trend {
-            name,
-            category: cat,
-            unit,
-            ref_low: lo,
-            ref_high: hi,
-            points: vec![],
-            n: 0,
-        });
-        e.points.push((t, v, level(&flag, Some(v), lo, hi)));
-        e.n += 1;
-    }
-    for it in live_items(c, id)?.0 {
+    for it in load(cfg, c, user, id)?.items {
         let (Some(t), Some(v)) = (it.time, it.num) else { continue };
         if !["lab", "vit", "obs", "ecg", "echo"].contains(&it.category.as_str()) {
             continue;

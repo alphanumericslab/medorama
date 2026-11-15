@@ -13,19 +13,19 @@ does not read yet, and for reviewers who want to know where format-specific code
   - [Recordings: the index](#recordings-the-index)
   - [ECG records](#ecg-records)
   - [DICOM objects](#dicom-objects)
-  - [Catalog tables](#catalog-tables)
+  - [Database tables](#database-tables)
 - [The readers that exist](#the-readers-that-exist)
 - [Add a format](#add-a-format)
   - [Recordings: a built-in reader or an adapter](#recordings-a-built-in-reader-or-an-adapter)
   - [ECGs: a reader in the ECG viewer, or a converter](#ecgs-a-reader-in-the-ecg-viewer-or-a-converter)
   - [Images: convert to DICOM](#images-convert-to-dicom)
-  - [Tables: add an import format or a connected database](#tables-add-an-import-format-or-a-connected-database)
+  - [Tables: add a db-builder format or a connected database](#tables-add-a-db-builder-format-or-a-connected-database)
 - [Two exceptions: WFDB and BedMasterEx .Stp](#two-exceptions-wfdb-and-bedmasterex-stp)
 
 ## The design
 
 Every file format has its own **reader**, and every reader produces one of four **data models**:
-a recording's index, an ECG record, a DICOM object, or rows of the catalog's canonical tables.
+a recording's index, an ECG record, a DICOM object, or rows of a database's canonical tables.
 Past the reader, nothing depends on the format: VitalStream draws an index the same way whether
 it came from a WFDB record or an EDF file, cohorts search entries the same way whether they came
 from a CSV file or an OMOP database, and the privacy gate checks the same fields whatever their
@@ -40,9 +40,8 @@ This design has three consequences:
   images, and a table or a set of SQL views with the canonical columns for tabular data.
 - **Identity stays out of the models.** No data model has a place for the patient's identity. A
   recording's index, an ECG record and the viewers' output never hold a name, an identifier or
-  a birth date. Identifiers reach Medorama only through the catalog's identifier tables
-  (imported columns, connected views, and the `identify` action for identifiers stored inside
-  recordings), where the privacy gate controls them.
+  a birth date. Identifiers reach Medorama only through a connected database's `persons` (its
+  table, its view or OMOP's `person`), where the grants and the privacy gate control them.
 
 ## The four data models
 
@@ -51,7 +50,7 @@ This design has three consequences:
 | Recording index | Channels, pieces of contiguous samples, min/max envelopes, vital-sign series, events, markers and breaks | [index-format.md](../viewers/vitalstream/docs/index-format.md), [data-model.md](../viewers/vitalstream/docs/data-model.md) | VitalStream; Medorama (a Holter's heart rate, recordings in cohorts and on patient pages) |
 | ECG record | Leads in millivolts, their sampling rate, the report (measurements, statements, notes); and its JSON form | The header comment of [viewers/ecg/readers.js](../viewers/ecg/readers.js), summarized below | The ECG viewer |
 | DICOM object | Frames, measurements and reports, as the DICOM standard defines them | DICOM (PS3) | The PACS viewer; the ECG viewer for DICOM ECGs |
-| Catalog tables | Patients, encounters, bed stays and entries, in canonical columns | [importing.md, Column reference](importing.md#column-reference); [databases.md, Canonical views reference](databases.md#canonical-views-reference) | Patient pages, cohorts, the Databases tab |
+| Database tables | Persons, visits, entries and recordings, in canonical columns | [databases.md](databases.md); [db-builder/docs/schema.md](../db-builder/docs/schema.md); [importing.md](importing.md) (db-builder's input) | Patient pages, cohorts, the Databases tab |
 
 ### Recordings: the index
 
@@ -63,8 +62,8 @@ full: when a view zooms in close, the samples are read from the recording itself
 same reader.
 
 The index format is specified so that independently written programs produce the same bytes:
-the three VitalStream viewers (Rust, C++, Python) and Medorama share index folders, and a test
-checks that they write byte-identical indexes ([index-format.md,
+the three VitalStream viewers (Rust, C++, Python) and Medorama write the same index stores, and a
+test checks that their stores' rows are byte-identical ([index-format.md,
 Conformance](../viewers/vitalstream/docs/index-format.md#conformance)). The language-neutral model
 behind it (channels, pieces, lanes, breaks, "time not stated") is in
 [data-model.md](../viewers/vitalstream/docs/data-model.md).
@@ -110,14 +109,17 @@ either shown as it is (pictures, videos, PDF) or converted to DICOM. The PACS vi
 [viewers/pacs/dicom.js](../viewers/pacs/dicom.js) (and `jpeg.js` for lossless and 12-bit JPEG);
 the privacy gate rewrites DICOM headers in [medorama/src/dicom.rs](../medorama/src/dicom.rs).
 
-### Catalog tables
+### Database tables
 
-Tabular data (patients, encounters, bed stays, results, drugs, conditions, notes, and the files
-they name) end up in the catalog's **canonical columns**. Imported tables reach them through the
-recognized column names and mappings; known exports through an import format that converts them
-first; connected databases through three SQL views (`persons`, `visits`, `entries`). The columns
-are specified in [importing.md, Column reference](importing.md#column-reference) and
-[databases.md, Canonical views reference](databases.md#canonical-views-reference).
+Tabular data (patients, visits, results, drugs, conditions, notes, and the files they name) reach
+Medorama in **canonical columns**, read in place from a connected database: OMOP's tables through
+built-in views, any SQL database through the views a site writes (`persons`, `visits`,
+`entries`, and `recordings` for a recording database), or a db-builder database, whose tables
+are those columns already. Tables, known exports and folders of recordings become a db-builder
+database first: db-builder recognizes column names and mappings, and converts known exports with
+its formats. The columns are specified in [databases.md](databases.md) and
+[db-builder/docs/schema.md](../db-builder/docs/schema.md); db-builder's input in
+[importing.md](importing.md).
 
 ## The readers that exist
 
@@ -127,24 +129,26 @@ are specified in [importing.md, Column reference](importing.md#column-reference)
 | EDF, EDF+, BDF, BDF+ | EDF reader | Rust, C++, Python | [libs/engine/src/sources/edf.rs](../libs/engine/src/sources/edf.rs); `cpp/engine/src/sources_edf.cpp`; `python/…/sources/edf.py` | Recording index ([edf.md](edf.md)) |
 | BedMasterEx `.Stp` (GE Unity and Carescape, Philips PIICiX and Viridia) | stp-adapter, a private add-on available to institutions under agreement | Rust, C++, Python | outside this repository, through the adapter protocol ([adapters.md](adapters.md)) | Recording index |
 | WFDB (a `.hea` with its signal files) | `wfdb.js` | JavaScript | [viewers/ecg/](../viewers/ecg/README.md) | ECG record |
-| GE MUSE XML | `muse.js`; `muse-py` (`json`, `wfdb`, `index`) | JavaScript; Python | viewers/ecg/, viewers/ecg/python/muse | ECG record (and its JSON form, a WFDB record, a table) |
+| GE MUSE XML | `muse.js`; `muse-py` (`json`, `wfdb`, `index`) | JavaScript; Python | viewers/ecg/, viewers/ecg/python/muse | ECG record (and its JSON form, a WFDB record, a table for db-builder) |
 | DICOM ECG waveforms | `dicom-ecg.js` with `dicom.js`; `dicom-py wfdb` | JavaScript; Python | viewers/ecg/, viewers/pacs/python/dicom | ECG record (or a WFDB record) |
 | EDF, EDF+, BDF, BDF+ | `edf.js` | JavaScript | viewers/ecg/ | ECG record |
 | The ECG viewer's JSON form | `ECG.readJson` in `ecg.js` | JavaScript | viewers/ecg/ | ECG record |
 | PNG, JPEG, PDF | shown as they are | | viewers/ecg/, viewers/pacs/ | (not a model) |
-| DICOM images, loops, series, structured reports, encapsulated PDF | `dicom.js`, `jpeg.js`; `dicom-py index` | JavaScript; Python | [viewers/pacs/](../viewers/pacs/README.md) | DICOM object (and a table) |
+| DICOM images, loops, series, structured reports, encapsulated PDF | `dicom.js`, `jpeg.js`; `dicom-py index` | JavaScript; Python | [viewers/pacs/](../viewers/pacs/README.md) | DICOM object (and a table for db-builder) |
 | DICOM headers in Privacy Mode | `dicom.rs` | Rust | medorama/src/ | DICOM object, de-identified |
-| CSV, Parquet, Excel, OpenDocument tables | `tables.rs`, `parquet_rows.rs` | Rust | medorama/src/ | Catalog tables |
-| GE MUSE metadata tables; CLIF tables | `formats/ge_muse.rs`; `formats/clif.rs` | Rust | [medorama/src/formats/](../medorama/src/formats/mod.rs) | Catalog tables |
-| A site's own exports | TOML descriptions (`formats/declared.rs`) | none: a description | a folder of `formats_dirs` | Catalog tables |
-| OMOP CDM 5.3 and 5.4 | built-in views (`sources/omop.rs`) | SQL | [medorama/src/sources/](../medorama/src/sources/mod.rs) | Catalog tables (connected) |
-| Any other SQL database | your three views | SQL | a TOML file | Catalog tables (connected) |
+| CSV, Parquet, Excel, OpenDocument tables | `tables.rs`, `parquet_rows.rs` (db-builder) | Rust | [db-builder/src/](../db-builder/src/lib.rs) | Database tables (a db-builder database) |
+| GE MUSE metadata tables; CLIF tables | `formats/ge_muse.rs`; `formats/clif.rs` (db-builder) | Rust | [db-builder/src/formats/](../db-builder/src/formats/mod.rs) | Database tables (a db-builder database) |
+| A site's own exports | TOML descriptions (`formats/declared.rs`, db-builder) | none: a description | a file or folder given with `db-builder add --formats` | Database tables (a db-builder database) |
+| A folder of recordings | `recordings.rs` (db-builder), with the engine's readers and the installed adapters | Rust | [db-builder/src/](../db-builder/src/recordings.rs) | Database tables (a recording database) |
+| db-builder databases | their tables (`sources/mod.rs`) | SQL | [medorama/src/sources/](../medorama/src/sources/mod.rs) | Database tables (connected) |
+| OMOP CDM 5.3 and 5.4 | built-in views (`sources/omop.rs`) | SQL | [medorama/src/sources/](../medorama/src/sources/mod.rs) | Database tables (connected) |
+| Any other SQL database | your views | SQL | the database's settings (`medorama databases connect --views FILE.toml`, or the page) | Database tables (connected) |
 
 ## Add a format
 
 Choose the data model first: it decides where the reader goes. A format of waveforms that people
 scroll through for hours is a recording; a 10-second, 12-lead ECG printed on paper is an ECG
-record; an image is DICOM; anything tabular is catalog tables.
+record; an image is DICOM; anything tabular is database tables.
 
 ### Recordings: a built-in reader or an adapter
 
@@ -179,20 +183,21 @@ is the model to follow; the module table is in
 5. **Add test files** (synthetic only) to `viewers/vitalstream/testdata/`, written by its
    `generate.py`, and tests in each language (`libs/engine/tests/`, the Python viewer's tests).
 6. **Check the three agree:** `make parity` indexes the test files with every built viewer and
-   checks that the indexes are byte-identical.
-7. **Teach Medorama the format** where it needs to know it: `is_recording` in
-   [medorama/src/tables.rs](../medorama/src/tables.rs) (so that an imported row makes a recording);
-   the file kinds in [medorama/src/patient/files.rs](../medorama/src/patient/files.rs) and
+   checks that the index stores' rows are byte-identical.
+7. **Teach Medorama the format** where it needs to know it: the file kinds in
+   [medorama/src/patient/files.rs](../medorama/src/patient/files.rs) and
    [medorama/src/gate.rs](../medorama/src/gate.rs) if its files are also served to the browser
-   (the gate refuses, in Privacy Mode, any kind it cannot de-identify); and
-   [medorama/src/identify.rs](../medorama/src/identify.rs) if the file stores identifiers, so that
-   the `identify` action can read them into the identifier tables.
+   (the gate refuses, in Privacy Mode, any kind it cannot de-identify). db-builder finds such
+   recordings through the engine (`is_recording` in
+   [db-builder/src/add.rs](../db-builder/src/add.rs)), so a folder of them becomes a recording
+   database with no change there.
 
 **An adapter.** The protocol is in [adapters.md](adapters.md#the-protocol).
 
 1. Write a program named `<name>-adapter` that answers `describe` (its formats: kind, label and
    extensions), `detect`, `index PATH DIR` (the index files, in the index format), `serve` (a
-   session that returns samples), `identify` (the identifiers the file states), and `--version`.
+   session that returns samples), `identify` (the identifiers the file states; Medorama does not
+   call it), and `--version`.
 2. Test it with every viewer: `viewers/vitalstream/tests/parity/index_parity.py --adapters-dir DIR
    FILE…` indexes a recording through the adapter with each built viewer and checks the results
    are byte-identical ([adapters.md, Writing an adapter](adapters.md#writing-an-adapter)).
@@ -239,34 +244,36 @@ Privacy Mode the gate rewrites a DICOM file's header (names, IDs, dates, UIDs), 
 and videos go out as they are, with the "may contain PHI" warning, because the gate cannot know
 what they show.
 
-### Tables: add an import format or a connected database
+### Tables: add a db-builder format or a connected database
 
-Tabular data need a reader only when their columns cannot simply be mapped. In order of effort:
+Tabular data need a reader only when their columns cannot simply be mapped. Tables become a
+database with db-builder ([db-builder/README.md](../db-builder/README.md)). In order of effort:
 
-1. **A mapping** (no reader at all): map the columns once in the Import tab, or with
-   `--mapping` ([databases.md, When the columns have other names](databases.md#when-the-columns-have-other-names)).
-2. **A TOML description**, for an export your site imports regularly: column by column, with date
-   forms, value maps, numbers and joined columns. No code and no build
-   ([databases.md, Describe your own export in TOML](databases.md#describe-your-own-export-in-toml);
-   [medorama/src/formats/declared.rs](../medorama/src/formats/declared.rs)).
+1. **A mapping** (no reader at all): map the columns with `db-builder add --mapping FILE`
+   ([db-builder/README.md, add](../db-builder/README.md#add)).
+2. **A TOML description**, for an export your site makes regularly: column by column, with date
+   forms, value maps, numbers and joined columns, given with `db-builder add --formats`. No code
+   and no build ([db-builder/README.md, Known exports](../db-builder/README.md#known-exports);
+   [db-builder/src/formats/declared.rs](../db-builder/src/formats/declared.rs)).
 3. **A Rust converter**, for what a description cannot say (one row that becomes several
    entries, values that depend on other rows or tables). Implement the two traits of
-   [medorama/src/formats/mod.rs](../medorama/src/formats/mod.rs):
+   [db-builder/src/formats/mod.rs](../db-builder/src/formats/mod.rs):
    - `Format`: `key` (its name on the command line and in the page), `label`, `category`,
      `about`, `detect(headers)` (whether a table with these columns is one) and
      `start(headers)` (its converter);
-   - `Converter`: `headers()` (the converted table's columns, catalog fields or columns of its
-     own), and `row(record)` or `rows(record)` (the converted row, several rows, or why a row is
-     left out).
+   - `Converter`: `headers()` (the converted table's columns, recognized fields or columns of
+     its own), and `row(record)` or `rows(record)` (the converted row, several rows, or why a row
+     is left out).
 
-   Register it in `builtin()` in the same file. [ge_muse.rs](../medorama/src/formats/ge_muse.rs)
-   (one row per ECG) and [clif.rs](../medorama/src/formats/clif.rs) (one format per CLIF table,
+   Register it in `builtin()` in the same file. [ge_muse.rs](../db-builder/src/formats/ge_muse.rs)
+   (one row per ECG) and [clif.rs](../db-builder/src/formats/clif.rs) (one format per CLIF table,
    rows that become several entries) are the examples. A format keeps only what it names:
-   identifiers it maps to the catalog's patient columns are masked in Privacy Mode, and it should
-   not keep other identifying columns (staff, account numbers).
-4. **A connected database's views**, when the data should stay in their database: three SQL
-   queries with the canonical columns, or the built-in OMOP views
-   ([databases.md, Connect any SQL database through views](databases.md#connect-any-sql-database-through-views)).
+   identifiers it maps to the patient's columns are kept in `persons`, which Medorama's grants
+   and Privacy Mode control, and it should not keep other identifying columns (staff, account
+   numbers).
+4. **A connected database's views**, when the data should stay in their database: SQL queries
+   with the canonical columns (`persons`, `visits`, `entries`, and `recordings`), or the built-in
+   OMOP views ([databases.md](databases.md)).
    A new kind of database engine is added in [medorama/src/sources/](../medorama/src/sources/mod.rs)
    and [medorama/src/sql/](../medorama/src/sql/mod.rs).
 

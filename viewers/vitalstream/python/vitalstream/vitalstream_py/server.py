@@ -4,7 +4,7 @@
   GET  /api/v1/browse?path=                folders and recordings (default: home)
   GET  /api/v1/complete?prefix=            path completion for the path box
   GET  /api/v1/scan?path=                  what opening a folder or a WFDB record would read
-  POST /api/v1/open {"path": ...}          index (in a worker process) or load from cache
+  POST /api/v1/open {"path": ...}          index (in a worker process) or load from an index store
   POST /api/v1/cancel {"key": ...}         stop an index being built
   GET  /api/v1/datasets/{key}              indexing progress, or the dataset description
   GET  /api/v1/datasets/{key}/window       ?t0&t1&px&ch=0,1,2  samples or min/max per channel
@@ -31,7 +31,7 @@ import tempfile
 import threading
 import time
 from collections import OrderedDict
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -46,9 +46,10 @@ from . import __version__, auth
 from . import adapters, paths
 from .common import json_loads
 from .dataset import Dataset
-from .index import build_index, cache_key, load_index, read_progress
+from .index import Progress, build_files, cache_key
 from .settings import FS_ROOT, HOME, IN_REPO, SAMPLE_DATA, absolute
 from .sources import format_label, kind_of, unreadable, wfdb_folder
+from .store import STORE_FORMAT, Stores
 
 # The page: packaged copy (installed wheel), else <repo>/web/ (editable install, run from a clone).
 STATIC = Path(__file__).parent / 'static'
@@ -99,6 +100,28 @@ class _Flag:
             os.remove(self.path)
         except FileNotFoundError:
             pass
+
+
+def _packed(future, store):
+    """A Future of the key: once the worker's build (`future`, of (key, folder)) is done, its
+    files packed into `store` in a thread of this process, and its folder removed."""
+    out = Future()
+
+    def pack():
+        try:
+            key, folder = future.result()
+        except BaseException as e:
+            out.set_exception(e)
+            return
+        try:
+            store.pack(key, folder)
+            out.set_result(key)
+        except BaseException as e:
+            out.set_exception(e)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+    future.add_done_callback(lambda _: threading.Thread(target=pack, daemon=True).start())
+    return out
 
 
 def _init_worker(adapters_dirs, limits, roots):
@@ -285,8 +308,13 @@ def _entry(path, name):
     return None
 
 
-def create_app(settings, protected=None):
-    """protected: require the password (default: when one is set)."""
+def create_app(settings, protected=None, stores=None):
+    """protected: require the password (default: when one is set).  stores: the index stores
+    (store.Stores), default the viewer's own (cache_dir/index.sqlite, with index_key_file); a
+    viewer launched by Medorama gets them on standard input (--keys-on-stdin).  A ValueError when
+    the own store cannot be opened."""
+    if stores is None:
+        stores = Stores.own_from(settings)
     # indexing runs in worker processes, which look for adapters in the same folder, read
     # folders of records within the same limits and open files in the same data roots; a pool
     # broken by a worker that died is made again
@@ -296,7 +324,8 @@ def create_app(settings, protected=None):
     pool = [new_pool()]
     # this process reads samples too: from no file outside the data roots
     paths.set_allowed_roots(settings.data_roots)
-    flags = tempfile.mkdtemp(prefix='vitalstream-cancel-')     # the cancel flags of the jobs
+    # the cancel flags and the progress files of the jobs
+    flags = tempfile.mkdtemp(prefix='vitalstream-jobs-')
 
     @asynccontextmanager
     async def lifespan(app):
@@ -307,6 +336,7 @@ def create_app(settings, protected=None):
     app = FastAPI(title='VitalStream', version=__version__, docs_url='/api/v1/docs', openapi_url='/api/v1/openapi.json', redoc_url=None,
                   lifespan=lifespan)
     app.state.pool = pool
+    app.state.stores = stores
     jobs = {}                     # key -> (Future, its cancel _Flag)
     loaded = OrderedDict()        # key -> Dataset
     opened = set()                # keys opened through allowed paths in this session
@@ -416,7 +446,8 @@ def create_app(settings, protected=None):
             if ds is not None:
                 loaded.move_to_end(key)
                 return ds
-        found = load_index(settings.cache_dir, key)
+        store = stores.holding(key)
+        found = store.load(key) if store is not None else None
         if found is None:
             return None
         ds = Dataset(*found)
@@ -536,22 +567,37 @@ def create_app(settings, protected=None):
         except Exception as e:
             raise HTTPException(422, str(e))
 
+    def progress_file(key):
+        return os.path.join(flags, f'{key}.progress.json')
+
     def start_job(key, p):
-        """Index `p` under `key` in a worker process (a pool broken by a worker that died is made
-        again)."""
+        """Index `p` under `key`: its files built in a worker process (a pool broken by a worker
+        that died is made again), then packed into the viewer's own store here (the worker needs
+        no key)."""
         with lock:
             job = jobs.get(key)
             if job is not None and not job[0].done():
                 return
             flag = _Flag(os.path.join(flags, key))
             flag.clear()
+            own = stores.own()
+            if own is None:
+                future = Future()
+                future.set_exception(ValueError('no index store to write into'))
+                jobs[key] = (future, flag)
+                return
             try:
-                future = pool[0].submit(build_index, str(p), settings.cache_dir, flag)
+                os.remove(progress_file(key))
+            except OSError:
+                pass
+            args = (build_files, str(p), own.tmp_dir, Progress(progress_file(key)), flag, key)
+            try:
+                future = pool[0].submit(*args)
             except (BrokenProcessPool, RuntimeError):
                 pool[0].shutdown(wait=False, cancel_futures=True)
                 pool[0] = new_pool()
-                future = pool[0].submit(build_index, str(p), settings.cache_dir, flag)
-            jobs[key] = (future, flag)
+                future = pool[0].submit(*args)
+            jobs[key] = (_packed(future, own), flag)
 
     def open_path(path, reindex):
         p = check_path(path)
@@ -570,7 +616,7 @@ def create_app(settings, protected=None):
                 wfdb_folder.scan(p, settings.limits)
             except Exception as e:
                 raise HTTPException(422, str(e))
-        key = cache_key(p)
+        key = cache_key(p, STORE_FORMAT)
         opened.add(key)
         if not reindex and dataset(key) is not None:
             return {'key': key, 'state': 'ready'}
@@ -608,7 +654,11 @@ def create_app(settings, protected=None):
     def describe(key: str):
         job = jobs.get(key)
         if job is not None and not job[0].done():
-            prog = read_progress(settings.cache_dir, key) or {'state': 'indexing', 'fraction': 0}
+            try:
+                with open(progress_file(key), encoding='utf-8') as f:
+                    prog = json_loads(f.read())
+            except (OSError, ValueError):
+                prog = {'state': 'indexing', 'fraction': 0}
             return {'state': 'indexing', 'progress': prog}
         if job is not None and cancelled(job):
             return {'state': 'cancelled'}

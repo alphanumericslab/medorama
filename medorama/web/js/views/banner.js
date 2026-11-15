@@ -69,7 +69,7 @@ export async function hostContext(params, kind) {
   const age = ages() && s.age !== undefined && s.age !== null ? `${s.age} y` : '';
   const who = [name, s.patient_id, mrn && `MRN ${mrn}`, s.sex, age].filter(Boolean).join(' · ');
   const enc = s.encounters?.find((x) => x.id === d.encounter);
-  const what = [d.title, d.time ? `${fmtDate(d.time)} ${fmtHM(d.time)}` : '', enc?.encounter_id].filter(Boolean).join(' · ');
+  const what = [d.title, d.time ? `${fmtDate(d.time)} ${fmtHM(d.time)}` : '', enc?.unit].filter(Boolean).join(' · ');
   // the patient's other files of this kind, in time order
   const sameKind = (e) => e.category === d.category && (kind === 'rec' ? e.key.startsWith('rec:') : e.attachment);
   const sibs = (rep.entries || []).filter(sameKind).sort((a, b) => (a.time ?? 0) - (b.time ?? 0));

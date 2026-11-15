@@ -9,6 +9,7 @@
 //! | [`adapters`] | programs that read other formats: finding them, and the protocol they speak |
 //! | [`common`] | pieces, envelopes, vital-sign series, alarms, placement in time |
 //! | [`index`] | the index: key, building, loading |
+//! | [`store`] | the index store (index format 3): one SQLite database of indexes, encrypted with a key |
 //! | [`dataset`] | window, vital-sign and marker queries on an indexed recording |
 //! | [`paths`] | paths as users write them (`~`, relative), Windows' canonical paths |
 
@@ -23,3 +24,4 @@ pub mod dataset;
 pub mod index;
 pub mod paths;
 pub mod sources;
+pub mod store;

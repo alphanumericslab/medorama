@@ -3,7 +3,7 @@
 //!
 //! The rewrite applies the actions of DICOM PS3.15 Table E.1-1 (the Basic Application Level
 //! Confidentiality Profile) for the attributes listed in `PROFILE`, with the "Retain
-//! Longitudinal Temporal Information with Modified Dates" option (the catalog's offset and the
+//! Longitudinal Temporal Information with Modified Dates" option (Medorama's offset and the
 //! patient's own days, so the patient's intervals are kept).  It is not a certified
 //! implementation of the profile: what the table names and this list does not is kept, its
 //! text scrubbed (below).
@@ -22,7 +22,7 @@
 //! | curves (50xx), overlays (60xx), results (4008) | removed |
 //! | private elements (odd groups) | removed |
 //! | the free text left (VR SH, LO, ST, LT, UC, UT; in implicit-VR files, elements of unknown VR that hold text) | the patient's names, date of birth and identifiers replaced, dates in it moved (gate.rs `Restricted::free_text`) |
-//! | instance UIDs (study, series, instance, frame of reference, references) | replaced: `2.25.` and a 128-bit keyed hash of the original (HMAC-SHA-256 with the catalog's secret), so a series still holds together across requests, and nobody without the secret can map them back |
+//! | instance UIDs (study, series, instance, frame of reference, references) | replaced: `2.25.` and a 128-bit keyed hash of the original (HMAC-SHA-256 with Medorama's secret), so a series still holds together across requests, and nobody without the secret can map them back |
 //! | dates and times (DA, DT, TM) | moved back by the offset; a date and its time together |
 //! | Patient Identity Removed, De-identification Method, Longitudinal Temporal Information Modified | added |
 //!
@@ -55,7 +55,7 @@ pub struct Rewrite<'a> {
     /// Dates move back by this many seconds (0: kept).
     pub offset_s: i64,
     pub cap_ages: bool,
-    /// The catalog's secret, for UIDs.
+    /// Medorama's secret, for UIDs.
     pub uid_key: &'a [u8],
     /// Free text as Privacy Mode writes it (the values of text VRs left by the profile, and of
     /// elements of unknown VR that hold text, in implicit-VR files): the patient's names and

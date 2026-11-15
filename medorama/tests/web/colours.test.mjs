@@ -26,3 +26,26 @@ test('red only for alarms', () => {
   assert.deepEqual(red, [], 'red outside the alarm tokens');
   assert.ok(tokens.some(([, name]) => name === 'alarm'), 'the alarm colour is defined');
 });
+
+const token = (theme, name) => {
+  const block = theme === 'dark' ? css.match(/:root\[data-theme="dark"\] \{([^}]*)\}/)[1] : css.match(/:root \{([^}]*)\}/)[1];
+  return block.match(new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`))[1];
+};
+const lum = (hex) => {
+  const n = parseInt(hex.slice(1), 16);
+  const f = (v) => ((v /= 255) <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+  return 0.2126 * f((n >> 16) & 255) + 0.7152 * f((n >> 8) & 255) + 0.0722 * f(n & 255);
+};
+const contrast = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
+
+test('the busy colour reads at 5:1 on the page, and its badge text on it at 4.5:1, in both themes', () => {
+  for (const t of ['light', 'dark']) {
+    if (t === 'light') assert.ok(contrast(token(t, 'busy'), token(t, 'bg')) >= 5, `${t}: busy on the page`);
+    assert.ok(contrast(token(t, 'on-busy'), token(t, 'busy')) >= 4.5, `${t}: a count's text on busy`);
+  }
+});
+
+test('no colour is written outside the tokens where a warning is shown (the tooltip)', () => {
+  assert.match(css, /\.tip \.bd \{ color: var\(--tip-warn\)/);
+  assert.doesNotMatch(css, /#ff9b93/);
+});

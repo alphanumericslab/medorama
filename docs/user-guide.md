@@ -3,7 +3,7 @@
 This guide explains how to find patients and work with their data in Medorama's web page. It is
 written for clinicians, researchers and data managers who use Medorama once it is running. To
 install Medorama and take a first tour, see [getting-started.md](getting-started.md). To set it
-up for others, import data and manage users, see the
+up for others, connect databases and manage users, see the
 [administrator's guide](administration.md). Programs that talk to Medorama directly use the
 [HTTP API](api.md).
 
@@ -17,7 +17,7 @@ up for others, import data and manage users, see the
 - [Cohorts](#cohorts)
 - [The Patient Catalog and the patient page](#the-patient-catalog-and-the-patient-page)
 - [The Databases tab](#the-databases-tab)
-- [Encounters and recordings](#encounters-and-recordings)
+- [Recordings](#recordings)
 - [Searching](#searching)
 - [The viewers](#the-viewers)
 - [Actions and jobs](#actions-and-jobs)
@@ -27,15 +27,15 @@ up for others, import data and manage users, see the
 
 | Term | Meaning |
 |---|---|
-| Catalog | Medorama's database of patients, their encounters and their data, and the links to their files. |
-| Patient | A person, known in the catalog by a `patient_id`. Identifiers such as the name, the medical record number (MRN) and the date of birth are kept apart from the clinical data. |
-| Encounter | One hospital stay or visit of a patient, known by an `encounter_id`. |
-| Bed stay | Where the patient was during an encounter: the care unit, the bed, and the start and end times. |
-| Item | One piece of a patient's data: a laboratory result, a vital sign, a drug, a diagnosis code, a note or report, an ECG, an image. Every item belongs to a **category**, such as Labs, Vitals, ECG or ICU. |
-| Recording | A waveform recording, such as ICU bedside monitoring, a Holter ECG, an EEG or a sleep study. It can be a WFDB record (single- or multi-segment), a folder of WFDB records read as one session, a WFDB collection, an EDF, EDF+, BDF or BDF+ file, or a file that an installed add-on reads. Each recording is linked to an encounter of its patient. |
-| Database | A table imported into the catalog (a CSV file, a Parquet file or a spreadsheet), or a **connected database**: one that Medorama reads where it is, such as an OMOP instance or a research warehouse. |
-| Cohort | A named set of patients, found across every database by criteria, and kept. |
-| Action | Work done on recordings in the background: `index` (prepares a recording for the viewers), `identify` (reads what the recording's file says about the patient), and any plug-ins your institution installs. |
+| Database | A **connected database**: one that Medorama reads where it is, read-only, and never writes. It can be an OMOP instance, a research warehouse read through SQL views, or a SQLite file made by [db-builder](../db-builder/README.md) from tables, exports and folders of recordings. Medorama imports nothing. |
+| Recording database | A connected database that lists recordings: each one's file, its patient, its start and its format. The files stay where they are. |
+| Patient | A person, known in Medorama by a patient number and a **pseudonym** (`MO-XXXX-XXXX`). A patient found in two databases under the same identifier, given by the same issuer (an MRN and its hospital, a study ID and its study), is one patient. Identifiers such as the name, the medical record number (MRN) and the date of birth stay in the databases. |
+| Visit | One hospital stay or visit of a patient, as a database records it. Each database's visits are shown with that database's name. |
+| Entry | One piece of a patient's data: a laboratory result, a vital sign, a drug, a diagnosis code, a note or report, an ECG, an image. Every entry belongs to a **category**, such as Labs, Vitals, ECG or ICU. |
+| Recording | A waveform recording, such as ICU bedside monitoring, a Holter ECG, an EEG or a sleep study, listed by a recording database. It can be a WFDB record (single- or multi-segment), a folder of WFDB records read as one session, a WFDB collection, an EDF, EDF+, BDF or BDF+ file, or a file that an installed add-on reads. |
+| Grant | What a user may do with one database or one cohort. On a database: `search` (its patients are found by criteria), `view` (also its data on patient pages, its recordings and the viewers), `phi` (also its identifiers, for a user with the PHI permission outside Privacy Mode) and `manage` (also checking, refreshing, granting and removing it). On a cohort: `view`, `edit` and `manage`. Each grant includes the weaker ones. |
+| Cohort | A named set of patients, found by criteria in the databases you choose, and kept. |
+| Action | Work done on recordings in the background: `index` (prepares a recording for the viewers), and any plug-ins your institution installs. |
 | PHI | Protected health information: names, MRNs, dates of birth, account numbers and other data that identify a patient. |
 | Privacy Mode | The mode in which Medorama sends no identifier to your browser. It is described [below](#privacy-mode). |
 
@@ -46,35 +46,37 @@ The top bar has three groups of tabs:
   on the Cohorts tab.
 - **ECG, PACS and VitalStream** are the viewers. The ECG and PACS tabs are always shown, and
   they stay dimmed until a patient's page sends something to them.
-- **History, Actions, Jobs, Review, Import and Admin**, at the right, are for work on the data.
-  Some of them are shown only to the roles that may use them.
+- **History, Actions, Jobs and Admin**, at the right, are for work on the data. Some of them are
+  shown only to the roles that may use them.
 
 | Tab | What it shows |
 |---|---|
-| Cohorts | Find patients across every database by criteria, with the reason each one matched. Save them as named cohorts; create, edit, clone, merge and refine cohorts; refresh, share and export them; run actions on their recordings. |
-| Patient Catalog | Every patient, the one with the latest encounter first, with the kinds of data each has. A patient's page shows their whole journey. |
-| Databases | Every database in use. Each one unfolds to show its rows as they were imported, with the patient and the file of each row. |
+| Cohorts | Find patients by criteria in the databases you tick, with the reason each one matched, and which databases were searched and which were left out. Save them as named cohorts; create, edit, clone, merge and refine cohorts; refresh, share and export them; run actions on their recordings. |
+| Patient Catalog | Every patient of the databases you may view, the one with the latest data first, with the kinds of data each has. A patient's page shows their whole journey. |
+| Databases | The databases granted to you, each with its status (online or offline) and what it holds; a database's own page; connecting a database, and creating one with db-builder (administrators). Its **Recordings** subtab lists the recordings of the recording databases you may view. |
 | ECG, PACS, VitalStream | The viewers: 12-lead ECGs; DICOM studies, pictures and videos; waveform recordings. |
-| History | The encounters you opened in the encounter panel, the most recent first. Only you see your history. |
+| History | The patients whose page you opened, the most recent first. Only you see your history. |
 | Actions, Jobs | Run actions on recordings, and follow the queue of jobs. |
-| Review (administrators) | Rows held back because they contradict the catalog, possible duplicate patients, and recordings whose files name another patient. |
-| Import (administrators) | Add databases; see the imports and sources with what each one added; see the recordings. |
 | Admin (administrators) | Users, settings, add-ons, Privacy Mode's settings, the format of dates and times, and the audit log. |
 
-**Roles.** Every user has one of three roles. A `viewer` searches and looks at the data and can
-make cohorts. An `analyst` can also run and cancel actions. An `admin` can also add and remove
-data and manage users. The **PHI permission** is given separately, per user, and lets a user
-leave Privacy Mode. The [administrator's guide](administration.md#users-roles-and-the-phi-permission)
-describes both.
+**Roles and grants.** Every user has one of three roles. A `viewer` searches and looks at the
+data and can make cohorts. An `analyst` can also run and cancel actions. An `admin` can also
+connect databases and manage users. The **PHI permission** is given separately, per user, and
+lets a user leave Privacy Mode. What a user may do with each database is set by its **grants**
+(see [Terms](#terms-used-in-this-guide)): a database that is not granted to you is not searched
+for you, and nothing of it is shown to you. The
+[administrator's guide](administration.md#users-roles-and-the-phi-permission) describes roles,
+the PHI permission and grants.
 
 **Every screen has its own address**, such as `#/patients`, `#/patient/12?item=labs:…`,
-`#/viewer?path=…&t0=…&t1=…`, `#/ecg?src=…` or `#/pacs?list=…`. The browser's Back and Forward
-buttons move between a patient's page and the viewers, and you can reload a screen or send its
-address to a colleague who may see it.
+`#/databases/3`, `#/viewer?path=…&t0=…&t1=…`, `#/ecg?src=…` or `#/pacs?list=…`. The browser's
+Back and Forward buttons move between a patient's page and the viewers, and you can reload a
+screen or send its address to a colleague who may see it.
 
-**The page follows changes as they happen.** Every import or removal advances the catalog's data
-version, which every open page checks every few seconds. Patient pages, lists and tabs then
-redraw, and a viewer that shows a file that was removed closes with a note.
+**The page follows changes as they happen.** Connecting, refreshing or removing a database, and
+linking new patients, advance Medorama's data version, which every open page checks every few
+seconds. Patient pages, lists and tabs then redraw, and a viewer that shows a file that is no
+longer available closes with a note.
 
 **Light and dark themes.** The page follows your system's light or dark setting. The **◐** button
 in the top bar switches between the two, and the viewers inside the page switch with it. The
@@ -82,8 +84,8 @@ pictures in this guide use the dark theme.
 
 ## Privacy Mode
 
-**Privacy Mode** is the mode in which no identifier reaches your browser. The catalog keeps every
-identifier as it was imported. When Medorama answers a request, a part of the server called the
+**Privacy Mode** is the mode in which no identifier reaches your browser. The identifiers stay in
+the connected databases. When Medorama answers a request, a part of the server called the
 **privacy gate** decides what may leave, and in Privacy Mode it replaces or withholds every
 identifier before the answer is sent. The page can only show what it receives. How the gate
 works, and how it is tested, is explained in
@@ -98,38 +100,60 @@ Whether you are in Privacy Mode depends on your PHI permission:
 | Without the PHI permission | Always on. |
 | With the PHI permission | On when you sign in. The **Privacy Mode** switch in the top bar turns it off. Administrators with the PHI permission start with it off. Your choice lasts until you sign out. |
 
+**You can always tell which mode you are in.** In Privacy Mode the switch is filled, a line of
+the accent colour runs along the top of the page, and each screen's search line ends with the
+mark **Privacy Mode**. Out of it, an amber mark **identifiers shown** stands beside the switch.
+In a narrow window the switch reads **Privacy**.
+
+Out of Privacy Mode, you see a patient's identifiers only from the databases granted to you with
+`phi`. A database granted to you with `view` only shows its data, never its identifiers.
+
 In Privacy Mode you see the following:
 
 | Data | What you see |
 |---|---|
 | Names | `[Patient Name]`; the names of staff, such as the authors of notes and physicians, as `[Staff Name]`. |
 | MRNs, account numbers, dates of birth | `[MRN]`, `[CSN]`, `[Date of Birth]`. |
-| Patient and encounter IDs | **Pseudonyms**: stable stand-in identifiers of the form `MO-XXXX-XXXX` for patients and `MO-E-XXXX-XXXX` for encounters. |
-| Dates and times | Moved back by an offset that applies to the whole catalog, plus a number of days that is fixed for each patient. Every user therefore sees the same dates for a given patient, and the intervals between that patient's events are kept. |
+| Patient and visit IDs | **Pseudonyms**: stable stand-in identifiers of the form `MO-XXXX-XXXX` for patients and `MO-E-XXXX-XXXX` for visits. |
+| Dates and times | Moved back by an offset that applies to every patient, plus a number of days that is fixed for each patient. Every user therefore sees the same dates for a given patient, and the intervals between that patient's events are kept. |
 | Ages | Ages above 89 are shown as `90+`. |
 | Recordings and files | Named by tokens such as `mo-rec:12` or `mo-f0003.dcm`. Their paths and file names are never sent. |
-| Imported columns | Identifying columns as placeholders. Columns that Medorama does not recognize are shown as `[Withheld]`. Measurements are shown. |
 | The text of notes | Shown by default, with the patient's own names and date of birth replaced. An administrator can withhold notes entirely (Admin › Privacy Mode, *The text of notes and reports*); they are then shown as `[Withheld]`. |
-| Files | WFDB headers, GE MUSE XML, DICOM files and EDF files are de-identified on the server before they are sent. Pictures, videos and PDFs are sent as they are, because they may show text burned into the image, and the viewer tab that shows one is marked with an amber warning triangle. Other kinds of files are not sent. |
+| Files | WFDB headers, GE MUSE XML, DICOM files and EDF files are de-identified on the server before they are sent. Pictures, videos and PDFs are sent as they are, because they may show text burned into the image, and the viewer tab that shows one is marked with an amber warning triangle; on a patient's page, the line "May show identifiers as recorded" stands above it. Other kinds of files are not sent. |
 
-In Privacy Mode, a search for a name, an MRN, a date of birth, an account number or a withheld
-column is refused; you find patients by their pseudonyms instead. Every search, filter and sort
-uses only what you are shown: pseudonyms, tokens and placeholders, and each patient's dates as
-they are shown. A search for a real identifier or a real date therefore finds nothing, and lists
-are ordered by the dates you see. Dates that you type (in a filter, or in a cohort's criteria)
-are dates as shown: the server compares them with each patient's shown dates, so the page never
-needs to know the offset. Searches in Privacy Mode are recorded in the audit log
-(`privacy_search`). Exports made in Privacy Mode pass through the same gate, and their file names
-end in `-privacy`.
+In Privacy Mode, a search for a name, an MRN or a date of birth is refused; you find patients by
+their pseudonyms instead. Every search, filter and sort uses only what you are shown: pseudonyms,
+tokens and placeholders, and each patient's dates as they are shown. A search for a real
+identifier or a real date therefore finds nothing, and lists are ordered by the dates you see.
+Dates that you type (in a filter, or in a cohort's criteria) are dates as shown: the server
+compares them with each patient's shown dates, so the page never needs to know the offset.
+Searches in Privacy Mode are recorded in the audit log (`privacy_search`). Exports made in
+Privacy Mode pass through the same gate, and their file names end in `-privacy`.
 
 ## Cohorts
 
-A **cohort** is a named set of patients, found across every database by criteria and kept. The
-Cohorts tab searches as you change the criteria and shows why each patient matched. You can save
-all the patients found, or only the ones you tick, as a new cohort, or add them to an existing
-one.
+A **cohort** is a named set of patients, found by criteria in the databases you choose and kept.
+The Cohorts tab searches as you change the criteria and shows why each patient matched. You can
+save all the patients found, or only the ones you tick, as a new cohort, or add them to an
+existing one.
 
-![The Cohorts tab: the criteria, the patients found and the reason each one matched](images/screens/cohorts.png)
+![The Cohorts tab: the databases to search, the criteria, the patients found and the reason each one matched](images/screens/cohorts.png)
+
+### Choose the databases to search
+
+Above the criteria, **Search in** lists the databases granted to you for `search`, each with its
+status dot. Tick the ones to search; with none ticked, every one is searched. An offline
+database is greyed and cannot be ticked: it is never searched, and never searched silently
+either.
+
+Every result says what it searched, after the number of patients found, for example
+*searched hospital, omop · left out: holter (offline)*. A database is left out when it is not
+ticked or is offline. A criterion is sent only to the databases whose variables may hold it (a
+measurement's name, a diagnosis, a drug); the others are not asked.
+
+Each patient a cohort keeps records the databases whose answers put them there (its
+**provenance**). For `hospital.lactate > 4 AND omop.troponin > 100`, a member's provenance holds
+both databases. When a database is removed, every member it contributed to leaves every cohort.
 
 ### Write the criteria
 
@@ -146,23 +170,39 @@ written as text and checked as you type, for example:
 (age > 18 AND age < 85 AND female) OR (age > 18 AND age < 65 AND male AND QT > 400ms)
 ```
 
+**No condition is left out silently.** While a condition cannot be read (an expression with an
+error, or a row not complete, such as a measurement without its name or **Sex** not chosen),
+the tab does not search: in place of the count it says, for example, *1 condition cannot be
+read: "QT >": …*, and saving and adding are disabled until you correct the condition or remove
+it with ✕. A new expression row left empty is no condition. Screen readers read the count and
+each expression's meaning or error as they change.
+
 | You write | It means |
 |---|---|
 | `AND`, `OR`, `NOT`, parentheses | `AND` binds before `OR`. The words can be in any case, and `&&`, `\|\|` and `!` also work. Two conditions written side by side must both hold. |
 | `female`, `male` (or `F`, `M`) | The patient's sex. |
-| `age > 18`, `age > 18 years` | The patient's age today. You can also write `y`, `yr` or `yrs`, and use `<`, `>=`, `<=`, `=` and `!=`. Age needs the PHI permission and Privacy Mode turned off; otherwise the builder grays out Age. |
-| `has ecg`, or a category alone: `icu`, `holter`, `sleep` | The patient has data of that category. |
-| `dx I21`, `diagnosis "sepsis"` | A condition whose code starts with the text, or whose name contains it. |
+| `age > 18`, `age > 18 years` | The patient's age today, not at a visit or a result: `age > 65 AND QT > 470` finds patients over 65 now who once had a long QT, perhaps at 50. You can also write `y`, `yr` or `yrs`, and use `<`, `>=`, `<=`, `=` and `!=`. Age needs the PHI permission and Privacy Mode turned off; otherwise the builder grays out Age. A date of birth known only by its year (OMOP's `year_of_birth`) is read as 1 July of that year, and by its year and month as the 15th: such ages are within six months. |
+| `has ecg`, or a category alone: `icu`, `holter`, `sleep` | The patient has data of that category, or a recording of that category in a recording database. `has icu`: a visit the database marks as an intensive-care stay, in a unit named like an intensive-care unit (ICU, MICU, CCU …; not a step-down, post-ICU or intermediate-care unit), or with a stay in one. |
+| `dx I21`, `diagnosis "sepsis"` | A condition whose code starts with the text, compared without dots and in any case (`I21.4`, `I214` and `i21` all find `I21.4`), or, for a word (three characters or more, with a letter, not shaped like a code), whose name contains it. Codes of every vocabulary are compared alike: `dx 410` finds an ICD-9 `410.1`. |
 | `medication heparin` | A drug whose name contains the text. |
-| `text "pulmonary edema"` | An item whose text contains the words. |
-| `in ecg_index` | The named database holds data about the patient. |
-| `QT > 400ms`, `"R axis" < -30`, `ecg_index.QT > 0.4 s` | A column of a database, or results of that name, compared in its unit. Units of the same kind are converted, such as ms and s, or µV and mV. |
-| `latest QTc >= 470` | Only each patient's latest value of that exact name counts (`latest QT` never reads a QTc), across the catalog and the connected databases. Without `latest`, any value at any time counts. |
-| `ecg_index.interpretation contains "fibrillation"` (or `~`) | A column's text contains the words. |
-| `omop.lactate > 4` | A measurement in a connected database, found by a word of its name. |
+| `text "pulmonary edema"` | An entry whose text contains the words. |
+| `in hospital` | The named database links the patient. |
+| `QT > 400ms`, `"R axis" < -30`, `muse.QT > 0.4 s` | A measurement (a result, a vital sign), compared in its unit. A name written alone refers to the one database that holds it; `muse.QT` names the database. Units of the same kind are converted, such as ms and s, or µV and mV. |
+| `omop.lactate > 4` | A measurement of a named database, found by a word of its name when no measurement has that exact name. |
+| `hrv.rmssd > 50` | A result of an action run on recordings (the action `hrv`, its field `rmssd`), searched like a measurement. When a database's name begins with `hrv`, the word names that database: write the result in quotes (`"hrv.rmssd"`), or after the database's name (`icu."hrv.rmssd"`). |
+| `latest QTc >= 470` | Only each patient's latest value of that exact name counts (`latest QT` never reads a QTc). Without `latest`, any value at any time counts. |
+
+**Measurements are never merged across databases.** A name written alone, such as `QT`, refers
+to the one database that holds a measurement of that name. When two databases hold a `QT`, for
+example an ECG database and a Holter database, the expression must name the database
+(`muse.QT`), and the error message lists the candidates. A name that matches several
+measurements of one database, such as `lactate` for *Lactate, arterial* and *Lactate, venous*,
+must be written in full, in quotes: `omop."Lactate, arterial"`.
 
 **Units must compare.** A value written with a unit is compared with the values in units of the
-same kind, converted (ms and s, µV and mV, g/dL and g/L, mmol/L and µmol/L). Values in a unit
+same kind, converted (ms and s, µV and mV, g/dL and g/L, mmol/L and µmol/L, µg, ug and mcg;
+mmHg, kPa and cmH2O; °C and °F; cell counts in 10^9/L, G/L, 10^3/µL and K/µL). mEq/L is read as
+mmol/L, which holds for monovalent ions (sodium, potassium, chloride, bicarbonate) only. Values in a unit
 that does not compare, such as mg/dL against `glucose > 7 mmol/L`, or values without a unit, are
 left out, and the search says how many. When none of the values compares, the search reports an
 error instead. A value written without a unit is compared as it is, and only when the data hold
@@ -170,44 +210,42 @@ one unit: when they hold several, write the unit. After a number, `m` is read as
 metres.
 
 **Saved criteria keep their meaning.** When a cohort is saved, each expression is kept together
-with what its names meant at that time, such as which database's `QT` column. A database imported
-later that would make a name ambiguous, or give it another meaning, does not change the cohort: a
-search of its criteria says so, and the cohort keeps the meaning it was saved with.
+with what its names meant at that time, such as which database's `QT`. A database connected later
+that would make a name ambiguous does not change the cohort.
 
-**Dates in Privacy Mode.** In Privacy Mode, the dates of a condition (an encounter's, a result's,
+**Dates in Privacy Mode.** In Privacy Mode, the dates of a condition (a visit's, a result's,
 a drug's) are dates as shown. Each patient's own dates are compared with them, so the cohort finds
 the patients whose shown dates fall in the range. The criteria keep that meaning for every user
 who refreshes them.
 
 **Without data.** `NOT`, and *Without* in the builder, include the patients who have no data of
-that kind at all: `NOT QT > 450 ms` also finds the patients without a QT.
+that kind at all: `NOT QT > 450 ms` also finds the patients without a QT. `NOT` and the criteria
+on the patient alone (sex, age, `in`) apply among the patients that the searched databases link.
 
-**Encounters.** An encounter without a discharge time counts as continuing until now.
-
-**Columns are never merged across databases.** A column name written alone, such as `QT`, refers
-to the one database that has a column of that name. When two databases have a `QT` column, for
-example an ECG database and a Holter database, the expression must name the database
-(`ecg_index.QT`), and the error message lists the candidates.
-
-**Connected databases are searched too.** A condition, a drug, a text, a stay or a result found
-in any connected database counts. A cohort records the version of each connected database at the
-time its members were found, and a refresh tells you which ones have new data.
+**Visits.** A visit without an end time counts as continuing until now.
 
 ### How a cohort keeps its members
 
-A cohort's page states its **definition** in words: where its members come from (the whole
-catalog, a parent cohort, or the cohorts that a merge combined), its criteria, the patients
-**added manually** and **removed manually** (identified by patient ID, never by name or MRN), and
-how the cohort was made.
+A cohort's page states its **definition** in words: where its members come from (the databases
+it searches, a parent cohort, or the cohorts that a merge combined), its criteria, the patients
+**added manually** and **removed manually** (identified by pseudonym, never by name or MRN), and
+how the cohort was made. Its header line says which databases it searches, and the version of
+each database when its members were found.
 
-A cohort is a snapshot. New data change nothing until someone **refreshes** it. A refresh first
-shows who would join and who would leave. **Apply these changes** applies the changes shown:
-the new patients you ticked join, and the members shown as leaving leave. Changes that appeared
-since the preview are not applied, and the message says how many: refresh again to see them.
-Patients added manually stay in the cohort, and patients removed manually stay out. A cohort's
-page tells you when the catalog has new data since its members were found.
+A cohort is a snapshot, kept in its own encrypted file of Medorama's workspace. New data change
+nothing until someone **refreshes** it. A refresh first shows who would join and who would leave.
+**Apply these changes** applies the changes shown: the new patients you ticked join, and the
+members shown as leaving leave. Changes that appeared since the preview are not applied, and the
+message says how many: refresh again to see them. Patients added manually stay in the cohort, and
+patients removed manually stay out. A cohort's page tells you when a database it searches has a
+new version since its members were found.
 
-A refresh reads the data as the criteria were written. Criteria on notes' text, ages, columns or
+When the data change while you work on the Cohorts tab, it redraws the lists, the databases and
+the members, and searches again, but what you are doing stays: the criteria (and the field you
+are typing in), the patients you ticked, the page of results, and an open panel such as a
+refresh's preview.
+
+A refresh reads the data as the criteria were written. Criteria on notes' text, ages or
 expressions select other patients for a user who reads the data differently, for example in
 Privacy Mode instead of with the PHI permission. Such a refresh is refused, and the message says
 how the criteria were written. A subcohort or a merge follows the cohorts that it is made from
@@ -217,40 +255,38 @@ only while you may still read them; when one is no longer shared with you, a ref
 
 | Action | What it does |
 |---|---|
-| New cohort | Opens the criteria builder. Saves all the patients found, or only the ones you tick. |
-| Edit | Changes the name, the description and the criteria. Changed criteria take effect at the next refresh, which shows its result first. Criteria that the builder cannot draw (made through the API) are shown read-only and kept as they are, unless you remove them with ✕. |
+| New cohort | Opens the criteria builder. Saves all the patients found, or only the ones you tick, with the databases ticked. |
+| Edit | Changes the name, the description, the criteria and the databases it searches. Changed criteria take effect at the next refresh, which shows its result first. Criteria that the builder cannot draw (made through the API) are shown read-only and kept as they are, unless you remove them with ✕. |
 | Members | Adds patients found by the Patient Catalog's search; ✕ removes a member. |
 | Clone… | Makes a copy that you own. |
 | Subcohort… | Opens the criteria builder, searching only among this cohort's members. |
 | Merge… | Makes a new cohort from this one and others: their union, intersection or difference. |
-| Share… | The owner chooses who may see the cohort and who may edit it. |
-| Delete… | The owner deletes the cohort. Its patients stay in the catalog (the cohort DEMO, below, is the one exception). |
+| Share… | Who manages the cohort (its owner) chooses who may see it and who may edit it. Sharing gives those users a grant on the cohort (`view` or `edit`). |
+| Delete… | Who manages the cohort deletes it. Its key is destroyed, then its file; its patients stay in their databases. Cohorts made from it keep its last members. |
 | Open in Patient Catalog | Shows the members as a list. |
 | Run actions… | Runs actions on the members' recordings. |
 | Export | Exports the members (CSV), the definition (JSON), the members' data (CSV), or all of these (Excel). Every member is exported, however many. Times are written in UTC, marked `Z` (ISO 8601). A cell that a spreadsheet would run as a formula (text starting with `=`, `+`, `-` or `@`) is written after a `'`, so that it opens as text. |
 
 Every change is recorded in the cohort's **History** and in the audit log. Each user sees a
-cohort's members as their own permissions allow.
-
-### The cohort DEMO
-
-The cohort **DEMO** exists when Medorama was installed with its demo: invented patients, with
-their data, recordings and files, for trying the system. Every user sees it, read-only, and each
-of its patients' pages is marked DEMO. It is the one cohort whose deletion also removes its
-patients. An administrator deletes it with **Delete…**, which first shows what will be removed;
-the demo's patients and everything about them then leave the catalog, and nothing else changes
-([administrator's guide, The demo](administration.md#the-demo)).
+cohort's members as their own permissions and grants allow: identifiers only with the PHI
+permission and the `phi` grant on the database that holds them.
 
 ## The Patient Catalog and the patient page
 
 ### Find a patient
 
-The **Patient Catalog** lists the patients, the one with the latest encounter first.
+The **Patient Catalog** lists the patients of the databases you may view, the one with the latest
+data first: the pseudonym (or, with the PHI permission out of Privacy Mode, the patient ID, the
+name, the MRN and the date of birth of the databases granted to you with `phi`), the sex, the
+age, the number of visits, the latest time, the databases that hold the patient, the kinds of
+data and the number of entries. The list is kept by Medorama for each database, so a patient of a
+database that is offline is still listed.
 
 ![The Patient Catalog: every patient with the kinds of data each has](images/screens/patients.png)
 
-- **Search** by name, MRN, patient ID, date of birth or encounter. Identifiers are searched only
-  for users with the PHI permission, out of Privacy Mode.
+- **Search** by pseudonym, sex, kind of data (`has:ecg`) or database (`database:omop`)
+  ([Searching](#searching)). With the PHI permission, out of Privacy Mode, also by name, MRN,
+  patient ID and date of birth, as the databases granted to you with `phi` hold them.
 - **Filter by kind of data.** After **Filter by**, click a category once to keep the patients who
   have it (✓), a second time to keep those who have none of it (✕), and a third time to clear
   it.
@@ -258,15 +294,25 @@ The **Patient Catalog** lists the patients, the one with the latest encounter fi
 
 ### Read a patient's page
 
-A patient's page shows everything known about the patient on one time line.
+A patient's page shows everything known about the patient on one time line. It is read when you
+open it, from each database you may view that links the patient. A database that does not answer
+is named in the patient bar (*not available*), and the page shows the others.
 
 | Part | What it shows |
 |---|---|
-| Patient bar | The name, sex, age and date of birth, the patient ID, the MRNs, the span of the data, and the allergies ("not recorded" when no database holds allergies). |
-| Patient column | The encounters (click one to show only that encounter), the latest stay's medications, and the conditions. |
-| Journey | Every item on one time line, the newest on top, with one column per category. ICU stays are drawn as light bars, with their recordings over them. Abnormal values are amber and critical values orange; red is used only for alarms. Months without data are folded. Hover over a mark to see what it is, and click it to open it. |
-| Report | The entries, newest first, grouped by day with the encounter, the hospital day and the unit. Laboratory results taken at the same moment form one panel, and vital signs form one entry per day. The report can also be grouped by category, or show the trends. |
-| Detail | The selected entry: a panel's values with their ranges, previous values and trend; a note; a 12-lead ECG on paper, a picture, a PDF or a video, with **Open in ECG** or **Open in PACS**; a recording's main vital signs over its whole length (click to open VitalStream at that moment); and the notes written around that time. |
+| Patient bar | The name, sex, age and date of birth, the patient ID and the MRNs (identity only from the databases granted to you with `phi`, out of Privacy Mode), the span of the data, the databases that hold the patient, and the allergies ("not recorded" when no database holds allergies). |
+| Patient column | The visits, each with the name of its database (click one to show only that visit), the latest stay's medications, and the conditions. |
+| Journey | Every entry on one time line, the newest on top, with one column per category. ICU stays are drawn as light bars, with their recordings over them: the stays in intensive-care units when the database gives them (db-builder's bed stays, OMOP's `visit_detail`), else the whole intensive-care visit. A result flagged normal (`N`, `WNL`) is shown normal whatever its range says. Abnormal values are amber and critical values orange, a critical mark also outlined when it is wide enough; red is used only for alarms. Months without data are folded. Hover over a mark to see what it is, and click it to open it. A column's name hides or shows that column: click it, or reach it with Tab and press Enter or Space; **Columns…** above the journey lists the columns with a box for each. For a screen reader, the journey is a picture whose text says its span and columns; every mark is also an entry of the report. |
+| Report | The entries, newest first, grouped by day with the visit, the hospital day and the unit. Laboratory results taken at the same moment form one panel, and vital signs form one entry per day (the day in Medorama's time zone). The report can also be grouped by category, or show the trends. |
+| Detail | The selected entry: a panel's values with their ranges, previous values and trend (a critical value also named *critical*); a note; a 12-lead ECG on paper, a picture, a PDF or a video, with **Open in ECG** or **Open in PACS**; a recording's main vital signs over its whole length (click to open VitalStream at that moment); and the notes written around that time. |
+
+**On a tablet.** In a window narrower than 1100 pixels, the report goes below the patient
+column and the journey, and the page scrolls, so that each keeps room to read.
+
+**Recordings and files.** The recordings and files of a patient come from the recording
+databases you may view. A 12-lead ECG, a picture, a PDF, an echo or a cath lab study is shown in
+the detail and opens in the ECG or PACS viewer; an ICU recording, a Holter ECG, an EEG or a sleep
+study opens in VitalStream.
 
 The journey's columns follow the clinical categories: ICU, Vitals, Labs, Microbiology,
 Pathology, ECG, Holter, **EEG**, **Sleep**, Echo, Cath lab, Imaging, Procedures, Medications,
@@ -316,38 +362,80 @@ codes, values, results, notes and reports.
 
 ## The Databases tab
 
-The Databases tab shows the same data as the patient pages, organized by database. It lists every
-database in use, the newest first, with what it holds, its number of rows, the patients it
-reached, and what is held back or waiting. The ▸ button unfolds a database's table in place, and
-**Full page ↗** shows one database alone.
+The Databases tab lists the databases granted to you, the online ones first, each with its kind
+(db-builder, OMOP or SQL views) and engine, its status, what it holds (its patients, variables,
+recordings and identity conflicts) and your grant on it (**Yours**). Administrators also see the
+databases that are not granted to them, so that they can grant them.
 
-![The Databases tab: every database, one of them unfolded](images/screens/databases.png)
+![The Databases tab: the connected databases with their status](images/screens/databases.png)
 
-- The rows are shown **as they were imported**, with the file's own column names. You can sort by
-  any column, filter each column and search all of them.
-- Each row links to **its patient**, and its **file** opens in the matching viewer: an ECG in the
-  ECG viewer, a DICOM study or a picture in PACS, and a recording in VitalStream at its start.
-- In Privacy Mode, every column is listed, but the cells of identifying columns are sent as
-  placeholders (`[MRN]`, `[Patient ID]`, `[File Name]`, `[Staff Name]` and so on), and the cells
-  of columns that Medorama does not recognize are sent as `[Withheld]`. Measurements are shown.
-  The search, the filters and the sort use the cells as you are shown them: pseudonyms in place
-  of identifiers, each patient's dates moved back, notes without the patient's names. The search
-  skips placeholders, and the text of notes when notes are withheld; a filter on a placeholder
-  column compares with the placeholder. A sort by a placeholder column is ignored.
-- A sort puts numbers in numeric order before text, and empty cells last, whichever the direction
-  and whichever database (SQLite or PostgreSQL) holds the catalog. The search and the filters
-  take `%` and `_` as written.
+**Status.** Medorama checks each database when it starts, every minute, and when someone asks: a
+SQLite file must be there, and each of its views must answer. A **green dot** means online. A
+**grey dot** means offline, with the time it was last checked; who manages the database also sees
+why (red is used only for alarms). An offline database keeps everything Medorama holds of it: its
+variables, its patients on the Patient Catalog and its grants. It is not searched, and the
+Cohorts tab greys it.
 
-Administrators can **export** a database as CSV and **delete** one, after a preview of what will
-be removed, from the list or from the database's own page.
+### A database's page
 
-## Encounters and recordings
+Click a database's name to open its page (`#/databases/3`). It shows its kind, its engine, its
+data version and when it was connected, and then:
 
-The **Encounters** view, beside Patients in the Patient Catalog, is the table of encounters: one
-row per encounter, with a status dot for its recordings and its source. You can search it with
-words or `field:value` terms ([Searching](#searching)) and filter it by unit, dates and status. A
-row opens the encounter panel, which shows the bed stays, the recordings (with **View**, **Copy
-path** and **Index now**), the results, the items by domain, and the patient's other encounters.
+| Part | What it does | Who |
+|---|---|---|
+| **Check now** | Checks whether the database answers. When its version changed, what Medorama keeps of it (its variables, persons and recordings) is read again. | Granted |
+| **Refresh** | Reads its variables, persons and recordings again now. | Who manages it |
+| **Remove…** | Removes the database and every trace of it from Medorama (below). You confirm by typing its name. | Who manages it |
+| Variables | What it holds: each measurement, diagnosis, drug or other name by category, with its unit, its code and vocabulary, its number of entries and its number of persons. | Granted |
+| Who may use it | The users granted the database and their permissions; a form to grant a user `search`, `view`, `phi` or `manage`; **Revoke all** to take a user's grants away. | Who manages it |
+| Identity conflicts | Persons of the database whose identifiers name two different patients, by the database's own key. They are not linked until the database is corrected; Medorama never merges patients. | Who manages it |
+| **Grant it to me** | An administrator is not granted a database by being an administrator. One who is not granted it can grant it to themselves; this is recorded in the audit log (`grant_self`). | Administrators |
+
+**Removing a database** destroys its key first, then its folder of Medorama's workspace (its
+persons, variables, indexes and results), and then takes its patients out of every cohort that
+they were in because of it. Patients that no other database links leave Medorama, with their
+pseudonyms. The database itself is not touched, and nothing of it can be found afterwards in
+Medorama. This cannot be undone.
+
+### Connect a database
+
+Administrators connect a database with **Connect a database**, below the list. Tables, exports
+and folders of recordings become a database with [db-builder](../db-builder/README.md) first.
+
+![Connect a database: the kind, where it is, and how its patients are named](images/screens/connect.png)
+
+| Field | What to give |
+|---|---|
+| Name | The name criteria use, such as `hospital` in `hospital.lactate`. |
+| Kind | A db-builder database (a SQLite file), OMOP CDM 5.3 or 5.4, or any layout through SQL views. |
+| Where | A file on this server (**Choose…** opens a dialog of the server's folders, inside the folders data may come from), or a PostgreSQL server (its address, without a password). |
+| Password | For a server: kept wrapped by Medorama's master key, and never shown again. |
+| Schema, Vocabulary schema | For OMOP: where its tables are. |
+| Its patients are named by | For OMOP: the MRN, the patient ID, or nothing another database knows. |
+| Issuer of its patient IDs | Who assigned them. Two databases with the same issuer are linked by them; left empty, the database's patient IDs link only its own persons. |
+| MRN authority | The authority of its MRNs, when a row names none. |
+| Time zone of its times | When it is not Medorama's. |
+| SQL views | For any layout: the queries for persons, visits, entries, stays (optional: the stays in units, such as ICU stays, within visits), recordings (a recording database) and its version. |
+
+Medorama checks the database, reads its variables, links its patients and grants it to you. What
+every database must provide, and how to build one, is described in [databases.md](databases.md).
+
+**Create a database…**, at the top of the card, opens db-builder's own page in a browser tab of
+its own (named `db-builder`: a second click shows the same tab), when an administrator has set
+Medorama up to run it ([administration.md, db-builder](administration.md#db-builder)); otherwise
+the button is not shown. There, sign in with db-builder's own account (not your Medorama
+account), make a database, preview what your tables would add, add them, and come back here to
+connect the file it made ([databases.md, Build it in the browser](databases.md#build-it-in-the-browser-db-builders-page)).
+When db-builder is set up but not running, the reason is written beside the button.
+
+## Recordings
+
+The **Recordings** subtab of the Databases tab lists the recordings of the recording databases
+you may view, the newest first: their status, name, kind and format, start, length, patient,
+database and path, with **View** (opens VitalStream), **Copy path** and **Index now** (analysts
+and administrators). You can search it by words in a recording's name, format, status or
+database. Administrators can **Re-check the files**: whether every recording's file is still
+there, unchanged.
 
 | Status | Dot | Meaning |
 |---|---|---|
@@ -357,44 +445,36 @@ path** and **Index now**), the results, the items by domain, and the patient's o
 | `new` | Gray | Never indexed. |
 | `stale` | Purple ring | Changed since it was indexed. |
 | `failed` | Amber | Indexing failed, or was cancelled; the error (or *indexing was cancelled*) is shown. A cancelled recording is not indexed again on its own: **Index now** indexes it. |
-| `missing` | Amber | Not found at the last check. |
+| `missing` | Amber | Not found at the last check (or outside `data_roots`, inside the workspace, unreadable). |
+| `file` | Gray ring | A file no reader indexes (a 12-lead ECG in DICOM or XML, a picture, a PDF): opened by its viewer from its entry on the patient's page, never indexed. |
 
-An encounter shows the most urgent status among its recordings, in this order: `missing`,
-`failed`, `indexing`, `queued`, `stale`, `new`, `ready`. An encounter without recordings has a
-dashed ring.
-
-**Identifiers in recordings.** Bedside monitors and EDF files often store patient identifiers
-inside the recordings themselves. For users with the PHI permission, out of Privacy Mode, the
-Encounters list shows what the encounter's recordings say (**In the files**): ✓ when it agrees
-with the databases, and ⚠ when it differs or names another patient. The encounter panel shows
-these values beside the databases' values. The
-[administrator's guide](administration.md#identifiers-in-recordings) explains where they come
-from.
+Medorama only reads recordings: a recording leaves when its database is removed or no longer
+lists it.
 
 ## Searching
 
-The Encounters table, Import › Recordings and the command-line tool (`list --q`,
-`recordings --q`, `--search`) share one search syntax:
+The Patient Catalog and the command-line tool (`list --q`) share one search syntax:
 
 | You write | It finds |
 |---|---|
-| `smith` | Entries in which some field contains "smith". |
-| `name:smith` | Entries in which that field contains it. |
-| `source:"ICU pilot"` | Quotes hold a value with spaces. |
-| `name:doe dob:1950 source:pilot` | Entries that match every term. |
+| `mo-ab4c` | Patients in which some field contains it. |
+| `sex:f` | Patients in which that field contains it. |
+| `database:"study one"` | Quotes hold a value with spaces. |
+| `sex:f has:ecg database:omop` | Patients that match every term. |
 
 - Searches never depend on letter case, and a value matches anywhere in the field: `name:smi`
   finds Smith, and `dob:1950-03` finds March 1950.
 - An unknown field is an error, and the message lists the fields.
 - Without the PHI permission, or in Privacy Mode, a word never matches an identifier, and an
-  identifier field (`name:`, `dob:` and so on) is an error. In Privacy Mode every field holds
-  what you are shown: `encounter:` and `patient:` the pseudonyms, `file:` and `path:` the
-  recordings' tokens (`mo-rec:12`), `admit:`, `discharge:` and `start:` the dates as shown.
+  identifier field (`name:`, `dob:` and so on) is an error. In Privacy Mode `patient:` holds the
+  pseudonyms.
 
-| List | Fields (fields in italics need the PHI permission) |
-|---|---|
-| Encounters | `encounter`, `patient`, `source`, `unit`, `bed`, `admit`, `discharge` (local time, for example `admit:2025-08`), `disposition`, `sex`, `status`, `file` (the names of the linked recordings); *`name`, `first`, `last`, `dob`, `mrn`, `csn`*; *`file-name`, `file-id`, `file-dob`* (what the linked recordings' files say) |
-| Recordings | `file`, `path`, `kind`, `format`, `unit`, `bed`, `start`, `status`, `source`, `encounter`; *`file-name`, `file-id`, `file-dob`* |
+| Fields (fields in italics need the PHI permission) |
+|---|
+| `patient` (the pseudonym; with the PHI permission, also the patient ID), `sex`, `has` (a kind of data), `database`; *`name`, `first`, `last`, `mrn`, `dob`* (of the databases granted to you with `phi`) |
+
+The Recordings subtab and the command `recordings --q` take plain words: each must appear in a
+recording's name, format, status or database.
 
 Searches made by users with the PHI permission are recorded in the audit log (`phi_search`), and
 so are searches made in Privacy Mode (`privacy_search`).
@@ -403,14 +483,15 @@ so are searches made in Privacy Mode (`privacy_search`).
 
 Medorama shows three viewers in its own tabs. Inside Medorama they run behind its sign-in and its
 privacy gate: they show no patient identity, and in Privacy Mode they receive de-identified files
-only. Each viewer also exists as a standalone program for use without Medorama, and each has a
-light and a dark theme that follows the page.
+only. They open only the recordings and files of the databases granted to you with `view`. Each
+viewer also exists as a standalone program for use without Medorama, and each has a light and a
+dark theme that follows the page.
 
 | Viewer | What it shows | Opened from |
 |---|---|---|
-| [VitalStream](../viewers/vitalstream) | Waveform recordings: every channel, the vital signs, the alarms, EDF+ annotations and the breaks in the data on one time axis, from days down to single samples. | **View** beside a recording, a recording's entry on the patient page (at its moment), or a database row. |
-| [ECG viewer](../viewers/ecg) | 12-lead ECGs on standard paper (3 × 4 with a rhythm strip, 6 × 2, 12 × 1), with calipers. It reads WFDB, GE MUSE XML, DICOM ECG, EDF and JSON ECGs, and shows PNG, JPEG and PDF printouts. | **Open in ECG** on the patient page, or a database row. |
-| [PACS viewer](../viewers/pacs) | DICOM studies (echo and angiography loops at their frame rate, CT, MR, X-ray, structured reports), videos, pictures and PDFs, with calipers in millimeters. | **Open in PACS** on the patient page, or a database row. |
+| [VitalStream](../viewers/vitalstream) | Waveform recordings: every channel, the vital signs, the alarms, EDF+ annotations and the breaks in the data on one time axis, from days down to single samples. | **View** beside a recording, or a recording's entry on the patient page (at its moment). |
+| [ECG viewer](../viewers/ecg) | 12-lead ECGs on standard paper (3 × 4 with a rhythm strip, 6 × 2, 12 × 1), with calipers. It reads WFDB, GE MUSE XML, DICOM ECG, EDF and JSON ECGs, and shows PNG, JPEG and PDF printouts. | **Open in ECG** on the patient page. |
+| [PACS viewer](../viewers/pacs) | DICOM studies (echo and angiography loops at their frame rate, CT, MR, X-ray, structured reports), videos, pictures and PDFs, with calipers in millimeters. | **Open in PACS** on the patient page. |
 
 ![VitalStream showing an ICU recording: ECG, arterial pressure, SpO2 pleth and respiration, with vital signs and alarms](images/screens/vitalstream.png)
 
@@ -429,27 +510,23 @@ or another identifier burned into the image. Red is reserved for alarms, so the 
 ## Actions and jobs
 
 **Actions** are for analysts and administrators. Tick the actions to run (**Index** is ticked by
-default), choose what to run them on (the selected encounters, the current search, a cohort or
-everything) and start the run. A run makes one **job** per action and recording. A job already
-done on the recording as it is now is not done again; tick *Run again where already done* to run
-it anyway.
+default), choose what to run them on (the recordings of a cohort's members, or every recording
+of the databases you may view) and start the run. A run makes one **job** per action and
+recording. A job already done on the recording as it is now is not done again; tick *Run again
+where already done* to run it anyway.
 
 The **Jobs** tab shows the queue (running, queued, failed and done jobs) with a **Cancel** button.
 A failed job shows its error. The page does not show a job's result (its summary); the API
-returns it with the encounter's recordings (`GET encounters/{id}`, see [api.md](api.md)).
+returns it with the recording (`GET recordings/{id}`, see [api.md](api.md)). The numbers of a
+summary can be searched in a cohort's criteria, such as `hrv.rmssd > 50`
+([actions.md](actions.md)).
 
-Two actions are built in:
-- **Index** (`index`) builds the index that the viewers draw from. When a recording has an ECG
-  signal but no heart rate, it also derives the heart rate from the ECG.
-- **Read identifiers** (`identify`) reads the identifiers that the recording's file states. An
-  add-on reads them for the formats it handles, and Medorama reads them from the header of EDF
-  and BDF files.
-
+One action is built in: **Index** (`index`) builds the index that the viewers draw from. When a
+recording has an ECG signal but no heart rate, it also derives the heart rate from the ECG.
 Plug-ins add other actions ([actions.md](actions.md)).
 
 ## History
 
-The History tab lists the encounters you opened in the encounter panel (from the Encounters
-table, History or Review), the most recent first, with the number of times you opened each.
-Patient pages are not recorded here. You can remove one entry or clear the whole list, and nobody
-else sees it.
+The History tab lists the patients whose page you opened, the most recent first, with when you
+first and last opened each and how many times. You can remove one entry or clear the whole list,
+and nobody else sees it.

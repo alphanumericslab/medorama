@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vitalstream_py"
-version = "0.1.0"
+version = "0.2.0"
 description = "VitalStream viewer (Python): physiological recordings (WFDB folders, and the formats of installed adapters) in a web browser"
 requires-python = ">=3.9"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -15,6 +15,9 @@ dependencies = [
     "fastapi>=0.100",
     "uvicorn>=0.20",
     "numpy>=1.22",
+    # the index store (index format 3): SQLCipher 4 on SQLite, bundled in its wheels (0.6.5: SQLCipher
+    # 4.20.0 on SQLite 3.54.1, with OpenSSL 3.6); plain stores are read with it too
+    "sqlcipher3>=0.6.5",
     "tomli>=1.1; python_version < '3.11'",
     # the IANA time zones (zoneinfo), which Windows does not have
     "tzdata; sys_platform == 'win32'",

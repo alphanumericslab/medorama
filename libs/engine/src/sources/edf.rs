@@ -111,6 +111,16 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146097 + doe - 719468
 }
 
+/// The days of month `m` (1-12) of `year` (Gregorian: February has 29 in leap years).
+fn days_in_month(year: i64, m: i64) -> i64 {
+    match m {
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    }
+}
+
 /// Three two-digit numbers `aa?bb?cc` (any separators), as EDF writes dates and times; the
 /// third may be anything when `loose` (the year of an EDF+ date after 2084 is `yy`).
 fn three(s: &str, loose: bool) -> Option<(i64, i64, Option<i64>)> {
@@ -156,7 +166,7 @@ fn start_of(date: &str, time: &str, recording: Option<&str>) -> Option<f64> {
         }
         (None, None) => return None,
     };
-    if !(1..=12).contains(&m) || !(1..=31).contains(&d) || hh > 23 || mi > 59 || ss > 59 {
+    if !(1..=12).contains(&m) || d < 1 || d > days_in_month(year, m) || hh > 23 || mi > 59 || ss > 59 {
         return None;
     }
     Some((days_from_civil(year, m, d) * 86400 + hh * 3600 + mi * 60 + ss) as f64)
@@ -548,6 +558,16 @@ mod tests {
         assert_eq!(start_of("01.03.yy", "13.00.00", None), None);
         assert_eq!(start_of("01.03.91", "13.00.00", Some("Startdate 01-MAR-2091 X X X")), Some(3823592400.0));
         assert_eq!(start_of("31.02.24", "25.00.00", None), None);
+        // a day the month does not have: no start (not the next month's)
+        assert_eq!(start_of("31.02.24", "10.00.00", None), None);
+        assert_eq!(start_of("30.02.24", "10.00.00", None), None);
+        assert_eq!(start_of("31.04.24", "10.00.00", None), None);
+        assert_eq!(start_of("00.03.24", "10.00.00", None), None);
+        assert_eq!(start_of("29.02.24", "00.00.00", None), Some(1709164800.0)); // 2024 is a leap year
+        assert_eq!(start_of("29.02.23", "00.00.00", None), None);
+        assert_eq!(start_of("29.02.00", "00.00.00", None), Some(951782400.0)); // 2000 is one too
+        assert_eq!(start_of("29.02.yy", "00.00.00", Some("Startdate 29-FEB-2100 X X X")), None); // 2100 is not
+        assert_eq!(start_of("31.12.24", "23.59.59", None), Some(1735689599.0));
         let t = tals(b"+0.25\x14\x14\x00+1.5\x152\x14Arousal\x14 two  words \x14\x00\x00\x00");
         assert_eq!(t.len(), 2);
         assert_eq!((t[0].0, t[0].1, t[0].2.clone()), (0.25, None, vec![String::new(), String::new()]));

@@ -1,6 +1,9 @@
 Required Notice: Copyright 2025-2026 Reza Sameni (https://github.com/alphanumericslab/medorama)
 
-Medorama is licensed under the PolyForm Noncommercial License 1.0.0, reproduced below.
+Medorama's software is licensed under the PolyForm Noncommercial License 1.0.0, reproduced below.
+Its documentation (the docs/ folders), the user's manual and their figures are licensed under CC BY-NC-ND 4.0,
+and the demo and example data (tools/demo/library/, viewers/ecg/examples/, viewers/pacs/examples/)
+under CC BY-NC 4.0; the license of each file is listed in REUSE.toml, and the texts are in LICENSES/.
 Commercial use needs a separate commercial license from the licensor: see COMMERCIAL.md.
 Third-party components keep their own licenses: see THIRD_PARTY_LICENSES.md.
 

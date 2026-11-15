@@ -42,10 +42,14 @@ host = "127.0.0.1"
 # Recordings indexed at the same time.
 index_workers = 2
 
-# The index folder, shared by the three viewers (they write the same index) and by Medorama
-# (set it to the catalog's index_dir to use the catalog's indexes).  Default:
-# sample_data/outputs/index when run from a clone, else ~/.cache/vitalstream.
+# The folder of the index store, index.sqlite (index format 3), shared by the three viewers
+# (they write the same rows).  Default: sample_data/outputs/index when run from a clone, else
+# ~/.cache/vitalstream.
 # cache_dir = "~/.cache/vitalstream"
+
+# A file holding 64 hex digits: the key the index store is encrypted with (SQLCipher 4, a raw
+# key).  Empty: a plain store.  A store made with a key opens only with it.
+# index_key_file = "~/.config/vitalstream/index.key"
 
 # The adapter folder: programs that read formats the viewers do not read themselves
 # (docs/adapters.md at the repository root).  Default: ~/.local/share/medorama/adapters

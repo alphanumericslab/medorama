@@ -81,6 +81,18 @@ fn an_adapter_end_to_end() {
     let w = Value::from_json(&ds.window_json(&[0], 1700000000.0, 1700000001.0, 400).unwrap()).unwrap();
     assert!(w.py_str().contains("'raw'"), "{}", w.py_str());
 
+    // the same through an index store (format 3): the adapter reads its samples from a private
+    // folder holding only the index's meta.json, removed once the index is dropped
+    let store = recording_engine::store::Store::open(&dir.path().join("ws/index.sqlite"), Some(&[3u8; 32])).unwrap();
+    let key3 = index::build_into_store(&rec, &store, &|_| {}, &|| false).unwrap();
+    let (meta3, arrays3) = store.load(&key3).unwrap();
+    let reading = arrays3.dir.clone();
+    assert!(reading.join("meta.json").is_file());
+    let ds3 = Dataset::new(meta3, arrays3);
+    assert_eq!(ds3.samples(0, 10, 20).unwrap(), samples[10..20]);
+    drop(ds3);
+    assert!(!reading.exists());
+
     let ids = found[0].identify(std::slice::from_ref(&rec)).unwrap();
     let first = ids[Path::new(&rec)].get("identifiers").cloned().unwrap();
     assert_eq!(first.get("full_name").and_then(Value::as_str), Some("Doe^Jane"));

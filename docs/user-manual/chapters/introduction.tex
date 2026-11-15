@@ -6,11 +6,14 @@ patients' identities, the synthetic data used in this manual, and how the manual
 
 Medorama is a unified patient-journey research platform linking EHR data, physiological
 waveforms, imaging and laboratory results across databases, free for noncommercial use. It
-brings together what is known about a patient from many sources: admissions and bed stays, laboratory results, vital
+connects databases and reads them in place: OMOP instances, research warehouses through SQL
+views, and SQLite databases that its companion tool, db-builder, makes from tables, exports and
+folders of recordings. It imports nothing. It brings together what is known about a patient
+from these databases: admissions and bed stays, laboratory results, vital
 signs, medications, conditions, notes, ECGs, imaging and bedside-monitor recordings. Every
 patient has a page with their \emph{Patient Journey}, a picture of the whole history with one
 column per clinical category, beside a searchable report of every entry. Researchers build
-\emph{cohorts} across every database, with criteria written as expressions such as
+\emph{cohorts} across the databases granted to them, with criteria written as expressions such as
 \code{QTc > 470ms AND female}. Recordings, ECGs, echo loops and images open in Medorama's own
 viewers, as tabs of the same page.
 
@@ -39,18 +42,20 @@ treatment, and must not be used to make clinical decisions.
 \toprule
 {\tabhead Feature} & {\tabhead What it is} \\
 \midrule
-Cohorts & Patients found across every database by criteria (results, vital signs, ECG and
-  imaging measurements, diagnoses, medications, encounters and ICU stays, age, sex, text),
+Cohorts & Patients found across the connected databases by criteria (results, vital signs,
+  ECG and imaging measurements, results of actions, diagnoses, medications, visits and ICU
+  stays, age, sex, text, database), each search saying which databases it searched and which it
+  left out,
   written as expressions or chosen line by line; kept, refreshed, combined, cloned and shared;
   each cohort's definition records its criteria and every patient added manually; members and
   their data exported as CSV and Excel (\cref{chap:cohorts}). \\
-Patient Catalog & Every patient, searchable; each one's page: identity and allergies,
-  encounters, medications and conditions, the Patient Journey, a report of every entry
+Patient Catalog & Every patient of the databases one may view, searchable; each one's page:
+  identity and allergies, visits, medications and conditions, the Patient Journey, a report of every entry
   searchable down to the notes, the detail of each entry (\cref{chap:patients}). \\
-Databases & Every imported database as a table, as it was imported, each row linked to its
-  patient and its file to its viewer; connected databases (an OMOP CDM instance, a research
-  warehouse) read in place, their persons linked to the same patients
-  (\cref{chap:databases-tab}). \\
+Databases & The connected databases (OMOP, any SQL database through views, db-builder
+  databases), read in place and read-only, each with its status (online or offline), its
+  variables and who may use it; their persons linked to the same patients by exact
+  identifiers; each removable with every trace of it (\cref{chap:databases-tab,chap:connecting}). \\
 Viewers & VitalStream for ICU monitoring, Holter, EEG and sleep recordings, from weeks down
   to single samples; the ECG viewer, on standard paper; the PACS viewer, for DICOM studies (echo and
   angiography loops, CT, MR, nuclear medicine, X-ray, structured reports)
@@ -61,13 +66,46 @@ Privacy Mode & Pseudonyms and placeholders instead of identifiers, dates moved b
 Sign-in & Medorama's own accounts and passwords, or the institution's sign-in (single sign-on,
   multi-factor authentication) through an authenticating proxy (\cref{chap:sign-in}). \\
 Work & Background indexing, a Holter's heart rate, plug-in actions on any selection of
-  recordings (\cref{chap:actions}); users, roles and a separate PHI permission; a sealed
-  audit log (\cref{chap:administration}). \\
-Scale & SQLite on one server, or PostgreSQL for several servers and many users, with the
-  same program (\cref{chap:deployment}). \\
+  recordings (\cref{chap:actions}); users, roles and a separate PHI permission; grants per
+  database and cohort; a sealed audit log (\cref{chap:administration}). \\
+Workspace & What Medorama generates for each database and cohort, encrypted with that
+  database's or cohort's own key (\cref{chap:protecting}). \\
+Control store & Medorama's own database, in SQLite or PostgreSQL, with the same program: users,
+  grants, the audit log, the list of databases, cohorts' definitions; no patient data
+  (\cref{chap:deployment}). \\
 \bottomrule
 \end{tabularx}
 \end{table}
+
+\section{Version 0.2.0}
+\label{sec:introduction-version}
+
+This manual describes Medorama 0.2.0, a pre-release of November 2026. Its main changes since
+0.1.0:
+\begin{itemize}
+\item \textbf{Databases only.} Medorama no longer imports data: it connects OMOP databases, SQL
+  databases through views, and SQLite databases built with db-builder from tables, exports and
+  folders of recordings (\cref{chap:connecting,chap:importing}). Identity is the databases'
+  own: patients are joined by issuer and identifier, exactly, and conflicts are listed, never
+  merged.
+\item \textbf{A workspace per database.} What Medorama keeps of each database, its recordings'
+  indexes included, is encrypted with that database's own key, and removing a database leaves
+  no trace of it (\cref{chap:protecting}).
+\item \textbf{Grants per database}: search, view, the identifiers (\code{phi}) and manage. A
+  database without the \code{phi} grant is de-identified everywhere, Privacy Mode or not
+  (\cref{chap:users-privacy}).
+\item \textbf{db-builder}, with its own web page and sign-in, and rules that rewrite paths and
+  identifiers (\cref{chap:importing}).
+\item \textbf{Index format 3}, in an encrypted store shared by Medorama and the three
+  VitalStream viewers (\cref{chap:recordings}).
+\item \textbf{A full synthetic demo}: about 40 invented patients in five databases
+  (\cref{sec:introduction-demo}).
+\item \textbf{The fixes of a senior review} of privacy, clinical data, signals and images, the
+  page, robustness and security; and a health check for service managers
+  (\cref{chap:http-api}).
+\end{itemize}
+A 0.1.0 installation is set up again rather than updated (\cref{sec:installation-upgrade}).
+The repository's changelogs list every change.
 
 \section{The parts}
 \label{sec:introduction-parts}
@@ -85,8 +123,13 @@ fit together, where each one runs and which trust boundaries separate them.
 {\tabhead Part} & {\tabhead Folder} & {\tabhead What it is} \\
 \midrule
 Medorama & \file{medorama/} & The server and its web page (Rust, SQLite or PostgreSQL, plain
-  JavaScript): the catalog, connected databases, cohorts, the patient pages, the privacy gate,
-  users and audit, jobs and plug-ins. Run with \cmd{medorama serve}. \\
+  JavaScript): connected databases, the workspace and its keys, grants, cohorts, the patient
+  pages, the privacy gate, users and audit, jobs and plug-ins. Run with
+  \cmd{medorama serve}. \\
+db-builder & \file{db-builder/} & A separate, open tool (Rust): tables (CSV, Excel,
+  OpenDocument, Parquet), known exports (GE MUSE, CLIF, formats declared in TOML) and folders of
+  recordings made into one SQLite database with an open schema, which Medorama connects
+  (\cref{chap:importing}). \\
 VitalStream & \file{viewers/vitalstream/} & The waveform viewer, in three implementations
   (Python, Rust and C++: \cmd{vitalstream-py}, \cmd{vitalstream-rs}, \cmd{vitalstream-cpp}),
   with the same page, the same API and the same index, checked against each other. It reads
@@ -94,10 +137,10 @@ VitalStream & \file{viewers/vitalstream/} & The waveform viewer, in three implem
   and BDF+ files, and other formats through adapters. \\
 ECG viewer & \file{viewers/ecg/} & 12-lead ECGs on standard paper with their report: WFDB, GE
   MUSE XML, DICOM ECGs, EDF, JSON, PNG, JPEG, PDF. A static page; \cmd{muse-py} reads GE MUSE XML
-  and builds ECG databases. \\
+  and builds tables of ECGs. \\
 PACS viewer & \file{viewers/pacs/} & DICOM studies: echo and angiography loops, CT, MR, NM and
   X-ray series, structured reports, PDFs, pictures and videos, with its own JPEG decoders for
-  what browsers do not decode. A static page; \cmd{dicom-py} builds databases of DICOM
+  what browsers do not decode. A static page; \cmd{dicom-py} builds tables of DICOM
   studies. \\
 Libraries & \file{libs/} & \code{signal-core} (signal types and values shared by the Rust
   code) and \code{engine} (the crate \code{recording-engine}: indexing and reading
@@ -131,29 +174,31 @@ the system's setting until the user chooses one (\cref{chap:page}).
 \label{sec:introduction-privacy}
 
 Medorama runs on servers that the institution controls. It listens on the local machine
-(127.0.0.1) by default and sends nothing anywhere else. Data enter only as databases that an
-administrator imports or connects (connected databases are read in place, read-only), and the
-files they name (recordings, ECGs, images) are read where they lie and never written. This
+(127.0.0.1) by default and sends nothing anywhere else. Data reach it only as databases that an
+administrator connects, read in place and read-only, and the files they name (recordings, ECGs,
+images) are read where they lie and never written. A user sees only the databases granted to
+them. This
 section summarizes the protection of patients' identities; \cref{chap:protecting} explains it in
 full.
 
-\paragraph{Identifiers stay in the catalog.} MRNs, names, dates of birth, account numbers and
-the imported patient and encounter IDs exist only in Medorama's database. They are shown and
-searchable only for users with the \emph{PHI permission} who switched Privacy Mode off, and
-those users' searches and views are written to the audit log. The viewers, the plug-ins, the
-indexes and the results folders receive pseudonyms only.
+\paragraph{Identifiers stay in the databases.} MRNs, names, dates of birth and patient IDs are
+read from the connected databases; Medorama keeps the identifiers it links patients by only in
+each database's encrypted workspace file, and keyed hashes of them in its control store. They
+are shown only to users with the \emph{PHI permission} and the \code{phi} grant on that
+database who switched Privacy Mode off, and those users' views are written to the audit log.
+The viewers, the plug-ins and the indexes receive pseudonyms only.
 
 \paragraph{Privacy Mode.} A session is in Privacy Mode unless its user has the PHI permission
 and has switched it off with the \ui{Privacy Mode} switch in the page's header. Administrators
 with the PHI permission start with Privacy Mode off, everyone else with it on, and users without
 the permission cannot leave it. In Privacy Mode:
 \begin{itemize}
-\item patients and encounters are named by pseudonyms (\code{MO-XXXX-XXXX},
+\item patients and visits are named by pseudonyms (\code{MO-XXXX-XXXX},
   \code{MO-E-XXXX-XXXX}), random and stored, never derived from an identifier;
 \item names, MRNs, account numbers and dates of birth become placeholders
   (\code{[Patient Name]}, \code{[MRN]}, \code{[CSN]}, \code{[Date of Birth]}); staff names
   become \code{[Staff Name]};
-\item every date moves back by the catalog's offset and by each patient's own number of days,
+\item every date moves back by Medorama's offset and by each patient's own number of days,
   drawn once and kept, so that the intervals between a patient's events are kept; ages above
   89 become \code{90+};
 \item files are de-identified on the server: WFDB headers, GE MUSE XML and EDF headers are
@@ -189,13 +234,14 @@ sources, neither of which holds any patient data:
 \begin{itemize}
 \item \textbf{The demo}, made by \file{tools/make-demo-data.py}: six invented patients
   (\code{P900001} to \code{P900006}, with the MRNs \code{SYN0000001} to \code{SYN0000006})
-  with their encounters and bed stays, laboratory results, vital signs, medications,
+  with their visits and bed stays, laboratory results, vital signs, medications,
   diagnoses, microbiology, allergies and notes; short ICU recordings, a 24-hour Holter, an
   overnight EDF+ sleep study, 12-lead ECGs (WFDB, GE MUSE XML, DICOM, PDF and PNG), chest X-rays and CT series, echo loops
-  and reports, a coronary angiography run, and another hospital's OMOP database that adds
-  earlier stays and results to two of them. The installers make it when asked (\opt{--demo}),
-  and \cmd{medorama init} loads it into a cohort named \code{DEMO} that every user sees
-  (\cref{chap:quickstart}). It is off by default.
+  and reports, a coronary angiography run; and another hospital's OMOP database that holds
+  earlier stays and results of two of them, and two patients of its own. The installers make it
+  when asked (\opt{--demo}): the tables and files become a database with db-builder, and
+  \cmd{medorama init -{}-demo} connects it with the OMOP database (\cref{chap:quickstart}). It
+  is off by default.
 \item \textbf{The viewers' examples}: \file{viewers/ecg/examples/} (a WFDB record, a GE MUSE
   XML file, a DICOM ECG, a PDF and a PNG printout) and \file{viewers/pacs/examples/} (an echo
   loop, a coronary angiography run, a chest X-ray), written by
@@ -230,8 +276,8 @@ parts and appendices:
 \item \cref{part:start}: this introduction, the installation (\cref{chap:installation}) and a
   first tour of the demo (\cref{chap:quickstart});
 \item \cref{part:using}: the page, screen by screen;
-\item \cref{part:data}: bringing data in, as imported tables, connected databases, CLIF,
-  recordings, ECGs and imaging;
+\item \cref{part:data}: connecting data: connected databases, building a database with
+  db-builder, CLIF, recordings, ECGs and imaging;
 \item \cref{part:viewers}: the viewers on their own;
 \item \cref{part:admin}: administration, users and privacy, sign-in, deployment, add-ons,
   readers and new formats, troubleshooting;
@@ -258,7 +304,7 @@ parts and appendices:
 \ui{Patient Catalog}, \ui{Add to cohort\dots} & A tab, button or menu of a page, written
   exactly as the page shows it \\
 \key{Enter}, \key{Esc} & A key of the keyboard \\
-\code{QTc > 470ms}, \code{results\_dir} & A value, an identifier, a setting, an expression \\
+\code{QTc > 470ms}, \code{workspace\_dir} & A value, an identifier, a setting, an expression \\
 \cmd{medorama serve} & A command line or a subcommand \\
 \opt{-{}-demo} & A command-line option \\
 \file{tools/install-medorama.sh} & A file or folder, of the repository or of an output \\
@@ -273,7 +319,7 @@ medorama --version
 \end{lstlisting}
 and what a program prints, when it matters, in a listing of its own:
 \begin{lstlisting}[style=text]
-medorama 0.1.0
+medorama 0.2.0
 \end{lstlisting}
 
 Three kinds of boxes set text apart:
@@ -297,23 +343,26 @@ Commands for Linux and macOS are given first, and their Windows equivalents wher
 The file \file{CITATION.cff} at the root of the repository says how to cite Medorama (or
 VitalStream): Reza Sameni, \emph{Medorama: A unified patient-journey research platform
 linking EHR data, physiological waveforms, imaging and laboratory results across databases},
-version 0.1.0, released 2026-10-11, license PolyForm Noncommercial 1.0.0,
+version 0.2.0 (a pre-release), released 2026-11-15, license PolyForm Noncommercial 1.0.0,
 \url{https://github.com/alphanumericslab/medorama}. In BibTeX:
 \begin{lstlisting}[style=text]
 @software{sameni_medorama,
   author  = {Sameni, Reza},
   title   = {Medorama: A unified patient-journey research platform linking EHR data,
              physiological waveforms, imaging and laboratory results across databases},
-  version = {0.1.0},
-  date    = {2026-10-11},
+  version = {0.2.0},
+  date    = {2026-11-15},
   license = {PolyForm-Noncommercial-1.0.0},
   url     = {https://github.com/alphanumericslab/medorama}
 }
 \end{lstlisting}
 
-\paragraph{License.} Medorama is licensed under the PolyForm Noncommercial License 1.0.0: free
-for noncommercial use, such as research and teaching and use by universities, public research
-and public health organizations; commercial use needs a commercial license from the author. WFDB
+\paragraph{License.} Medorama's software is licensed under the PolyForm Noncommercial License
+1.0.0: free for noncommercial use, such as research and teaching and use by universities, public
+research and public health organizations; commercial use needs a commercial license from the
+author. This manual and the documentation are licensed under CC BY-NC-ND 4.0, and the demo and
+example data under CC BY-NC 4.0; the installers ask the user to accept these terms
+(\cref{sec:installation-license}). WFDB
 records are read with wfdb-x, a separate project whose library is under the GNU LGPL version 2.1
 or later; every
 program can also be built without WFDB support, and then contains no wfdb-x code

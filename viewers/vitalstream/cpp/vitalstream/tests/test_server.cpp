@@ -16,6 +16,7 @@
 #include "core/pyfmt.hpp"
 #include "core/value.hpp"
 #include "engine/sources.hpp"
+#include "engine/store.hpp"
 #include "server.hpp"
 #include "settings.hpp"
 #include "needs_wfdb.hpp"
@@ -205,7 +206,7 @@ TEST(Server, QueriesAreCheckedAndBounded) {
 TEST(Server, ARecordingThatCannotBeIndexedIsAnError) {
   VS_NEEDS_WFDB();
   // index.csv without a record column: the state is "error", with a reason, and nothing is left
-  // behind in the index folder
+  // behind in the index store
   fs::path dir = temp_dir("vs_server_error");
   write(dir / "c" / "index.csv", "name\nx\n");
   {
@@ -215,7 +216,11 @@ TEST(Server, ARecordingThatCannotBeIndexedIsAnError) {
     EXPECT_EQ(v.get("state")->py_str(), "error");
     EXPECT_NE(v.get("error")->py_str().find("no record column"), std::string::npos);
   }
-  EXPECT_TRUE(fs::is_empty(dir / "cache"));
+  // nothing left behind: no index in the store, nothing of the build next to it
+  Store store(dir / "cache" / "index.sqlite", std::nullopt);
+  EXPECT_TRUE(store.keys().empty());
+  std::error_code ec;
+  EXPECT_TRUE(!fs::exists(store.tmp_dir()) || fs::is_empty(store.tmp_dir(), ec));
   fs::remove_all(dir);
 }
 

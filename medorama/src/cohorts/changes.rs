@@ -1,4 +1,5 @@
-//! Changing cohorts: making, cloning, changing, deleting, refreshing them; the versions of the sources they were made from.
+//! Changing cohorts: making, cloning, changing, sharing, deleting, refreshing them; the
+//! versions of the databases they were made from.
 
 use super::*;
 
@@ -8,40 +9,60 @@ pub struct NewCohort {
     pub name: String,
     pub description: String,
     pub criteria: Criteria,
-    /// A subcohort's parent or the cohorts merged (none: the whole catalog).
+    /// The databases it searches (none: every one its user may search).
+    pub databases: Vec<i64>,
+    /// A subcohort's parent or the cohorts merged (none: every patient of its databases).
     pub source: Option<Source>,
     /// Patients to add now (none: all those the definition selects).
     pub patients: Vec<i64>,
 }
 
-pub fn create(c: &Connection, user: &User, timezone: &str, n: &NewCohort) -> anyhow::Result<i64> {
+/// The databases a cohort is to search: those named that the user may search.
+fn checked_databases(c: &Connection, user: &User, dbs: &[i64]) -> anyhow::Result<Vec<i64>> {
+    let mut out = vec![];
+    for d in dbs {
+        if !crate::grants::can(c, user, &format!("db:{d}"), "search")? {
+            anyhow::bail!("no database {d} to search");
+        }
+        if !out.contains(d) {
+            out.push(*d);
+        }
+    }
+    out.sort_unstable();
+    Ok(out)
+}
+
+pub fn create(c: &Connection, cfg: &Config, user: &User, n: &NewCohort) -> anyhow::Result<i64> {
     let name = n.name.trim();
     if name.is_empty() {
         anyhow::bail!("a cohort needs a name");
     }
     let source = n.source.as_ref().map(|s| checked_source(c, user, s)).transpose()?;
-    let criteria = n.criteria.as_written_by(c, user)?;
-    let sel = selected(c, user, timezone, &criteria, source.as_ref())?;
+    let databases = checked_databases(c, user, &n.databases)?;
+    let criteria = n.criteria.as_written_by(c, cfg, user)?;
+    let sel = selected(c, cfg, user, &criteria, &databases, source.as_ref())?;
     let t = now();
     let id = c.insert(
-        "INSERT INTO cohorts (name, description, owner, criteria, source, created_at, updated_at, refreshed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6, ?6)",
+        "INSERT INTO cohorts (name, description, owner, criteria, databases, source, created_at, updated_at, refreshed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?7)",
         params![
             name,
             n.description.trim(),
             (user.id > 0).then_some(user.id),
             serde_json::to_string(&criteria)?,
+            serde_json::to_string(&databases)?,
             store_source(source.as_ref())?,
             t
         ],
     )?;
+    crate::grants::grant_all(c, user, &format!("cohort:{id}"))?;
     c.execute(
         "UPDATE cohorts SET source_versions = ?1 WHERE id = ?2",
         params![serde_json::to_string(&source_versions(c)?)?, id],
     )?;
-    let mut patients: Vec<i64> = if n.patients.is_empty() { sel.iter().copied().collect() } else { n.patients.clone() };
+    let mut patients: Vec<i64> = if n.patients.is_empty() { sel.keys().copied().collect() } else { n.patients.clone() };
     patients.sort();
-    let (by_def, manual) = add_members(c, user, id, &patients, &sel)?;
+    let (by_def, manual) = add_members(c, cfg, user, id, &patients, &sel)?;
     let mut detail = format!("made: {}", n_patients(by_def.len() + manual.len()));
     if let Some(s) = &source {
         let names: Vec<String> = s.of.iter().filter_map(|x| s.names.get(x).cloned()).collect();
@@ -55,28 +76,21 @@ pub fn create(c: &Connection, user: &User, timezone: &str, n: &NewCohort) -> any
 }
 
 /// A copy of a cohort the user may read, theirs: the same definition and members.
-pub fn clone(c: &Connection, user: &User, id: i64, name: &str) -> anyhow::Result<i64> {
-    let co = load(c, user, id)?;
+pub fn clone(c: &Connection, cfg: &Config, user: &User, id: i64, name: &str) -> anyhow::Result<i64> {
+    let co = load(c, cfg, user, id)?;
     let name = name.trim();
     if name.is_empty() {
         anyhow::bail!("a cohort needs a name");
     }
     let t = now();
     let new = c.insert(
-        "INSERT INTO cohorts (name, description, owner, criteria, source, origin, created_at, updated_at, refreshed_at, source_versions)
-         SELECT ?1, description, ?2, criteria, source, ?3, ?4, ?4, refreshed_at, source_versions FROM cohorts WHERE id = ?5",
+        "INSERT INTO cohorts (name, description, owner, criteria, databases, source, origin, created_at, updated_at,
+                              refreshed_at, source_versions)
+         SELECT ?1, description, ?2, criteria, databases, source, ?3, ?4, ?4, refreshed_at, source_versions FROM cohorts WHERE id = ?5",
         params![name, (user.id > 0).then_some(user.id), format!("Cloned from “{}”", co.name), t, id],
     )?;
-    c.execute(
-        "INSERT INTO cohort_members (cohort, patient, how, added_by, added_at)
-         SELECT ?1, patient, how, added_by, added_at FROM cohort_members WHERE cohort = ?2",
-        [new, id],
-    )?;
-    c.execute(
-        "INSERT INTO cohort_removed (cohort, patient, removed_by, removed_at)
-         SELECT ?1, patient, removed_by, removed_at FROM cohort_removed WHERE cohort = ?2",
-        [new, id],
-    )?;
+    crate::grants::grant_all(c, user, &format!("cohort:{new}"))?;
+    members::copy(cfg, c, id, new)?;
     audit(
         c,
         Some(user),
@@ -103,6 +117,8 @@ pub struct Change {
     pub name: Option<String>,
     pub description: Option<String>,
     pub criteria: Option<Criteria>,
+    /// The databases it searches, replacing the list (empty: every one).
+    pub databases: Option<Vec<i64>>,
     /// Patients to add.  Those the definition selects count as found by it, the others as
     /// added manually (the definition lists them).
     pub add: Vec<i64>,
@@ -111,13 +127,13 @@ pub struct Change {
     /// Members to take out.  Those the definition selected stay out when it is refreshed (the
     /// definition lists them); those added manually are simply no longer added.
     pub remove: Vec<i64>,
-    /// The owner only: who else may see it, replacing the list.
+    /// Who manages it only: who else may see it, replacing the list.
     pub shares: Option<Vec<Share>>,
 }
 
-pub fn change(c: &Connection, user: &User, timezone: &str, id: i64, ch: &Change) -> anyhow::Result<Cohort> {
-    let is_owner = editable(c, user, id)?;
-    let before = load(c, user, id)?;
+pub fn change(c: &Connection, cfg: &Config, user: &User, id: i64, ch: &Change) -> anyhow::Result<Cohort> {
+    let manages = editable(c, user, id)?;
+    let before = load(c, cfg, user, id)?;
     let mut log: Vec<String> = vec![];
     if let Some(n) = &ch.name {
         let n = n.trim();
@@ -136,7 +152,7 @@ pub fn change(c: &Connection, user: &User, timezone: &str, id: i64, ch: &Change)
         }
     }
     if let Some(q) = &ch.criteria {
-        let q = &q.as_written_by(c, user)?;
+        let q = &q.as_written_by(c, cfg, user)?;
         if *q != before.criteria {
             c.execute("UPDATE cohorts SET criteria = ?1 WHERE id = ?2", params![serde_json::to_string(q)?, id])?;
             let w = criteria_words(q);
@@ -152,20 +168,31 @@ pub fn change(c: &Connection, user: &User, timezone: &str, id: i64, ch: &Change)
             });
         }
     }
+    if let Some(dbs) = &ch.databases {
+        let dbs = checked_databases(c, user, dbs)?;
+        if dbs != before.databases {
+            c.execute("UPDATE cohorts SET databases = ?1 WHERE id = ?2", params![serde_json::to_string(&dbs)?, id])?;
+            log.push(if dbs.is_empty() {
+                "searches every database".into()
+            } else {
+                format!("searches {} databases", dbs.len())
+            });
+        }
+    }
     let mut add = ch.add.clone();
     if let Some(s) = &ch.add_search {
-        let only = s.cohort.map(|x| member_ids(c, user, x)).transpose()?;
-        add.extend(patient::matching_ids(c, user, &s.q, &s.has, only.as_ref())?);
+        let only = s.cohort.map(|x| member_ids(c, cfg, user, x)).transpose()?;
+        add.extend(patient::matching_ids(c, cfg, user, &s.q, &s.has, only.as_ref())?);
     }
     if !add.is_empty() {
-        let members = stored_members(c, id)?;
-        add.retain(|p| !members.contains(p));
+        let current = members::ids(cfg, c, id)?;
+        add.retain(|p| !current.contains(p));
         add.sort();
         add.dedup();
     }
     if !add.is_empty() {
-        let sel = selected_by(c, user, timezone, id)?;
-        let (by_def, manual) = add_members(c, user, id, &add, &sel)?;
+        let sel = selected_by(c, cfg, user, id)?;
+        let (by_def, manual) = add_members(c, cfg, user, id, &add, &sel)?;
         if !manual.is_empty() {
             log.push(format!("added manually: {}", some(&patient_ids(c, manual)?)));
         }
@@ -174,25 +201,18 @@ pub fn change(c: &Connection, user: &User, timezone: &str, id: i64, ch: &Change)
         }
     }
     if !ch.remove.is_empty() {
+        let how = members::how(cfg, c, id)?;
+        let by = (user.id > 0).then_some(user.id);
         let (mut out, mut dropped) = (vec![], vec![]);
         for p in &ch.remove {
-            let how: Option<String> = c
-                .query_row("SELECT how FROM cohort_members WHERE cohort = ?1 AND patient = ?2", [id, *p], |r| r.get(0))
-                .optional()?;
-            match how.as_deref() {
-                Some("criteria") => {
-                    c.execute(
-                        "INSERT INTO cohort_removed (cohort, patient, removed_by, removed_at) VALUES (?1, ?2, ?3, ?4)
-                         ON CONFLICT (cohort, patient) DO UPDATE SET removed_by = excluded.removed_by, removed_at = excluded.removed_at",
-                        params![id, p, (user.id > 0).then_some(user.id), now()],
-                    )?;
-                    out.push(*p);
-                }
+            match how.get(p).map(|h| h.0.as_str()) {
+                Some("criteria") => out.push(*p),
                 Some(_) => dropped.push(*p),
-                None => continue,
+                None => {}
             }
-            c.execute("DELETE FROM cohort_members WHERE cohort = ?1 AND patient = ?2", [id, *p])?;
         }
+        members::remove(cfg, c, id, &out, true, by)?;
+        members::remove(cfg, c, id, &dropped, false, by)?;
         if !out.is_empty() {
             log.push(format!("removed manually: {}", some(&patient_ids(c, out)?)));
         }
@@ -201,23 +221,24 @@ pub fn change(c: &Connection, user: &User, timezone: &str, id: i64, ch: &Change)
         }
     }
     if let Some(shares) = &ch.shares {
-        if !is_owner {
-            anyhow::bail!("only its owner shares a cohort");
+        if !manages {
+            anyhow::bail!("only who manages a cohort shares it");
         }
-        c.execute("DELETE FROM cohort_shares WHERE cohort = ?1", [id])?;
-        for s in shares {
-            c.execute(
-                "INSERT OR IGNORE INTO cohort_shares (cohort, user_id, can_edit) SELECT ?1, id, ?2 FROM users WHERE id = ?3 AND id != ?4",
-                params![id, s.can_edit, s.user_id, user.id],
-            )?;
+        let o = format!("cohort:{id}");
+        for (uid, _, _) in crate::grants::of_object(c, &o)? {
+            if uid != user.id && Some(uid) != before.owner {
+                c.execute("DELETE FROM grants WHERE user_id = ?1 AND object = ?2", params![uid, o])?;
+            }
         }
-        let now_shared: Vec<String> = c
-            .prepare(
-                "SELECT u.username || CASE WHEN s.can_edit != 0 THEN ' (may edit)' ELSE '' END FROM cohort_shares s
-                 JOIN users u ON u.id = s.user_id WHERE s.cohort = ?1 ORDER BY u.username",
-            )?
-            .query_map([id], |r| r.get(0))?
-            .collect::<Result<_, _>>()?;
+        for s in shares.iter().filter(|s| s.user_id != user.id) {
+            crate::grants::grant(c, user, s.user_id, &o, if s.can_edit { "edit" } else { "view" })?;
+        }
+        let now_shared: Vec<String> = load(c, cfg, user, id)?
+            .shares
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| format!("{}{}", s.username, if s.can_edit { " (may edit)" } else { "" }))
+            .collect();
         log.push(if now_shared.is_empty() {
             "not shared".into()
         } else {
@@ -228,18 +249,18 @@ pub fn change(c: &Connection, user: &User, timezone: &str, id: i64, ch: &Change)
         c.execute("UPDATE cohorts SET updated_at = ?1 WHERE id = ?2", params![now(), id])?;
         audit(c, Some(user), "cohort_change", &id.to_string(), &log.join("; "));
     }
-    load(c, user, id)
+    load(c, cfg, user, id)
 }
 
-/// Deletes a cohort (its owner only; the demo's, any admin, with demo::remove).  The cohorts
-/// made from it keep its last members and follow those.
-pub fn delete(c: &Connection, user: &User, id: i64) -> anyhow::Result<()> {
-    let (_, _, is_owner) = access(c, user, id)?;
-    if !is_owner && !(user.is_admin() && is_demo(c, id)?) {
-        anyhow::bail!("only its owner deletes a cohort");
+/// Deletes a cohort (who manages it): its key destroyed, then its file.  The cohorts made from
+/// it keep its last members and follow those.
+pub fn delete(c: &Connection, cfg: &Config, user: &User, id: i64) -> anyhow::Result<()> {
+    let (_, _, manages) = access(c, user, id)?;
+    if !manages {
+        anyhow::bail!("only who manages a cohort deletes it");
     }
     let name: String = c.query_row("SELECT name FROM cohorts WHERE id = ?1", [id], |r| r.get(0))?;
-    let mut kept: Vec<i64> = stored_members(c, id)?.into_iter().collect();
+    let mut kept: Vec<i64> = members::ids(cfg, c, id)?.into_iter().collect();
     kept.sort();
     let dependents: Vec<(i64, String)> = c
         .prepare("SELECT id, source FROM cohorts WHERE source IS NOT NULL AND id != ?1")?
@@ -261,6 +282,8 @@ pub fn delete(c: &Connection, user: &User, id: i64) -> anyhow::Result<()> {
             &format!("“{name}”, which it is made from, was deleted: its last members are kept"),
         );
     }
+    members::delete(cfg, c, id)?;
+    crate::grants::remove_object(c, &format!("cohort:{id}"))?;
     c.execute("DELETE FROM cohorts WHERE id = ?1", [id])?;
     audit(c, Some(user), "cohort_delete", &id.to_string(), &name);
     Ok(())
@@ -312,46 +335,32 @@ pub struct RefreshOpts {
 /// How many of those who would join and leave a dry run lists.
 const LISTED: usize = 500;
 
-/// The version of each source now: the catalog's data version, and each connected database's
-/// (`unavailable` when it does not answer).
+/// The data version of each connected database as last checked (`offline` when it does not
+/// answer).
 pub fn source_versions(c: &Connection) -> anyhow::Result<BTreeMap<String, String>> {
     let mut v = BTreeMap::new();
-    let catalog: i64 = c.query_row("SELECT version FROM data_version", [], |r| r.get(0))?;
-    v.insert("catalog".to_string(), catalog.to_string());
-    for s in crate::sources::list(c)? {
-        let version = s.version().unwrap_or_else(|_| "unavailable".into());
-        v.insert(s.name, if version.is_empty() { "-".into() } else { version });
+    for d in crate::databases::list(c)? {
+        let version = if d.status == "online" { d.data_version.clone() } else { "offline".into() };
+        v.insert(d.source.name, if version.is_empty() { "-".into() } else { version });
     }
     Ok(v)
 }
 
 /// What the definition selects now, against the members; applied unless `dry_run`.
-pub fn refresh(c: &Connection, user: &User, timezone: &str, id: i64, dry_run: bool) -> anyhow::Result<Refresh> {
-    refresh_with(c, user, timezone, id, &RefreshOpts { dry_run, ..Default::default() })
+pub fn refresh(c: &Connection, cfg: &Config, user: &User, id: i64, dry_run: bool) -> anyhow::Result<Refresh> {
+    refresh_with(c, cfg, user, id, &RefreshOpts { dry_run, ..Default::default() })
 }
 
 /// [`refresh`], as `opts` says: all the changes, or only (some of) the new patients.
-pub fn refresh_with(
-    c: &Connection,
-    user: &User,
-    timezone: &str,
-    id: i64,
-    opts: &RefreshOpts,
-) -> anyhow::Result<Refresh> {
+pub fn refresh_with(c: &Connection, cfg: &Config, user: &User, id: i64, opts: &RefreshOpts) -> anyhow::Result<Refresh> {
     let dry_run = opts.dry_run;
     let (can_edit, _) = readable(c, user, id)?;
-    let sel = selected_by(c, user, timezone, id)?;
-    let members: HashMap<i64, String> = c
-        .prepare("SELECT patient, how FROM cohort_members WHERE cohort = ?1")?
-        .query_map([id], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<Result<_, _>>()?;
-    let out: HashSet<i64> = c
-        .prepare("SELECT patient FROM cohort_removed WHERE cohort = ?1")?
-        .query_map([id], |r| r.get(0))?
-        .collect::<Result<_, _>>()?;
-    let mut added: Vec<i64> = sel.iter().filter(|p| !members.contains_key(p) && !out.contains(p)).copied().collect();
+    let sel = selected_by(c, cfg, user, id)?;
+    let how = members::how(cfg, c, id)?;
+    let out = members::removed(cfg, c, id)?;
+    let mut added: Vec<i64> = sel.keys().filter(|p| !how.contains_key(p) && !out.contains(p)).copied().collect();
     let mut removed: Vec<i64> =
-        members.iter().filter(|(p, h)| h.as_str() == "criteria" && !sel.contains(p)).map(|(p, _)| *p).collect();
+        how.iter().filter(|(p, h)| h.0.as_str() == "criteria" && !sel.contains_key(p)).map(|(p, _)| *p).collect();
     added.sort();
     removed.sort();
     if dry_run {
@@ -360,7 +369,7 @@ pub fn refresh_with(
                 return Ok(vec![]);
             }
             let set: HashSet<i64> = ids.iter().copied().collect();
-            Ok(crate::patient::list_in(c, user, "", &[], Some(&set), LISTED, 0)?.1)
+            Ok(crate::patient::list_in(c, cfg, user, "", &[], Some(&set), LISTED, 0)?.1)
         };
         let (joining, leaving) = (rows(&added)?, rows(&removed)?);
         return Ok(Refresh { added, removed, dry_run, joining, leaving, not_applied: vec![], not_chosen: 0 });
@@ -383,42 +392,38 @@ pub fn refresh_with(
     }
     not_applied.sort();
     not_applied.dedup();
-    {
-        if !can_edit {
-            anyhow::bail!("this cohort is shared with you to read only");
-        }
-        add_members(c, user, id, &added, &sel)?;
-        for p in &removed {
-            c.execute("DELETE FROM cohort_members WHERE cohort = ?1 AND patient = ?2", [id, *p])?;
-        }
-        let before: BTreeMap<String, String> =
-            serde_json::from_str(
-                &c.query_row("SELECT source_versions FROM cohorts WHERE id = ?1", [id], |r| r.get::<_, String>(0))?,
-            )
-            .unwrap_or_default();
-        let versions = source_versions(c)?;
-        c.execute(
-            "UPDATE cohorts SET refreshed_at = ?1, updated_at = ?1, source_versions = ?2 WHERE id = ?3",
-            params![now(), serde_json::to_string(&versions)?, id],
-        )?;
-        let mut detail = format!("refreshed: {} joined, {} left", added.len(), removed.len());
-        // the connected databases whose data changed since
-        let changed: Vec<String> = versions
-            .iter()
-            .filter(|(k, v)| k.as_str() != "catalog" && before.get(*k).is_some_and(|b| b != *v))
-            .map(|(k, v)| format!("{k} {} → {v}", before[k]))
-            .collect();
-        if !changed.is_empty() {
-            detail += &format!("; new data: {}", changed.join(", "));
-        }
-        if !added.is_empty() {
-            detail += &format!("; joined: {}", some(&patient_ids(c, added.clone())?));
-        }
-        if !removed.is_empty() {
-            detail += &format!("; left: {}", some(&patient_ids(c, removed.clone())?));
-        }
-        audit(c, Some(user), "cohort_refresh", &id.to_string(), &detail);
+    if !can_edit {
+        anyhow::bail!("this cohort is shared with you to read only");
     }
+    add_members(c, cfg, user, id, &added, &sel)?;
+    members::remove(cfg, c, id, &removed, false, (user.id > 0).then_some(user.id))?;
+    let before: BTreeMap<String, String> =
+        serde_json::from_str(
+            &c.query_row("SELECT source_versions FROM cohorts WHERE id = ?1", [id], |r| r.get::<_, String>(0))?,
+        )
+        .unwrap_or_default();
+    let versions = source_versions(c)?;
+    c.execute(
+        "UPDATE cohorts SET refreshed_at = ?1, updated_at = ?1, source_versions = ?2 WHERE id = ?3",
+        params![now(), serde_json::to_string(&versions)?, id],
+    )?;
+    let mut detail = format!("refreshed: {} joined, {} left", added.len(), removed.len());
+    // the databases whose data changed since
+    let changed: Vec<String> = versions
+        .iter()
+        .filter(|(k, v)| before.get(*k).is_some_and(|b| b != *v))
+        .map(|(k, v)| format!("{k} {} → {v}", before[k]))
+        .collect();
+    if !changed.is_empty() {
+        detail += &format!("; new data: {}", changed.join(", "));
+    }
+    if !added.is_empty() {
+        detail += &format!("; joined: {}", some(&patient_ids(c, added.clone())?));
+    }
+    if !removed.is_empty() {
+        detail += &format!("; left: {}", some(&patient_ids(c, removed.clone())?));
+    }
+    audit(c, Some(user), "cohort_refresh", &id.to_string(), &detail);
     Ok(Refresh { added, removed, dry_run, joining: vec![], leaving: vec![], not_applied, not_chosen })
 }
 

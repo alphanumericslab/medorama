@@ -1,5 +1,6 @@
-// Patient Catalog: every patient, latest encounter first; the search line finds a patient by
-// name, MRN, ID, date of birth or encounter (identifiers only with the PHI permission); the
+// Patient Catalog: every patient of the databases the user may view, latest first; the search
+// line finds a patient by pseudonym, sex, data or database, and by name, MRN, ID or date of
+// birth with the PHI permission on the database that holds them; the
 // chips filter by kind of data: a click keeps the patients who have it, a second those who have
 // none, a third clears it (?has=ecg,!icu); ?cohort=… shows a cohort's members only.  "Add to
 // cohort…" adds every patient the search finds to a cohort (the server runs the same search).
@@ -32,18 +33,18 @@ async function load() {
     ? `Patients${withs.length ? ` with <b>${withs.map(esc).join('</b> and <b>')}</b>` : ''}${withs.length && withouts.length ? ',' : ''}${withouts.length ? ` without <b>${withouts.map(esc).join('</b> or <b>')}</b>` : ''}`
     : '';
   const p = phi();
-  let html = `<tr><th>Patient</th><th>Patient ID</th>${p ? '<th>MRN</th>' : ''}<th>Sex</th>${ages() ? '<th class="num">Age</th>' : ''}${p ? '<th>Born</th>' : ''}<th class="num">Encounters</th><th>Latest encounter</th><th>Where</th><th>Data</th><th class="num">Items</th></tr>`;
-  if (!data.items.length) html += `<tr><td colspan="11" class="empty">${asked.q || asked.has.length ? 'No patient matches.' : 'No patients yet: add databases in Import.'}</td></tr>`;
+  let html = `<tr><th>Patient</th><th>${p ? 'Patient ID' : 'Pseudonym'}</th>${p ? '<th>MRN</th>' : ''}<th>Sex</th>${ages() ? '<th class="num">Age</th>' : ''}${p ? '<th>Born</th>' : ''}<th class="num">Visits</th><th>Latest</th><th>Databases</th><th>Data</th><th class="num">Entries</th></tr>`;
+  if (!data.items.length) html += `<tr><td colspan="11" class="empty">${asked.q || asked.has.length ? 'No patient matches.' : 'No patients yet: connect a database in Databases.'}</td></tr>`;
   const labels = Object.fromEntries(data.categories);
   for (const r of data.items) {
-    const name = p ? [r.phi?.last_name, r.phi?.first_name].filter(Boolean).join(', ') || '—' : r.patient_id;
+    const name = (p ? [r.phi?.last_name, r.phi?.first_name].filter(Boolean).join(', ') : '') || r.pseudonym;
     const mrn = p ? (r.phi?.mrns || []).map((m) => m[1]).join(', ') : '';
-    // and the connected databases that hold their data (read when their page opens)
-    const kinds = [...r.kinds.map((k) => esc(labels[k] || k)), ...(r.sources || []).map((n) => `<span class="pill" title="Data in the connected database ${esc(n)}">${esc(n)}</span>`)].join(' · ');
+    const kinds = r.kinds.map((k) => esc(labels[k] || k)).join(' · ');
+    const dbs = (r.sources || []).map((n) => `<span class="pill">${esc(n)}</span>`).join(' ');
     const to = esc(href('patient', [String(r.id)]));
-    html += `<tr data-href="${to}"><td class="nm"><a href="${to}">${esc(name)}</a></td><td class="mono">${esc(r.patient_id)}</td>${p ? `<td class="mono">${esc(mrn)}</td>` : ''}
+    html += `<tr data-href="${to}"><td class="nm"><a href="${to}">${esc(name)}</a></td><td class="mono">${esc(p && r.patient_id ? r.patient_id : r.pseudonym)}</td>${p ? `<td class="mono">${esc(mrn)}</td>` : ''}
       <td>${esc(r.sex)}</td>${ages() ? `<td class="num">${esc(r.age ?? '')}</td>` : ''}${p ? `<td>${esc(r.phi?.birth_date || '')}</td>` : ''}<td class="num">${r.encounters}</td>
-      <td>${r.latest ? fmtDate(r.latest) : '<span class="faint">—</span>'}</td><td>${esc(r.latest_where)}</td><td><span class="kinds">${kinds}</span></td><td class="num">${r.items}</td></tr>`;
+      <td>${r.latest ? fmtDate(r.latest) : '<span class="faint">—</span>'}</td><td>${dbs}</td><td><span class="kinds">${kinds}</span></td><td class="num">${r.items}</td></tr>`;
   }
   $('#pl-table').innerHTML = html;
   const o = pl.offset;
@@ -63,7 +64,7 @@ function searchWords() {
   if (s.q) parts.push(`“${esc(s.q)}”`);
   if (s.has.length) parts.push('the filters');
   if (s.cohort) parts.push(`among “${esc(s.cohortName)}”`);
-  return parts.length ? `this search (${parts.join(', ')}) finds` : 'the catalog holds (no search)';
+  return parts.length ? `this search (${parts.join(', ')}) finds` : 'the databases hold (no search)';
 }
 
 async function addToPanel() {
@@ -103,8 +104,8 @@ export default {
     if (pl.cohort) pl.cohortName = (await api(`cohorts/${pl.cohort}`).catch(() => ({ name: pl.cohort }))).name;
     $('#pl-q').value = pl.q;
     $('#pl-q').placeholder = privacy.on
-      ? 'Search: pseudonym (MO-…), encounter, unit, sex… (Privacy Mode: no identifiers)'
-      : 'Search: name, MRN, patient ID, date of birth, encounter…';
+      ? 'Search: pseudonym (MO-…), sex, has:…, database:… (Privacy Mode: no identifiers)'
+      : 'Search: name, MRN, patient ID, date of birth, database…';
     return load();
   },
   wire() {

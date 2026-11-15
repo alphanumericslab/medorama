@@ -1,6 +1,9 @@
 // An ECG on standard paper, as SVG in millimetres: 1 mm and 5 mm grid, 25 mm/s, 10 mm/mV,
 // a 1 mV calibration pulse at the start of each row.  Layouts: the standard 3 × 4 and 6 × 2, each
 // with a lead II rhythm strip, and 12 × 1; records that are not 12-lead ECGs show every lead in full.
+// The baseline: each strip (a lead's segment on the paper) is drawn about its median, and an
+// optional 0.5 Hz high-pass and 50 or 60 Hz notch, both zero-phase (run forward then backward),
+// clean the signal first.  The samples of the record are never changed.
 // A classic script (it works from file://), and a CommonJS module for tests.
 
 (function (root) {
@@ -15,13 +18,104 @@
   const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const f2 = (x) => (Math.round(x * 100) / 100).toString();
 
-  /** The path of samples v[a..b) at `speed` mm/s and `gain` mm/mV, from (x0, y0) mm. */
-  function trace(v, fs, a, b, x0, y0, speed, gain) {
+  // ---------------------------------------------------------------- filters
+  /**
+   * A biquad { b: [b0, b1, b2], a: [a1, a2] } (a0 = 1) run over x forward then backward, so with
+   * no phase shift: each end extended by its odd reflection (up to 1 s) and the filter started in
+   * its steady state for the first value, so that the ends do not ring.  Gaps (NaN) are held at
+   * the last value while filtering and are gaps again in the result.
+   */
+  function filtfilt(x, fs, f) {
+    const n = x.length;
+    const out = new Float64Array(n);
+    let first = -1;
+    for (let i = 0; i < n; i++) if (Number.isFinite(x[i])) { first = i; break; }
+    if (first < 0) return out.fill(NaN);
+    // gaps held
+    const y = new Float64Array(n);
+    let last = x[first];
+    for (let i = 0; i < n; i++) { if (Number.isFinite(x[i])) last = x[i]; y[i] = last; }
+    if (n < 2) return Float64Array.from(x);
+    const pad = Math.min(n - 1, Math.max(1, Math.round(fs)));
+    const ext = new Float64Array(n + 2 * pad);
+    for (let i = 0; i < pad; i++) ext[i] = 2 * y[0] - y[pad - i];
+    ext.set(y, pad);
+    for (let i = 0; i < pad; i++) ext[pad + n + i] = 2 * y[n - 1] - y[n - 2 - i];
+    const [b0, b1, b2] = f.b;
+    const [a1, a2] = f.a;
+    const gain = (b0 + b1 + b2) / (1 + a1 + a2);
+    // transposed direct form II, from the steady state of a constant input x0
+    const run = (v) => {
+      let z1 = (gain - b0) * v[0];
+      let z2 = (b2 - a2 * gain) * v[0];
+      for (let i = 0; i < v.length; i++) {
+        const xi = v[i];
+        const yi = b0 * xi + z1;
+        z1 = b1 * xi - a1 * yi + z2;
+        z2 = b2 * xi - a2 * yi;
+        v[i] = yi;
+      }
+    };
+    run(ext);
+    ext.reverse();
+    run(ext);
+    ext.reverse();
+    for (let i = 0; i < n; i++) out[i] = Number.isFinite(x[i]) ? ext[pad + i] : NaN;
+    return out;
+  }
+
+  /** A first-order Butterworth high-pass at fc Hz (bilinear transform); run forward and backward, −6 dB at fc. */
+  function highpassFilter(fs, fc) {
+    const k = Math.tan((Math.PI * fc) / fs);
+    return { b: [1 / (1 + k), -1 / (1 + k), 0], a: [(k - 1) / (k + 1), 0] };
+  }
+
+  /** A notch at f0 Hz of quality q (the bandwidth f0 / q), as in the Audio EQ Cookbook. */
+  function notchFilter(fs, f0, q = 30) {
+    const w = (2 * Math.PI * f0) / fs;
+    const alpha = Math.sin(w) / (2 * q);
+    const a0 = 1 + alpha;
+    const c = -2 * Math.cos(w) / a0;
+    return { b: [1 / a0, c, 1 / a0], a: [c, (1 - alpha) / a0] };
+  }
+
+  /** v high-passed at fc Hz (0.5 by default), with no phase shift. */
+  const highpass = (v, fs, fc = 0.5) => filtfilt(v, fs, highpassFilter(fs, fc));
+  /** v without f0 Hz (50 or 60, mains), with no phase shift; unchanged when f0 is not below fs / 2. */
+  const notch = (v, fs, f0) => (f0 > 0 && f0 < fs / 2 ? filtfilt(v, fs, notchFilter(fs, f0)) : Float64Array.from(v));
+
+  /** The median of the finite samples v[a..b), or 0 when there are none. */
+  function median(v, a = 0, b = v.length) {
+    const xs = [];
+    for (let i = Math.max(0, a); i < Math.min(v.length, b); i++) if (Number.isFinite(v[i])) xs.push(v[i]);
+    if (!xs.length) return 0;
+    xs.sort((p, q) => p - q);
+    const m = xs.length >> 1;
+    return xs.length % 2 ? xs[m] : (xs[m - 1] + xs[m]) / 2;
+  }
+
+  /**
+   * The samples the paper draws of a lead: its first `seconds` (and 2 s more, so the filters'
+   * ends fall off the paper), high-passed at 0.5 Hz when `highpass`, without mains when `notch`
+   * (50 or 60 Hz).  The lead's own samples when neither is on.
+   */
+  function conditioned(lead, seconds, opts) {
+    const hp = opts.highpass === true ? 0.5 : +opts.highpass || 0;
+    const f0 = +opts.notch || 0;
+    if (!hp && !f0) return lead.v;
+    let v = lead.v.subarray ? lead.v.subarray(0, Math.min(lead.v.length, Math.ceil((seconds + 2) * lead.fs))) : lead.v;
+    if (hp > 0 && hp < lead.fs / 2) v = highpass(v, lead.fs, hp);
+    if (f0) v = notch(v, lead.fs, f0);
+    return v;
+  }
+
+  /** The path of samples v[a..b), less `off` mV, at `speed` mm/s and `gain` mm/mV, from (x0, y0) mm. */
+  function trace(v, fs, a, b, x0, y0, speed, gain, off = 0) {
     let d = '';
     let pen = false;
     for (let n = Math.max(0, a); n < Math.min(v.length, b); n++) {
       const x = x0 + ((n - a) / fs) * speed;
-      const y = v[n];
+      const y = v[n] - off;
       if (!Number.isFinite(y)) { pen = false; continue; }
       d += `${pen ? 'L' : 'M'}${f2(x)} ${f2(y0 - y * gain)}`;
       pen = true;
@@ -39,7 +133,9 @@
   /**
    * Draw `rec` (see ecg.js) on paper.  opts: layout ('3x4', '6x2', '12x1'), speed (mm/s),
    * gain (mm/mV), seconds (the strip's length, default 10), twelve (leads by name, from
-   * ECG.twelveLead, or null).  Returns { svg, width, height (mm), seconds, toTime(x mm),
+   * ECG.twelveLead, or null), median (each strip drawn about its median; true unless false),
+   * highpass (true for 0.5 Hz, or a cut-off in Hz; off by default), notch (50 or 60 Hz; off by
+   * default).  Returns { svg, width, height (mm), seconds, toTime(x mm),
    * snap(x, y) }: `snap` finds the point of a trace nearest a point of the paper (for calipers).
    */
   function draw(rec, opts) {
@@ -53,6 +149,11 @@
     const twelve = opts.twelve;
     const L = twelve ? LAYOUTS[opts.layout] || LAYOUTS['3x4'] : null;
     const rows = [];
+    const signal = new Map();       // lead -> the samples drawn (conditioned once, also for the rhythm strip)
+    const samples = (lead) => {
+      if (!signal.has(lead)) signal.set(lead, conditioned(lead, seconds, opts));
+      return signal.get(lead);
+    };
     if (L) {
       const colS = seconds / L.cols;
       L.rows.forEach((names) => rows.push(names.map((nm, c) => ({ lead: twelve[nm], name: nm, t0: c * colS, t1: (c + 1) * colS }))));
@@ -79,8 +180,10 @@
         const lead = cell.lead;
         const a = Math.round(cell.t0 * lead.fs);
         const b = Math.round(cell.t1 * lead.fs);
-        paths += trace(lead.v, lead.fs, a, b, x0, y0, speed, gain);
-        placed.push({ lead, name: cell.name, a, b: Math.min(b, lead.v.length), x0, y0 });
+        const v = samples(lead);
+        const off = opts.median === false ? 0 : median(v, a, b);
+        paths += trace(v, lead.fs, a, b, x0, y0, speed, gain, off);
+        placed.push({ lead, v, off, name: cell.name, a, b: Math.min(b, v.length), x0, y0 });
         // the lead's name, and a mark where the lead changes
         labels += `<text x="${f2(x0 + 1.2)}" y="${f2(y0 - rowH * 0.42)}">${esc(cell.name)}</text>`;
         if (c > 0) paths += `M${f2(x0)} ${f2(y0 - 2.5)}V${f2(y0 + 2.5)}`;
@@ -88,9 +191,11 @@
     });
     s += `<path class="trace" d="${paths}"/>`;
     s += `<g class="labels">${labels}</g>`;
-    s += `<text class="foot" x="${left}" y="${height - 2.2}">${speed} mm/s   ${gain} mm/mV   ${esc(rec.fs)} Hz</text>`;
+    const hp = opts.highpass === true ? 0.5 : +opts.highpass || 0;
+    const filt = [hp ? `${hp} Hz high-pass` : '', +opts.notch ? `${+opts.notch} Hz notch` : ''].filter(Boolean).map((t) => `   ${t}`).join('');
+    s += `<text class="foot" x="${left}" y="${height - 2.2}">${speed} mm/s   ${gain} mm/mV   ${esc(rec.fs)} Hz${esc(filt)}</text>`;
     s += '<g class="calipers"></g></svg>';
-    /** The sample nearest (x, y) mm, within ±40 ms along the paper: { x, y, v (mV), t (s), lead }. */
+    /** The sample nearest (x, y) mm, within ±40 ms along the paper: { x, y, v (mV, as drawn: about the strip's median, filtered), t (s), lead }. */
     const snap = (x, y) => {
       let best = null;
       for (const c of placed) {
@@ -100,7 +205,7 @@
         const n0 = c.a + Math.round(((x - c.x0) / speed) * fs);
         const w = Math.max(1, Math.round(0.04 * fs));
         for (let n = Math.max(c.a, n0 - w); n < Math.min(c.b, n0 + w + 1); n++) {
-          const v = c.lead.v[n];
+          const v = c.v[n] - c.off;
           if (!Number.isFinite(v)) continue;
           const px = c.x0 + ((n - c.a) / fs) * speed;
           const py = c.y0 - v * gain;
@@ -113,7 +218,7 @@
     return { svg: s, width, height, seconds, left, speed, gain, toTime: (x) => (x - left) / speed, snap };
   }
 
-  const api = { draw, LAYOUTS };
+  const api = { draw, LAYOUTS, filtfilt, highpass, notch, median, highpassFilter, notchFilter };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Paper = api;
 })(typeof self !== 'undefined' ? self : this);

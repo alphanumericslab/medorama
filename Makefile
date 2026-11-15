@@ -63,9 +63,9 @@ test: test-python test-rust test-cpp test-medorama test-viewers test-tools parit
 test-python:
 	$(PY) -m pytest -q $(V)/python/vitalstream/tests viewers/ecg/python/muse/tests viewers/pacs/python/dicom/tests
 
-# the libraries and the Rust viewer (Medorama: test-medorama)
+# the libraries, the Rust viewer and db-builder (Medorama: test-medorama)
 test-rust:
-	$(CARGO) test --release --locked -p signal-core -p recording-engine -p vitalstream-rs
+	$(CARGO) test --release --locked -p signal-core -p recording-engine -p vitalstream-rs -p db-builder
 
 test-cpp: cpp
 	cd $(V)/cpp && ctest --preset release
@@ -74,7 +74,7 @@ test-medorama:
 	$(CARGO) test --release --locked -p medorama
 	node --test medorama/tests/web/
 
-# the same tests with the catalog in PostgreSQL: MEDORAMA_TEST_POSTGRES=postgres://user@host/db
+# the same tests with the control store in PostgreSQL: MEDORAMA_TEST_POSTGRES=postgres://user@host/db
 test-medorama-postgres:
 	@test -n "$(MEDORAMA_TEST_POSTGRES)" || { echo "set MEDORAMA_TEST_POSTGRES=postgres://user@host/db (an empty database)"; exit 1; }
 	MEDORAMA_TEST_POSTGRES=$(MEDORAMA_TEST_POSTGRES) $(CARGO) test --release --locked -p medorama

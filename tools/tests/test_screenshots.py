@@ -1,4 +1,4 @@
-"""Tests of tools/screenshots.py: it refuses a catalog that holds more than the demo, and no call
+"""Tests of tools/screenshots.py: it refuses a Medorama connected to more than the demo, and no call
 to Chrome waits forever.  The Python standard library only:
 
     python3 -m unittest discover -s tools/tests
@@ -25,22 +25,23 @@ shots = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(shots)
 
 
-def demo_answers():
-    """What a catalog of the demo alone answers (the connection synced: one OMOP person added)."""
-    tables, _ = shots.demo_patients()
+def demo_answers(folder="/demo"):
+    """What a Medorama connected to the demo alone answers: its databases, managed by the admin,
+    and their patients (the persons tools/make-demo-data.py invents)."""
     patients = [
-        {"patient_id": pid, "pseudonym": f"MO-{i}", "phi": {"mrns": [["", mrn]], "last_name": last, "first_name": first, "birth_date": born}}
-        for i, (pid, (mrn, last, first, born)) in enumerate(tables.items())
+        {"patient_id": p["patient_id"], "pseudonym": f"MO-{i}", "sources": ["demo"],
+         "phi": {"mrns": [["DEMO", p["mrn"]]] if p["mrn"] else [], "last_name": p["last_name"], "first_name": p["first_name"],
+                 "birth_date": p["birth_date"]}}
+        for i, p in enumerate(shots.demo_patients())
     ]
-    patients.append({"patient_id": "GEN-000001", "pseudonym": "MO-X", "sources": ["demo_omop"],
-                     "phi": {"mrns": [["", "SYN0000101"]], "last_name": "", "first_name": "", "birth_date": "1949-09-21"}})
+    files = {"demo": "demo.sqlite", "demo_north": "north/north.sqlite", "demo_omop": "omop/omop.sqlite",
+             "demo_registry": "registry/registry.sqlite", "demo_secure": "secure/secure.sqlite"}
     return {
-        "sources": {"items": [{"source": "DEMO", "patients": len(tables), "recordings": 8},
-                              {"source": "demo_omop", "patients": 1, "recordings": 0}]},
-        "connections": {"items": [{"name": "demo_omop", "kind": "omop"}]},
-        "demo/removal": {"dry_run": True, "patients": len(tables), "recordings": 8, "kept_recordings": 0, "kept_encounters": 0},
+        "databases": {"items": [
+            {"name": n, "kind": "omop" if n == "demo_omop" else "views" if n == "demo_registry" else "dbb", "permission": "manage",
+             "url": f"sqlite:{folder}/{f}"} for n, f in files.items()
+        ]},
         "patients?limit=1": {"total": len(patients), "items": patients[:1]},
-        "recordings?limit=1": {"total": 8, "items": []},
         "patients?limit=1000&offset=0": {"total": len(patients), "items": patients},
     }
 
@@ -58,39 +59,38 @@ class DemoOnly(unittest.TestCase):
         a = demo_answers()
         shots.check_catalog(api_of(a))
         shots.check_identities(api_of(a))
+        # the small demo: its two databases, its eight persons
+        small = shots.demo_patients(False)
+        self.assertEqual(len(small), 8)
 
-    def test_another_source_is_refused(self):
+    def test_another_database_is_refused(self):
         a = demo_answers()
-        a["sources"]["items"].append({"source": "admissions.csv", "patients": 1})
+        a["databases"]["items"].append({"name": "warehouse", "kind": "omop", "permission": "manage", "url": "postgres://x"})
         with self.assertRaises(shots.NotDemo):
             shots.check_catalog(api_of(a))
 
-    def test_no_demo_is_refused(self):
+    def test_a_database_outside_the_folder_is_refused(self):
         a = demo_answers()
-        a["sources"]["items"] = [{"source": "admissions.csv", "patients": 6}]
+        a["databases"]["items"][0]["url"] = "sqlite:/data/elsewhere/demo.sqlite"
+        with self.assertRaises(shots.NotDemo):
+            shots.check_catalog(api_of(a), "/demo")
+        shots.check_catalog(api_of(demo_answers()), "/demo")
+
+    def test_a_database_not_managed_is_refused(self):
+        a = demo_answers()
+        a["databases"]["items"][1]["permission"] = "view"
         with self.assertRaises(shots.NotDemo):
             shots.check_catalog(api_of(a))
 
-    def test_another_connection_is_refused(self):
+    def test_patients_from_elsewhere_are_refused(self):
         a = demo_answers()
-        a["connections"]["items"].append({"name": "warehouse", "kind": "omop"})
-        with self.assertRaises(shots.NotDemo):
-            shots.check_catalog(api_of(a))
-
-    def test_patients_or_recordings_from_elsewhere_are_refused(self):
-        for key, field in (("patients?limit=1", "total"), ("recordings?limit=1", "total")):
-            a = demo_answers()
-            a[key][field] += 1
-            with self.assertRaises(shots.NotDemo, msg=key):
-                shots.check_catalog(api_of(a))
-        a = demo_answers()
-        a["demo/removal"]["kept_recordings"] = 1
+        a["patients?limit=1"]["total"] = len(shots.demo_patients()) + 1
         with self.assertRaises(shots.NotDemo):
             shots.check_catalog(api_of(a))
 
     def test_an_unanswered_question_is_refused(self):
         a = demo_answers()
-        del a["demo/removal"]   # e.g. a user who is not an admin: 403
+        del a["databases"]   # e.g. not signed in
         with self.assertRaises(RuntimeError):
             shots.check_catalog(api_of(a))
 
@@ -101,9 +101,18 @@ class DemoOnly(unittest.TestCase):
             # no demo.json (a folder made before it existed): refused
             with self.assertRaises(shots.NotDemo):
                 shots.check_folder(api_of(inside), folder)
-            # invented data alone: passes
+            # invented data alone: passes (and a folder made before "invented" was written)
+            (folder / "demo.json").write_text('{"made_by": "tools/make-demo-data.py", "invented": true, "library": false}')
+            shots.check_folder(api_of(inside), folder)
             (folder / "demo.json").write_text('{"made_by": "tools/make-demo-data.py", "synthetic_only": true}')
             shots.check_folder(api_of(inside), folder)
+            # made with the demo library (transformed, checked, publishable): passes
+            (folder / "demo.json").write_text('{"made_by": "tools/make-demo-data.py", "invented": false, "library": true, "examples": false, "dicom": false}')
+            shots.check_folder(api_of(inside), folder)
+            # the library and local files: refused
+            (folder / "demo.json").write_text('{"made_by": "tools/make-demo-data.py", "invented": false, "library": true, "dicom": true}')
+            with self.assertRaises(shots.NotDemo):
+                shots.check_folder(api_of(inside), folder)
             # local files on the demo's patients (--examples, --dicom): refused
             (folder / "demo.json").write_text('{"made_by": "tools/make-demo-data.py", "synthetic_only": false, "examples": true}')
             with self.assertRaises(shots.NotDemo):
@@ -121,13 +130,19 @@ class DemoOnly(unittest.TestCase):
             with self.assertRaises(shots.NotDemo):
                 shots.check_identities(api_of(a))
 
-        refused(lambda ps: ps[0]["phi"]["mrns"].__setitem__(0, ["", "1234567"]))       # not a SYN MRN
+        refused(lambda ps: ps[0]["phi"]["mrns"].__setitem__(0, ["DEMO", "1234567"]))   # not a SYN MRN
         refused(lambda ps: ps[0]["phi"]["mrns"].append(["lab", "SYN9999999"]))         # a second MRN
+        refused(lambda ps: ps[0]["phi"]["mrns"].append(["DEMO", "SYN0000002"]))        # another person's MRN too
         refused(lambda ps: ps[0]["phi"].__setitem__("last_name", "Smith"))             # renamed
         refused(lambda ps: ps[0].__setitem__("patient_id", "P123"))                    # not the demo's
         refused(lambda ps: ps[0].pop("phi"))                                           # Privacy Mode on
-        refused(lambda ps: ps[-1].__setitem__("sources", ["warehouse"]))               # another database's person
         refused(lambda ps: ps[-1]["phi"].__setitem__("birth_date", "1950-01-01"))      # not the OMOP person
+        refused(lambda ps: ps[-1]["phi"].__setitem__("mrns", []))                       # an OMOP person without its MRN
+
+        # the same MRN in another letter case (a second hospital's, linked ignoring case): passes
+        a = demo_answers()
+        a["patients?limit=1000&offset=0"]["items"][0]["phi"]["mrns"].append(["DEMO", "syn0000001"])
+        shots.check_identities(api_of(a))
 
         a = demo_answers()   # fewer listed than the total
         listed = a["patients?limit=1000&offset=0"]

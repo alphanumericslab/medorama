@@ -17,6 +17,8 @@
     </select></label>
     <label>Speed <select id="speed"><option value="25">25 mm/s</option><option value="50">50 mm/s</option></select></label>
     <label>Gain <select id="gain"><option value="5">5 mm/mV</option><option value="10">10 mm/mV</option><option value="20">20 mm/mV</option></select></label>
+    <button id="hp" title="A 0.5 Hz high-pass filter against baseline wander, with no phase shift (each strip is always drawn about its median)">High-pass</button>
+    <label>Notch <select id="notch" title="A 50 or 60 Hz notch filter against mains interference, with no phase shift"><option value="0">Off</option><option value="50">50 Hz</option><option value="60">60 Hz</option></select></label>
     <div class="seg"><button id="zout" title="Smaller">−</button><button id="zoomv" title="Fit the width">Fit</button><button id="zin" title="Larger">+</button></div>
     <button id="cal" title="Calipers: click two points (Esc clears)">Calipers</button>
   </div>

@@ -14,9 +14,11 @@
 //!   (docs/wfdb-collection.md, "Limits").
 //! - `require_password`: refuse to start without a password (Medorama sets it for the viewer
 //!   it runs; a build without password support then never starts).
-//! - `cache_dir`: the index cache, shared by the three viewers (they write the same index).
-//!   Default, run from a clone of the repository: `<viewer>/sample_data/outputs/index`;
-//!   elsewhere `~/.cache/vitalstream`.
+//! - `cache_dir`: the index cache, shared by the three viewers (they write the same index): its
+//!   index store `index.sqlite` (index format 3).  Default, run from a clone of the repository:
+//!   `<viewer>/sample_data/outputs/index`; elsewhere `~/.cache/vitalstream`.
+//! - `index_key_file`: a file holding 64 hex digits, the key the index store is encrypted with
+//!   (SQLCipher); empty: a plain store.
 //! - `adapters_dir`: the folder of adapters, programs that read formats the viewer does not
 //!   read itself (docs/adapters.md). Default: `~/.local/share/medorama/adapters`.
 //! - `auth_file`: the password (shared by the three viewers), default
@@ -42,6 +44,8 @@ pub struct Settings {
     pub timezone: String,
     pub data_roots: Vec<String>,
     pub cache_dir: PathBuf,
+    /// the key of the index store, in a file (empty: a plain store)
+    pub index_key_file: PathBuf,
     pub host: String,
     pub port: u16,
     pub index_workers: usize,
@@ -116,6 +120,7 @@ impl Settings {
             timezone: "America/New_York".into(),
             data_roots: vec![built_root()],
             cache_dir: cache,
+            index_key_file: PathBuf::new(),
             host: "127.0.0.1".into(),
             port: 8060,
             index_workers: 2,
@@ -226,6 +231,7 @@ pub fn load_settings(path: Option<&str>) -> Result<Settings, String> {
                         .collect::<Result<_, _>>()?
                 }
                 "cache_dir" => s.cache_dir = PathBuf::from(relative_to(&base, v.as_str().ok_or_else(bad)?)),
+                "index_key_file" => s.index_key_file = PathBuf::from(relative_to(&base, v.as_str().ok_or_else(bad)?)),
                 "auth_file" => s.auth_file = PathBuf::from(relative_to(&base, v.as_str().ok_or_else(bad)?)),
                 "adapters_dir" => s.adapters_dir = PathBuf::from(relative_to(&base, v.as_str().ok_or_else(bad)?)),
                 "host" => s.host = v.as_str().ok_or_else(bad)?.to_string(),

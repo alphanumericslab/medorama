@@ -498,7 +498,9 @@ def test_cancel_an_index_being_built(tmp_path):
         time.sleep(0.05)
     assert d == {'state': 'cancelled'}
     assert c.post('/api/v1/cancel', json={'key': key}).json() == {'key': key, 'state': 'cancelled'}
-    assert list(Path(st.cache_dir).iterdir()) == []
+    from vitalstream_py.store import Store
+    assert Store(Path(st.cache_dir) / 'index.sqlite').keys() == []
+    assert list((Path(st.cache_dir) / 'index.tmp').iterdir()) == []
 
 
 def test_version(capsys):

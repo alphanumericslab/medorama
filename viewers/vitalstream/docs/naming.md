@@ -33,10 +33,10 @@ contain `-`. Without a suffix, a name refers to what the three have in common: "
 | The page | [`web/`](../web). The Rust and C++ viewers have it built in; the Python viewer serves it from its package. |
 | Settings file | `vitalstream.toml`: the first found of `--config FILE`, `./vitalstream.toml`, `<viewer>/vitalstream.toml` (in a clone) and `~/.config/vitalstream/vitalstream.toml`. Top-level keys apply to every viewer; the `[py]`, `[rs]` and `[cpp]` sections apply to one ([example](../vitalstream.example.toml)). |
 | Password | `~/.config/vitalstream/auth.json`: one password (a salted scrypt hash) and one sign-in key for every viewer. |
-| Index folder | `~/.cache/vitalstream` (in a clone, `<viewer>/sample_data/outputs/index`), shared by the three viewers and by Medorama. |
+| Index store | `index.sqlite` in the cache folder, `~/.cache/vitalstream` (in a clone, `<viewer>/sample_data/outputs/index`), shared by the three viewers. |
 | Adapter folder | `~/.local/share/medorama/adapters` (Windows: `%LOCALAPPDATA%\medorama\adapters`), shared with Medorama. |
-| Command-line options | `--config`, `--host`, `--port`, `--timezone`, `--root`, `--cache-dir`, `--adapters-dir`, `--qc-verbose`, `--no-browser`, `--set-password`, `--clear-password`, `--no-auth`, `--index PATH`, `-V` / `--version` |
-| Settings keys | `timezone`, `data_roots`, `host`, `port`, `index_workers`, `cache_dir`, `auth_file`, `adapters_dir`, `qc_verbose`, `max_records`, `max_depth`, `max_scan_s`, `require_password` |
+| Command-line options | `--config`, `--host`, `--port`, `--timezone`, `--root`, `--cache-dir`, `--adapters-dir`, `--qc-verbose`, `--no-browser`, `--set-password`, `--clear-password`, `--no-auth`, `--index PATH`, `--keys-on-stdin`, `-V` / `--version` |
+| Settings keys | `timezone`, `data_roots`, `host`, `port`, `index_workers`, `cache_dir`, `index_key_file`, `auth_file`, `adapters_dir`, `qc_verbose`, `max_records`, `max_depth`, `max_scan_s`, `require_password` |
 | Installers | `install.sh` (`--viewer`, `--prefix`, `--no-rustup`, `--root`, `--no-password`, `--no-wfdb`) and `install.ps1` (`-Viewer`, `-Prefix`, `-Root`, `-NoPassword`, `-NoWfdb`) |
 | Tests across the three | [`tests/parity/`](../tests/parity) |
 

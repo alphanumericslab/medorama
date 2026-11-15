@@ -2,12 +2,14 @@
 % what is withheld and what replaces it (identifiers, pseudonyms, dates and ages, notes,
 % searches, the administrator's choices), de-identifying files at the source (WFDB, MUSE, DICOM,
 % EDF and BDF, files passed with a warning), the VitalStream viewer, exports and plug-ins,
-% connected databases, failing closed, verification, limits, and the repository.
+% connected databases, the workspace, keys, removing a database, backups, failing closed,
+% verification, limits, and the repository.
 % Source: docs/protecting-patient-data.md; the code is the authority: medorama/src/server.rs
 % (in_privacy, session_user, set_privacy, privacy, cleared, attachment_response,
 % edf_deidentified), users.rs (in_privacy_mode), gate.rs, deid.rs, dicom.rs, pseudonyms.rs,
-% gateway.rs (handle, shift_query, gate_annotations); tests: medorama/tests/privacy.rs,
-% gateway.rs, connections.rs, dicom_samples.rs.
+% gateway.rs (handle, shift_query, gate_annotations), workspace.rs, grants.rs, persons.rs,
+% databases.rs (remove); tests: medorama/tests/privacy.rs, databases.rs, gateway.rs,
+% dicom_samples.rs.
 \chapter{How Medorama protects patient data}
 \label{chap:protecting}
 
@@ -26,10 +28,12 @@ complete security review, with the threat model and the deployment checklist, is
 Medorama brings together data that identify patients: names, medical record numbers, dates of
 birth, account numbers, and the dates of every event. Its design rests on three rules.
 \begin{enumerate}
-\item \textbf{Identifiers are kept in one place only: the catalog database.} The catalog keeps
-  every identifier as it was imported, in its own tables. Copies are not made elsewhere: the
-  viewers, the waveform indexes, the results of analyses and the plug-in programs never receive
-  them.
+\item \textbf{Identifiers stay where they are.} Medorama imports nothing: it reads each connected
+  database in place. The only identifiers it keeps are those of each database's persons, in that
+  database's persons file in Medorama's workspace, encrypted with the database's own key
+  (\cref{sec:protecting-workspace}). Medorama's own control store holds none: its patients are
+  numbers and pseudonyms. The viewers, the waveform indexes, the results of analyses and the
+  plug-in programs never receive identifiers.
 \item \textbf{What leaves the server is decided at the moment of sending.} Privacy Mode is a
   property of a user's session, not of the data. For each answer, the server checks who is
   asking and whether that session is in Privacy Mode, and then sends either the identified data
@@ -42,9 +46,9 @@ birth, account numbers, and the dates of every event. Its design rests on three 
 The part of the server that makes the de-identified copy is called the \textbf{privacy gate}
 (\cref{fig:protecting-gate}).
 
-\screenshot{privacy-gate.pdf}{The privacy gate: identifiers stay in the catalog's database, and
-every answer of a session in Privacy Mode leaves through the gate, which replaces identifiers,
-moves dates back, de-identifies files and refuses what it cannot clear.}{fig:protecting-gate}
+\screenshot{privacy-gate.pdf}{The privacy gate: every answer of a session in Privacy Mode leaves
+through the gate, which replaces identifiers, moves dates back, de-identifies files and refuses
+what it cannot clear.}{fig:protecting-gate}
 
 \Cref{fig:protecting-compare} shows the same synthetic patient twice. On the left, an
 administrator with the PHI permission sees the identified record. On the right, the same page in
@@ -80,23 +84,31 @@ Privacy Mode shows placeholders, a pseudonym and dates moved back by about a cen
 \endfoot
 PHI & Protected health information: anything that can identify a patient, together with their
   health data. \\
-Catalog & Medorama's own database of patients, encounters, clinical entries, recordings, users
-  and the audit log (SQLite or PostgreSQL). \\
+Connected database & A database that Medorama reads in place, read-only: an OMOP instance, any
+  SQL database through views, or a db-builder SQLite file. The only way data reach Medorama. \\
+Control store & Medorama's own database (SQLite or PostgreSQL): users, grants, the audit log,
+  the list of connected databases, cohort definitions, the wrapped keys, and the patients'
+  numbers and pseudonyms. It holds no identifier. \\
+Workspace & The folder where Medorama keeps what it generates: one folder per connected
+  database, one file per cohort, each encrypted with a data key of its own. \\
+Data key, master key & A data key (256 random bits) encrypts one workspace folder or cohort
+  file; it is stored only wrapped by the master key, which comes from outside the workspace. \\
+Grant & A permission given to one user on one database or cohort
+  (\cref{sec:users-privacy-grants}). \\
 Identifier & A value that names a person directly: a name, a medical record number (MRN), a date
-  of birth, an account number (CSN), an imported patient or encounter ID. \\
+  of birth, a database's patient ID or visit key. \\
 PHI permission & A right that an administrator gives to a user account. Without it, a user can
-  never see identifiers. \\
+  never see identifiers; with it, a user sees the identifiers of the databases on which they also
+  hold the \code{phi} grant. \\
 Privacy Mode & The state of a session in which every answer passes the privacy gate. \\
 Privacy gate & The server code that de-identifies answers and files for sessions in Privacy
   Mode, and refuses what it cannot de-identify. \\
-Pseudonym & A random code that stands for a patient (\code{MO-XXXX-XXXX}) or an encounter
+Pseudonym & A random code that stands for a patient (\code{MO-XXXX-XXXX}) or a visit
   (\code{MO-E-XXXX-XXXX}) in Privacy Mode. \\
 Placeholder & Fixed text that stands for a withheld value, such as \code{[Patient Name]} or
   \code{[MRN]}. \\
-Date offset & The amount by which Privacy Mode moves a patient's dates back: the catalog's
-  offset plus the patient's own number of days. \\
-Connected database & A database that Medorama reads in place, such as an OMOP instance, instead
-  of importing it. \\
+Date offset & The amount by which Privacy Mode moves a patient's dates back: the offset set by
+  the administrator plus the patient's own number of days. \\
 \end{xltabular}
 
 \section{Privacy Mode and the PHI permission}
@@ -129,7 +141,9 @@ The role of a user (viewer, analyst or administrator) decides what the user may 
 PHI permission decides what the user may \emph{see}. An administrator grants the PHI permission
 when creating an account, or later in \ui{Admin} $\rightarrow$ \ui{Users}
 (\cref{chap:users-privacy}). Most users should not have it: they work with pseudonyms and shifted
-dates, which is enough for most research.
+dates, which is enough for most research. Outside Privacy Mode, the permission shows the
+identifiers of a database only to a user who also holds the \code{phi} grant on that database
+(\cref{sec:users-privacy-grants}); the patients of other databases keep their pseudonyms.
 
 \paragraph{Switching Privacy Mode.} The \ui{Privacy Mode} switch in the page's header changes the
 mode for that session. The server keeps the choice with the session, never in the browser, and
@@ -158,8 +172,8 @@ who switches Privacy Mode on receives no identifier.
 \label{sec:protecting-identifiers}
 
 \Cref{tab:protecting-replaced} lists what Privacy Mode withholds by default and what the user sees
-instead. The defaults follow the identifiers of the HIPAA Safe Harbor list that the catalog
-holds, with one exception, the text of notes, described in \cref{sec:protecting-notes}.
+instead. The defaults follow the identifiers of the HIPAA Safe Harbor list that the databases
+hold, with one exception, the text of notes, described in \cref{sec:protecting-notes}.
 
 \begin{xltabular}{\linewidth}{@{}P{5.0cm}L@{}}
 \caption{What Privacy Mode withholds, and what replaces it.}
@@ -177,25 +191,22 @@ holds, with one exception, the text of notes, described in \cref{sec:protecting-
 Patients' names & \code{[Patient Name]} \\
 Staff names (authors of notes, ECG overreaders, physicians) & \code{[Staff Name]} \\
 Medical record numbers & \code{[MRN]} \\
-Account numbers (CSN) & \code{[CSN]} \\
 Dates of birth & \code{[Date of Birth]}. The age is computed on the server and shown instead. \\
-Imported patient IDs & The patient's pseudonym, \code{MO-XXXX-XXXX}, because an imported ID may
-  be an MRN. In a database's own columns, \code{[Patient ID]}. \\
-Imported encounter IDs & The encounter's pseudonym, \code{MO-E-XXXX-XXXX}. \\
+A database's patient IDs & The patient's pseudonym, \code{MO-XXXX-XXXX}, because a patient ID
+  may be an MRN; \code{[Patient ID]} where a person is not linked to a patient. \\
+A database's visits & The visit's pseudonym, \code{MO-E-XXXX-XXXX}; its key in the database
+  never leaves. \\
 Every date and time & Moved back by the patient's date offset (\cref{sec:protecting-dates}). \\
 Ages above 89 & \code{90+} \\
 Recordings' paths and file names & Tokens (\code{mo-rec:<n>}, \code{mo-f0003.dcm}), and
   \code{[Recording]} or \code{[File Name]} where a name is shown. \\
-An identifier found inside text & The same replacement wherever it appears (MRNs, account
-  numbers, and imported IDs of four or more characters that contain a digit). \\
-Columns of imported databases that hold identifiers & Kept under their imported names. Their
-  cells become placeholders, so the table keeps the shape of the source. \\
-Columns that the catalog does not recognize & Withheld (\code{[Withheld]}), except measurement
-  columns such as \code{QT (ms)}, which hold numbers. In the \ui{Databases} tab, the search, the
-  filters and the sorting skip such columns. \\
-The text of notes and reports & Shown by default, with the patient's own names and date of birth
-  replaced, and marked with a warning. Withheld (\code{[Withheld]}) when the administrator
-  chooses so (\cref{sec:protecting-notes}). \\
+An identifier found inside text & The same replacement wherever it appears (the databases' MRNs
+  and patient IDs of four or more characters that contain a digit). \\
+The text of notes and reports, and every other free text (any entry's text, a long written value)
+  & Shown by default, with the patient's own names and date of birth, telephone numbers, e-mail
+  and web addresses, social security numbers, street addresses and labelled MRNs replaced, and
+  marked with a warning. Withheld (\code{[Withheld]}) when the administrator chooses so
+  (\cref{sec:protecting-notes}). \\
 \end{xltabular}
 
 Placeholders are fixed text. They never reveal the length or the form of the value they replace.
@@ -203,29 +214,30 @@ Placeholders are fixed text. They never reveal the length or the form of the val
 \subsection{Pseudonyms}
 \label{sec:protecting-pseudonyms}
 
-Each patient receives a pseudonym such as \code{MO-D5QM-Y1X5} when first seen, and each encounter
-one such as \code{MO-E-QMC6-E2VA}. In Privacy Mode, users find patients by these pseudonyms, and
+Each patient receives a pseudonym such as \code{MO-D5QM-Y1X5} when first linked, and each visit
+one such as \code{MO-E-QMC6-E2VA} when first shown. In Privacy Mode, users find patients by these pseudonyms, and
 exports name patients by them.
 \begin{itemize}
 \item \textbf{Random and stored, never derived.} The seven characters come from the operating
   system's secure random generator, and an eighth is a check character. No calculation on an MRN
-  or a name produces the pseudonym: the only link between a pseudonym and a person is the catalog
-  database. This follows HIPAA 45 CFR \S164.514(c), which asks that a re-identification code not
+  or a name produces the pseudonym: the only link between a pseudonym and a person is
+  Medorama's own, the control store's patient number and the encrypted persons file of each
+  database in the workspace. This follows HIPAA 45 CFR \S164.514(c), which asks that a re-identification code not
   be ``derived from or related to information about the individual'', and ISO/TS 25237.
 \item \textbf{Why not a hash of the MRN.} MRNs are short, so every possible MRN can be hashed in
   minutes, which would reverse an unkeyed hash. A keyed hash would depend on one secret forever
   and would still be derived from the identifier.
-\item \textbf{Stable.} A patient keeps the same pseudonym through re-imports and restarts. When
-  two records are merged as one person, the absorbed record's pseudonym stays as an alias, so
-  that earlier exports and cohort definitions still resolve.
+\item \textbf{Stable.} A patient keeps the same pseudonym through refreshes and restarts, as long
+  as a connected database links them. It goes, with the patient's number, when the last database
+  that holds the patient is removed (\cref{sec:protecting-removal}).
 \item \textbf{Checked.} The check character (Luhn mod 32, in Crockford's base 32, which has no I,
   L, O or U) catches any single mistyped character, so a pseudonym typed into a search is either
   right or refused.
 \item \textbf{The same everywhere.} Pages, exports, cohort definitions and their history, DICOM
   headers and plug-ins' job descriptions use the same pseudonym.
 \end{itemize}
-A catalog rebuilt from scratch draws new pseudonyms and new date offsets. Keep backups of the
-database to keep them stable (\cref{sec:deployment-backups}).
+A control store rebuilt from scratch draws new pseudonyms and new date offsets. Keep backups of
+it to keep them stable (\cref{sec:deployment-backups,sec:protecting-backups}).
 
 \subsection{Dates and ages}
 \label{sec:protecting-dates}
@@ -233,31 +245,32 @@ database to keep them stable (\cref{sec:deployment-backups}).
 Research depends on the time between events, so Privacy Mode moves dates rather than removing
 them.
 \begin{itemize}
-\item \textbf{The catalog's offset.} Every date and time moves back by an offset that the
+\item \textbf{The offset.} Every date and time moves back by an offset that the
   administrator sets in years, months, days and hours (\ui{Admin} $\rightarrow$ \ui{Privacy
-  Mode}). It is counted on the calendar from 2000-01-01. The default is 36\,570 days, about 100
-  years.
+  Mode}). It is counted on the calendar from 2000-01-01. A new installation draws it at random
+  (80 to 120 years and 0 to 364 days), so that only its administrators know it; an installation
+  made before keeps the former documented default, 36\,570 days, and \code{medorama serve} warns
+  about it at start until another is set.
 \item \textbf{Each patient's own days.} On top of that, each patient's dates move back by a whole
   number of days between 0 and a maximum (\code{spread\_days}: 365 by default, at least 30 and
   at most 3650; a smaller value saved before that minimum is kept, since raising it moves every
   patient's dates, and \cmd{medorama serve} warns about it at start). This number is drawn at
   random once, when the patient's
   pseudonym is drawn, and stored with it. Every user and every session therefore sees the same
-  dates for the same patient. Something that names no patient moves by the catalog's offset
-  alone.
+  dates for the same patient. Something that names no patient moves by the offset alone.
 \item \textbf{Intervals are kept.} The time between any two events of one patient is exact.
   Between two patients, it changes by the difference of their own days.
 \item \textbf{Row by row.} A patient's pages and files move by that patient's offset; a list or an
-  export moves row by row, by the patient each row names; a recording in VitalStream moves by the
-  patient of its encounter.
-\item \textbf{Everywhere.} Dates move in every form the catalog holds or sends: numbers (Unix
+  export moves row by row, by the patient each row names; a recording in VitalStream moves by its
+  patient's.
+\item \textbf{Everywhere.} Dates move in every form Medorama reads or sends: numbers (Unix
   times), text (\code{2024-01-02} with or without a time, \code{2024/01/02}, \code{01/02/2024},
   \code{2.1.2024}, \code{02-JAN-2024}, \code{Jan 2, 2024}, \code{2 January 2024},
   \code{20240102}), BedMaster file names' Unix times (a name whose moved time falls before 1970
   is written with a minus sign: \code{ICU7\_12--1455465600}), DICOM dates and times, GE MUSE XML
   dates, WFDB base dates, EDF start dates, and the keys of entries that carry a time
-  (\code{labs:<encounter>:<time>}). A date written \code{01/02/2024} is read month first, unless
-  the catalog writes dates day first (\ui{Admin} $\rightarrow$ \ui{Dates and times}) or the
+  (\code{labs:<patient>:<time>}). A date written \code{01/02/2024} is read month first, unless
+  the page writes dates day first (\ui{Admin} $\rightarrow$ \ui{Dates and times}) or the
   month would be over 12; \code{2.1.2024} is read day first. Either way the year moves back by
   about a century, so a misread date shows no real date. A Unix time written on its own is a
   number, and is kept.
@@ -287,7 +300,7 @@ is often essential for research, with the following protections:
 \item the patient's own names (each word of at least two letters, and each part of a compound
   name such as \code{Smith-Jones} or \code{O'Brien}) and date of birth are replaced by
   \code{[Patient Name]} and \code{[Date of Birth]};
-\item identifiers the catalog knows (MRNs, account numbers, imported IDs of four or more
+\item identifiers Medorama knows (the databases' MRNs, and patient IDs of four or more
   characters that contain a digit) are replaced wherever they appear, and so are recordings'
   paths and the folders they lie in (\code{[Folder]}), which may be named after the patient;
 \item phrases such as ``Confirmed by \dots'' or ``Signed by \dots'' are replaced by
@@ -296,17 +309,22 @@ is often essential for research, with the following protections:
 \item the page marks the text with a warning, because it may still identify someone.
 \end{itemize}
 An administrator who prefers to withhold all free text ticks \ui{The text of notes and reports}
-in \ui{Admin} $\rightarrow$ \ui{Privacy Mode}. Notes then appear as \code{[Withheld]}, and their
-text is not searched in Privacy Mode. The same choice applies to the annotations of EDF+
+in \ui{Admin} $\rightarrow$ \ui{Privacy Mode}. Notes, reports and every other free text (any
+entry's text longer than 40 characters or of several lines, a long written value) then appear as
+\code{[Withheld]}, on pages and in exports, and their text is not searched in Privacy Mode. A
+cohort's text criterion and the patient page's search (its fuzzy matches too) read the text as the
+session is shown it, never the real one; telephone numbers, e-mail and web addresses, social
+security numbers, street addresses and labelled MRNs are replaced in free text, by rules that
+miss forms they do not know. The same choice applies to the annotations of EDF+
 recordings shown in VitalStream (\cref{sec:protecting-vitalstream}).
 
 \subsection{Searches}
 \label{sec:protecting-searches}
 
-In Privacy Mode, a search by name, MRN, date of birth, account number or a withheld column is
-refused with a message (HTTP 400). A plain word does not match identifiers behind the scenes
-either: otherwise the number of results would reveal whether a person is in the catalog.
-Patients are found by their pseudonyms, and encounters by theirs. Every search, filter and sort
+In Privacy Mode, a search by name, MRN, date of birth or account number is refused with a
+message (HTTP 400). A plain word does not match identifiers behind the scenes either: otherwise
+the number of results would reveal whether a person is in a database. Patients are found by their
+pseudonyms, and visits by theirs. Every search, filter and sort
 uses only what the session is shown: pseudonyms, tokens and placeholders, and each patient's
 dates as they are shown, so a search for a real identifier or a real date finds nothing, and
 lists are ordered by the dates shown. Searches of identifiers by users who may see them are
@@ -317,16 +335,15 @@ made in Privacy Mode, with their text (\code{privacy\_search}).
 \label{sec:protecting-settings}
 
 \ui{Admin} $\rightarrow$ \ui{Privacy Mode} lets an administrator choose which kinds of identifiers
-are withheld, the catalog's offset and \code{spread\_days} (\cref{sec:users-privacy-settings}).
+are withheld, the offset and \code{spread\_days} (\cref{sec:users-privacy-settings}).
 Every change is written to the audit log (\code{deid\_settings}) with the new settings. Some
-protections do not depend on these settings and always apply in Privacy Mode: imported patient
-and encounter IDs become pseudonyms, file names become tokens, staff names become
-\code{[Staff Name]}, unrecognized columns are withheld, and files that the gate cannot
-de-identify are refused.
+protections do not depend on these settings and always apply in Privacy Mode: the databases'
+patient IDs and visits become pseudonyms, file names become tokens, staff names become
+\code{[Staff Name]}, and files that the gate cannot de-identify are refused.
 
-\paragraph{For reviewers.} Placeholders, the identifier dictionary and table cells are in
-\file{gate.rs} (\code{Dict}, \code{Restricted::json}, \code{column\_placeholder},
-\code{column\_mask}); dates, ages and the settings in \file{deid.rs} (\code{FIELDS},
+\paragraph{For reviewers.} Placeholders, the identifier dictionary and notes are in
+\file{gate.rs} (\code{Dict}, built from each database's persons and recordings as kept in the
+workspace; \code{Restricted::json}, \code{Restricted::note}); dates, ages and the settings in \file{deid.rs} (\code{FIELDS},
 \code{Settings}, \code{answer\_with}, \code{shift\_text}); pseudonyms in \file{pseudonyms.rs}.
 Each module has unit tests, and \file{medorama/tests/privacy.rs} tests them end to end.
 
@@ -379,7 +396,9 @@ DICOM (\file{.dcm}, \file{.dicom}, or a file recognized by its content) & The he
 EDF, EDF+, BDF, BDF+ (\file{.edf}, \file{.bdf}) & The header is de-identified and the texts of
   annotations are removed; the samples are sent as they are (\cref{sec:protecting-edf}). \\
 Pictures, videos and PDF documents & Sent as they are, marked as possibly identifying: the
-  viewer's tab shows an amber warning triangle. \\
+  viewer's tab shows an amber warning triangle. An SVG picture leaves without its texts; a PDF
+  document of up to 64\,MB with its descriptive fields (author, title, subject, keywords) blanked.
+  What their pages and pixels show is not changed. \\
 Anything else & Refused (HTTP 403). \\
 \end{xltabular}
 
@@ -432,11 +451,11 @@ The attributes of the list: institution, department, station, addresses and phon
 Curves (50xx), overlays (60xx: their bitmaps, labels and comments), the retired results group
   (4008) & Removed \\
 Free text left (SH, LO, ST, LT, UC, UT; in implicit-VR files, elements of unknown VR that hold
-  text) & The patient's own names and date of birth, and the identifiers the catalog knows,
+  text) & The patient's own names and date of birth, and the identifiers Medorama knows,
   replaced; dates in it moved back \\
 Private elements & Removed \\
 Instance UIDs (study, series, instance, frame of reference, references) & Replaced by
-  \code{2.25.} and 128 bits of an HMAC-SHA-256 under the catalog's secret, so that a series still
+  \code{2.25.} and 128 bits of an HMAC-SHA-256 under Medorama's secret, so that a series still
   holds together and nobody without the secret can map them back. The standard's own UIDs
   (classes, transfer syntaxes) are kept. \\
 Dates and times & Moved back, a date and its time together \\
@@ -487,9 +506,7 @@ fields of the signal headers (labels, units, transducer and prefiltering descrip
 as they are.
 
 The engine and the viewers never put the patient and recording fields into an index or into any
-answer. Medorama's \code{identify} action reads them into the catalog's identifier tables, where
-an administrator can check that the file belongs to the patient it is linked to
-(\cref{chap:administration}).
+answer.
 
 \subsection{Why some files pass with a warning}
 \label{sec:protecting-warning}
@@ -527,7 +544,9 @@ following rules:
   notes, each annotation reads \code{[Annotation]}; otherwise the patient's own names and date of
   birth are replaced (\file{gateway.rs}, \code{gate\_annotations});
 \item every answer then passes the gate's last layer, like any other answer, which replaces the
-  identifiers the catalog knows and moves dates back.
+  identifiers Medorama knows and moves dates back.
+\item a user who is not an administrator opens only the recordings of the databases on which they
+  hold the \code{view} grant, and browses only the folders that lead to them.
 \end{itemize}
 
 \paragraph{For reviewers.} \file{gateway.rs} (\code{handle}, \code{shift\_query},
@@ -539,13 +558,15 @@ real viewer in \file{medorama/tests/gateway.rs}.
 
 \begin{itemize}
 \item \textbf{Exports} made in Privacy Mode (cohort members, definitions, members' data, Excel
-  files, database CSV files) pass the same gate. They have the same columns as identified
+  files) pass the same gate. They have the same columns as identified
   exports, with identifiers as placeholders, patients named by pseudonym and dates moved back,
   and their file names end in \code{-privacy}. Exports by users who see identifiers are written
   to the audit log (\code{phi\_export}).
 \item \textbf{Plug-in actions}, programs that an administrator installs to analyze recordings,
-  receive a job description with the recording's path, its index folder, an output folder, and
-  the pseudonyms of its encounters and patients, never their imported IDs (\cref{chap:actions}).
+  receive a job description with the recording's real path, an output folder, and
+  its patient's pseudonym (\cref{chap:actions}), and read the recording's files as they are: a
+  file's name, folder and headers may identify the patient, so a plug-in is trusted code that
+  handles patient data.
   They also do not receive the server's secrets in their environment
   (\cref{sec:security-jobs}).
 \end{itemize}
@@ -553,27 +574,200 @@ real viewer in \file{medorama/tests/gateway.rs}.
 \section{Connected databases}
 \label{sec:protecting-connected}
 
-A connected database (an OMOP instance, a data warehouse read through SQL views) is read in
-place, read-only, and its data leave through the same gate as the catalog's.
+Medorama imports nothing. Every patient's data come from connected databases (an OMOP instance, a
+warehouse read through SQL views, a db-builder SQLite file), which Medorama reads in place,
+read-only, and whose data leave through the same gate (\cref{chap:connecting}).
 \begin{itemize}
-\item \textbf{Only canonical columns are read.} Medorama reads a connected database through three
-  views of fixed columns (persons, visits, entries), each column with a privacy class: key,
-  identifier, date, free text, staff or clinical value. A view cannot add a field that the gate
-  does not know (\cref{chap:connecting}).
-\item \textbf{Persons are linked to patients.} A connected database's persons are linked to the
-  catalog's patients, so they leave as pseudonyms. Their identifiers are copied into the
-  catalog's identifier tables, where the gate knows them, and their keys in the source database
-  never leave.
-\item \textbf{Entries are named by tokens.} An entry is named by a keyed hash
-  (\code{live:<connection>:<token>}) that holds neither its key nor its time. Its dates move back
-  with the rest, its text follows the rule for notes, and its authors are treated as staff.
-\item \textbf{Searches} of identifiers in connected databases need the PHI permission, as in the
-  catalog.
+\item \textbf{Never written.} Medorama's sessions in a connected database are read-only, whatever
+  its account may do: a SQLite file is opened with \code{query\_only}, and a PostgreSQL session
+  with \code{default\_transaction\_read\_only} and a time limit (\file{sources/mod.rs}). A SQLite
+  database file must lie inside \code{data\_roots}, and is refused inside the workspace.
+\item \textbf{Only canonical columns are read.} Medorama reads a database through the views of
+  fixed columns (persons, visits, entries, and recordings for a recording database): a column that
+  is not among them is never read (\cref{sec:connecting-views}).
+\item \textbf{Persons are linked to patients by exact identifiers.} Each person is named by
+  (issuer, identifier) pairs: the patient ID under its issuer, the MRN under its authority. Two
+  databases' persons with an equal pair are one patient, with one pseudonym; a person whose pairs
+  name two patients is a conflict, listed and never linked or merged (\file{persons.rs};
+  \cref{sec:connecting-identity}). The control store keeps only a keyed hash of each pair (an
+  HMAC under the gate's secret, in \code{patient\_keys}), from which no pair can be read back.
+  The gate's secret is kept wrapped by the master key: without it, a copy of the control store
+  cannot test identifiers against the hashes.
+  The identifiers themselves are kept only in the database's encrypted persons file, where the
+  gate's dictionary reads them (\cref{sec:protecting-workspace}).
+\item \textbf{Entries and visits are named by tokens.} An entry is named by a keyed hash
+  (\code{live:<database>:<token>}) that holds neither its key nor its time, and a visit by
+  \code{enc:<database>:<token>} and its pseudonym. Dates move back with the rest, text follows the
+  rule for notes, and authors are treated as staff.
+\item \textbf{Grants decide who reads what.} A user's criteria search only the databases granted
+  to them for \code{search}; their patient pages, recordings and viewers show only the databases
+  granted to them for \code{view}; and their identifiers need the \code{phi} grant as well as the
+  PHI permission (\cref{sec:users-privacy-grants}).
 \end{itemize}
 
-\paragraph{For reviewers.} \file{sources/} (read-only sessions, views, the person registry in
-\file{sources/link.rs}) and \file{patient/items.rs} \code{live\_items}; tested in
-\file{medorama/tests/connections.rs} over a synthetic OMOP database, in SQLite and PostgreSQL.
+\paragraph{For reviewers.} \file{sources/} (read-only sessions, views), \file{persons.rs} (the
+patient index), \file{grants.rs}, \file{patient/items.rs} (\code{load}, \code{token}); tested in
+\file{medorama/tests/databases.rs} (\code{equal\_identifiers\_link\_one\_patient\_exactly},
+\code{identifiers\_naming\_two\_patients\_are\_a\_conflict\_never\_merged},
+\code{grants\_decide\_what\_a\_user\_sees}) and, for Privacy Mode over a db-builder database, in
+\file{medorama/tests/privacy.rs}.
+
+\section{The workspace}
+\label{sec:protecting-workspace}
+
+What Medorama generates from the connected databases (who their persons are, what they hold, the
+index of their recordings, the results of actions, and the members of cohorts) is kept in its
+\emph{workspace}, the folder named by \code{workspace\_dir} (set by \cmd{medorama init
+-{}-workspace DIR}; \cref{tab:protecting-workspace}).
+
+\begin{xltabular}{\linewidth}{@{}P{5.0cm}L@{}}
+\caption{What the workspace holds. Each SQLite file is encrypted with its owner's data key.}
+\label{tab:protecting-workspace}\\
+\toprule
+\tabhead File & \tabhead Holds \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead File & \tabhead Holds \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+\file{db-NNNN/persons.sqlite} & The database's persons as linked: their identifiers\phimark,
+  names\phimark, birth dates\phimark, sex and patient numbers; their identity conflicts; a summary
+  of each person for the patient list \\
+\file{db-NNNN/variables.sqlite} & What the database holds: each variable's category, name,
+  vocabulary, code, unit, and its numbers of entries and persons \\
+\file{db-NNNN/recordings.sqlite} & Each recording of a recording database: its file's
+  path\phimark, format, start and end, size, fingerprint, whether it is present, and its derived
+  series \\
+\file{db-NNNN/results-<action>.sqlite} & The numbers of an action's results, searchable as
+  measurements \\
+\file{db-NNNN/index.sqlite} & The index store: the indexes of the database's recordings (waveform
+  envelopes, vital-sign series, markers, alarms, with real times; index format 3,
+  \cref{sec:formats-reference-folder}) \\
+\file{db-NNNN/results/<action>/r<n>/j<job>/} & An action plug-in's output folder (not
+  encrypted: the plug-in writes it) \\
+\file{cohorts/c-NNNN.sqlite} & A cohort's members, the databases each came from, and those
+  removed from it \\
+\file{viewer/index.sqlite} & The index store of the viewer Medorama runs: what it indexes itself,
+  encrypted with a key of its own (owner \code{viewer}) \\
+\end{xltabular}
+
+\begin{itemize}
+\item \textbf{Encrypted.} Every SQLite file of the workspace is encrypted with SQLCipher
+  (AES-256), with its owner's data key: the database's (\code{db:N}) for its folder, the
+  cohort's (\code{cohort:N}) for a cohort's file. Without the key, a file is unreadable, and a
+  file that does not open with its key is an error, never a new empty database
+  (\file{workspace.rs}, \code{open}; unit test \code{files\_open\_with\_their\_key\_only}).
+\item \textbf{Medorama's account only.} Folders are made with mode 0700 and files with 0600.
+\item \textbf{Apart from the data.} Connecting refuses a database file inside the workspace, and
+  a recording whose file lies inside the workspace is marked missing (tested in
+  \file{tests/databases.rs},
+  \code{a\_database\_in\_the\_workspace\_or\_outside\_the\_roots\_is\_refused}).
+\item \textbf{Indexes encrypted too.} The index store of a database is encrypted with SQLCipher
+  and a raw 256-bit key, the database's data key (\file{libs/engine/src/store.rs}; tests
+  \code{without\_its\_key\_a\_store\_is\_not\_read} in \file{libs/engine/tests/store.rs} and
+  \code{indexes\_go\_into\_the\_databases\_encrypted\_store\_and\_leave\_with\_it} in
+  \file{tests/databases.rs}). An index is built in a temporary folder next to the store,
+  readable by Medorama's account only, and removed once packed. The viewer Medorama runs gets the
+  stores' keys on its standard input only, never on a command line, in the environment, in a
+  file or a log.
+\item \textbf{Not encrypted: plug-ins' output.} The files a plug-in writes into its output folder
+  are not encrypted (their numbers go into the encrypted \file{results-<action>.sqlite}).
+  Protect them with disk encryption.
+\end{itemize}
+
+\section{Keys}
+\label{sec:protecting-keys}
+
+The workspace is protected by envelope encryption, as cloud key services and HashiCorp Vault do it
+(\file{workspace.rs}).
+\begin{enumerate}
+\item \textbf{A data key per owner.} Each connected database, each cohort and each derived
+  database has a key of 256 random bits, made when it is connected or created.
+\item \textbf{Stored only wrapped.} The data key is encrypted with the master key (AES-256-GCM),
+  with its owner as associated data, so that a wrapped key moved to another owner does not
+  unwrap, and kept in the control store's \code{keys} table with the master key's id (the first 16
+  hexadecimal digits of its SHA-256). A wrong master key is therefore named, not taken for
+  damaged data. The data key itself is never written, and is wiped from memory when dropped.
+\item \textbf{The master key comes from outside the workspace}, in this order:
+  \begin{itemize}
+  \item the environment variable \code{MEDORAMA\_MASTER\_KEY} (64 hexadecimal digits), from a
+    service manager;
+  \item \code{master\_key\_command}, a command that prints it: the operating system's keyring
+    (\cmd{security find-generic-password -s medorama -w} on macOS, \cmd{secret-tool lookup} on
+    Linux), HashiCorp Vault, or a cloud key service's command-line tool;
+  \item \code{master\_key\_file}, by default \file{<home>/master.key}, which \cmd{medorama init}
+    makes with mode 0600, outside the workspace.
+  \end{itemize}
+  Medorama has no built-in client for a keyring, Vault or a key service: they are reached through
+  \code{master\_key\_command}.
+\item \textbf{Unwrapped for a grant.} The server unwraps a database's key only for a request whose
+  user holds a grant on it. Keys protect the files at rest; grants protect them in use.
+\item \textbf{Rotation.} \cmd{medorama keys new FILE} makes a new key file, and \cmd{medorama keys
+  rotate -{}-new-key-file FILE} wraps every data key again with it (the data are untouched;
+  audited as \code{keys\_rotate}); then point the setting at the new key (\cref{chap:cli}).
+\item \textbf{Passwords of databases.} A password given to Medorama for a connected database (on
+  the page, or \cmd{medorama databases connect -{}-password-stdin}) is sealed by the master key
+  like a data key, in the control store (\code{password\_wrapped}): never in a file, never shown.
+  A site may instead give a \code{password\_file} or the environment variable
+  \code{MEDORAMA\_SOURCE\_PASSWORD\_<NAME>}.
+\end{enumerate}
+The control store itself, when it is a SQLite file, may also be encrypted with SQLCipher, with a
+key from \code{key\_file} or \code{MEDORAMA\_KEY} (\cref{sec:security-data}).
+
+\paragraph{For reviewers.} \file{workspace.rs} (\code{Master::wrap}, \code{Master::unwrap},
+\code{master}, \code{rotate}, \code{shred}), with its unit test
+\code{wrapped\_keys\_unwrap\_for\_their\_owner\_only}.
+
+\section{Removing a database}
+\label{sec:protecting-removal}
+
+A user who manages a database removes it on its page (\ui{Remove\dots}, then typing its name;
+\cref{sec:databases-tab-remove}) or with \cmd{medorama databases remove NAME}. Removal leaves no
+trace of the database in Medorama (\file{databases.rs}, \code{remove}):
+\begin{enumerate}
+\item the database is marked \code{removing}: it is no longer offered, searched or opened;
+\item its data key is destroyed, and the keys of the databases derived from it: from then on its
+  workspace files cannot be read;
+\item its workspace folder is deleted, with its index store, and the folders derived from it;
+\item every cohort member whose provenance includes the database is deleted, in every cohort
+  (\cref{sec:cohorts-removal});
+\item its patient links (\code{patient\_keys}) are deleted, and the patients that no database
+  links any more are deleted with their pseudonyms, and taken out of cohorts' lists;
+\item its jobs, visit pseudonyms, grants, derived databases and its row are deleted, and what the
+  server keeps open of it is closed. An audit entry records who removed it and when, with its name
+  and no patient data.
+\end{enumerate}
+Each step can be repeated: a removal that a crash interrupted is finished when the server or any
+command next starts. Removed from its page, the viewer Medorama runs is first told to forget the
+database's index store; since the key is destroyed before the folder, nothing of its indexes can
+be read again. The database
+itself is never touched. The audit log keeps its earlier entries, which name patients by number:
+those numbers lead nowhere once the links are gone.
+
+\paragraph{For reviewers.} \file{databases.rs} (\code{remove}, \code{finish\_removal},
+\code{resume\_removals}); tested in \file{tests/databases.rs}
+(\code{removing\_a\_database\_leaves\_no\_trace}, \code{a\_removal\_a\_crash\_interrupted\_finishes},
+\code{a\_cohort\_deleted\_takes\_its\_key}).
+
+\section{Backups}
+\label{sec:protecting-backups}
+
+A backup of the control store holds the wrapped data keys of its day, and a backup of the
+workspace holds its encrypted files. Restoring old backups of both brings back a removed
+database's workspace files, readable with the master key of that day. Shredding by removal is
+therefore final only once every backup older than the removal has expired: the removal's audit
+entry gives the date from which it holds.
+\begin{itemize}
+\item Back up the control store and the workspace together, and the master key apart from both.
+  A workspace without its wrapped keys, or keys without the master key, cannot be read.
+\item Encrypt the backups, restrict who may restore them, and set their retention with removals in
+  mind.
+\item The connected databases' own encryption and backups are their owners' duty, not
+  Medorama's (\cref{sec:connecting-requirements}).
+\end{itemize}
 
 \section{Failing closed}
 \label{sec:protecting-fail-closed}
@@ -601,13 +795,14 @@ and \code{may\_hold\_phi} (the marks set by handlers). The internal header
 \label{sec:protecting-verified}
 
 \begin{itemize}
-\item \textbf{End to end.} \file{medorama/tests/privacy.rs} seeds a catalog with identifiers that
-  cannot appear by chance: a name, an MRN, patient, encounter and account numbers, a date of
+\item \textbf{End to end.} \file{medorama/tests/privacy.rs} seeds a connected database, as
+  db-builder makes it, and files with identifiers that cannot appear by chance: a name, an MRN, a
+  patient ID, a visit key, a date of
   birth, staff names, an institution, and real dates in the forms that tables, DICOM, MUSE, WFDB,
-  EDF and EDF+ write them. They are placed in every format the catalog serves: tables, notes, a
+  EDF and EDF+ write them. They are placed in every format Medorama serves: results, notes, a
   WFDB record, GE MUSE XML, DICOM, an EDF+ file, a picture, a text file and an ICU recording. The
   test then requests every page's answers, every entry's detail, every file and its parts, and
-  every cohort and database export, as a user without the PHI permission and as an administrator
+  every cohort export, as a user without the PHI permission and as an administrator
   who switched Privacy Mode on. It asserts that no byte of any answer holds any of the seeded
   identifiers, that no JSON number is a real time, that identifier searches are refused or find
   nobody, that placeholders and pseudonyms appear, that the text file is refused, and that
@@ -615,8 +810,11 @@ and \code{may\_hold\_phi} (the marks set by handlers). The internal header
   identifiers, so that the test would fail if it checked nothing.
 \item \textbf{The viewer.} \file{medorama/tests/gateway.rs} runs a real VitalStream viewer behind
   the gateway, in Privacy Mode too.
-\item \textbf{Connected databases.} \file{medorama/tests/connections.rs} repeats the Privacy Mode
-  check over a synthetic OMOP database.
+\item \textbf{Every route.} The same test asks every GET route of the API in Privacy Mode
+  (\code{every\_route\_in\_privacy\_mode}): a new route fails it until it has a case.
+\item \textbf{Databases, grants and removal.} \file{medorama/tests/databases.rs} checks exact
+  linking, conflicts, status, grants, searches that name the databases they left out, and that a
+  removal leaves no trace.
 \item \textbf{Each de-identifier.} Unit tests in \file{gate.rs}, \file{deid.rs} (including real
   EDF test files), \file{dicom.rs}, \file{pseudonyms.rs} and \file{gateway.rs};
   \file{medorama/tests/dicom\_samples.rs} checks real DICOM files with pydicom.
@@ -642,14 +840,18 @@ know its limits.
   exported in Privacy Mode are not de-identified under HIPAA's Safe Harbor method. They suit use
   as a limited data set under a data use agreement, or under an expert determination
   (\cref{sec:security-regulatory}).
-\item \textbf{Everyone sees every patient.} Medorama has no per-patient or per-study access
-  lists: every signed-in user may see every patient of a catalog, as Privacy Mode and the PHI
-  permission allow. Separate catalogs serve separate studies.
+\item \textbf{Grants are per database, not per patient.} A user granted a database sees every
+  patient of it, as Privacy Mode and the PHI permission allow. A study that must see only some
+  patients is served by a database that holds only them.
+\item \textbf{Plug-ins' output folders are not encrypted} by Medorama
+  (\cref{sec:protecting-workspace}): protect them with disk encryption.
+\item \textbf{Backups bring removed data back} until they expire (\cref{sec:protecting-backups}).
 \end{itemize}
 
 \begin{phibox}
 The deploying institution remains responsible for the rest: who receives accounts and the PHI
-permission, how the server and its backups are protected, which data are imported, and how
+permission, how the server, the master key and the backups are protected, which databases are
+connected and to whom they are granted, and how
 exports are used and shared. The deployment checklist (\cref{sec:security-checklist}) lists these
 duties. Treat what a session in Privacy Mode exports as pseudonymized data, not as anonymous
 data.

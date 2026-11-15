@@ -1,5 +1,5 @@
 //! How the page writes dates and times (Admin › Dates and times): the order of a date's parts
-//! and the clock, for the whole catalog.  The page applies it to every date it shows; data
+//! and the clock, for the whole of Medorama.  The page applies it to every date it shows; data
 //! (exports, the API) and the server's own sentences keep ISO 8601, which every program reads
 //! and Privacy Mode recognises when it moves dates written in text.
 

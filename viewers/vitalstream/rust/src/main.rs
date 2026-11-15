@@ -3,6 +3,7 @@
 
 use clap::Parser;
 use recording_engine::index;
+use signal_core::value::Value;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -54,6 +55,10 @@ struct Cli {
     /// index PATH into the cache and exit
     #[arg(long, value_name = "PATH")]
     index: Option<String>,
+    /// the index stores and their keys come on standard input, one JSON line each (Medorama,
+    /// which launches the viewer: viewers/vitalstream/docs/index-format.md, "The key on a pipe")
+    #[arg(long)]
+    keys_on_stdin: bool,
 }
 
 fn open_browser(url: String) {
@@ -155,9 +160,13 @@ fn main() -> ExitCode {
     }
     if let Some(p) = a.index {
         let path = settings::absolute(&p);
-        return match index::build_index(std::path::Path::new(&path), &s.cache_dir, &|_| {}) {
+        let built = server::Stores::own_from(&s).and_then(|stores| {
+            let own = stores.own().ok_or("no index store")?;
+            index::build_into_store(std::path::Path::new(&path), &own, &|_| {}, &|| false).map_err(|e| e.to_string())
+        });
+        return match built {
             Ok(key) => {
-                println!("indexed {p} -> {}/{key}/", s.cache_dir.display());
+                println!("indexed {p} -> {} ({key})", s.cache_dir.join("index.sqlite").display());
                 ExitCode::SUCCESS
             }
             Err(e) => {
@@ -178,13 +187,36 @@ fn main() -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
-    let app = match server::App::new(s.clone(), Some(protected)) {
+    // launched by Medorama: its stores and their keys arrive on standard input, and are
+    // forgotten when it closes
+    let made = if a.keys_on_stdin {
+        server::App::with_stores(s.clone(), Some(protected), server::Stores::default())
+    } else {
+        server::App::new(s.clone(), Some(protected))
+    };
+    let app = match made {
         Ok(app) => Arc::new(app),
         Err(e) => {
             eprintln!("vitalstream-rs: {e}");
             return ExitCode::FAILURE;
         }
     };
+    if a.keys_on_stdin {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::stdin().lock().lines() {
+                let Ok(line) = line else { break };
+                if let Err(e) = app.stores().apply(&line) {
+                    // the line is never repeated: it may hold a key
+                    eprintln!("vitalstream-rs: a store from standard input: {e}");
+                }
+            }
+            for p in app.stores().paths() {
+                let _ = app.stores().apply(&format!("{{\"forget\":{}}}", Value::from(p).to_json()));
+            }
+        });
+    }
     // an IPv6 address is written in brackets in a URL
     let url = if s.host.contains(':') {
         format!("http://[{}]:{}/", s.host, s.port)

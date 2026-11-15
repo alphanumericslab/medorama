@@ -19,6 +19,7 @@
 #endif
 
 #include "engine/sources.hpp"
+#include "engine/store.hpp"
 #include "core/paths.hpp"
 #include "core/pyfmt.hpp"
 #include "core/sha256.hpp"
@@ -51,7 +52,9 @@ std::int64_t mtime_ns(const fs::path& p) {
 #endif
 }
 
-std::string cache_key(const fs::path& path) {
+std::string cache_key(const fs::path& path) { return cache_key_of(path, INDEX_VERSION); }
+
+std::string cache_key_of(const fs::path& path, std::int64_t version) {
   std::error_code ec;
   fs::path p = fs::canonical(path, ec);
   if (ec) p = path;
@@ -66,7 +69,7 @@ std::string cache_key(const fs::path& path) {
     if (ec) size = 0;
     fp = Value(List{Value(static_cast<unsigned long long>(size)), Value(mtime_ns(p))});
   }
-  std::string text = Value(List{Value(INDEX_VERSION), Value(path_utf8(p)), fp}).to_json();
+  std::string text = Value(List{Value(version), Value(path_utf8(p)), fp}).to_json();
   core::Sha256 h;
   h.update(text.data(), text.size());
   return h.hex_digest().substr(0, 20);
@@ -120,8 +123,6 @@ std::string build_index(const fs::path& path, const fs::path& cache_dir, const P
   return build_index_until(path, cache_dir, progress, [] { return false; });
 }
 
-namespace {
-
 // The writers of each key in this process, one at a time.
 std::shared_ptr<std::mutex> key_lock(const std::string& key) {
   static std::mutex m;
@@ -137,22 +138,48 @@ std::shared_ptr<std::mutex> key_lock(const std::string& key) {
   return lock;
 }
 
-// A folder of cache_dir named uniquely for this writer: <key>.<process id>.<n>.<suffix>.
-fs::path unique(const fs::path& cache_dir, const std::string& key, const char* suffix) {
+fs::path unique_dir(const fs::path& dir, const std::string& key, const char* suffix) {
   static std::atomic<std::uint64_t> n{0};
-  return cache_dir / (key + "." + std::to_string(process_id()) + "." + std::to_string(n++) + "." + suffix);
+  return dir / (key + "." + std::to_string(process_id()) + "." + std::to_string(n++) + "." + suffix);
 }
 
-// Removes a folder when it goes out of scope (an index being built, on every way out).
-struct Removed {
-  fs::path path;
-  ~Removed() {
-    std::error_code ec;
-    fs::remove_all(path, ec);
-  }
-};
+Removed::~Removed() {
+  std::error_code ec;
+  fs::remove_all(path, ec);
+}
 
-}  // namespace
+void private_dir(const fs::path& p) {
+  fs::create_directories(p);
+#ifndef _WIN32
+  fs::permissions(p, fs::perms::owner_all, fs::perm_options::replace);
+#endif
+}
+
+void build_files(const fs::path& path, const fs::path& dir, const std::string& key, std::int64_t version,
+                 const Progress& progress, const Cancelled& cancelled) {
+  auto t_start = std::chrono::steady_clock::now();
+  fs::create_directories(dir);
+  Building b = build_source(path, dir, progress, cancelled);
+  auto& [meta, a] = b.built;
+  if (!b.by_adapter) write_arrays(dir, a);  // otherwise the adapter wrote the arrays into dir
+  std::error_code ec;
+  fs::path real = fs::canonical(path, ec);
+  if (ec) real = path;
+  meta.insert("path", Value(path_utf8(real)));
+  meta.insert("name", Value(path_utf8(path.filename())));
+  meta.insert("key", Value(key));
+  meta.insert("index_version", Value(version));
+  meta.insert("engine", Value(VS_ENGINE_VERSION));
+  double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
+  meta.insert("indexed_s", Value(core::round_to(secs, 1)));
+  write_text(dir / "meta.json", clean(Value(std::move(meta))).to_json());
+  // what a reader would refuse is not kept (times or rates that are not finite numbers, ...)
+  std::string why;
+  if (!load_files(dir, version, why))
+    throw std::runtime_error(path_utf8(path) + ": the index would be inconsistent: " + why);
+}
+
+const char* engine_version() { return VS_ENGINE_VERSION; }
 
 std::string build_index_until(const fs::path& path, const fs::path& cache_dir, const Progress& progress,
                               const Cancelled& cancelled) {
@@ -160,29 +187,12 @@ std::string build_index_until(const fs::path& path, const fs::path& cache_dir, c
   std::string key = cache_key(path);
   auto lock = key_lock(key);
   std::lock_guard<std::mutex> writing(*lock);
-  auto t_start = std::chrono::steady_clock::now();
   progress(0.0);
   fs::path folder = cache_dir / key;
-  Removed tmp{unique(cache_dir, key, "tmp")};
+  Removed tmp{unique_dir(cache_dir, key, "tmp")};
   std::error_code ec;
-  fs::create_directories(tmp.path);
-  Building b = build_source(path, tmp.path, progress, cancelled);
-  auto& [meta, a] = b.built;
-  if (!b.by_adapter) write_arrays(tmp.path, a);  // otherwise the adapter wrote the arrays into tmp
-  fs::path real = fs::canonical(path, ec);
-  if (ec) real = path;
-  meta.insert("path", Value(path_utf8(real)));
-  meta.insert("name", Value(path_utf8(path.filename())));
-  meta.insert("key", Value(key));
-  meta.insert("index_version", Value(INDEX_VERSION));
-  meta.insert("engine", Value(VS_ENGINE_VERSION));
-  double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - t_start).count();
-  meta.insert("indexed_s", Value(core::round_to(secs, 1)));
-  write_text(tmp.path / "meta.json", clean(Value(std::move(meta))).to_json());
-  // what a reader would refuse is not kept (times or rates that are not finite numbers, ...)
+  build_files(path, tmp.path, key, INDEX_VERSION, progress, cancelled);
   std::string why;
-  if (!load_from(tmp.path, why))
-    throw std::runtime_error(path_utf8(path) + ": the index would be inconsistent: " + why);
   // an index already there, complete and written by this engine, is kept (the same content);
   // any other is moved aside first, so that readers never see a folder half replaced
   bool current = false;
@@ -191,7 +201,7 @@ std::string build_index_until(const fs::path& path, const fs::path& cache_dir, c
     current = e && e->as_str() && *e->as_str() == VS_ENGINE_VERSION;
   }
   if (!current) {
-    Removed old{unique(cache_dir, key, "old")};
+    Removed old{unique_dir(cache_dir, key, "old")};
     if (fs::exists(folder, ec)) fs::rename(folder, old.path);
     fs::rename(tmp.path, folder, ec);
     // another program moved its index of this key in first
@@ -202,17 +212,26 @@ std::string build_index_until(const fs::path& path, const fs::path& cache_dir, c
 }
 
 template <class T>
-Mapped<T>::Mapped(const fs::path& p) {
+Values<T>::Values(const fs::path& p) {
   // cache files are written once (atomically renamed into place) and never modified
   file_ = std::make_shared<const core::FileData>(path_utf8(p));
   if (file_->size() % sizeof(T) != 0) throw std::runtime_error(path_utf8(p) + ": not a whole number of values");
 }
 
-template class Mapped<float>;
-template class Mapped<std::int32_t>;
-template class Mapped<std::int64_t>;
-template class Mapped<std::int16_t>;
-template class Mapped<double>;
+template class Values<float>;
+template class Values<std::int32_t>;
+template class Values<std::int64_t>;
+template class Values<std::int16_t>;
+template class Values<double>;
+
+std::size_t Env::size() const { return chunked_ ? chunked_->size() : file_.size(); }
+
+std::optional<std::vector<float>> Env::range(std::size_t o, std::size_t n) const {
+  if (chunked_) return chunked_->range(o, n);
+  if (o > file_.size() || n > file_.size() - o) return std::nullopt;
+  const float* d = file_.data();
+  return d ? std::vector<float>(d + o, d + o + n) : std::vector<float>();
+}
 
 namespace {
 
@@ -317,6 +336,10 @@ std::string check(const Dict& meta, const Loaded& a) {
 }
 
 std::optional<std::pair<Dict, Loaded>> load_from(const fs::path& dir, std::string& why) {
+  return load_files(dir, INDEX_VERSION, why);
+}
+
+std::optional<std::pair<Dict, Loaded>> load_files(const fs::path& dir, std::int64_t version, std::string& why) {
   try {
     std::FILE* f = core::open_file(path_utf8(dir / "meta.json"), "rb");
     if (!f) {
@@ -338,7 +361,7 @@ std::optional<std::pair<Dict, Loaded>> load_from(const fs::path& dir, std::strin
       why = "meta.json is not a JSON object";
       return std::nullopt;
     }
-    if (whole(d->get("index_version")) != std::optional<std::int64_t>(INDEX_VERSION)) {
+    if (whole(d->get("index_version")) != std::optional<std::int64_t>(version)) {
       why = "another index version";
       return std::nullopt;
     }
@@ -349,14 +372,14 @@ std::optional<std::pair<Dict, Loaded>> load_from(const fs::path& dir, std::strin
       fs::path a = dir / ("env_min_" + std::to_string(lvl) + ".f32");
       fs::path b = dir / ("env_max_" + std::to_string(lvl) + ".f32");
       if (!fs::exists(a, ec)) break;
-      l.env_min.emplace_back(a);
-      l.env_max.emplace_back(b);
+      l.env_min.emplace_back(Values<float>(a));
+      l.env_max.emplace_back(Values<float>(b));
     }
-    l.mk_piece = Mapped<std::int32_t>(dir / "mk_piece.i32");
-    l.mk_sample = Mapped<std::int64_t>(dir / "mk_sample.i64");
-    l.mk_code = Mapped<std::int16_t>(dir / "mk_code.i16");
-    l.vit_t = Mapped<double>(dir / "vit_t.f64");
-    l.vit_v = Mapped<double>(dir / "vit_v.f64");
+    l.mk_piece = Values<std::int32_t>(dir / "mk_piece.i32");
+    l.mk_sample = Values<std::int64_t>(dir / "mk_sample.i64");
+    l.mk_code = Values<std::int16_t>(dir / "mk_code.i16");
+    l.vit_t = Values<double>(dir / "vit_t.f64");
+    l.vit_v = Values<double>(dir / "vit_v.f64");
     why = check(*d, l);
     if (!why.empty()) return std::nullopt;
     return std::make_pair(std::move(*d), std::move(l));

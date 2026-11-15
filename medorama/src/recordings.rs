@@ -1,16 +1,41 @@
-//! Recordings: import (by path, never copied), re-check, status, removal.
+//! Recordings (docs/design/databases-only.md, "Derived databases"): the recordings each
+//! recording database lists, and what Medorama keeps of them in that database's workspace
+//! folder (`recordings.sqlite`): whether the file is there, its fingerprint (the index key), the
+//! format and times its index found, and the series derived from it.
 //!
-//! The catalog only reads recordings.  Removing one deletes its database entries (and, if
-//! asked, the catalog's own results for it); the file or folder itself is never touched.
+//! A recording is numbered `database × 1,000,000,000 + its number in the database's file`, one
+//! number across Medorama (jobs, the page, the viewer).  Medorama only reads recordings: the
+//! file or folder itself is never written, moved or deleted.
 
-use crate::config::{real, within, Config};
-use crate::db::{audit, now};
-use crate::sql::{params, Connection, OptionalExtension};
-use crate::users::User;
-use recording_engine::index::cache_key;
-use recording_engine::sources::{kind_of, unreadable, wfdb_folder};
-use serde::Serialize;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+use crate::config::Config;
+use crate::db::now;
+use crate::sources::Source;
+use crate::sql::{params, Connection};
+use crate::users::User;
+use recording_engine::index::cache_key_of;
+use recording_engine::store::STORE_FORMAT;
+
+/// A recording's index key (index format 3: its database's index store).
+fn cache_key(path: &Path) -> String {
+    cache_key_of(path, STORE_FORMAT)
+}
+use recording_engine::sources::{kind_of, unreadable};
+use serde::Serialize;
+
+/// The numbers of one database's recordings: `database × STRIDE + n`.
+pub const STRIDE: i64 = 1_000_000_000;
+
+pub fn global(database: i64, n: i64) -> i64 {
+    database * STRIDE + n
+}
+
+/// (database, number in its file) of a recording's number.
+pub fn split(id: i64) -> (i64, i64) {
+    (id / STRIDE, id % STRIDE)
+}
 
 /// Status of a recording, as shown by the colored dot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -28,6 +53,9 @@ pub enum Status {
     Failed,
     /// Not found at the last check.
     Missing,
+    /// A file no reader indexes (a picture, a PDF, a 12-lead ECG in DICOM or XML): opened by its
+    /// viewer from its entry, never indexed.
+    File,
 }
 
 impl Status {
@@ -40,25 +68,36 @@ impl Status {
             Status::Stale => "stale",
             Status::Failed => "failed",
             Status::Missing => "missing",
+            Status::File => "file",
         }
     }
 
     pub fn parse(s: &str) -> Option<Status> {
-        [Status::Ready, Status::Queued, Status::Indexing, Status::New, Status::Stale, Status::Failed, Status::Missing]
-            .into_iter()
-            .find(|x| x.as_str() == s)
+        [
+            Status::Ready,
+            Status::Queued,
+            Status::Indexing,
+            Status::New,
+            Status::Stale,
+            Status::Failed,
+            Status::Missing,
+            Status::File,
+        ]
+        .into_iter()
+        .find(|x| x.as_str() == s)
     }
 
-    /// Ordering for an encounter's summary: the most urgent of its recordings.
+    /// Ordering for a summary: the most urgent of several recordings.
     fn severity(self) -> u8 {
         match self {
-            Status::Ready => 0,
-            Status::New => 1,
-            Status::Stale => 2,
-            Status::Queued => 3,
-            Status::Indexing => 4,
-            Status::Failed => 5,
-            Status::Missing => 6,
+            Status::File => 0,
+            Status::Ready => 1,
+            Status::New => 2,
+            Status::Stale => 3,
+            Status::Queued => 4,
+            Status::Indexing => 5,
+            Status::Failed => 6,
+            Status::Missing => 7,
         }
     }
 }
@@ -71,17 +110,29 @@ pub fn summary(statuses: &[Status]) -> Option<Status> {
 #[derive(Debug, Clone, Serialize)]
 pub struct Recording {
     pub id: i64,
+    pub database: i64,
+    /// The database's name.
+    pub source: String,
+    /// The database's key for it (never sent: identifies it in the database).
+    #[serde(skip)]
+    pub key: String,
+    #[serde(skip)]
+    pub person_key: String,
+    #[serde(skip)]
+    pub visit_key: String,
+    /// Its Medorama patient, once its person is linked.
+    pub patient: Option<i64>,
     pub path: String,
     pub kind: String,
     pub name: String,
     pub size: i64,
-    pub unit: String,
-    pub bed: String,
-    pub name_time: Option<f64>,
     /// The recording's format, as its reader names it (`WFDB collection`, an adapter's description).
     pub format: String,
     pub t_start: Option<f64>,
     pub t_end: Option<f64>,
+    /// The Patient Journey's lane (categories.rs).
+    pub category: String,
+    pub label: String,
     pub present: bool,
     pub status: Status,
     /// Indexing progress 0..1 while indexing.
@@ -91,315 +142,380 @@ pub struct Recording {
     pub index_key: Option<String>,
     pub fingerprint: String,
     pub added_at: f64,
-    /// Filled by [`list`]: the sources it came from, the encounters it is linked to, and (PHI
-    /// users) the identifiers in its file.
-    pub sources: Vec<String>,
-    pub encounters: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub in_file: Option<crate::identify::InFile>,
 }
 
-/// Columns for [`row_recording`]; `j` is the newest index job of the recording.
-pub const REC_SELECT: &str = "SELECT r.id, r.path, r.kind, r.name, r.size, r.unit, r.bed, r.name_time, r.format,
-    r.t_start, r.t_end, r.present, r.fingerprint, r.added_at,
-    j.state, j.progress, j.error, j.fingerprint, j.action_version
-  FROM recordings r
-  LEFT JOIN jobs j ON j.id = (SELECT MAX(id) FROM jobs WHERE recording = r.id AND action = 'index')";
+const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS recordings (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    recording_key  TEXT NOT NULL UNIQUE,
+    person_key     TEXT NOT NULL DEFAULT '',
+    visit_key      TEXT NOT NULL DEFAULT '',
+    path           TEXT NOT NULL,
+    kind           TEXT NOT NULL DEFAULT '',
+    name           TEXT NOT NULL DEFAULT '',
+    size           INTEGER NOT NULL DEFAULT 0,
+    fingerprint    TEXT NOT NULL DEFAULT '',
+    format         TEXT NOT NULL DEFAULT '',
+    t_start        REAL,
+    t_end          REAL,
+    label          TEXT NOT NULL DEFAULT '',
+    category       TEXT NOT NULL DEFAULT 'icu',
+    present        INTEGER NOT NULL DEFAULT 1,
+    problem        TEXT NOT NULL DEFAULT '',
+    added_at       REAL NOT NULL,
+    checked_at     REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS recordings_person ON recordings(person_key);
+CREATE TABLE IF NOT EXISTS series (
+    recording  INTEGER NOT NULL,
+    name       TEXT NOT NULL,
+    unit       TEXT NOT NULL DEFAULT '',
+    t          BLOB NOT NULL,
+    v          BLOB NOT NULL,
+    lo         BLOB NOT NULL,
+    hi         BLOB NOT NULL,
+    PRIMARY KEY (recording, name)
+);
+";
 
-pub fn row_recording(r: &crate::sql::Row) -> crate::sql::Result<Recording> {
-    let present = r.get::<_, i64>(11)? != 0;
-    let fingerprint: String = r.get(12)?;
-    let state: Option<String> = r.get(14)?;
-    let job_fp: Option<String> = r.get(17)?;
-    let job_version: Option<String> = r.get(18)?;
-    let current = job_fp.as_deref() == Some(fingerprint.as_str())
-        && job_version.as_deref() == Some(crate::actions::INDEX_VERSION_STR.as_str());
-    let status = if !present {
-        Status::Missing
-    } else {
-        let error: Option<String> = r.get(16)?;
-        match state.as_deref() {
-            // indexing cancelled by a user (jobs::cancel): not indexed again on its own (it
-            // shows as failed, said so, until indexed again); cancelled by the catalog (its index
-            // folder removed): new
-            Some("cancelled") if current && error.as_deref() == Some("cancelled") => Status::Failed,
-            None | Some("cancelled") => Status::New,
-            Some("queued") => Status::Queued,
-            Some("running") => Status::Indexing,
-            Some(_) if !current => Status::Stale,
-            Some("done") => Status::Ready,
-            _ => Status::Failed,
-        }
-    };
-    Ok(Recording {
-        id: r.get(0)?,
-        path: r.get(1)?,
-        kind: r.get(2)?,
-        name: r.get(3)?,
-        size: r.get(4)?,
-        unit: r.get(5)?,
-        bed: r.get(6)?,
-        name_time: r.get(7)?,
-        format: r.get(8)?,
-        t_start: r.get(9)?,
-        t_end: r.get(10)?,
-        present,
-        progress: if status == Status::Indexing { r.get(15)? } else { 0.0 },
-        error: if status == Status::Failed {
-            match (state.as_deref(), r.get::<_, Option<String>>(16)?.unwrap_or_default()) {
-                (Some("cancelled"), _) => "indexing was cancelled: index it to index it again".into(),
-                (_, e) => e,
-            }
-        } else {
-            String::new()
-        },
-        index_key: if status == Status::Ready { Some(fingerprint.clone()) } else { None },
-        fingerprint,
-        status,
-        added_at: r.get(13)?,
-        sources: vec![],
-        encounters: vec![],
-        in_file: None,
-    })
-}
-
-pub fn get(c: &Connection, id: i64) -> anyhow::Result<Option<Recording>> {
-    Ok(c.query_row(&format!("{REC_SELECT} WHERE r.id = ?1"), [id], row_recording).optional()?)
-}
-
-/// `UNIT_BED-<Unix time>`, the way bedside-monitor recordings are often named: (unit, bed,
-/// time).  The unit is the part before the first `_`; a name without the time gives nothing.
-pub fn parse_name(name: &str) -> (String, String, Option<f64>) {
-    let stem = Path::new(name).file_stem().map_or(name.to_string(), |s| s.to_string_lossy().to_string());
-    let Some((label, time)) = stem.rsplit_once('-') else { return (String::new(), String::new(), None) };
-    if !(9..=11).contains(&time.len()) || !time.bytes().all(|b| b.is_ascii_digit()) || label.is_empty() {
-        return (String::new(), String::new(), None);
-    }
-    let (unit, bed) = label.split_once('_').unwrap_or((label, ""));
-    (unit.to_string(), bed.to_string(), time.parse::<f64>().ok())
-}
-
-#[derive(Debug, Default, Serialize)]
-pub struct ImportReport {
-    pub import_id: i64,
-    pub dry_run: bool,
-    pub added: usize,
-    pub already: usize,
-    pub skipped: Vec<(String, String)>,
-    pub linked: usize,
-    /// Added recordings whose current index was already in index_dir.
-    pub indexed: usize,
+/// A recording database's `recordings.sqlite`.
+pub fn open(cfg: &Config, c: &Connection, database: i64) -> anyhow::Result<rusqlite::Connection> {
+    let w = crate::workspace::open_database_file(cfg, c, database, "recordings.sqlite")?;
+    w.execute_batch(SCHEMA)?;
+    Ok(w)
 }
 
 fn size_of(p: &Path) -> i64 {
     if p.is_dir() {
         std::fs::read_dir(p)
-            .map(|it| it.filter_map(Result::ok).filter_map(|e| e.metadata().ok()).map(|m| m.len() as i64).sum())
+            .map(|it| {
+                it.flatten().filter_map(|e| e.metadata().ok()).filter(|m| m.is_file()).map(|m| m.len() as i64).sum()
+            })
             .unwrap_or(0)
     } else {
-        p.metadata().map_or(0, |m| m.len() as i64)
+        std::fs::metadata(p).map(|m| m.len() as i64).unwrap_or(0)
     }
 }
 
-/// True if writing to folder `w` would write into the recording's folder: the folder holding
-/// a recording file, anywhere inside a WFDB folder, or a folder inside which the recording lies.
-fn writes_into(w: &Path, rec: &Path, kind: &str) -> bool {
-    // a WFDB folder: anywhere inside it; a file (a WFDB record's header too): its own folder
-    let into_source = if kind == "wfdb" && rec.is_dir() { within(w, rec) } else { rec.parent() == Some(w) };
-    into_source || within(rec, w)
+/// What reading the recordings of a database found.
+#[derive(Debug, Default, Serialize)]
+pub struct SyncReport {
+    pub recordings: usize,
+    pub added: usize,
+    pub missing: usize,
+    pub changed: usize,
+    pub removed: usize,
 }
 
-/// A recording found, of `kind`: to add, or skipped with the reason when this build cannot read
-/// it (a WFDB recording in a build without the `wfdb` feature).
-fn take(p: PathBuf, kind: String, out: &mut Vec<(PathBuf, String)>, skipped: &mut Vec<(String, String)>) {
-    match unreadable(&p) {
-        Some(why) => skipped.push((p.to_string_lossy().to_string(), why.into())),
-        None => out.push((p, kind)),
-    }
-}
-
-/// Recordings (WFDB folders, and files an installed adapter reads) at or under `path`.
-fn find(path: &Path, recursive: bool, out: &mut Vec<(PathBuf, String)>, skipped: &mut Vec<(String, String)>) {
-    if let Some(k) = kind_of(path) {
-        take(path.to_path_buf(), k, out, skipped);
-        return;
-    }
-    if !path.is_dir() {
-        let why = wfdb_folder::signal_file_note(path).unwrap_or_else(|| "not a recording this program reads".into());
-        skipped.push((path.to_string_lossy().to_string(), why));
-        return;
-    }
-    let Ok(it) = std::fs::read_dir(path) else {
-        skipped.push((path.to_string_lossy().to_string(), "cannot read the folder".into()));
-        return;
-    };
-    let mut entries: Vec<PathBuf> = it
-        .filter_map(Result::ok)
-        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
-        .map(|e| e.path())
-        .collect();
-    entries.sort();
-    for e in entries {
-        // a symbolic link in a folder is not followed (it may lead out of the data folders)
-        let is_link = e.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(true);
-        if is_link {
-            skipped.push((e.to_string_lossy().to_string(), "a symbolic link: not followed".into()));
-        } else if let Some(k) = kind_of(&e) {
-            take(e, k, out, skipped);
-        } else if recursive && e.is_dir() {
-            find(&e, true, out, skipped);
-        }
+/// Read a recording database's recordings and keep what Medorama needs of them: each file's
+/// presence and fingerprint, its patient.  A file outside `data_roots`, or in the workspace, is
+/// kept missing with the reason.  Recordings the database no longer lists go (their series too).
+/// Why a recording's file is not read (empty: it is): missing, outside `data_roots`, inside the
+/// workspace, or unreadable.
+fn problem_of(cfg: &Config, path: &Path) -> String {
+    if !path.exists() {
+        "no such file or folder".into()
+    } else if !cfg.in_data_roots(path) {
+        "outside the folders data may come from (data_roots)".into()
+    } else if crate::config::within(path, &crate::config::real(&cfg.workspace_dir)) {
+        "inside Medorama's workspace".into()
+    } else {
+        unreadable(path).unwrap_or_default().to_string()
     }
 }
 
-/// Where a batch of recordings lies: the folder given, or the folder holding the files given;
-/// for several, the deepest folder holding them all.  The default name and source of a batch.
-pub fn data_folder(paths: impl IntoIterator<Item = PathBuf>) -> String {
-    let mut common: Option<PathBuf> = None;
-    for p in paths {
-        let folder = if p.is_dir() { p } else { p.parent().map(Path::to_path_buf).unwrap_or(p) };
-        common = Some(match common {
-            None => folder,
-            Some(c) => c.components().zip(folder.components()).take_while(|(a, b)| a == b).map(|(a, _)| a).collect(),
-        });
-    }
-    common.map(|c| c.to_string_lossy().to_string()).unwrap_or_default()
-}
-
-/// Add the recordings at or under each path (admins only).
-pub fn import(
-    c: &mut Connection,
-    cfg: &Config,
-    user: &User,
-    paths: &[String],
-    recursive: bool,
-    opts: &crate::imports::Opts,
-) -> anyhow::Result<ImportReport> {
-    if !user.is_admin() {
-        anyhow::bail!("only admins add recordings");
-    }
-    let mut rep = ImportReport { dry_run: opts.dry_run, ..Default::default() };
-    let default_name = data_folder(paths.iter().map(|p| PathBuf::from(recording_engine::paths::absolute(p))));
-    let opts = crate::imports::Opts::new(
-        if opts.name.is_empty() { &default_name } else { &opts.name },
-        &opts.source,
-        opts.dry_run,
-    );
-    let mut found = vec![];
-    for p in paths {
-        let abs = PathBuf::from(recording_engine::paths::absolute(p));
-        if !abs.exists() {
-            rep.skipped.push((p.clone(), "no such file or folder".into()));
-            continue;
-        }
-        if !cfg.import_allowed(&abs) {
-            rep.skipped.push((p.clone(), "outside the configured data_roots".into()));
-            continue;
-        }
-        find(&abs, recursive, &mut found, &mut rep.skipped);
-    }
-    let tx = c.transaction()?;
-    let batch = crate::imports::begin(&tx, "recordings", &opts.name, &opts.source, &paths.join("; "), user)?;
-    rep.import_id = batch;
-    let new_ids = add_found(&tx, cfg, user, found, batch, &opts.source, &mut rep)?;
-    crate::imports::finish(
-        &tx,
-        batch,
-        &serde_json::json!({"added": rep.added, "already": rep.already, "skipped": rep.skipped.len()}),
-    )?;
-    if opts.dry_run {
-        tx.rollback()?;
+pub fn sync(cfg: &Config, c: &Connection, s: &Source) -> anyhow::Result<SyncReport> {
+    let mut rep = SyncReport::default();
+    if !s.has_recordings() {
         return Ok(rep);
     }
-    tx.commit()?;
-    for id in &new_ids {
-        adopt_index(c, cfg, *id)?;
-    }
-    for id in &new_ids {
-        if get(c, *id)?.is_some_and(|r| r.status == Status::Ready) {
-            rep.indexed += 1;
+    let zone = s.zone(&cfg.timezone);
+    let listed = s.all_recordings(zone)?;
+    let mut w = open(cfg, c, s.id)?;
+    let tx = w.transaction()?;
+    let t = now();
+    for r in &listed {
+        rep.recordings += 1;
+        let path = crate::config::real(&s.recording_path(&r.file));
+        let problem = problem_of(cfg, &path);
+        let present = problem.is_empty();
+        let kind = if present { kind_of(&path).unwrap_or_default() } else { String::new() };
+        let fp = if present { cache_key(&path) } else { String::new() };
+        let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+        let category = if r.category.trim().is_empty() {
+            "icu".to_string()
+        } else {
+            crate::categories::named(&r.category).unwrap_or("icu").to_string()
+        };
+        let before: Option<(String, bool)> = tx
+            .query_row("SELECT fingerprint, present FROM recordings WHERE recording_key = ?1", [&r.key], |x| {
+                Ok((x.get(0)?, x.get::<_, i64>(1)? != 0))
+            })
+            .ok();
+        match &before {
+            None => rep.added += 1,
+            Some((f, _)) if present && *f != fp => rep.changed += 1,
+            _ => {}
         }
+        if !present && before.as_ref().is_none_or(|b| b.1) {
+            rep.missing += 1;
+        }
+        tx.execute(
+            // the size and fingerprint Medorama's own (the fingerprint is the viewers' index key);
+            // the format and times the database's until indexing reads them from the recording,
+            // and the database's again once the file changed
+            "INSERT INTO recordings (recording_key, person_key, visit_key, path, kind, name, size, fingerprint, t_start,
+                                     t_end, label, category, present, problem, added_at, checked_at, format)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15, ?16)
+             ON CONFLICT (recording_key) DO UPDATE SET person_key = excluded.person_key, visit_key = excluded.visit_key,
+                path = excluded.path, kind = excluded.kind, name = excluded.name, size = excluded.size,
+                fingerprint = excluded.fingerprint, label = excluded.label, category = excluded.category,
+                present = excluded.present, problem = excluded.problem, checked_at = excluded.checked_at,
+                t_start = CASE WHEN recordings.fingerprint <> excluded.fingerprint THEN excluded.t_start
+                               ELSE COALESCE(recordings.t_start, excluded.t_start) END,
+                t_end = CASE WHEN recordings.fingerprint <> excluded.fingerprint THEN excluded.t_end
+                             ELSE COALESCE(recordings.t_end, excluded.t_end) END,
+                format = CASE WHEN recordings.fingerprint <> excluded.fingerprint OR recordings.format = ''
+                              THEN excluded.format ELSE recordings.format END",
+            rusqlite::params![
+                r.key,
+                r.person,
+                r.visit,
+                path.to_string_lossy(),
+                kind,
+                name,
+                if present { size_of(&path) } else { 0 },
+                fp,
+                r.start,
+                r.end,
+                r.label,
+                category,
+                present,
+                problem,
+                t,
+                r.format
+            ],
+        )?;
     }
-    rep.linked = crate::linkage::relink(c, Some(&new_ids))?;
-    audit(
-        c,
-        Some(user),
-        "import_recordings",
-        &paths.join("; "),
-        &format!("added {}, already {}", rep.added, rep.already),
-    );
+    let keys: std::collections::HashSet<&str> = listed.iter().map(|r| r.key.as_str()).collect();
+    let gone: Vec<(i64, String)> = {
+        let mut st = tx.prepare("SELECT id, recording_key FROM recordings")?;
+        let v = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+        v.into_iter().filter(|(_, k): &(i64, String)| !keys.contains(k.as_str())).collect()
+    };
+    for (id, _) in &gone {
+        tx.execute("DELETE FROM series WHERE recording = ?1", [id])?;
+        tx.execute("DELETE FROM recordings WHERE id = ?1", [id])?;
+        c.execute("DELETE FROM jobs WHERE database_id = ?1 AND recording = ?2", params![s.id, global(s.id, *id)])?;
+    }
+    rep.removed = gone.len();
+    tx.commit()?;
+    // the patients of the recordings' persons, linked now
+    let persons: Vec<String> = listed.iter().map(|r| r.person.clone()).filter(|p| !p.is_empty()).collect();
+    crate::persons::patients(cfg, c, s, &persons, None)?;
     Ok(rep)
 }
 
-/// Add recordings found on disk to the catalog as part of batch `batch` (source `source`);
-/// returns the ids of the new ones.  Recordings already there are claimed by the batch too.
-pub(crate) fn add_found(
-    tx: &Connection,
-    cfg: &Config,
-    user: &User,
-    found: Vec<(PathBuf, String)>,
-    batch: i64,
-    source: &str,
-    rep: &mut ImportReport,
-) -> anyhow::Result<Vec<i64>> {
-    let written = cfg.written_folders();
-    let t = now();
-    let mut new_ids = vec![];
-    for (p, kind) in found {
-        let rp = real(&p);
-        // where it really is (a symbolic link in a data folder may lead out of it)
-        if !cfg.import_allowed(&rp) {
-            rep.skipped.push((p.to_string_lossy().to_string(), "outside the configured data_roots".into()));
-            continue;
-        }
-        if let Some(w) = written.iter().find(|w| writes_into(w, &rp, &kind)) {
-            rep.skipped.push((
-                rp.to_string_lossy().to_string(),
-                format!("the catalog writes to {}: the recording's own folder, or a folder containing it", w.display()),
-            ));
-            continue;
-        }
-        let path = rp.to_string_lossy().to_string();
-        let exists: Option<i64> =
-            tx.query_row("SELECT id FROM recordings WHERE path = ?1", [&path], |r| r.get(0)).optional()?;
-        if let Some(id) = exists {
-            // already in the catalog: this batch (and its source) claims it too
-            crate::imports::note(tx, batch, source, "recording", id)?;
-            rep.already += 1;
-            continue;
-        }
-        let name = rp.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        let (unit, bed, name_time) = parse_name(&name);
-        let id = tx.insert(
-            "INSERT INTO recordings (path, kind, name, size, fingerprint, unit, bed, name_time, added_at, added_by, checked_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?9)",
-            params![path, kind, name, size_of(&rp), cache_key(&rp), unit, bed, name_time, t, (user.id > 0).then_some(user.id)],
-        )?;
-        crate::imports::note(tx, batch, source, "recording", id)?;
-        new_ids.push(id);
-        rep.added += 1;
-    }
-    Ok(new_ids)
+/// What every recording's index job says: (state, progress, error, fingerprint, version) of the
+/// newest index job of each recording of a database.
+fn index_jobs(c: &Connection, database: i64) -> anyhow::Result<HashMap<i64, IndexJob>> {
+    let mut st = c.prepare(
+        "SELECT recording, state, progress, error, fingerprint, action_version FROM jobs
+         WHERE id IN (SELECT MAX(id) FROM jobs WHERE database_id = ?1 AND action = 'index' GROUP BY recording)",
+    )?;
+    let v = st
+        .query_map([database], |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                IndexJob {
+                    state: r.get(1)?,
+                    progress: r.get(2)?,
+                    error: r.get(3)?,
+                    fingerprint: r.get(4)?,
+                    version: r.get(5)?,
+                },
+            ))
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(v)
 }
 
-/// A path given in a database row, as recordings to add: the recordings it is or holds.
-pub(crate) fn find_path(cfg: &Config, p: &str, skipped: &mut Vec<(String, String)>) -> Vec<(PathBuf, String)> {
-    let abs = PathBuf::from(recording_engine::paths::absolute(p));
-    let mut found = vec![];
-    if !abs.exists() {
-        skipped.push((p.to_string(), "no such file or folder".into()));
-    } else if !cfg.import_allowed(&abs) {
-        skipped.push((p.to_string(), "outside the configured data_roots".into()));
-    } else {
-        find(&abs, false, &mut found, skipped);
-    }
-    found
+struct IndexJob {
+    state: String,
+    progress: f64,
+    error: String,
+    fingerprint: String,
+    version: String,
 }
 
-/// Record times and format from an index folder; true if it exists.
-pub fn apply_index_meta(c: &Connection, id: i64, folder: &Path) -> anyhow::Result<bool> {
-    let Ok(text) = std::fs::read_to_string(folder.join("meta.json")) else { return Ok(false) };
-    let meta: serde_json::Value = serde_json::from_str(&text)?;
+fn status_of(present: bool, kind: &str, fingerprint: &str, job: Option<&IndexJob>) -> (Status, f64, String) {
+    if !present {
+        return (Status::Missing, 0.0, String::new());
+    }
+    if kind.is_empty() {
+        return (Status::File, 0.0, String::new());
+    }
+    let Some(j) = job else { return (Status::New, 0.0, String::new()) };
+    let current = j.fingerprint == fingerprint && j.version == crate::actions::INDEX_VERSION_STR.as_str();
+    match j.state.as_str() {
+        // indexing cancelled by a user (jobs::cancel): failed until indexed again; cancelled by
+        // Medorama (its index gone from its store): new
+        "cancelled" if current && j.error == "cancelled" => {
+            (Status::Failed, 0.0, "indexing was cancelled: index it to index it again".into())
+        }
+        "cancelled" => (Status::New, 0.0, String::new()),
+        "queued" => (Status::Queued, 0.0, String::new()),
+        "running" => (Status::Indexing, j.progress, String::new()),
+        _ if !current => (Status::Stale, 0.0, String::new()),
+        "done" => (Status::Ready, 0.0, String::new()),
+        _ => (Status::Failed, 0.0, j.error.clone()),
+    }
+}
+
+const COLS: &str =
+    "id, recording_key, person_key, visit_key, path, kind, name, size, fingerprint, format, t_start, t_end,
+    label, category, present, problem, added_at";
+
+/// A database's recordings, as kept, with their status; `filter` an SQL condition on them.
+fn read(cfg: &Config, c: &Connection, s: &Source, filter: &str, args: &[String]) -> anyhow::Result<Vec<Recording>> {
+    let w = open(cfg, c, s.id)?;
+    let jobs = index_jobs(c, s.id)?;
+    let mut st =
+        w.prepare(&format!("SELECT {COLS} FROM recordings WHERE {filter} ORDER BY t_start IS NULL, t_start, id"))?;
+    let rows: Vec<Recording> = st
+        .query_map(rusqlite::params_from_iter(args.iter()), |r| {
+            let n: i64 = r.get(0)?;
+            let id = global(s.id, n);
+            let present = r.get::<_, i64>(14)? != 0;
+            let fingerprint: String = r.get(8)?;
+            let problem: String = r.get(15)?;
+            let kind: String = r.get(5)?;
+            let (status, progress, error) = status_of(present, &kind, &fingerprint, jobs.get(&id));
+            Ok(Recording {
+                id,
+                database: s.id,
+                source: s.name.clone(),
+                key: r.get(1)?,
+                person_key: r.get(2)?,
+                visit_key: r.get(3)?,
+                patient: None,
+                path: r.get(4)?,
+                kind,
+                name: r.get(6)?,
+                size: r.get(7)?,
+                index_key: (status == Status::Ready).then(|| fingerprint.clone()),
+                fingerprint,
+                format: r.get(9)?,
+                t_start: r.get(10)?,
+                t_end: r.get(11)?,
+                label: r.get(12)?,
+                category: r.get(13)?,
+                present,
+                status,
+                progress,
+                error: if !present { problem } else { error },
+                added_at: r.get(16)?,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    drop(st);
+    let persons: Vec<String> = rows.iter().map(|r| r.person_key.clone()).collect();
+    let known = crate::persons::known(cfg, c, s.id, &persons)?;
+    Ok(rows
+        .into_iter()
+        .map(|mut r| {
+            r.patient = known.get(&r.person_key).copied();
+            r
+        })
+        .collect())
+}
+
+/// One recording, by its number (none if its database is gone or being removed).
+pub fn get(cfg: &Config, c: &Connection, id: i64) -> anyhow::Result<Option<Recording>> {
+    let (db, n) = split(id);
+    let Some(s) = crate::sources::get(c, db)? else { return Ok(None) };
+    Ok(read(cfg, c, &s, "id = ?1", &[n.to_string()])?.into_iter().next())
+}
+
+/// Several recordings by number, each database's file opened once (a job queue, a check):
+/// by number, those found.
+pub fn get_many(cfg: &Config, c: &Connection, ids: &[i64]) -> anyhow::Result<HashMap<i64, Recording>> {
+    let mut by_db: HashMap<i64, Vec<i64>> = HashMap::new();
+    for &id in ids {
+        let (db, n) = split(id);
+        by_db.entry(db).or_default().push(n);
+    }
+    let mut out = HashMap::new();
+    for (db, ns) in by_db {
+        let Some(s) = crate::sources::get(c, db)? else { continue };
+        for chunk in ns.chunks(500) {
+            let marks = (1..=chunk.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(", ");
+            let args: Vec<String> = chunk.iter().map(|n| n.to_string()).collect();
+            for r in read(cfg, c, &s, &format!("id IN ({marks})"), &args)? {
+                out.insert(r.id, r);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Every recording of a database.
+pub fn of_database(cfg: &Config, c: &Connection, s: &Source) -> anyhow::Result<Vec<Recording>> {
+    read(cfg, c, s, "1 = 1", &[])
+}
+
+/// The recordings of these persons of a database.
+pub fn of_persons(cfg: &Config, c: &Connection, s: &Source, persons: &[String]) -> anyhow::Result<Vec<Recording>> {
+    let mut out = vec![];
+    for chunk in persons.chunks(500) {
+        let marks = (1..=chunk.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(", ");
+        out.extend(read(cfg, c, s, &format!("person_key IN ({marks})"), chunk)?);
+    }
+    Ok(out)
+}
+
+/// A patient's recordings, in every database granted to `user` for viewing.
+pub fn of_patient(cfg: &Config, c: &Connection, user: &User, patient: i64) -> anyhow::Result<Vec<Recording>> {
+    let granted = crate::databases::granted(c, user, "view")?;
+    let mut out = vec![];
+    for (db, keys) in crate::persons::persons_of(cfg, c, patient, Some(&granted))? {
+        let Some(s) = crate::sources::get(c, db)? else { continue };
+        if !s.has_recordings() {
+            continue;
+        }
+        out.extend(of_persons(cfg, c, &s, &keys)?);
+    }
+    out.sort_by(|a, b| a.t_start.partial_cmp(&b.t_start).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(out)
+}
+
+/// How many recordings a database lists.
+pub fn count(cfg: &Config, c: &Connection, database: i64) -> anyhow::Result<i64> {
+    let dir = crate::workspace::database_dir(cfg, database);
+    if !dir.join("recordings.sqlite").is_file() {
+        return Ok(0);
+    }
+    let w = open(cfg, c, database)?;
+    Ok(w.query_row("SELECT COUNT(*) FROM recordings", [], |r| r.get(0))?)
+}
+
+/// Every recording of every database (the job queue's "all recordings"; checks).
+pub fn all(cfg: &Config, c: &Connection) -> anyhow::Result<Vec<Recording>> {
+    let mut out = vec![];
+    for s in crate::sources::list(c)? {
+        if count(cfg, c, s.id)? > 0 {
+            out.extend(of_database(cfg, c, &s)?);
+        }
+    }
+    Ok(out)
+}
+
+/// Record times and format from an index's `meta.json`; false when there is none.
+pub fn apply_index_meta(cfg: &Config, c: &Connection, id: i64, text: &str) -> anyhow::Result<bool> {
+    if text.is_empty() {
+        return Ok(false);
+    }
+    let meta: serde_json::Value = serde_json::from_str(text)?;
     let (mut lo, mut hi) = (f64::INFINITY, f64::NEG_INFINITY);
     for p in meta.get("pieces").and_then(|v| v.as_array()).into_iter().flatten() {
         let (t0, n, fs) = (p["t0"].as_f64(), p["n"].as_f64(), p["fs"].as_f64());
@@ -418,46 +534,60 @@ pub fn apply_index_meta(c: &Connection, id: i64, folder: &Path) -> anyhow::Resul
     }
     let text = |k: &str| meta.get(k).and_then(|v| v.as_str()).filter(|s| !s.is_empty());
     let format = text("description").or(text("format")).unwrap_or("").to_string();
-    c.execute(
+    let (db, n) = split(id);
+    let w = open(cfg, c, db)?;
+    w.execute(
         "UPDATE recordings SET format = ?1, t_start = ?2, t_end = ?3 WHERE id = ?4",
-        params![format, lo.is_finite().then_some(lo), hi.is_finite().then_some(hi), id],
+        rusqlite::params![format, lo.is_finite().then_some(lo), hi.is_finite().then_some(hi), n],
     )?;
     Ok(true)
 }
 
-/// A recording whose current index already exists in index_dir (e.g. the index folder is a
-/// viewer's cache) is marked indexed without indexing it again.
-pub fn adopt_index(c: &Connection, cfg: &Config, id: i64) -> anyhow::Result<()> {
-    let Some(rec) = get(c, id)? else { return Ok(()) };
-    if rec.status != Status::New {
-        return Ok(());
+/// Replace a recording's derived series (derived.rs).
+pub fn store_series(cfg: &Config, c: &Connection, id: i64, series: &[crate::derived::Derived]) -> anyhow::Result<()> {
+    let (db, n) = split(id);
+    let mut w = open(cfg, c, db)?;
+    let tx = w.transaction()?;
+    tx.execute("DELETE FROM series WHERE recording = ?1", [n])?;
+    for s in series {
+        tx.execute(
+            "INSERT INTO series (recording, name, unit, t, v, lo, hi) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                n,
+                s.name,
+                s.unit,
+                crate::derived::blob(&s.t),
+                crate::derived::blob(&s.v),
+                crate::derived::blob(&s.lo),
+                crate::derived::blob(&s.hi)
+            ],
+        )?;
     }
-    let folder = cfg.index_dir.join(&rec.fingerprint);
-    let Ok(text) = std::fs::read_to_string(folder.join("meta.json")) else { return Ok(()) };
-    let meta: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-    if meta.get("index_version").and_then(|v| v.as_i64()) != Some(recording_engine::common::INDEX_VERSION) {
-        return Ok(());
-    }
-    apply_index_meta(c, id, &folder)?;
-    let derived = crate::derived::derive(&cfg.index_dir, &rec.fingerprint, &|_| {})?;
-    crate::derived::store(c, id, &derived)?;
-    let t = now();
-    c.execute(
-        "INSERT INTO jobs (action, action_version, params, params_hash, recording, fingerprint, state, progress,
-                           created_at, started_at, finished_at, output_dir, summary)
-         VALUES ('index', ?1, '{}', ?2, ?3, ?4, 'done', 1, ?5, ?5, ?5, ?6, '{\"adopted\":true}')",
-        params![
-            crate::actions::INDEX_VERSION_STR.as_str(),
-            crate::actions::params_hash(&serde_json::json!({})),
-            id,
-            rec.fingerprint,
-            t,
-            folder.to_string_lossy()
-        ],
-    )?;
+    tx.commit()?;
     Ok(())
 }
 
+/// A recording's derived series.
+pub fn load_series(cfg: &Config, c: &Connection, id: i64) -> anyhow::Result<Vec<crate::derived::Derived>> {
+    let (db, n) = split(id);
+    let w = open(cfg, c, db)?;
+    let mut st = w.prepare("SELECT name, unit, t, v, lo, hi FROM series WHERE recording = ?1 ORDER BY name")?;
+    let v = st
+        .query_map([n], |r| {
+            Ok(crate::derived::Derived {
+                name: r.get(0)?,
+                unit: r.get(1)?,
+                t: crate::derived::unblob(&r.get::<_, Vec<u8>>(2)?),
+                v: crate::derived::unblob(&r.get::<_, Vec<u8>>(3)?),
+                lo: crate::derived::unblob(&r.get::<_, Vec<u8>>(4)?),
+                hi: crate::derived::unblob(&r.get::<_, Vec<u8>>(5)?),
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    Ok(v)
+}
+
+/// What checking the recordings found.
 #[derive(Debug, Default, Serialize)]
 pub struct CheckReport {
     pub checked: usize,
@@ -467,290 +597,170 @@ pub struct CheckReport {
     pub index_lost: usize,
 }
 
-/// Re-check every recording: present?  changed?  index folder still there?
-pub fn check(c: &Connection, cfg: &Config) -> anyhow::Result<CheckReport> {
+/// Re-check every recording of the online databases: present?  changed?  index still there?
+pub fn check(cfg: &Config, c: &Connection) -> anyhow::Result<CheckReport> {
     let mut rep = CheckReport::default();
-    let rows: Vec<(i64, String, bool, String)> = {
-        let mut st = c.prepare("SELECT id, path, present, fingerprint FROM recordings")?;
-
-        st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? != 0, r.get(3)?)))?
-            .collect::<Result<_, _>>()?
-    };
-    for (id, path, present, fp) in rows {
-        rep.checked += 1;
-        let p = Path::new(&path);
-        let t = now();
-        if !p.exists() {
-            if present {
-                rep.missing += 1;
-            }
-            c.execute("UPDATE recordings SET present = 0, checked_at = ?1 WHERE id = ?2", params![t, id])?;
+    for s in crate::sources::list(c)? {
+        if count(cfg, c, s.id)? == 0 {
             continue;
         }
-        if !present {
-            rep.returned += 1;
+        let w = open(cfg, c, s.id)?;
+        let rows: Vec<(i64, String, bool, String)> = {
+            let mut st = w.prepare("SELECT id, path, present, fingerprint FROM recordings")?;
+            let v = st
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? != 0, r.get(3)?)))?
+                .collect::<Result<_, _>>()?;
+            v
+        };
+        for (n, path, present, fp) in rows {
+            rep.checked += 1;
+            let p = Path::new(&path);
+            let t = now();
+            let problem = problem_of(cfg, p);
+            if !problem.is_empty() {
+                if present {
+                    rep.missing += 1;
+                }
+                w.execute(
+                    "UPDATE recordings SET present = 0, problem = ?1, checked_at = ?2 WHERE id = ?3",
+                    rusqlite::params![problem, t, n],
+                )?;
+                continue;
+            }
+            if !present {
+                rep.returned += 1;
+            }
+            let key = cache_key(p);
+            if key != fp {
+                rep.changed += 1;
+            }
+            w.execute(
+                "UPDATE recordings SET present = 1, problem = '', fingerprint = ?1, size = ?2, checked_at = ?3 WHERE id = ?4",
+                rusqlite::params![key, size_of(p), t, n],
+            )?;
         }
-        let key = cache_key(p);
-        if key != fp {
-            rep.changed += 1;
-        }
-        c.execute(
-            "UPDATE recordings SET present = 1, fingerprint = ?1, size = ?2, checked_at = ?3 WHERE id = ?4",
-            params![key, size_of(p), t, id],
-        )?;
-        if let Some(rec) = get(c, id)? {
-            if rec.status == Status::Ready && !cfg.index_dir.join(&rec.fingerprint).join("meta.json").is_file() {
+        drop(w);
+        // indexes the store no longer holds: the database's recordings read once, its store opened once
+        let store = crate::workspace::index_store(cfg, c, s.id).ok();
+        for rec in of_database(cfg, c, &s)? {
+            let held = store.as_ref().is_some_and(|st| st.engine_of(&rec.fingerprint).is_some());
+            if rec.status == Status::Ready && !held {
                 rep.index_lost += 1;
                 c.execute(
-                    "UPDATE jobs SET state = 'cancelled', error = 'index folder removed'
+                    "UPDATE jobs SET state = 'cancelled', error = 'index gone from its store'
                      WHERE id = (SELECT MAX(id) FROM jobs WHERE recording = ?1 AND action = 'index')",
-                    [id],
+                    [rec.id],
                 )?;
-            } else if rec.status == Status::New {
-                adopt_index(c, cfg, id)?;
             }
         }
     }
     Ok(rep)
 }
 
-/// Remove recordings from the catalog (admins only).  With `purge`, also delete the
-/// catalog's results for them (inside results_dir / index_dir only).  The recordings
-/// themselves are never touched.
-pub fn remove(c: &mut Connection, cfg: &Config, user: &User, ids: &[i64], purge: bool) -> anyhow::Result<usize> {
-    if !user.is_admin() {
-        anyhow::bail!("only admins remove entries");
-    }
-    let tx = c.transaction()?;
-    let mut dirs = vec![];
+/// Remove, from each database's index store, the indexes no recording of it uses any more (a
+/// recording changed or gone): how many.  A removed database's store goes with its folder.
+pub fn sweep_index(cfg: &Config, c: &Connection) -> anyhow::Result<usize> {
     let mut n = 0;
-    for id in ids {
-        let path: Option<String> =
-            tx.query_row("SELECT path FROM recordings WHERE id = ?1", [id], |r| r.get(0)).optional()?;
-        let Some(path) = path else { continue };
-        if purge {
-            let mut st = tx.prepare("SELECT output_dir FROM jobs WHERE recording = ?1 AND output_dir != ''")?;
-            let v: Vec<String> = st.query_map([id], |r| r.get(0))?.collect::<Result<_, _>>()?;
-            dirs.extend(v);
+    for s in crate::sources::list(c)? {
+        if count(cfg, c, s.id)? == 0 || !crate::workspace::database_dir(cfg, s.id).join("index.sqlite").exists() {
+            continue;
         }
-        n += tx.execute("DELETE FROM recordings WHERE id = ?1", [id])?;
-        audit(&tx, Some(user), "remove_recording", &path, if purge { "with results" } else { "" });
-    }
-    crate::imports::prune(&tx)?;
-    tx.commit()?;
-    for d in dirs {
-        purge_dir(cfg, Path::new(&d));
-    }
-    Ok(n)
-}
-
-/// How many of these recordings exist: what `remove` would remove (a dry run).
-pub fn existing(c: &Connection, ids: &[i64]) -> anyhow::Result<usize> {
-    let mut n = 0;
-    for id in ids.iter().collect::<std::collections::BTreeSet<_>>() {
-        n += c.query_row("SELECT COUNT(*) FROM recordings WHERE id = ?1", [id], |r| r.get::<_, i64>(0))? as usize;
+        let w = open(cfg, c, s.id)?;
+        let used: std::collections::HashSet<String> = w
+            .prepare("SELECT fingerprint FROM recordings")?
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<Result<_, _>>()?;
+        let store = crate::workspace::index_store(cfg, c, s.id)?;
+        for k in store.keys().into_iter().filter(|k| !used.contains(k)) {
+            n += store.remove(&k).map_err(|e| anyhow::anyhow!("{e}"))? as usize;
+        }
     }
     Ok(n)
 }
 
-/// Delete a results folder, but only one inside the catalog's own output folders (and never
-/// a folder a remaining recording still uses).
+/// Delete a results folder, but only one inside Medorama's workspace.
 pub fn purge_dir(cfg: &Config, d: &Path) {
-    let rd = real(d);
-    let ours = [real(&cfg.results_dir), real(&cfg.index_dir)].iter().any(|root| within(&rd, root) && rd != *root);
+    let rd = crate::config::real(d);
+    let root = crate::config::real(&cfg.workspace_dir);
+    let ours = crate::config::within(&rd, &root) && rd != root;
     if ours && rd.is_dir() {
         let _ = std::fs::remove_dir_all(&rd);
     }
 }
 
-/// Recordings matching a search (search.rs: words and `field:value` terms), newest first:
-/// the number of matches and one page.
-#[allow(clippy::too_many_arguments)]
+/// Where a job's results go: inside its recording's database folder of the workspace, so that
+/// they go with it (`results/<action>/r<recording>/j<job>`).
+pub fn results_dir(cfg: &Config, id: i64, action: &str) -> PathBuf {
+    let (db, n) = split(id);
+    crate::workspace::database_dir(cfg, db).join("results").join(action).join(format!("r{n}"))
+}
+
+/// The recordings a user may view, matching a search (words in their name, format, status or
+/// database), newest first: the number of matches and one page.
 pub fn list(
+    cfg: &Config,
     c: &Connection,
     user: &User,
     q: &str,
-    unlinked_only: bool,
-    limit: i64,
-    offset: i64,
-    timezone: &str,
-) -> anyhow::Result<(i64, Vec<Recording>)> {
-    list_in(c, user, None, q, unlinked_only, limit, offset, timezone)
+    limit: usize,
+    offset: usize,
+) -> anyhow::Result<(usize, Vec<Recording>)> {
+    list_with(cfg, c, user, q, limit, offset, None)
 }
 
-/// [`list`] through a session's gate (Privacy Mode: built here when not given).  Searches in
-/// Privacy Mode are audited (`privacy_search`).
-#[allow(clippy::too_many_arguments)]
-pub fn list_in(
+/// [`list`], with the privacy gate at hand (the server's, its dictionary kept).  The recordings
+/// a session sees de-identified (Privacy Mode; outside it, those of databases granted without
+/// `phi`) are searched by what it is shown only: their token, label (as the gate shows it),
+/// format, status, database and kind, never their path or file name; and they are sorted by
+/// their times as shown (each patient's own offset), so that the order tells no real time.
+pub fn list_with(
+    cfg: &Config,
     c: &Connection,
     user: &User,
+    q: &str,
+    limit: usize,
+    offset: usize,
     gate: Option<&crate::gate::Restricted>,
-    q: &str,
-    unlinked_only: bool,
-    limit: i64,
-    offset: i64,
-    timezone: &str,
-) -> anyhow::Result<(i64, Vec<Recording>)> {
-    let ids = search_ids_in(c, user, gate, q, unlinked_only, timezone)?;
-    if user.privacy && !user.phi && !q.trim().is_empty() {
-        crate::db::audit(c, Some(user), "privacy_search", "recordings", q);
-    }
-    let total = ids.len() as i64;
-    let page: Vec<i64> = ids.into_iter().skip(offset.max(0) as usize).take(limit.max(0) as usize).collect();
-    let mut out = vec![];
-    for id in page {
-        if let Some(mut r) = get(c, id)? {
-            r.sources = crate::imports::sources_of(c, "recording", id)?;
-            let mut st = c.prepare(
-                "SELECT e.encounter_id FROM recording_links l JOIN encounters e ON e.id = l.encounter WHERE l.recording = ?1",
-            )?;
-            r.encounters = st.query_map([id], |x| x.get(0))?.collect::<Result<_, _>>()?;
-            if user.phi {
-                r.in_file = crate::identify::in_file(c, id, None)?;
-            }
-            out.push(r);
-        }
-    }
-    Ok((total, out))
-}
-
-/// Ids of the recordings matching a search, newest first.
-pub fn search_ids(
-    c: &Connection,
-    user: &User,
-    q: &str,
-    unlinked_only: bool,
-    timezone: &str,
-) -> anyhow::Result<Vec<i64>> {
-    search_ids_in(c, user, None, q, unlinked_only, timezone)
-}
-
-/// [`search_ids`] through a session's gate.  In Privacy Mode it finds and orders by what the
-/// session is shown (search.rs): each recording as the gate sends it (its token for its path
-/// and name, its encounters' pseudonyms, its start moved back).
-pub fn search_ids_in(
-    c: &Connection,
-    user: &User,
-    gate: Option<&crate::gate::Restricted>,
-    q: &str,
-    unlinked_only: bool,
-    timezone: &str,
-) -> anyhow::Result<Vec<i64>> {
-    let g = crate::search::session_gate(c, user, gate)?;
-    let gate = g.get();
-    let terms = crate::search::parse(q);
-    crate::search::check(&terms, crate::search::RECORDING_FIELDS, user.phi).map_err(anyhow::Error::msg)?;
-    // (not those only an import still loading holds)
-    let mut st = c.prepare(&format!(
-        "{REC_SELECT} WHERE {} ORDER BY COALESCE(r.t_start, r.name_time) DESC, r.id DESC",
-        crate::patient::recording_shown("r.id")
-    ))?;
-    let recs: Vec<Recording> = st.query_map([], row_recording)?.collect::<Result<_, _>>()?;
-    let linked: std::collections::HashMap<i64, Vec<String>> = {
-        let mut m: std::collections::HashMap<i64, Vec<String>> = std::collections::HashMap::new();
-        let mut st = c.prepare(
-            "SELECT l.recording, e.encounter_id FROM recording_links l JOIN encounters e ON e.id = l.encounter",
-        )?;
-        let mut rows = st.query([])?;
-        while let Some(r) = rows.next()? {
-            m.entry(r.get(0)?).or_default().push(r.get(1)?);
-        }
-        m
-    };
-    let sources: std::collections::HashMap<i64, Vec<String>> = {
-        let mut m: std::collections::HashMap<i64, Vec<String>> = std::collections::HashMap::new();
-        let mut st = c.prepare("SELECT row_id, source FROM provenance WHERE kind = 'recording'")?;
-        let mut rows = st.query([])?;
-        while let Some(r) = rows.next()? {
-            m.entry(r.get(0)?).or_default().push(r.get(1)?);
-        }
-        m
-    };
-    let files: std::collections::HashMap<i64, [String; 3]> = if user.phi && !terms.is_empty() {
-        let mut st = c.prepare(
-            "SELECT recording, trim(full_name || ' ' || last_name || ' ' || first_name), patient_id, birth_date
-             FROM recording_identifiers WHERE state = 'found'",
-        )?;
-
-        st.query_map([], |r| Ok((r.get::<_, i64>(0)?, [r.get(1)?, r.get(2)?, r.get(3)?])))?.collect::<Result<_, _>>()?
+) -> anyhow::Result<(usize, Vec<Recording>)> {
+    let granted = crate::databases::granted(c, user, "view")?;
+    let deidentified = crate::patient::without_phi(c, user)?;
+    let words: Vec<String> = q.split_whitespace().map(|w| w.to_lowercase()).collect();
+    let any = granted.iter().any(|d| deidentified.contains(d));
+    let gate = if any {
+        crate::search::session_gate(c, cfg, &User { privacy: true, ..user.clone() }, gate)?
     } else {
-        Default::default()
+        crate::search::SessionGate::None
     };
-    let zone = crate::util::tz(timezone);
-    let recs = recs.into_iter().filter(|r| !unlinked_only || !linked.contains_key(&r.id));
-    if let Some(g) = gate {
-        // as shown: each recording through the gate, newest (as shown) first
-        let mut found: Vec<(Option<f64>, i64)> = vec![];
-        for mut r in recs {
-            r.sources = sources.get(&r.id).cloned().unwrap_or_default();
-            r.encounters = linked.get(&r.id).cloned().unwrap_or_default();
-            let v = crate::search::shown(g, &r);
-            let start = v["t_start"].as_f64().or(v["name_time"].as_f64());
-            if !terms.is_empty() {
-                let mut d = crate::search::Doc::default();
-                for (field, key) in [
-                    ("file", "name"),
-                    ("path", "path"),
-                    ("kind", "kind"),
-                    ("format", "format"),
-                    ("unit", "unit"),
-                    ("bed", "bed"),
-                    ("status", "status"),
-                    ("source", "sources"),
-                    ("encounter", "encounters"),
-                ] {
-                    for s in crate::search::strings(&v[key]) {
-                        d.add(field, &s);
-                    }
-                }
-                if let Some(t) = start {
-                    d.add("start", &crate::util::fmt_local(t, zone));
-                }
-                if !d.matches(&terms, false) {
-                    continue;
-                }
-            }
-            found.push((start, r.id));
+    let offsets = gate.get().map(crate::search::Offsets::of_gate);
+    let mut all = vec![];
+    for s in crate::sources::list(c)? {
+        if !granted.contains(&s.id) || count(cfg, c, s.id)? == 0 {
+            continue;
         }
-        found.sort_by(|a, b| {
-            b.0.is_some()
-                .cmp(&a.0.is_some())
-                .then(b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal))
-                .then(b.1.cmp(&a.1))
-        });
-        return Ok(found.into_iter().map(|f| f.1).collect());
+        let shown = deidentified.contains(&s.id);
+        for r in of_database(cfg, c, &s)? {
+            let hay = match gate.get().filter(|_| shown) {
+                Some(g) => {
+                    let label = g.text(&r.label);
+                    let label = g.dict.scrub_any_names(&label).unwrap_or(label);
+                    let token = crate::gate::recording_token(r.id);
+                    format!("{token} {label} {} {} {} {}", r.format, r.status.as_str(), r.source, r.kind)
+                }
+                None => format!("{} {} {} {} {} {}", r.name, r.label, r.format, r.status.as_str(), r.source, r.kind),
+            }
+            .to_lowercase();
+            if words.iter().all(|w| hay.contains(w)) {
+                let at = match (&offsets, shown) {
+                    (Some(o), true) => r.t_start.map(|t| o.shift(r.patient, t)),
+                    _ => r.t_start,
+                };
+                all.push((at, r));
+            }
+        }
     }
-    Ok(recs
-        .filter(|r| {
-            if terms.is_empty() {
-                return true;
-            }
-            let mut d = crate::search::Doc::default();
-            d.add("file", &r.name);
-            d.add("path", &r.path);
-            d.add("kind", &r.kind);
-            d.add("format", &r.format);
-            d.add("unit", &r.unit);
-            d.add("bed", &r.bed);
-            d.add("status", r.status.as_str());
-            if let Some(t) = r.t_start.or(r.name_time) {
-                d.add("start", &crate::util::fmt_local(t, zone));
-            }
-            for x in sources.get(&r.id).into_iter().flatten() {
-                d.add("source", x);
-            }
-            for x in linked.get(&r.id).into_iter().flatten() {
-                d.add("encounter", x);
-            }
-            if let Some([name, id, dob]) = files.get(&r.id) {
-                d.add("file-name", name);
-                d.add("file-id", id);
-                d.add("file-dob", dob);
-            }
-            d.matches(&terms, user.phi)
-        })
-        .map(|r| r.id)
-        .collect())
+    all.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal).then(b.1.id.cmp(&a.1.id)));
+    let total = all.len();
+    Ok((total, all.into_iter().skip(offset).take(limit).map(|(_, r)| r).collect()))
 }
 
 #[cfg(test)]
@@ -758,27 +768,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn names() {
-        let t = "1700000000";
-        assert_eq!(parse_name(&format!("ICU7_12-{t}.dat")), ("ICU7".into(), "12".into(), Some(1.7e9)));
-        assert_eq!(parse_name(&format!("ICU_ICU_1-{t}.dat")), ("ICU".into(), "ICU_1".into(), Some(1.7e9)));
-        assert_eq!(parse_name("recording.dat"), (String::new(), String::new(), None));
-        assert_eq!(parse_name("a-b.dat"), (String::new(), String::new(), None));
-    }
-
-    #[test]
-    fn data_folders() {
-        let dir = tempfile::tempdir().unwrap();
-        let d = dir.path();
-        std::fs::create_dir_all(d.join("a/x")).unwrap();
-        std::fs::create_dir_all(d.join("a/y")).unwrap();
-        for f in ["a/x/1.dat", "a/x/2.dat", "a/y/3.dat"] {
-            std::fs::write(d.join(f), b"").unwrap();
-        }
-        let show = |p: &str| d.join(p).to_string_lossy().to_string();
-        assert_eq!(data_folder([d.join("a/x")]), show("a/x"));
-        assert_eq!(data_folder([d.join("a/x/1.dat"), d.join("a/x/2.dat")]), show("a/x"));
-        assert_eq!(data_folder([d.join("a/x/1.dat"), d.join("a/y/3.dat")]), show("a"));
-        assert_eq!(data_folder(Vec::<PathBuf>::new()), "");
+    fn numbers_split_back() {
+        assert_eq!(split(global(7, 123)), (7, 123));
+        assert_eq!(split(global(1, 1)), (1, 1));
+        assert!(global(9_000_000, STRIDE - 1) < (1i64 << 53), "within a browser's exact integers");
     }
 }

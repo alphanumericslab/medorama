@@ -1,9 +1,11 @@
 //! Index cache: per source a folder `<key>/` with `meta.json` and one little-endian binary
-//! file per array (envelopes, markers, vital-sign series), memory-mapped when loaded.  The
+//! file per array (envelopes, markers, vital-sign series), memory-mapped when loaded (index
+//! format 2); or an index store (format 3, [`crate::store`]), built the same way and packed.  The
 //! key derives from the source's real path, size and modification time.
 
 use crate::common::{clean, Arrays, INDEX_VERSION};
 use crate::sources;
+use crate::store::Removed;
 use memmap2::Mmap;
 use sha2::{Digest, Sha256};
 use signal_core::value::{Dict, Value};
@@ -22,6 +24,11 @@ pub fn real_path(path: &Path) -> PathBuf {
 }
 
 pub fn cache_key(path: &Path) -> String {
+    cache_key_of(path, INDEX_VERSION)
+}
+
+/// The key of `path` in index format `version` (2: a folder, 3: a store).
+pub fn cache_key_of(path: &Path, version: i64) -> String {
     let p = real_path(path);
     let fp = if p.is_dir() || sources::wfdb_folder::is_record(&p) {
         Value::List(
@@ -39,7 +46,7 @@ pub fn cache_key(path: &Path) -> String {
             .map_or(0, |d| d.as_nanos() as i128);
         Value::List(vec![m.map_or(0, |m| m.len()).into(), Value::Int(mtime)])
     };
-    let text = Value::List(vec![INDEX_VERSION.into(), p.to_string_lossy().to_string().into(), fp]).to_json();
+    let text = Value::List(vec![version.into(), p.to_string_lossy().to_string().into(), fp]).to_json();
     signal_core::text::hex(&Sha256::digest(text.as_bytes()))[..20].to_string()
 }
 
@@ -85,16 +92,6 @@ fn unique(cache_dir: &Path, key: &str, suffix: &str) -> PathBuf {
     cache_dir.join(format!("{key}.{}.{}.{suffix}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)))
 }
 
-/// Removes a folder when dropped (an index being built, on every way out: an error, a
-/// cancellation, a panic).
-struct Removed(PathBuf);
-
-impl Drop for Removed {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
 /// [`build_index`] that stops (an error, nothing left behind) once `cancelled` returns true.
 pub fn build_index_until(
     path: &Path,
@@ -106,32 +103,10 @@ pub fn build_index_until(
     let key = cache_key(path);
     let lock = key_lock(&key);
     let _writing = lock.lock().unwrap_or_else(|e| e.into_inner());
-    let t_start = Instant::now();
     progress(0.0);
     let folder = cache_dir.join(&key);
     let tmp = Removed(unique(cache_dir, &key, "tmp"));
-    std::fs::create_dir_all(&tmp.0).map_err(signal_core::Error::io(&tmp.0))?;
-    let io = |r: std::io::Result<()>| r.map_err(signal_core::Error::io(&tmp.0));
-    let mut meta = match sources::build(path, &tmp.0, progress, cancelled)? {
-        sources::Building::Here((meta, a)) => {
-            write_arrays(&tmp.0, &a)?;
-            meta
-        }
-        // the adapter wrote the arrays into `tmp`
-        sources::Building::ByAdapter(meta) => meta,
-    };
-    let real = real_path(path);
-    meta.insert("path".into(), real.to_string_lossy().to_string().into());
-    meta.insert("name".into(), path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default().into());
-    meta.insert("key".into(), key.clone().into());
-    meta.insert("index_version".into(), INDEX_VERSION.into());
-    meta.insert("engine".into(), env!("CARGO_PKG_VERSION").into());
-    meta.insert("indexed_s".into(), signal_core::pyfmt::round_to(t_start.elapsed().as_secs_f64(), 1).into());
-    io(std::fs::write(tmp.0.join("meta.json"), clean(Value::Dict(meta)).to_json()))?;
-    // what a reader would refuse is not kept (times or rates that are not finite numbers, ...)
-    if let Err(why) = load_from(&tmp.0) {
-        return Err(signal_core::Error::Format(format!("{}: the index would be inconsistent: {why}", path.display())));
-    }
+    build_files(path, &tmp.0, &key, INDEX_VERSION, progress, cancelled)?;
     // an index already there, complete and written by this engine, is kept (the same content);
     // any other is moved aside first, so that readers never see a folder half replaced
     let current = load_from(&folder)
@@ -151,6 +126,64 @@ pub fn build_index_until(
     }
     progress(1.0);
     Ok(key)
+}
+
+/// Index `path` into an index store (format 3): built in a private temporary folder, then packed
+/// in one transaction; returns the key.  Stops (an error, nothing left behind) once `cancelled`
+/// returns true.
+pub fn build_into_store(
+    path: &Path,
+    store: &crate::store::Store,
+    progress: &dyn Fn(f64),
+    cancelled: &dyn Fn() -> bool,
+) -> signal_core::Result<String> {
+    let key = cache_key_of(path, crate::store::STORE_FORMAT);
+    let lock = key_lock(&format!("{}\u{1}{key}", store.path().display()));
+    let _writing = lock.lock().unwrap_or_else(|e| e.into_inner());
+    progress(0.0);
+    let tmp_root = store.tmp_dir();
+    crate::store::private_dir(&tmp_root).map_err(signal_core::Error::io(&tmp_root))?;
+    let tmp = Removed(unique(&tmp_root, &key, "tmp"));
+    build_files(path, &tmp.0, &key, crate::store::STORE_FORMAT, progress, cancelled)?;
+    store.pack(&key, &tmp.0)?;
+    progress(1.0);
+    Ok(key)
+}
+
+/// Write the index files of `path` (its arrays and `meta.json`, index format `version`) into the
+/// new folder `dir`, and check them as a reader would.
+fn build_files(
+    path: &Path,
+    dir: &Path,
+    key: &str,
+    version: i64,
+    progress: &dyn Fn(f64),
+    cancelled: &dyn Fn() -> bool,
+) -> signal_core::Result<()> {
+    let t_start = Instant::now();
+    std::fs::create_dir_all(dir).map_err(signal_core::Error::io(dir))?;
+    let io = |r: std::io::Result<()>| r.map_err(signal_core::Error::io(dir));
+    let mut meta = match sources::build(path, dir, progress, cancelled)? {
+        sources::Building::Here((meta, a)) => {
+            write_arrays(dir, &a)?;
+            meta
+        }
+        // the adapter wrote the arrays into `dir`
+        sources::Building::ByAdapter(meta) => meta,
+    };
+    let real = real_path(path);
+    meta.insert("path".into(), real.to_string_lossy().to_string().into());
+    meta.insert("name".into(), path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default().into());
+    meta.insert("key".into(), key.into());
+    meta.insert("index_version".into(), version.into());
+    meta.insert("engine".into(), env!("CARGO_PKG_VERSION").into());
+    meta.insert("indexed_s".into(), signal_core::pyfmt::round_to(t_start.elapsed().as_secs_f64(), 1).into());
+    io(std::fs::write(dir.join("meta.json"), clean(Value::Dict(meta)).to_json()))?;
+    // what a reader would refuse is not kept (times or rates that are not finite numbers, ...)
+    if let Err(why) = load_files(dir, version) {
+        return Err(signal_core::Error::Format(format!("{}: the index would be inconsistent: {why}", path.display())));
+    }
+    Ok(())
 }
 
 /// A memory-mapped array file (empty files are not mapped).
@@ -190,16 +223,61 @@ impl<T: Copy> Mapped<T> {
     }
 }
 
+/// An array read whole: a version 2 file memory-mapped, or values held.
+pub enum Values<T> {
+    Mapped(Mapped<T>),
+    Held(Vec<T>),
+}
+
+impl<T: Copy> Values<T> {
+    pub fn as_slice(&self) -> &[T] {
+        match self {
+            Values::Mapped(m) => m.as_slice(),
+            Values::Held(v) => v,
+        }
+    }
+}
+
+/// An envelope array: a version 2 file memory-mapped, or a store's array read by range.
+pub enum Env {
+    File(Mapped<f32>),
+    Chunked(crate::store::Chunked<f32>),
+}
+
+impl Env {
+    pub fn len(&self) -> usize {
+        match self {
+            Env::File(m) => m.as_slice().len(),
+            Env::Chunked(c) => c.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// The values `[o, o+n)`, or None when they cannot be read.
+    pub fn range(&self, o: usize, n: usize) -> Option<std::borrow::Cow<'_, [f32]>> {
+        match self {
+            Env::File(m) => m.as_slice().get(o..o + n).map(std::borrow::Cow::Borrowed),
+            Env::Chunked(c) => c.range(o, n).map(std::borrow::Cow::Owned),
+        }
+    }
+}
+
 pub struct Loaded {
-    /// The index folder.
+    /// The index folder (a store's index of an adapter's recording: a private folder holding its
+    /// `meta.json`, for the adapter to read samples again).
     pub dir: PathBuf,
-    pub env_min: Vec<Mapped<f32>>,
-    pub env_max: Vec<Mapped<f32>>,
-    pub mk_piece: Mapped<i32>,
-    pub mk_sample: Mapped<i64>,
-    pub mk_code: Mapped<i16>,
-    pub vit_t: Mapped<f64>,
-    pub vit_v: Mapped<f64>,
+    pub env_min: Vec<Env>,
+    pub env_max: Vec<Env>,
+    pub mk_piece: Values<i32>,
+    pub mk_sample: Values<i64>,
+    pub mk_code: Values<i16>,
+    pub vit_t: Values<f64>,
+    pub vit_v: Values<f64>,
+    /// That private folder, removed when the index is dropped.
+    pub(crate) _reading: Option<Removed>,
 }
 
 pub fn index_dir(cache_dir: &Path, key: &str) -> PathBuf {
@@ -216,13 +294,21 @@ pub fn load_index(cache_dir: &Path, key: &str) -> Option<(Dict, Loaded)> {
 }
 
 fn load_from(dir: &Path) -> Result<(Dict, Loaded), String> {
+    load_files(dir, INDEX_VERSION)
+}
+
+/// The index files in `dir`, of index format `version`, checked.
+fn load_files(dir: &Path, version: i64) -> Result<(Dict, Loaded), String> {
     let text = std::fs::read_to_string(dir.join("meta.json")).map_err(|e| format!("meta.json: {e}"))?;
     let Ok(Value::Dict(meta)) = Value::from_json(&text) else { return Err("meta.json is not a JSON object".into()) };
-    if meta.get("index_version").and_then(Value::as_int) != Some(INDEX_VERSION as i128) {
+    if meta.get("index_version").and_then(Value::as_int) != Some(version as i128) {
         return Err("another index version".into());
     }
     fn open<T: Copy>(dir: &Path, name: String) -> Result<Mapped<T>, String> {
         Mapped::open(&dir.join(&name)).map_err(|e| format!("{name}: {e}"))
+    }
+    fn held<T: Copy>(dir: &Path, name: &str) -> Result<Values<T>, String> {
+        open(dir, name.into()).map(Values::Mapped)
     }
     let mut env_min = vec![];
     let mut env_max = vec![];
@@ -230,18 +316,19 @@ fn load_from(dir: &Path) -> Result<(Dict, Loaded), String> {
         if !dir.join(format!("env_min_{lvl}.f32")).exists() {
             break;
         }
-        env_min.push(open(dir, format!("env_min_{lvl}.f32"))?);
-        env_max.push(open(dir, format!("env_max_{lvl}.f32"))?);
+        env_min.push(Env::File(open(dir, format!("env_min_{lvl}.f32"))?));
+        env_max.push(Env::File(open(dir, format!("env_max_{lvl}.f32"))?));
     }
     let loaded = Loaded {
         dir: dir.to_path_buf(),
         env_min,
         env_max,
-        mk_piece: open(dir, "mk_piece.i32".into())?,
-        mk_sample: open(dir, "mk_sample.i64".into())?,
-        mk_code: open(dir, "mk_code.i16".into())?,
-        vit_t: open(dir, "vit_t.f64".into())?,
-        vit_v: open(dir, "vit_v.f64".into())?,
+        mk_piece: held(dir, "mk_piece.i32")?,
+        mk_sample: held(dir, "mk_sample.i64")?,
+        mk_code: held(dir, "mk_code.i16")?,
+        vit_t: held(dir, "vit_t.f64")?,
+        vit_v: held(dir, "vit_v.f64")?,
+        _reading: None,
     };
     check(&meta, &loaded)?;
     Ok((meta, loaded))
@@ -297,7 +384,7 @@ pub fn check(meta: &Dict, a: &Loaded) -> Result<(), String> {
             let Some((off, len)) = pair else {
                 return Err(bad(format!("envelope level {lvl} is not [offset, length]")));
             };
-            let size = a.env_min[lvl].as_slice().len().min(a.env_max[lvl].as_slice().len()) as i128;
+            let size = a.env_min[lvl].len().min(a.env_max[lvl].len()) as i128;
             if off < 0 || len < 0 || off + len > size {
                 return Err(bad(format!("envelope level {lvl} [{off}, {len}] lies outside its {size} values")));
             }

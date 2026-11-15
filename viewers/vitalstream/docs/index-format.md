@@ -10,7 +10,9 @@ An index holds:
 - minimum and maximum envelopes of every waveform, at several resolutions;
 - markers, vital-sign series, alarms and other events, and breaks in the data.
 
-Four programs write and read indexes, and they can share one index folder:
+Four programs write and read indexes, and they can share an index store (version 3, the current
+one: [Version 3: the index store](#version-3-the-index-store)), which keeps exactly the files this
+page specifies for version 2, in one SQLite database:
 - the three VitalStream viewers: `vitalstream-rs` (with the Rust engine, `libs/engine`),
   `vitalstream-cpp` (with the C++ engine) and `vitalstream-py`;
 - Medorama, which indexes with the Rust engine.
@@ -32,6 +34,7 @@ program writes the same bytes for the same recording, and a test checks it
 - [Writing and sharing](#writing-and-sharing)
 - [Loading an index](#loading-an-index)
 - [Versions](#versions)
+- [Version 3: the index store](#version-3-the-index-store)
 - [Conformance](#conformance)
 
 ## Index folder
@@ -176,7 +179,7 @@ them to read samples again; other programs may ignore them.
 
 | Source | `kind` | Piece fields, after the common ones | Channel `modality` |
 |---|---|---|---|
-| WFDB records | `wfdb` | `record` (the record's name, relative to the folder it is read from) and `sig` (the signal's position in its header), in that order | the modality an `index.csv` states for the record, else `wfdb` |
+| WFDB records | `wfdb` | `record` (the record's name, relative to the folder it is read from) and `sig` (the signal's position in its header), in that order; a signal of several samples per frame has `fs` its header's frequency times its samples per frame, and its sample `i` is sample `i mod spf` of frame `⌊i / spf⌋` ([multi-frequency records](../../../docs/wfdb-collection.md#multi-frequency-records)) | the modality an `index.csv` states for the record, else `wfdb` |
 | EDF, EDF+, BDF, BDF+ files | `edf` | `sig` (the signal's position in the header, annotation signals included) and `data_record` (the run's first data record), in that order | `edf` |
 | Files an adapter reads | the adapter's | the adapter's own | the adapter's |
 
@@ -299,10 +302,114 @@ example times or rates that are not finite numbers, which `meta.json` would hold
 | Version | Changes |
 |---|---|
 | 1 | The first version. |
-| 2 | The current version, described on this page. It added the key of one WFDB record (a `.hea` file), multi-segment records, folders of plain records read with their subfolders (hidden entries and symbolic links skipped, in the folder's key too), and overlapping pieces of a channel in lanes of their own. **EDF, EDF+, BDF and BDF+ files** were added later within version 2, as a new `kind` (`edf`): no existing index changes, so indexes already written stay valid. Later still within version 2: a folder's key counts the files its symbolic links lead to, and its walk is bounded (the keys of folders without links, of at most 200,000 files within `max_depth` levels, are unchanged); a WFDB header that states more samples than its signal files hold is read to the end of its data; the [limits](#limits) and the [checks on loading](#loading-an-index) were added. |
+| 3 | The current version: the [index store](#version-3-the-index-store). The same `meta.json` and arrays as version 2, in one SQLite database (encrypted when its owner has a key), the arrays in chunks. **Later within version 3** (only the indexes of the recordings concerned change; an index already written of one of them stays in use until its recording is indexed again): a WFDB header that states no number of samples is read to the end of its data (it gave no samples); a signal of several samples per frame is a piece at its own rate (the frame rate times its samples per frame) with every sample, its markers at the first sample of their frame (it was averaged to the frame rate); records without a start time that come before the first record with one end where it starts, with a note (they started at 0, 1970-01-01); an EDF date with a day its month does not have (`31.02.24`) states no start (it became a day of the next month). |
+| 2 | The index folder, described above. It added the key of one WFDB record (a `.hea` file), multi-segment records, folders of plain records read with their subfolders (hidden entries and symbolic links skipped, in the folder's key too), and overlapping pieces of a channel in lanes of their own. **EDF, EDF+, BDF and BDF+ files** were added later within version 2, as a new `kind` (`edf`): no existing index changes, so indexes already written stay valid. Later still within version 2: a folder's key counts the files its symbolic links lead to, and its walk is bounded (the keys of folders without links, of at most 200,000 files within `max_depth` levels, are unchanged); a WFDB header that states more samples than its signal files hold is read to the end of its data; the [limits](#limits) and the [checks on loading](#loading-an-index) were added. |
 
 Any change to the files, to `meta.json` or to the key of an existing kind of recording makes a
 new version, and indexes of other versions are built again.
+
+## Version 3: the index store
+
+> **Status: built.** Medorama and the three viewers write and read version 3; the version 2
+> folder above is still read and written by the engines' tests and the benchmark only. Version 3
+> keeps an index in one SQLite database, the **index store**, so that it can be encrypted with
+> the key of the data it describes and destroyed with it. It was measured against version 2
+> before version 2 left the programs ([docs/performance.md](../../../docs/performance.md#index-format-3)).
+
+**What changes, and what does not.** An index holds exactly what version 2 holds: the same
+`meta.json` text, the same arrays, built by the same rules ([meta.json](#metajson),
+[Arrays](#arrays), [Limits](#limits)). Only where they are kept changes. The key is computed as
+in [The key](#the-key) with `version` 3, so that no program mistakes a version 2 index for a
+version 3 one.
+
+**Where the store is.**
+
+| Who | Store |
+|---|---|
+| Medorama | One store per recording database: `<workspace>/db-NNNN/index.sqlite`, encrypted with SQLCipher by that database's data key. Removing the database destroys the key first, then the folder: no index of it can be read again. |
+| A viewer launched by Medorama | The stores of the databases Medorama gives it, with their keys, on a pipe (below). |
+| A viewer on its own | `index.sqlite` in its own cache folder (`cache_dir`), chosen when it is set up; encrypted when a key is set in its settings (`index_key_file`), else plain. |
+
+**Encryption.** An encrypted store is a SQLCipher 4 database with SQLCipher 4's default settings,
+opened with a raw 256-bit key (`PRAGMA key = "x'<64 hex digits>'"`, the first statement on the
+connection; no key derivation). Any SQLCipher 4 build reads it with that key; without it, nothing
+of the file can be read. A plain store is an ordinary SQLite database.
+
+**Tables.**
+
+```sql
+CREATE TABLE store (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+  -- ('format', '3'), ('chunk_values', '4096')
+CREATE TABLE indexes (
+  key        TEXT PRIMARY KEY,     -- the recording's key
+  meta       TEXT NOT NULL,        -- meta.json's text, byte for byte
+  engine     TEXT NOT NULL,        -- meta's engine (informative)
+  written_at REAL NOT NULL         -- Unix seconds (informative)
+);
+CREATE TABLE arrays (
+  key      TEXT NOT NULL,          -- the recording's key
+  array    TEXT NOT NULL,          -- the array's file name in version 2
+  n_values INTEGER NOT NULL,       -- how many values it holds
+  PRIMARY KEY (key, array)
+) WITHOUT ROWID;
+CREATE TABLE chunks (
+  key   TEXT NOT NULL,             -- the recording's key
+  array TEXT NOT NULL,             -- the array's file name in version 2: env_min_0.f32, vit_t.f64 …
+  n     INTEGER NOT NULL,          -- the chunk's number, from 0
+  data  BLOB NOT NULL,             -- little-endian values, as the version 2 file holds them
+  PRIMARY KEY (key, array, n)
+) WITHOUT ROWID;
+```
+
+- **Chunks.** An array is cut into chunks of `chunk_values` values (4,096 by default, the store's
+  setting, written when the store is made and never changed); the last chunk may be shorter. An
+  array with no values has one chunk of zero bytes. Every array of an index has a row in
+  `arrays`, with its number of values: readers take an array's length from it, never from the
+  chunks' lengths (in an encrypted store that would decrypt every chunk). The chunk size was
+  chosen by measuring: smaller chunks mean less to decrypt for a window, and below 4,096 values
+  windows were no faster ([docs/performance.md](../../../docs/performance.md#index-format-3)).
+- **Reading.** A reader loads `meta` and the small arrays (markers, vital signs) whole, and reads
+  the envelopes by range: the values `[o, o+len)` of an array are in chunks `o / c` to
+  `(o + len − 1) / c`, `c` the chunk size. A reader may keep the chunks it read in a bounded
+  cache. Nothing is memory-mapped.
+- **Checks.** A reader runs the checks of [Loading an index](#loading-an-index) on the rows, an
+  array's length being its `n_values`; a chunk read whose byte length is not `min(chunk_values,
+  n_values − n·chunk_values)` values fails that read.
+
+**Writing.**
+
+- **Built as before, then packed.** A writer builds the version 2 files of an index in a
+  temporary folder of its own next to the store (`<store folder>/index.tmp/<key>.<process
+  id>.<n>.tmp/`, readable by its owner only), then packs them into the store in **one transaction**:
+  it deletes the key's rows, if any, and inserts the new ones. The temporary
+  folder is removed on every way out; what a program that was killed leaves there is removed when
+  a program next opens the store, once untouched for a day. The transaction writes the `indexes` row, one `arrays` row
+  per array and its chunks. Adapters keep writing the version 2 files of their `index`
+  command into the folder they are given ([docs/adapters.md](../../../docs/adapters.md)); the
+  calling program packs them.
+- **Keeping or replacing.** Within the transaction, an index of the key written by the same
+  `engine` is kept and the new build discarded; any other is replaced. Readers see the old index
+  or the new one, never a mixture.
+- **Sharing.** Several programs may open one store at once (Medorama and the viewer it launched):
+  SQLite's locking serialises the writers, and the store is in WAL mode so that readers are not
+  blocked by a writer.
+- **Removing.** An index is removed by deleting its key's rows in `indexes`, `arrays` and `chunks`. A whole store goes with its folder
+  (Medorama: after its key is destroyed).
+
+**The key on a pipe.** Medorama launches its viewer with standard input open, and writes one line
+of JSON per store: `{"store": "/…/db-0003/index.sqlite", "key": "<64 hex digits>", "own": false}`
+for each recording database at launch and when one is connected, `{"store": "/…/viewer/index.sqlite",
+"key": "…", "own": true}` for the store the viewer writes what it indexes itself, and
+`{"forget": "/…/db-0003/index.sqlite"}` before a database is removed. A line naming a store the
+viewer has already replaces it. The viewer keeps the keys in memory only, never writes them, and looks a
+recording's key up in the stores it was given; when standard input closes, it forgets them all.
+A key never appears on a command line, in the environment, in a file or in a log.
+
+**Adapters reading samples.** Version 2 of the adapter protocol sends a `read` request the index's
+`meta.json` itself (`"meta": {…}`) in place of the index folder (`"index": "…"`): an adapter that
+speaks protocol 2 says so in `describe`. To an adapter of protocol 1, the calling program gives a
+temporary folder holding only that `meta.json` (`index.tmp/<key>.<process id>.<n>.read/`, one
+per load), readable by its owner only, removed when the index is closed.
 
 ## Conformance
 

@@ -136,3 +136,23 @@ def test_index_passes_over_hidden_folders_and_reads_each_file_once(tmp_path, mon
     header, rows, skipped = cli.index_rows(tmp_path / 'ecgs', tmp_path)
     assert len(rows) == 1 and rows[0][-1] == str(Path('ecgs') / 'one.xml') and not skipped
     assert reads == [str(tmp_path / 'ecgs' / 'one.xml')]
+
+
+def test_utf16_and_utf8_files_as_muse_js_reads_them():
+    text = XML.read_bytes().decode('iso-8859-1')
+    golden = read_muse(str(XML))
+    as_ = lambda t, d: t.replace('encoding="ISO-8859-1"', f'encoding="{d}"')  # noqa: E731
+    files = {
+        'UTF-16LE, BOM': b'\xff\xfe' + as_(text, 'UTF-16').encode('utf-16-le'),
+        'UTF-16BE, BOM': b'\xfe\xff' + as_(text, 'UTF-16').encode('utf-16-be'),
+        'UTF-16LE, no BOM': as_(text, 'UTF-16').encode('utf-16-le'),
+        'UTF-16BE, no BOM': as_(text, 'UTF-16').encode('utf-16-be'),
+        'UTF-16LE, BOM, a wrong declaration': b'\xff\xfe' + text.encode('utf-16-le'),
+        'UTF-8, BOM': b'\xef\xbb\xbf' + as_(text, 'UTF-8').encode('utf-8'),
+        'UTF-8, BOM, a wrong declaration': b'\xef\xbb\xbf' + text.encode('utf-8'),
+        'UTF-8 declared UTF-16': as_(text, 'UTF-16').encode('utf-8'),
+    }
+    for what, data in files.items():
+        e = read_muse(data)
+        assert e == golden, what
+        assert dict(e['meta']['fields'])['Site'] == 'Clinique Médicale', what

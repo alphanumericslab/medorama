@@ -1,25 +1,26 @@
 % Part III: waveform recordings. Sources: docs/wfdb-collection.md (every section);
-% docs/adapters.md (what add-ons do; the protocol is chap:addons); docs/importing.md "Files";
-% docs/administration.md "Files and recordings", "Linking recordings", "Identifiers in
-% recordings"; docs/edf.md (users' part); viewers/vitalstream/docs/data-model.md. Checked against
+% docs/adapters.md (what add-ons do; the protocol is chap:addons); docs/design/databases-only.md
+% (recording databases, as built); docs/edf.md (users' part); viewers/vitalstream/docs/data-model.md;
+% db-builder/README.md ("Folders of recordings"). Checked against
 % libs/engine/src/sources/wfdb_folder.rs and sources/mod.rs, libs/engine/src/index.rs
-% (cache_key), medorama/src/tables.rs (files of rows), recordings.rs (find, add, check),
-% linkage.rs (relink), jobs.rs (automatic indexing), web/js/views/recordings.js, encounters.js.
+% (cache_key), medorama/src/sources/mod.rs (the recordings view, recording_path),
+% recordings.rs (numbers, sync, check, sweep_index), jobs.rs (automatic indexing),
+% patient/detail.rs (waveforms and attachments), web/js/views/recordings.js.
 \chapter{Waveform recordings}
 \label{chap:recordings}
 
-This chapter describes the waveform recordings that Medorama reads, how they come into the
-catalog, how they find their encounters, and how they are indexed. It is written for
-administrators and data managers.
+This chapter describes the waveform recordings that Medorama reads, how they reach it through
+recording databases, and how they are indexed. It is written for administrators and data
+managers.
 
 A \emph{recording} is a long waveform recording of a patient: the bedside monitors' signals of an
 ICU stay, an ambulatory ECG (a Holter), an EEG, or a sleep study (polysomnography). Medorama
 reads WFDB records, folders of records and WFDB collections, EDF, EDF+, BDF and BDF+ files, and
 the formats that installed add-ons read. Recordings are shown in VitalStream
-(\cref{chap:vitalstream}), from an \emph{index} that the catalog builds once, and are linked to
-their patients' encounters. The patient's page shows them in the ICU, Holter, EEG or Sleep column
-of the Patient Journey. A recording, like every file, comes in only as a row of a table that names
-its patient (\cref{chap:importing}).
+(\cref{chap:vitalstream}), from an \emph{index} that Medorama builds once. The patient's page
+shows them in the ICU, Holter, EEG or Sleep column of the Patient Journey. A recording reaches
+Medorama only as a row of a \emph{recording database}, which names its file and its patient
+(\cref{sec:recordings-databases}); Medorama never scans folders for recordings.
 
 \section{What a recording becomes}
 \label{sec:recordings-model}
@@ -68,48 +69,79 @@ the unit \code{adu}. A signal whose header gives no units has none: WFDB's old d
 250\,Hz, a gain of 200 and millivolts are not used. Missing samples are drawn as a gap in the
 line, never as zero, and zero is a value, never ``missing''.
 
-\section{Bringing recordings in}
+\section{Recording databases}
+\label{sec:recordings-databases}
 \label{sec:recordings-in}
 
-A recording comes in as the \code{file} of a table's row. The file becomes a recording when the
-row's or the table's category is a \textbf{recording category} (\code{icu}, \code{holter},
-\code{eeg} or \code{sleep}), or when neither the row nor the table names a category
-(\cref{chap:importing}). A recording without a category goes to the ICU column. The file may be
-one of the following:
+A \emph{recording database} is a connected database that lists recordings
+(\cref{chap:connecting}): a db-builder database with a \code{recordings} table, or a database of
+kind \code{views} with a \code{recordings} view (\cref{sec:connecting-views}). Each of its rows
+names a recording's file, its patient (\code{person\_key}), optionally its visit, its start and
+end, a label and a category. The files stay where they are.
+
+\paragraph{Making one with db-builder.} \cmd{db-builder recordings OUT FOLDER} finds the
+recordings of a folder and its subfolders (WFDB records by their header, EDF and BDF files, and
+files that an installed add-on reads), reads each one's start and end from its header, and takes
+its patient from a table (\opt{-{}-patients TABLE}, matched by the \code{file} column) or from
+the files' names (\opt{-{}-pattern}, such as \code{\{patient\}\_*.edf}). Every file that a
+table's row names (\cmd{db-builder add}) is a row of \code{recordings} too, of the row's category
+(\cref{chap:importing}). The following commands make a recording database and connect it:
+\begin{lstlisting}[style=shell]
+db-builder recordings icu.sqlite /data/icu --patients icu_patients.csv --issuer HOSP
+medorama databases connect icu --kind dbb --url sqlite:/data/icu.sqlite
+\end{lstlisting}
+
+\paragraph{What a row may name.} The \code{file} is absolute, or relative to the database's
+\code{files\_root} setting, else to the folder of the database's SQLite file. It may be one of the
+following:
 \begin{itemize}
 \item \textbf{A WFDB header} (\file{.hea}). The recording is that record only, or a
   multi-segment record whole (\cref{sec:recordings-multi}).
-\item \textbf{A folder.} A \emph{WFDB folder}, one that holds WFDB records itself (a
-  \file{.hea} file or a \file{RECORDS} file) or an \file{index.csv}, is itself the recording,
-  taken whole with its subfolders, within the limits of \cref{sec:recordings-limits}. Any other
-  folder adds only the recordings directly inside it (WFDB records, WFDB folders, EDF files and
-  files an add-on reads); a subfolder that is not itself a WFDB folder is not searched.
+\item \textbf{A folder} of WFDB records, read as one session (\cref{sec:recordings-session}), or
+  a WFDB collection (\cref{sec:recordings-collection}), within the limits of
+  \cref{sec:recordings-limits}.
 \item \textbf{An EDF, EDF+, BDF or BDF+ file} (\file{.edf}, \file{.bdf};
   \cref{sec:recordings-edf}).
 \item \textbf{A file of a format that an installed add-on reads}, such as BedMasterEx
   \file{.Stp} (\cref{sec:recordings-addons}).
+\item \textbf{Any other file}: a 12-lead ECG, a picture, a PDF, a folder of DICOM files. It is
+  not a waveform recording: the patient's page attaches it to its entry, for the ECG viewer or
+  the PACS viewer (\cref{chap:ecg-imaging}).
 \end{itemize}
+
+\paragraph{Categories.} A row's \code{category} decides where the recording goes. The
+\textbf{recording categories} \code{icu}, \code{holter}, \code{eeg} and \code{sleep} are waveform
+recordings, opened in VitalStream from their column of the Patient Journey; a row whose category
+is empty or not recognized is \code{icu}. Any other category (\code{ecg}, \code{img},
+\code{echo}, \code{cath} \dots) makes the file an attachment of the patient's page, opened by the
+viewer of its kind.
 
 The following rules keep recordings safe:
 \begin{itemize}
-\item \textbf{Recordings are only read.} The catalog stores paths, never copies. It never writes,
-  moves or deletes a recording, and never writes into a recording's folder (the folder that holds
-  a recording file, or anywhere inside a WFDB folder). A recording that lies where the catalog
-  writes (its results, indexes or home folder), or that holds one of them, is refused at import.
-\item \textbf{Inside \code{data\_roots}.} When the setting names folders, a recording outside
-  them is left out with a warning.
-\item \textbf{Once.} Paths are stored with symbolic links resolved, so a recording is never in
-  the catalog twice. A second table that names it claims it too, and the recording stays while
-  either table does.
-\item \textbf{Hidden entries} (names that start with \code{.}) are skipped when a folder is
-  searched.
+\item \textbf{Recordings are only read.} Medorama keeps paths, never copies. It never writes,
+  moves or deletes a recording, and never writes into a recording's folder.
+\item \textbf{Inside \code{data\_roots}, outside the workspace.} When the setting names folders,
+  a recording outside them is kept as missing, with the reason; so is a recording inside
+  Medorama's workspace (\cref{sec:recordings-presence}).
 \item \textbf{WFDB recordings need WFDB support.} A Medorama built without it
-  (\cref{sec:installation-no-wfdb}) skips each WFDB record, folder of records or collection it
-  finds, and lists it with the reason ``this build has no WFDB support''.
+  (\cref{sec:installation-no-wfdb}) marks each WFDB record, folder of records or collection with
+  the reason ``this build has no WFDB support''.
 \end{itemize}
-A recording takes its row's category (ICU by default), and is linked to the row's encounter (\cref{sec:recordings-linking}), indexed in the background
-(\cref{sec:recordings-indexing}), and listed in \ui{Import} $\rightarrow$ \ui{Recordings}
-(\cref{sec:recordings-tab}).
+Medorama reads a recording database's recordings when it is connected and at each new version
+(\cref{sec:connecting-status}), keeps what it needs of each one in the database's workspace file
+\file{recordings.sqlite} (its path, kind, size, fingerprint, the format and times its index found,
+whether it is there, and the series derived from it), and indexes them in the background
+(\cref{sec:recordings-indexing}). A recording that the database no longer lists leaves Medorama,
+with its jobs and series.
+
+\section{Recording numbers}
+\label{sec:recordings-numbers}
+
+Each recording has one number across Medorama, used by the page, the jobs, actions and the
+viewer: its database's number times 1{,}000{,}000{,}000, plus its number in that database's
+\file{recordings.sqlite} (database 3's twelfth recording is \code{3000000012}). The number says
+nothing of the recording's file or patient, and it leads nowhere once its database is removed.
+The database's own key for the recording (\code{recording\_key}) is never sent to the browser.
 
 \screenshot{patient-holter.png}{A patient's page with a Holter recording in its column of the Patient Journey.}{fig:recordings-holter}
 
@@ -150,6 +182,12 @@ states no date and time gives data marked \emph{time not stated}, which starts a
 (1970-01-01). A record whose header states no sampling frequency, or one that is not a finite
 number greater than 0 (\code{nan}), is not read.
 
+\paragraph{A header without a number of samples.} A record line that leaves out the number of
+samples, or states 0, is read to the end of its data, as the WFDB library reads it: up to what
+its signal files hold (below), the frames of a compressed file counted by decoding them. A signal
+of several samples per frame is read at its own rate (the frame rate times its samples per
+frame), with every sample, never averaged to the frame rate.
+
 \paragraph{Samples stated and samples held.} A header may state more samples than its signal
 files hold. The number of samples read is the least of the number the header states and, for
 each signal file whose signals all have a storage format of fixed size, the frames that file can
@@ -167,8 +205,8 @@ opens none of them when it leads outside its data roots, symbolic links resolved
 (\cref{sec:formats-reference-roots}).
 
 \paragraph{A record is opened by its header.} A signal file (\file{.dat}, \file{.mat}) is not a
-record of its own: opened or added by itself (a path typed in a viewer's file browser,
-\code{medorama add}, a table's \code{file} column), it is refused with what to open in its place:
+record of its own: opened or named by itself (a path typed in a viewer's file browser, a
+recording database's \code{file}), it is refused with what to open in its place:
 \emph{100.dat is a WFDB signal file: open its header, 100.hea} when the header of the same name
 next to it names it, else \emph{\dots{} open the header (.hea) that names it}. The ECG viewer,
 which reads only the files chosen in it, asks for the header in the same words
@@ -277,10 +315,8 @@ day, are seen together.
 \item A \file{RECORDS} file is not needed and not read. \file{vitals.csv}, \file{events.csv} and
   \file{gaps.csv}, when present in the folder itself, are read as for a collection.
 \end{enumerate}
-When a tree of folders is searched for recordings (Medorama's import), a folder is a recording
-when it holds records itself (a \file{.hea} file or a \file{RECORDS} file) or an
-\file{index.csv}; it is then taken whole, its subfolders included. The viewers' \ui{Open multiple
-records\dots} opens any folder.
+A recording database may name such a folder as one recording (db-builder lists records by their
+headers). The viewers' \ui{Open multiple records\dots} opens any folder.
 
 \screenshot{vitalstream-session.png}{A folder of records read as one session in VitalStream: a record without a start time, marked time not stated, and a signal recorded twice in a second lane, II (2).}{fig:recordings-session}
 
@@ -538,18 +574,19 @@ The exact reading rules, which the three implementations follow, are specified i
 
 \paragraph{EEG and sleep studies in Medorama.} Medorama has two recording categories for these
 files, \textbf{EEG} (\code{eeg}) and \textbf{Sleep} (\code{sleep}), beside ICU and Holter. Each is
-a column of the patient page's journey, and its recordings open in VitalStream. A table's
-\code{category} column, the category chosen for the import, or the table's file name (with words
-such as \code{eeg}, \code{polysomnography}, \code{psg} or \code{sleep study}) chooses the
-category (\cref{chap:importing}). With the category \code{ecg}, an EDF file is not a recording
-but an attachment of its entry, opened by the ECG viewer (\cref{chap:ecg-imaging}).
+a column of the patient page's journey, and its recordings open in VitalStream. The category is
+the recording row's (db-builder's \opt{-{}-category}, or a \code{category} column of the table
+that names the file; \cref{chap:importing}). With the category \code{ecg}, an EDF file is not a
+waveform recording but an attachment of its entry, opened by the ECG viewer
+(\cref{chap:ecg-imaging}).
 
 The demo made by \file{tools/make-demo-data.py} includes an overnight sleep study for the
 patient \code{P900004}: a two-hour EDF+ file (\file{sleep/P900004\_psg\_20240305.edf}) with EEG,
 EOG, ECG, airflow, thoracic effort and SpO2 signals, and its scoring (sleep stages and events) as
-annotations. The study has its own encounter in the sleep laboratory (\code{E9100010}), with a
-note, the \emph{Sleep study report}. Its table, \file{sleep\_index.csv}, links the file to the
-patient and the encounter:
+annotations. The study has its own visit to the sleep laboratory (\code{E9100010}), with a note,
+the \emph{Sleep study report}. Its table, \file{sleep\_index.csv}, names the file with its patient
+and visit; db-builder adds it to the demo's database, where the file is a row of
+\code{recordings}:
 \begin{lstlisting}[style=text]
 patient_id,encounter_id,time,study,category,file
 P900004,E9100010,2024-03-05 22:30,Polysomnography,sleep,../sleep/P900004_psg_20240305.edf
@@ -566,12 +603,8 @@ fields often hold protected health information, so they are handled as follows:
 \begin{itemize}
 \item The index never contains them, and neither does anything the viewers send to the browser.
   VitalStream and the ECG viewer do not show them, in Medorama or on their own.
-\item Medorama's \code{identify} action reads them (\code{from\_edf} in
-  \file{medorama/src/identify.rs}). It stores the code, sex, birth date, name and admin code in
-  the catalog's identifier tables, next to the database's own values, so that an administrator
-  can check that the file belongs to the patient it is linked to
-  (\cref{sec:recordings-identifiers}). A plain EDF patient field, which has no structure, is kept
-  whole as the code.
+\item Medorama does not read them: a recording's patient is the one its recording database names
+  (\cref{sec:recordings-identifiers}).
 \item In Privacy Mode, EDF files and their annotations are de-identified before they leave the
   server (\cref{sec:protecting-edf}).
 \end{itemize}
@@ -604,136 +637,118 @@ program, to institutions under agreement. It is not in Medorama's repository.
 
 Until an add-on is installed, Medorama and the viewers name none of its formats: a file of that
 format is treated like any other file they do not read. The viewers' file browsers do not list
-it, and opening it is refused (\code{not a recording this program reads}). An import skips the row
-that names it, with a warning, and keeps nothing of it. Once an administrator has installed the
-add-on on the server (never through the page) and restarted Medorama, remove that earlier import
-and import the table again. The files then come in as recordings, linked to their patients and
-indexed by the workers. Installing, checking and removing add-ons, and their
-protocol, are described in \cref{chap:addons}.
+it, and opening it is refused (\code{not a recording this program reads}); db-builder does not
+find it in a folder. Once an administrator has installed the add-on on the server (never through
+the page) and restarted Medorama, make the recording database again with db-builder (or refresh a
+database that already lists the files: \ui{Refresh} on its page). The files are then recordings,
+indexed by the workers. Installing, checking and removing add-ons, and their protocol, are
+described in \cref{chap:addons}.
 
 With an adapter, the recording is indexed like any other: the index holds its channels, pieces,
 vital signs, alarms, breaks and markers, the format's label, and the adapter's name. Raw samples
 are read from the recording through the adapter when a view zooms in close enough. Indexes made
-through an adapter are shared like the others: the three viewers and Medorama read and write the
-same index folders. A failing adapter makes the recording unreadable, never the program; the
+through an adapter are kept like the others, in the index store of the recording's database
+(\cref{sec:recordings-indexing}). A failing adapter makes the recording unreadable, never the program; the
 indexing fails with the adapter's message.
 
-\section{Linking recordings to encounters}
+\section{Patients, visits and presence}
+\label{sec:recordings-presence}
 \label{sec:recordings-linking}
 
-A recording is linked to one or more encounters after every import and every indexing, in this
-order:
-\begin{enumerate}
-\item \textbf{By a database row} that names its file and its encounter (the \code{file} and
-  \code{encounter\_id} columns). The recording belongs to that encounter, as if linked manually.
-\item \textbf{By a bed stay's \code{recording\_file}.} A recording whose file name or path is a
-  bed stay's \code{recording\_file} (ignoring case) is linked to that bed stay's encounter.
-\item \textbf{By bed and time.} Bedside-monitor systems name their files
-  \code{UNIT\_BED-<Unix time>} (\file{ICU7\_12-1704106800.Stp}): the unit is the part of the name
-  before the first \code{\_}, the bed the rest before the last \code{-}, and the time the digits
-  after it (9 to 11 digits). A recording so named is linked to every encounter that has a bed stay
-  whose \code{care\_unit} and \code{bed} are its unit and bed (\code{care\_unit} + \code{\_} +
-  \code{bed}, ignoring case) and whose time overlaps the recording's. Before indexing, the
-  recording's time is the time in its name; after indexing, it is the real start and end. A bed
-  stay without an end is open.
-\end{enumerate}
+A recording belongs to the patient its row's \code{person\_key} names, once that person is linked
+(\cref{sec:connecting-identity}), and to the visit its \code{visit\_key} names, if any. Medorama
+does not link recordings to visits by bed, time or file name, and does not read the identifiers
+that a recording's file may hold: the recording database decides whose recording it is. A
+recording whose row names no person, or a person who is not linked (an identity conflict), has no
+patient: the \ui{Recordings} list shows a dash in its place.
 
-\paragraph{Decisions made manually} win over all of these, and outlive removing and importing the
-databases again. In an encounter's panel (\cref{chap:patients}), admins have, for each recording:
+A recording is \emph{present} when its file or folder is there and may be read. Otherwise it is
+kept, marked \code{missing}, with the reason:
 \begin{itemize}
-\item \ui{Unlink} unlinks the recording, and it is \emph{never} linked to that encounter
-  automatically again.
-\item \ui{Forget manual link}, for a recording linked manually, forgets the decision, and
-  automatic linking resumes.
+\item \code{no such file or folder};
+\item \code{outside the folders data may come from (data\_roots)};
+\item \code{inside Medorama's workspace};
+\item the reason it cannot be read (a build without WFDB support).
 \end{itemize}
-A recording with a manual link gets exactly its manual links. For administrators with the PHI
-permission, \ui{Review} lists the \ui{Recordings whose files disagree}: automatic links where the
-recording's own file names a patient other than the one in the databases. \ui{Keep the link}
-makes such a link manual; \ui{Unlink} never links the recording to that encounter again. Every decision is in the audit log.
-Recordings that match nothing are listed in \ui{Import} $\rightarrow$ \ui{Recordings} with
-\ui{Not linked to an encounter} (\cmd{medorama recordings -{}-unlinked}).
+A missing recording is counted as back when its file returns (\cref{sec:recordings-indexing}). A
+recording that its database no longer lists leaves Medorama at the database's next new version or
+refresh.
 
 \section{Indexing in the background}
 \label{sec:recordings-indexing}
 
-A recording is drawn from its \emph{index}: a folder in \code{index\_dir} that holds its
-channels, the envelopes of every piece (the minimum and maximum of every block of 32 samples, and
-of every four blocks above that), its vital signs, alarms, breaks and markers. The folder's name is
-the recording's \emph{index key}: a fingerprint of the index version, the recording's path and
-its files' names, sizes and modification times. A changed recording has a new key, and is indexed
-again.
+A recording is drawn from its \emph{index}: its channels, the envelopes of every piece (the
+minimum and maximum of every block of 32 samples, and of every four blocks above that), its vital
+signs, alarms, breaks and markers. The indexes of a recording database are kept in its
+\emph{index store}: one SQLite database, \file{<workspace>/db-NNNN/index.sqlite}, encrypted with
+SQLCipher by that database's data key (index format 3, \cref{sec:formats-reference-folder}). An index is
+found in the store by the recording's \emph{index key}: a fingerprint of the index version, the
+recording's path and its files' names, sizes and modification times. A changed recording has a
+new key, and is indexed again.
 
 \begin{itemize}
 \item \textbf{Automatically.} With \code{auto\_index} on (the default), the server queues the
   indexing of every recording that is new or changed, and the workers (\code{workers}, default 2)
   index them one by one while it runs. The \ui{Jobs} tab shows the queue (\cref{chap:actions}).
   Users who may run actions can also \ui{Index now} a recording that is not indexed.
-\item \textbf{Shared.} A recording whose current index is already in \code{index\_dir} (for
-  instance, the viewers' \code{cache\_dir}, pointed at the same folder) is marked indexed at once,
-  without indexing it again.
+\item \textbf{Read by the viewer.} The viewer Medorama runs is given each recording database's
+  store with its key, on a pipe (\cref{sec:viewers-in-medorama-vitalstream}), and reads the indexes there. What
+  it indexes itself goes into a store of its own, \file{<workspace>/viewer/index.sqlite}, with a
+  key of its own.
 \item \textbf{Times.} Once a recording is indexed, its start and end are its real ones, and its
-  format is the index's (\code{WFDB records}, \code{EDF+}, or the add-on's label). Links by bed
-  and time are computed again.
-\item \textbf{Identifiers.} The built-in action \code{identify} reads the identifiers that the
-  recording states, once per recording and again when its file changes. Medorama reads an EDF
-  header's fields itself, and asks an adapter for the formats it reads; WFDB records hold none
-  (\cref{sec:recordings-identifiers}).
+  format is the index's (\code{WFDB records}, \code{EDF+}, or the add-on's label).
+\item \textbf{Encrypted.} Indexes hold waveform envelopes and vital-sign series: patient data.
+  Without the database's key, nothing of its index store can be read (\cref{chap:protecting}).
+\item \textbf{Removed with their database.} Removing a database destroys its key first, then its
+  folder with its index store: nothing of its indexes can be read again. Indexes that no
+  recording uses any more (a recording changed or gone) are removed from each store.
 \end{itemize}
 
-\paragraph{Checking the files.} \ui{Re-check the files} (\ui{Import} $\rightarrow$
+\paragraph{Checking the files.} \ui{Re-check the files} (\ui{Databases} $\rightarrow$
 \ui{Recordings}), \cmd{medorama check}, and the server every \code{check\_interval\_s} seconds
-(default 900; 0 means never) check every recording: whether it is still there, whether it
-changed, and whether its index folder is still there. A missing recording is kept, marked
-missing, until an administrator removes it, and is counted as back when it returns. A changed
-recording is indexed again, and a lost index is made again. The following command runs the check
-and prints a summary:
+(default 900; 0 means never) check every recording of the connected databases: whether it is
+still there, whether it changed, and whether its index is still in the store. A missing recording
+is kept, marked missing, and is counted as back when it returns. A changed recording is indexed
+again, and a lost index is made again. The following command runs the check and prints a summary:
 \begin{lstlisting}[style=shell]
 medorama check
-# 1204 checked: 2 missing, 0 back, 3 changed, 0 index folders gone
+# 1204 checked: 2 missing, 0 back, 3 changed, 0 indexes lost
 \end{lstlisting}
 
-\section{The Recordings tab}
+\section{The Recordings subtab}
 \label{sec:recordings-tab}
 
-\ui{Import} $\rightarrow$ \ui{Recordings}, for administrators, lists every recording, a page at
-a time. For each recording it shows the status, the name (with any error, and, for users with the
-PHI permission, what its file says of the patient), the kind and format, the start, the length,
-the encounters, the sources and the path, with the buttons \ui{View} (in VitalStream),
-\ui{Copy path}, \ui{Index now} and \ui{Remove}. The status is \code{new} (never indexed),
+\ui{Databases} $\rightarrow$ \ui{Recordings} lists the recordings of the recording databases you
+may view (\code{view}; \cref{sec:databases-tab-grants}), newest first, a page at a time. For each
+recording it shows the status, the name (with any error), the kind and format, the start, the
+length, a link to its patient, its database and its path, with the buttons \ui{View} (in
+VitalStream), \ui{Copy path} and \ui{Index now}. The status is \code{new} (never indexed),
 \code{queued}, \code{indexing}, \code{ready}, \code{stale} (changed since it was indexed),
-\code{failed} or \code{missing} (not found at the last check). The search line takes words or
-\code{field:value} terms (\code{file:}, \code{path:}, \code{unit:}, \code{source:},
-\code{status:} \dots). \ui{Not linked to an encounter} keeps only the unlinked recordings, and
-\ui{Remove matching\dots} removes every recording the search finds, after saying how many.
+\code{failed}, \code{missing} (not there, or not readable, at the last check), or \code{file} (a
+file no reader indexes, such as a 12-lead ECG in DICOM or XML, a picture or a PDF: opened by its
+viewer from its entry, never indexed). The search line
+keeps the recordings with every word in their name, format, status, kind or database
+(\code{missing}, \code{holter}, \code{icu}). \cmd{medorama recordings} lists them on the command
+line (\cref{chap:cli}).
 
-\paragraph{Removing recordings} takes them out of the catalog; the files are never touched. A
-recording's index and results are deleted too only when asked (the page asks; on the command
-line, \opt{-{}-purge-results}), and only inside \code{results\_dir} and \code{index\_dir}.
-Encounters stay. The following commands list the unlinked recordings, show what a removal would
-take out, and remove it:
-\begin{lstlisting}[style=shell]
-medorama recordings --unlinked                       # recordings no encounter holds
-medorama remove --search "unit:ICU7" --dry-run       # what would go
-medorama remove --search "unit:ICU7" --purge-results
-\end{lstlisting}
+\paragraph{Removing recordings.} Medorama does not remove single recordings: a recording leaves
+when its recording database no longer lists it, or when the database is removed
+(\cref{sec:databases-tab-remove}), which deletes its workspace folder (the recordings' status,
+series, the results of actions and the index store). The files are
+never touched.
 
 \section{Identifiers in recordings}
 \label{sec:recordings-identifiers}
 
 \begin{phibox}
-Bedside monitors and EDF headers store patient identifiers in the recordings themselves. The
-action \code{identify} reads them: from an EDF header's patient and recording fields itself, and
-through the recording's adapter for other formats. A file that names several patients is
-flagged. The identifiers are kept in the catalog's database only, and shown only to users with
-the PHI permission outside Privacy Mode, so that a reviewer can check the databases against them.
-They appear in the Encounters table's \ui{In the files}, the encounter panel, \ui{Import}
-$\rightarrow$ \ui{Recordings}, and the searches \code{file-name:}, \code{file-id:} and
-\code{file-dob:}. They never reach job summaries, the viewers, actions' job descriptions,
-results folders or logs.
+Bedside monitors and EDF headers store patient identifiers in the recordings themselves. Medorama
+does not read them: a recording's patient is the one its recording database names, and checking
+that the files agree with the database is the database owner's task. The index holds no name,
+identifier or date of birth.
 
-The index holds no name, identifier or date of birth. A recording's path and file name may still
-identify a patient, however (bedside-monitor systems name files by unit, bed and time), and every
-value of a recording is patient data. Keep recordings, and the index folders made from them, on
-protected storage. In Privacy Mode, VitalStream opens recordings by token, never by path, and
-every time it shows is moved (\cref{sec:protecting-vitalstream}).
+A recording's path and file name may still identify a patient, however (bedside-monitor systems
+name files by unit, bed and time), and every value of a recording is patient data. Keep
+recordings on protected storage. In Privacy Mode,
+VitalStream opens recordings by token, never by path, and every time it shows is moved
+(\cref{sec:protecting-vitalstream}).
 \end{phibox}

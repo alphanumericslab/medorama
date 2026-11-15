@@ -1,4 +1,5 @@
-//! Helpers shared by the tests: synthetic WFDB recordings.
+//! Helpers shared by the tests: Medorama set up in a folder, db-builder databases and synthetic
+//! WFDB recordings, all invented.
 #![allow(dead_code)]
 
 use std::path::Path;
@@ -30,21 +31,16 @@ pub fn wfdb_record(dir: &Path, offset_s: i64) {
     std::fs::write(dir.join("rec.dat"), b).unwrap();
 }
 
-/// A bedside-monitor recording name UNIT_BED-<time> (built here: such names are kept out of the sources).
-pub fn bed_name(unit: &str, bed: &str, t: i64) -> String {
-    format!("{unit}_{bed}-{t}")
-}
-
-/// Batch options for a test import (name and source).
-pub fn opts(name: &str) -> medorama::imports::Opts {
-    medorama::imports::Opts::new(name, name, false)
-}
-
-/// Settings for a test catalog in `home`, results in `results`.  With
+/// Settings for a test setup in `home`, its workspace `ws`, with its master key (one per test
+/// process: the first loaded).  With
 /// `MEDORAMA_TEST_POSTGRES=postgres://…` set, the catalog is in that PostgreSQL database, in a
 /// schema of its own (so tests run side by side); else in SQLite, as by default.
-pub fn config(home: &Path, results: &Path) -> medorama::config::Config {
-    let mut cfg = medorama::config::Config::new(home, results);
+pub fn config(home: &Path, ws: &Path) -> medorama::config::Config {
+    let mut cfg = medorama::config::Config::new(home, ws);
+    std::fs::create_dir_all(home).unwrap();
+    std::fs::create_dir_all(ws).unwrap();
+    medorama::workspace::make_master_file(&cfg).unwrap();
+    medorama::workspace::load(&cfg).unwrap();
     if let Some(url) = std::env::var("MEDORAMA_TEST_POSTGRES").ok().filter(|u| !u.is_empty()) {
         let mut b = [0u8; 8];
         getrandom::fill(&mut b).unwrap();
@@ -103,4 +99,178 @@ pub fn fake_recording(path: &Path, patient: &str, patient_id: &str) {
         ),
     )
     .unwrap();
+}
+
+/// A db-builder database (db-builder/docs/schema.md), written here: the tables Medorama reads.
+pub struct Dbb {
+    pub path: std::path::PathBuf,
+    c: rusqlite::Connection,
+    version: u32,
+}
+
+impl Dbb {
+    pub fn new(path: &Path) -> Dbb {
+        let _ = std::fs::remove_file(path);
+        let c = rusqlite::Connection::open(path).unwrap();
+        c.execute_batch(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+             CREATE TABLE persons (person_key TEXT PRIMARY KEY, patient_id TEXT NOT NULL DEFAULT '', patient_id_issuer TEXT NOT NULL DEFAULT '',
+                 mrn TEXT NOT NULL DEFAULT '', mrn_authority TEXT NOT NULL DEFAULT '', last_name TEXT NOT NULL DEFAULT '',
+                 first_name TEXT NOT NULL DEFAULT '', birth_date TEXT NOT NULL DEFAULT '', sex TEXT NOT NULL DEFAULT '');
+             CREATE TABLE visits (visit_key TEXT PRIMARY KEY, person_key TEXT, start_time TEXT, end_time TEXT,
+                 unit TEXT NOT NULL DEFAULT '', icu INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE entries (entry_key TEXT PRIMARY KEY, person_key TEXT, visit_key TEXT, category TEXT NOT NULL DEFAULT '',
+                 time TEXT, end_time TEXT, name TEXT NOT NULL DEFAULT '', code TEXT NOT NULL DEFAULT '', vocabulary TEXT NOT NULL DEFAULT '',
+                 value_num REAL, value_text TEXT NOT NULL DEFAULT '', unit TEXT NOT NULL DEFAULT '', ref_low REAL, ref_high REAL,
+                 flag TEXT NOT NULL DEFAULT '', author TEXT NOT NULL DEFAULT '', text TEXT NOT NULL DEFAULT '');
+             CREATE TABLE recordings (recording_key TEXT PRIMARY KEY, person_key TEXT, visit_key TEXT, file TEXT NOT NULL,
+                 format TEXT NOT NULL DEFAULT '', start_time TEXT, end_time TEXT, label TEXT NOT NULL DEFAULT '',
+                 category TEXT NOT NULL DEFAULT '', size INTEGER, fingerprint TEXT NOT NULL DEFAULT '');
+             INSERT INTO meta VALUES ('schema', '1'), ('version', 'v1'), ('timezone', 'UTC');",
+        )
+        .unwrap();
+        Dbb { path: path.to_path_buf(), c, version: 1 }
+    }
+
+    pub fn url(&self) -> String {
+        format!("sqlite:{}", self.path.display())
+    }
+
+    /// A person: key, patient ID and its issuer, MRN and its authority, names, birth date, sex.
+    #[allow(clippy::too_many_arguments)]
+    pub fn person(
+        &self,
+        key: &str,
+        pid: &str,
+        issuer: &str,
+        mrn: &str,
+        authority: &str,
+        last: &str,
+        first: &str,
+        dob: &str,
+        sex: &str,
+    ) -> &Self {
+        self.c
+            .execute(
+                "INSERT INTO persons VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                rusqlite::params![key, pid, issuer, mrn, authority, last, first, dob, sex],
+            )
+            .unwrap();
+        self
+    }
+
+    pub fn visit(&self, key: &str, person: &str, start: &str, end: &str, unit: &str, icu: bool) -> &Self {
+        self.c
+            .execute(
+                "INSERT INTO visits VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![key, person, start, end, unit, icu as i64],
+            )
+            .unwrap();
+        self
+    }
+
+    /// A result: key, person, visit, category, time, name, value, unit.
+    #[allow(clippy::too_many_arguments)]
+    pub fn entry(
+        &self,
+        key: &str,
+        person: &str,
+        visit: &str,
+        category: &str,
+        time: &str,
+        name: &str,
+        value: Option<f64>,
+        unit: &str,
+    ) -> &Self {
+        self.c
+            .execute(
+                "INSERT INTO entries (entry_key, person_key, visit_key, category, time, name, value_num, unit) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                rusqlite::params![key, person, visit, category, time, name, value, unit],
+            )
+            .unwrap();
+        self
+    }
+
+    /// A note, with its text.
+    pub fn note(&self, key: &str, person: &str, time: &str, name: &str, text: &str) -> &Self {
+        self.c
+            .execute(
+                "INSERT INTO entries (entry_key, person_key, category, time, name, text, author) VALUES (?1, ?2, 'note', ?3, ?4, ?5, 'Dr Invented')",
+                rusqlite::params![key, person, time, name, text],
+            )
+            .unwrap();
+        self
+    }
+
+    /// A recording: key, person, its file (relative to this database's folder), category.
+    pub fn recording(&self, key: &str, person: &str, file: &str, category: &str) -> &Self {
+        self.c
+            .execute(
+                "INSERT INTO recordings (recording_key, person_key, file, category) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![key, person, file, category],
+            )
+            .unwrap();
+        self
+    }
+
+    /// The data changed: a new version.
+    pub fn bump(&mut self) {
+        self.version += 1;
+        self.c.execute("UPDATE meta SET value = ?1 WHERE key = 'version'", [format!("v{}", self.version)]).unwrap();
+    }
+
+    pub fn exec(&self, sql: &str) {
+        self.c.execute_batch(sql).unwrap();
+    }
+}
+
+/// Medorama set up in a temporary folder: its settings, control store and workspace, an admin
+/// (`boss`, PHI) and an analyst without the PHI permission (`reader`), both with the password
+/// `0123456789ab`.
+pub struct Setup {
+    pub tmp: tempfile::TempDir,
+    pub cfg: medorama::config::Config,
+    pub db: std::sync::Arc<medorama::db::Db>,
+}
+
+pub const PASSWORD: &str = "0123456789ab";
+
+impl Setup {
+    pub fn new() -> Setup {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = medorama::config::real(tmp.path());
+        let mut cfg = config(&root.join("home"), &root.join("ws"));
+        cfg.data_roots = vec![root.join("data").to_string_lossy().to_string()];
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        let db = std::sync::Arc::new(medorama::db::Db::open(&cfg, true).unwrap());
+        {
+            let c = db.get().unwrap();
+            medorama::users::add(&c, "boss", "", medorama::users::Role::Admin, true, PASSWORD).unwrap();
+            medorama::users::add(&c, "reader", "", medorama::users::Role::Analyst, false, PASSWORD).unwrap();
+        }
+        Setup { tmp, cfg, db }
+    }
+
+    /// The data folder (inside data_roots).
+    pub fn data(&self) -> std::path::PathBuf {
+        medorama::config::real(self.tmp.path()).join("data")
+    }
+
+    pub fn user(&self, name: &str) -> medorama::users::User {
+        medorama::users::get_by_name(&self.db.get().unwrap(), name).unwrap().unwrap()
+    }
+
+    /// Connect a db-builder database, as `boss`.
+    pub fn connect(&self, name: &str, d: &Dbb) -> i64 {
+        let n =
+            medorama::sources::NewSource { name: name.into(), kind: "dbb".into(), url: d.url(), ..Default::default() };
+        medorama::databases::connect(&self.cfg, &self.db.get().unwrap(), &self.user("boss"), &n, "").unwrap()
+    }
+
+    pub fn app(&self) -> axum::Router {
+        medorama::server::router(std::sync::Arc::new(medorama::server::App::new(
+            std::sync::Arc::new(self.cfg.clone()),
+            self.db.clone(),
+        )))
+    }
 }

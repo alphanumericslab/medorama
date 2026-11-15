@@ -1,0 +1,76 @@
+# The license of every file of the repository (REUSE 3.3, https://reuse.software): checked by
+# `reuse lint` in CI (.github/workflows/checks.yml, "licenses"). The texts are in LICENSES/; README.md,
+# "License and commercial use", explains them. When several entries match a file, the last wins.
+version = 1
+
+# The software: everything not listed below.
+[[annotations]]
+path = "**"
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2025-2026 Reza Sameni <https://github.com/alphanumericslab/medorama>"
+SPDX-License-Identifier = "PolyForm-Noncommercial-1.0.0"
+
+# The documentation (the docs/ folders), the user's manual, their figures and screenshots.
+# Commands, settings and code shown in them are under the software's license (docs/LICENSE.md).
+[[annotations]]
+path = ["docs/**", "db-builder/docs/**", "viewers/vitalstream/docs/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2025-2026 Reza Sameni <https://github.com/alphanumericslab/medorama>"
+SPDX-License-Identifier = "CC-BY-NC-ND-4.0"
+
+# ... except the programs that build the manual and draw the figures, which are software.
+[[annotations]]
+path = [
+  "docs/images/diagrams.py",
+  "docs/user-manual/check_manual.py",
+  "docs/user-manual/Makefile",
+  "docs/user-manual/latexmkrc",
+]
+precedence = "override"
+SPDX-FileCopyrightText = "2025-2026 Reza Sameni <https://github.com/alphanumericslab/medorama>"
+SPDX-License-Identifier = "PolyForm-Noncommercial-1.0.0"
+
+# The demo library and the viewers' examples: data.
+[[annotations]]
+path = ["tools/demo/library/**", "viewers/ecg/examples/**", "viewers/pacs/examples/**"]
+precedence = "override"
+SPDX-FileCopyrightText = "2025-2026 Reza Sameni <https://github.com/alphanumericslab/medorama>"
+SPDX-License-Identifier = "CC-BY-NC-4.0"
+
+# The library's CT series and radiographs are adapted from collections of The Cancer Imaging
+# Archive under Creative Commons Attribution licenses (THIRD_PARTY_LICENSES.md, "The demo library").
+[[annotations]]
+path = [
+  "tools/demo/library/ct/ct-01.u16",   # C4KC-KiTS
+  "tools/demo/library/ct/ct-02.u16",   # LIDC-IDRI
+  "tools/demo/library/ct/ct-04.u16",   # Pancreas-CT
+  "tools/demo/library/xray/xray-01.u16",  # LIDC-IDRI
+]
+precedence = "override"
+SPDX-FileCopyrightText = [
+  "2025-2026 Reza Sameni <https://github.com/alphanumericslab/medorama> (the adaptation)",
+  "The Cancer Imaging Archive collections named in THIRD_PARTY_LICENSES.md (the source images)",
+]
+SPDX-License-Identifier = "CC-BY-NC-4.0 AND CC-BY-3.0"
+
+[[annotations]]
+path = [
+  "tools/demo/library/ct/ct-03.u16",   # NLST
+  "tools/demo/library/xray/xray-02.u16",  # NLST
+]
+precedence = "override"
+SPDX-FileCopyrightText = [
+  "2025-2026 Reza Sameni <https://github.com/alphanumericslab/medorama> (the adaptation)",
+  "National Lung Screening Trial Research Team, The Cancer Imaging Archive (the source images)",
+]
+SPDX-License-Identifier = "CC-BY-NC-4.0 AND CC-BY-4.0"
+
+# The website's page layout is adapted from GitHub's Minimal theme (pages-themes/minimal, CC0 1.0).
+[[annotations]]
+path = "_layouts/default.html"
+precedence = "override"
+SPDX-FileCopyrightText = [
+  "2025-2026 Reza Sameni <https://github.com/alphanumericslab/medorama> (the adaptation)",
+  "GitHub, Inc. and the Minimal theme's authors (pages-themes/minimal)",
+]
+SPDX-License-Identifier = "PolyForm-Noncommercial-1.0.0 AND CC0-1.0"

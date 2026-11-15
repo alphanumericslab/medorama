@@ -206,9 +206,15 @@ std::vector<std::vector<double>> read_physical(const fs::path& dir, const std::s
   if (h.nsamples > 0 && to > h.nsamples) to = h.nsamples;
   std::vector<std::vector<double>> out(wanted.size());
   if (to <= from) return out;
+  // a multi-frequency record is read in WFDB's high-resolution mode: m vectors per frame, which
+  // repeat sample floor(k * spf / m) of a signal of spf samples per frame at vector k
+  std::int64_t m = 1;
+  for (const auto& s : h.siginfo) m = std::max<std::int64_t>(m, std::max(s.spf, 1));
+  const std::int64_t big = INT64_MAX / m;
   wfdbx::ReadOptions opt;
-  opt.from = static_cast<wfdbx::WFDB_Time>(from);
-  opt.to = static_cast<wfdbx::WFDB_Time>(to);
+  opt.from = static_cast<wfdbx::WFDB_Time>(std::min(from, big) * m);
+  opt.to = static_cast<wfdbx::WFDB_Time>(std::min(to, big) * m);
+  opt.highres = m > 1;
   opt.checksum_warning = false;
   wfdbx::Record r;
   try {
@@ -216,11 +222,15 @@ std::vector<std::vector<double>> read_physical(const fs::path& dir, const std::s
   } catch (const wfdbx::Error& e) {
     throw std::runtime_error(record + ": " + e.what());
   }
-  const std::size_t frames = r.nsamples();
+  const std::size_t vectors = r.nsamples() - r.nsamples() % static_cast<std::size_t>(m);  // whole frames
+  const auto um = static_cast<std::uint64_t>(m);
   for (std::size_t j = 0; j < wanted.size(); ++j) {
     const auto& s = r.siginfo[wanted[j]];
-    out[j].reserve(frames);
-    for (std::size_t i = 0; i < frames; ++i) {
+    const auto spf = static_cast<std::uint64_t>(std::max(s.spf, 1));
+    out[j].reserve(vectors / um * spf);
+    for (std::size_t i = 0; i < vectors; ++i) {
+      // vector i starts a new sample of the signal: every sample once
+      if (m > 1 && (static_cast<std::uint64_t>(i) % um * spf) % um >= spf) continue;
       int x = r.samples[i * n + wanted[j]];
       // the stored value for an uncalibrated signal (gain 0): no gain is assumed
       out[j].push_back(x == wfdbx::WFDB_INVALID_SAMPLE ? std::nan("")

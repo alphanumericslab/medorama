@@ -1,19 +1,18 @@
 //! Pseudonyms (docs/security.md, "Pseudonyms"): how Privacy Mode names patients and encounters.
 //!
-//! Each patient gets `MO-XXXX-XXXX` and each encounter `MO-E-XXXX-XXXX` when first seen:
+//! Each patient gets `MO-XXXX-XXXX` and each visit `MO-E-XXXX-XXXX` when first seen:
 //! seven characters drawn from the operating system's secure random generator, then a check
 //! character, in Crockford's base 32 (digits and capitals without I, L, O, U, so that nothing
 //! reads as another letter).  A pseudonym is never derived from the patient's identifiers: no
 //! function of an MRN gives it (HIPAA §164.514(c); ISO/TS 25237), and the only link between the
-//! two is this catalog's database.  It does not change: a patient keeps it through re-imports,
-//! and a merged patient's pseudonym stays an alias of the patient it was merged into.
+//! two is Medorama's own: the control store's patient number, and the encrypted persons file of
+//! each database in the workspace (persons.rs).  It does not change while the patient is linked:
+//! it goes when the last database that holds them is removed.
 //!
 //! The check character (Luhn mod 32) catches a mistyped character and most swapped pairs, so
 //! that a pseudonym typed into a search is either right or refused.
 
 use crate::sql::{params, Connection, OptionalExtension};
-
-use crate::db::now;
 
 /// Crockford's base 32.
 const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
@@ -51,62 +50,21 @@ pub fn valid(s: &str) -> bool {
     body.len() == RANDOM + 1 && body.iter().all(|b| ALPHABET.contains(b)) && check(&body[..RANDOM]) == body[RANDOM]
 }
 
-/// `n` new pseudonyms (of encounters, or of patients), none taken nor drawn twice: drawn, then
-/// checked in one query (a clash, very rare, is drawn again).
-pub fn fresh_many(c: &Connection, n: usize, encounter: bool) -> anyhow::Result<Vec<String>> {
-    let mut out: Vec<String> = vec![];
-    let mut seen = std::collections::HashSet::new();
-    for _ in 0..100 {
-        let need = n - out.len();
-        if need == 0 {
-            break;
-        }
-        let mut drawn = vec![];
-        while drawn.len() < need {
-            let p = format!("MO-{}{}", if encounter { "E-" } else { "" }, draw()?);
-            if seen.insert(p.clone()) {
-                drawn.push(p);
-            }
-        }
-        let taken: std::collections::HashSet<String> = if encounter {
-            c.query_in("SELECT pseudonym FROM encounters WHERE pseudonym IN ({})", &drawn, |r| r.get(0))?
-        } else {
-            let mut t = c.query_in("SELECT pseudonym FROM patients WHERE pseudonym IN ({})", &drawn, |r| r.get(0))?;
-            t.extend(
-                c.query_in("SELECT pseudonym FROM pseudonym_aliases WHERE pseudonym IN ({})", &drawn, |r| r.get(0))?,
-            );
-            t
-        }
-        .into_iter()
-        .collect();
-        out.extend(drawn.into_iter().filter(|p| !taken.contains(p)));
-    }
-    if out.len() < n {
-        anyhow::bail!("no free pseudonyms after 100 draws");
-    }
-    Ok(out)
-}
-
 /// A new patient's draw for Privacy Mode's own date offset ([`assign_patient`]).
 pub fn new_draw() -> anyhow::Result<f64> {
     random_draw()
 }
 
-/// A new patient pseudonym that no patient (nor alias) has.
-fn fresh(c: &Connection, encounter: bool) -> anyhow::Result<String> {
+/// A new pseudonym that no patient (or visit) has.
+fn fresh(c: &Connection, visit: bool) -> anyhow::Result<String> {
     for _ in 0..100 {
-        let p = format!("MO-{}{}", if encounter { "E-" } else { "" }, draw()?);
-        let taken: bool = if encounter {
-            c.query_row("SELECT EXISTS (SELECT 1 FROM encounters WHERE pseudonym = ?1)", [&p], |r| r.get(0))?
+        let p = format!("MO-{}{}", if visit { "E-" } else { "" }, draw()?);
+        let sql = if visit {
+            "SELECT EXISTS (SELECT 1 FROM visit_pseudonyms WHERE pseudonym = ?1)"
         } else {
-            c.query_row(
-                "SELECT EXISTS (SELECT 1 FROM patients WHERE pseudonym = ?1)
-                     OR EXISTS (SELECT 1 FROM pseudonym_aliases WHERE pseudonym = ?1)",
-                [&p],
-                |r| r.get(0),
-            )?
+            "SELECT EXISTS (SELECT 1 FROM patients WHERE pseudonym = ?1)"
         };
-        if !taken {
+        if !c.query_row(sql, [&p], |r| r.get::<_, bool>(0))? {
             return Ok(p);
         }
     }
@@ -128,40 +86,29 @@ fn random_draw() -> anyhow::Result<f64> {
     Ok((u64::from_le_bytes(b) >> 11) as f64 / (1u64 << 53) as f64)
 }
 
-/// Gives a new encounter its pseudonym.
-pub fn assign_encounter(c: &Connection, encounter: i64) -> anyhow::Result<()> {
-    let p = fresh(c, true)?;
-    c.execute("UPDATE encounters SET pseudonym = ?1 WHERE id = ?2", params![p, encounter])?;
-    Ok(())
-}
-
-/// Before patient `from` is merged into `into`: its pseudonym becomes an alias of `into`.
-pub fn alias_on_merge(c: &Connection, from: i64, into: i64) -> anyhow::Result<()> {
-    let p: Option<String> =
-        c.query_row("SELECT pseudonym FROM patients WHERE id = ?1", [from], |r| r.get(0)).optional()?.flatten();
-    if let Some(p) = p {
-        c.execute("UPDATE pseudonym_aliases SET patient = ?1 WHERE patient = ?2", [into, from])?;
-        c.execute(
-            "INSERT INTO pseudonym_aliases (pseudonym, patient, since) VALUES (?1, ?2, ?3)
-             ON CONFLICT (pseudonym) DO UPDATE SET patient = excluded.patient, since = excluded.since",
-            params![p, into, now()],
-        )?;
+/// The pseudonym of a database's visit (`visit_hash`: its key, hashed with the gate's secret),
+/// drawn the first time it is asked for.
+pub fn of_visit(c: &Connection, database: i64, visit_hash: &str) -> anyhow::Result<String> {
+    let q = "SELECT pseudonym FROM visit_pseudonyms WHERE database_id = ?1 AND visit_hash = ?2";
+    if let Some(p) = c.query_row(q, params![database, visit_hash], |r| r.get::<_, String>(0)).optional()? {
+        return Ok(p);
     }
-    Ok(())
+    let p = fresh(c, true)?;
+    c.execute(
+        "INSERT INTO visit_pseudonyms (database_id, visit_hash, pseudonym) VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING",
+        params![database, visit_hash, p],
+    )?;
+    // another request may have drawn one first: the one stored
+    Ok(c.query_row(q, params![database, visit_hash], |r| r.get(0))?)
 }
 
-/// The patient a pseudonym (or an alias of one) names.
+/// The patient a pseudonym names.
 pub fn patient_of(c: &Connection, pseudonym: &str) -> anyhow::Result<Option<i64>> {
     let p = pseudonym.trim().to_ascii_uppercase();
     if !valid(&p) {
         return Ok(None);
     }
-    let direct: Option<i64> =
-        c.query_row("SELECT id FROM patients WHERE pseudonym = ?1", [&p], |r| r.get(0)).optional()?;
-    if direct.is_some() {
-        return Ok(direct);
-    }
-    Ok(c.query_row("SELECT patient FROM pseudonym_aliases WHERE pseudonym = ?1", [&p], |r| r.get(0)).optional()?)
+    Ok(c.query_row("SELECT id FROM patients WHERE pseudonym = ?1", [&p], |r| r.get(0)).optional()?)
 }
 
 #[cfg(test)]

@@ -11,31 +11,38 @@
 // (the server's words) is its source (a parent, cohorts merged), its criteria, and the patients
 // added and removed manually.
 
-import { $, API, PAGE, ages, api, catClass, privacy, esc, fail, fmtDate, fmtTime, isAdmin, phi, qs, toast } from '../core.js';
-import { focusLost, go, href, setParams } from '../router.js';
+import { $, API, PAGE, ages, api, catClass, privacy, esc, fail, fmtDate, fmtTime, isAdmin, phi, qs, st, toast } from '../core.js';
+import { focusLost, go, href, navigation, setParams, superseded } from '../router.js';
 import { dataVersion } from '../live.js';
 
 const co = {
-  list: [], cats: [], dbs: [], people: [], columns: {},
+  list: [], cats: [], dbs: [], people: [], pick: null,
   editing: null,                // the cohort being edited, or
   parent: null,                 // the parent of a new subcohort (neither: a new cohort)
   mode: '',                     // which builder is shown (a new search starts empty)
   inc: [], exc: [], kept: null, // inclusion groups (each: conditions), exclusions; a query kept as it is
   result: null, selected: new Set(), offset: 0, timer: null, seq: 0, searching: null, words: {},
+  unread: [],                   // why conditions cannot be read (the search waits for them)
+  where: null,                  // the address drawn (a redraw for new data keeps what it shows)
   cohort: null, moffset: 0,     // the cohort shown, its members' page
   found: null, fseq: 0, ftimer: null, // patients found to add to it
 };
 
 // ------------------------------------------------------------ criteria
 const KINDS = [
-  ['expression', 'Expression'], ['measurement', 'Lab or vital sign'], ['column', "A database's column"],
+  ['expression', 'Expression'], ['measurement', 'Lab, vital sign or result'],
   ['diagnosis', 'Diagnosis'], ['medication', 'Medication'], ['has', 'Has data'],
   ['encounter', 'Encounter'], ['sex', 'Sex'], ['age', 'Age'], ['text', 'Text in notes and reports'], ['database', 'In a database'],
 ];
 const CMPS = [['', 'between'], ['>', '>'], ['>=', '≥'], ['<', '<'], ['<=', '≤'], ['=', '='], ['!=', '≠']];
 const EXAMPLE = '(age > 18 AND age < 85 AND female) OR (age > 18 AND age < 65 AND male AND QT > 400ms)';
+const KIND_LABEL = Object.fromEntries(KINDS);
+const SEXES = [['', 'choose…'], ['F', 'female'], ['M', 'male']];
+const SEX_WORD = { F: 'female', M: 'male' };
 const blank = (kind) => ({ kind, not: false });
-const dbName = (id) => co.dbs.find((d) => d.id === id)?.name?.replace(/\.(csv|tsv|txt|xlsx|xls)$/i, '') || '?';
+/** An expression's text as it is checked (and its check kept). */
+const exprText = (k) => (k.text || '').trim();
+const dbName = (id) => co.dbs.find((d) => d.id === id)?.name || '(removed)';
 const num = (x) => x !== undefined && x !== '' && x !== null && isFinite(+x);
 
 function describe(k) {
@@ -44,13 +51,12 @@ function describe(k) {
   const dates = k.from || k.to ? ` (${k.from || '…'} → ${k.to || '…'})` : '';
   const lbl = Object.fromEntries(co.cats);
   const s = {
-    age: `age${value()}`, sex: `sex ${k.text || '?'}`, has: `has ${lbl[k.category] || k.category || '?'}`,
+    age: `age${value()}`, sex: SEX_WORD[k.text] || `sex ${k.text || '?'}`, has: `has ${lbl[k.category] || k.category || '?'}`,
     encounter: `encounter${k.text ? ` in ${k.text}` : ''}${k.icu === true ? ', with ICU stay' : k.icu === false ? ', without ICU stay' : ''}${dates}`,
     diagnosis: `diagnosis ${k.text || '?'}`,
-    measurement: `${k.latest ? 'latest ' : ''}${k.name || '?'}${value()}${k.import ? ` (${dbName(k.import)})` : ''}${dates}`,
-    column: `${k.latest ? 'latest ' : ''}${dbName(k.import)}.${k.name || '?'}${k.text ? ` contains “${k.text}”` : value()}${dates}`,
+    measurement: `${k.latest ? 'latest ' : ''}${k.name || '?'}${value()}${k.database ? ` (${dbName(k.database)})` : ''}${dates}`,
     medication: `medication ${k.text || '?'}${dates}`, text: `“${k.text || '?'}”`,
-    database: `in ${dbName(k.import)}`, expression: k.text || '?',
+    database: `in ${dbName(k.database)}`, expression: k.text || '?',
   }[k.kind] || k.kind;
   return `${k.not ? 'not ' : ''}${s}`;
 }
@@ -76,28 +82,22 @@ function editor(k, g, i) {
   const sel = (key, opts, label) => `<label class="cf"><span>${esc(label)}</span><select data-g="${g}" data-i="${i}" data-k="${key}">${opts.map(([v, l]) => `<option value="${esc(v)}"${String(k[key] ?? '') === String(v) ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>`;
   const value = (units) => `${sel('cmp', CMPS, '')}${k.cmp ? `${n('value', '')}${units ? field(g, i, 'unit', '', 'text', ' class="u" placeholder="unit" list="co-units"') : ''}` : `${n('min', 'from')}${n('max', 'to')}`}`;
   const latest = `<label class="cf"><input type="checkbox" data-g="${g}" data-i="${i}" data-k="latest"${k.latest ? ' checked' : ''}><span>latest only</span></label>`;
-  const tables = co.dbs.filter((d) => d.kind !== 'recordings');
+  const dbs = co.dbs.filter((d) => d.permission);
   switch (k.kind) {
     case 'expression': {
-      const w = co.words[k.text || ''];
+      const w = co.words[exprText(k)];
       return `<label class="cf expr"><input data-g="${g}" data-i="${i}" data-k="text" value="${esc(k.text || '')}" placeholder="${esc(EXAMPLE)}" spellcheck="false" aria-label="Expression"></label>
-        <span class="ewords ${w?.ok === false ? 'bad' : ''}" data-words="${g}:${i}">${w ? esc(w.ok ? `= ${w.words}` : w.error) : ''}</span>`;
+        <span class="ewords ${w?.ok === false ? 'bad' : ''}" data-words="${g}:${i}" role="status" aria-live="polite">${w ? esc(w.ok ? `= ${w.words}` : w.error) : ''}</span>`;
     }
-    case 'measurement': return `${field(g, i, 'name', 'name', 'text', ' placeholder="lactate, heart rate…"')}${value(true)}${latest}${sel('import', [['', 'any database'], ...tables.map((d) => [d.id, dbName(d.id)])], 'in')}${dates}`;
-    case 'column': {
-      const cols = co.columns[k.import] || [];
-      return `${sel('import', [['', 'choose…'], ...tables.map((d) => [d.id, dbName(d.id)])], 'database')}
-        ${k.import ? sel('name', [['', cols.length ? 'choose…' : 'loading…'], ...cols.map((c) => [c.header, c.header])], 'column') : ''}
-        ${k.name ? `${sel('mode', [['num', 'value'], ['text', 'contains']], '')}${k.mode === 'text' ? field(g, i, 'text', '', 'text', ' placeholder="text"') : `${value(true)}${latest}`}` : ''}`;
-    }
+    case 'measurement': return `${field(g, i, 'name', 'name', 'text', ' placeholder="lactate, heart rate…"')}${value(true)}${latest}${sel('database', [['', 'any database'], ...dbs.map((d) => [d.id, dbName(d.id)])], 'in')}${dates}`;
     case 'diagnosis': return field(g, i, 'text', 'code or name', 'text', ' placeholder="I21, sepsis…"');
     case 'medication': return `${field(g, i, 'text', 'name', 'text', ' placeholder="heparin…"')}${dates}`;
     case 'has': return sel('category', [['', 'choose…'], ...co.cats], 'data');
     case 'encounter': return `${field(g, i, 'text', 'unit', 'text', ' placeholder="ICU7, cardiology…"')}${sel('icu', [['', 'any'], ['true', 'with an ICU stay'], ['false', 'without an ICU stay']], 'ICU')}${dates}`;
-    case 'sex': return sel('text', [['', 'choose…'], ['F', 'F'], ['M', 'M']], 'sex');
+    case 'sex': return sel('text', SEXES, 'sex');
     case 'age': return value(false);
     case 'text': return field(g, i, 'text', 'contains', 'text', ' placeholder="at least 3 letters"');
-    case 'database': return sel('import', [['', 'choose…'], ...co.dbs.map((d) => [d.id, dbName(d.id)])], 'database');
+    case 'database': return sel('database', [['', 'choose…'], ...dbs.map((d) => [d.id, dbName(d.id)])], 'database');
     default: return '';
   }
 }
@@ -139,22 +139,12 @@ function renderCriteria() {
   $('#co-exclude').innerHTML = `${co.exc.map((k, i) => line(k, 'x', i)).join('')}
     ${co.exc.length ? '' : '<p class="muted small">No exclusion. An exclusion takes out every included patient who ever had it.</p>'}
     <div class="gtools top"><button class="btn" id="co-addexc">+ Add an exclusion</button></div>`;
-  for (const k of [...co.inc.flat(), ...co.exc]) if (k.kind === 'column' && k.import && !co.columns[k.import]) loadColumns(k.import);
   if (had && focusLost()) document.querySelector(had)?.focus();
 }
 
 /** The focus on a condition just added (its field, or the choice of its kind). */
 function focusCondition(crit) {
   if (crit) (crit.querySelector('input[data-k="text"]') || crit.querySelector('select.kind'))?.focus();
-}
-
-async function loadColumns(id) {
-  co.columns[id] = [];
-  try {
-    const r = await api(`databases/${id}/rows?${qs({ limit: 1 })}`);
-    co.columns[id] = r.columns.filter((c) => !['patient_id', 'mrn', 'encounter_id', 'csn', 'last_name', 'first_name', 'birth_date', 'file'].includes(c.maps_to));
-  } catch (e) { co.columns[id] = []; }
-  renderCriteria();
 }
 
 /** A condition as the API takes it, or null while it is still being written. */
@@ -166,22 +156,44 @@ function toApi(k) {
   // dates typed in Privacy Mode are sent as typed: the server reads them as shown, per patient;
   // dates once written so (privacy_dates) keep that meaning
   if (k.privacy_dates && (o.from || o.to)) o.privacy_dates = true;
-  for (const key of ['import']) if (num(k[key])) o[key] = +k[key];
+  if (num(k.database)) o.database = +k.database;
   if (k.cmp) { if (num(k.value)) o.value = +k.value; } else for (const key of ['min', 'max']) if (num(k[key])) o[key] = +k[key];
   if (!k.cmp) delete o.unit;
   if (k.latest) o.latest = true;
   if (k.icu === 'true' || k.icu === true) o.icu = true;
   if (k.icu === 'false' || k.icu === false) o.icu = false;
-  if (k.kind === 'column' && k.mode === 'text') { delete o.cmp; delete o.value; delete o.min; delete o.max; delete o.unit; delete o.latest; }
-  if (k.kind === 'column' && k.mode !== 'text') delete o.text;
   const hasValue = o.value !== undefined || o.min !== undefined || o.max !== undefined;
   const need = {
     measurement: o.name, diagnosis: o.text, medication: o.text, has: o.category, sex: o.text, text: o.text && o.text.length >= 3,
-    database: o.import, age: hasValue, encounter: true, column: o.import && o.name && (hasValue || o.text || k.mode !== 'text'),
+    database: o.database, age: hasValue, encounter: true,
     expression: o.text && co.words[o.text]?.ok,
   };
   return need[o.kind] ? o : null;
 }
+
+const WHY = {
+  measurement: 'give the name of the measurement', diagnosis: 'give a code or a name', medication: "give the drug's name",
+  has: 'choose the kind of data', sex: 'choose female or male', age: 'give an age', text: 'write at least 3 letters',
+  database: 'choose a database',
+};
+
+/** Why a condition cannot be read, or '' when it can (or when it is a new expression not
+ * written yet: no condition).  A condition that cannot be read is never left out of a search
+ * silently: the search waits for it (search()). */
+export function unread(k) {
+  if (k.kind === 'group') return '';
+  if (k.kind === 'expression') {
+    const t = exprText(k);
+    if (!t) return '';
+    const w = co.words[t];
+    if (!w) return `“${t}”: not checked yet`;
+    return w.ok ? '' : `“${t}”: ${w.error || 'it does not read as an expression'}`;
+  }
+  return toApi(k) ? '' : `${KIND_LABEL[k.kind] || k.kind}: ${WHY[k.kind] || 'complete it'}`;
+}
+
+/** What cannot be read in the criteria now (each condition's reason). */
+const unreadable = () => [...(co.kept ? [] : co.inc.flat()), ...co.exc].map(unread).filter(Boolean);
 
 /** The query as the API takes it (version 2). */
 function query() {
@@ -199,7 +211,7 @@ function query() {
 function toGroups(q) {
   const leaf = (e) => !e.op;
   const grp = (e) => (leaf(e) ? [e] : e.op === 'and' && e.of.every(leaf) ? e.of : null);
-  const prep = (k) => ({ ...k, mode: k.kind === 'column' && k.text ? 'text' : undefined });
+  const prep = (k) => ({ ...k });
   if (q.all?.length && !q.include) return [q.all.map(prep)];
   if (!q.include) return [];
   if (q.include.op === 'or') {
@@ -212,14 +224,14 @@ function toGroups(q) {
 
 /** Check the expressions being written (the server parses them), then search. */
 async function checkWords() {
-  const texts = [...co.inc.flat(), ...co.exc].filter((k) => k.kind === 'expression' && k.text?.trim()).map((k) => k.text);
+  const texts = [...new Set([...co.inc.flat(), ...co.exc].filter((k) => k.kind === 'expression' && exprText(k)).map(exprText))];
   await Promise.all(texts.filter((t) => !co.words[t]).map(async (t) => {
     try { co.words[t] = await api('cohorts/parse', { method: 'POST', json: { text: t } }); } catch (e) { co.words[t] = { ok: false, error: e.message }; }
   }));
   for (const el of document.querySelectorAll('[data-words]')) {
     const [g, i] = el.dataset.words.split(':');
     const k = at(g === 'x' ? 'x' : +g, +i);
-    const w = k && co.words[k.text || ''];
+    const w = k && co.words[exprText(k)];
     el.textContent = w ? (w.ok ? `= ${w.words}` : w.error) : '';
     el.classList.toggle('bad', w?.ok === false);
   }
@@ -228,9 +240,22 @@ async function checkWords() {
 // ------------------------------------------------------------ search
 /** Where the builder's search looks: a new subcohort's parent, or an edited cohort's source. */
 function scope() {
-  if (co.parent) return { source: { op: 'within', of: [co.parent.id] } };
-  if (co.editing?.source) return { within_source_of: co.editing.id };
-  return {};
+  const databases = co.pick ? [...co.pick] : [];
+  if (co.parent) return { source: { op: 'within', of: [co.parent.id] }, databases };
+  if (co.editing?.source) return { within_source_of: co.editing.id, databases };
+  return { databases };
+}
+
+/** The databases to search, ticked: those the user may search, online ones tickable (none
+ * ticked: every one); an offline one is greyed, never searched. */
+function renderDbs() {
+  const dbs = co.dbs.filter((d) => d.permission);
+  if (!dbs.length) { $('#co-dbs').innerHTML = '<span class="muted small">No database is granted to you yet.</span>'; return; }
+  $('#co-dbs').innerHTML = `<span class="filterby">Search in</span>${dbs.map((d) => {
+    const on = d.status === 'online';
+    const ticked = on && (!co.pick || co.pick.has(d.id));
+    return `<label class="dbtick${on ? '' : ' off'}" title="${esc(on ? d.name : `${d.name} is offline: not searched`)}"><input type="checkbox" data-db="${d.id}"${ticked ? ' checked' : ''}${on ? '' : ' disabled'}> <span class="dbstat ${on ? 'on' : 'off'}"><span class="dot" aria-hidden="true"></span></span>${esc(d.name)}</label>`;
+  }).join('')}`;
 }
 
 async function search() {
@@ -238,8 +263,21 @@ async function search() {
   const seq = ++co.seq;
   // the search before this one, if it still runs, is not waited for
   co.searching?.abort();
+  co.searching = null;
+  // a condition that cannot be read: no search (its result would leave it out), nothing to save
+  co.unread = unreadable();
+  if (co.unread.length) {
+    const n = co.unread.length;
+    co.result = null;
+    $('#co-count').classList.add('err');
+    $('#co-count').textContent = `${n} condition${n === 1 ? '' : 's'} cannot be read: ${co.unread.join('; ')}`;
+    $('#co-results').innerHTML = '<p class="muted">No search while a condition cannot be read: correct it, or remove it with ✕.</p>';
+    renderSave();
+    return;
+  }
   const ctl = new AbortController();
   co.searching = ctl;
+  $('#co-count').classList.remove('err');
   $('#co-count').textContent = 'Searching…';
   let r;
   try {
@@ -258,18 +296,21 @@ async function search() {
 
 function patientCells(p) {
   const P = phi();
-  const name = P ? [p.phi?.last_name, p.phi?.first_name].filter(Boolean).join(', ') || '—' : p.patient_id;
+  const name = (P ? [p.phi?.last_name, p.phi?.first_name].filter(Boolean).join(', ') : '') || p.pseudonym;
   const lbl = Object.fromEntries(co.cats);
-  return `<td class="nm"><a href="${esc(href('patient', [String(p.id)]))}">${esc(name)}</a></td><td class="mono">${esc(p.patient_id)}</td><td>${esc(p.sex)}</td>${ages() ? `<td class="num">${p.age ?? ''}</td>` : ''}
+  return `<td class="nm"><a href="${esc(href('patient', [String(p.id)]))}">${esc(name)}</a></td><td class="mono">${esc(P && p.patient_id ? p.patient_id : p.pseudonym)}</td><td>${esc(p.sex)}</td>${ages() ? `<td class="num">${p.age ?? ''}</td>` : ''}
     <td><span class="kinds">${p.kinds.map((k) => `<span class="sw ${catClass(k)}" title="${esc(lbl[k] || k)}"></span>`).join('')}</span></td>`;
 }
 
 function renderResults() {
   const r = co.result;
   const n = r.total;
-  $('#co-count').innerHTML = `<b>${n}</b> patient${n === 1 ? '' : 's'} match${n === 1 ? 'es' : ''}${r.excluded_total ? ` · ${r.excluded_total} excluded` : ''}${co.selected.size ? ` · ${co.selected.size} ticked` : ''}`;
+  // what it searched, and what it left out (offline, not ticked): a result never silently lacks a database
+  const searched = (r.searched || []).map((x) => x[1]);
+  const left = (r.left_out || []).map((x) => `${x.name} (${x.why})`);
+  $('#co-count').innerHTML = `<b>${n}</b> patient${n === 1 ? '' : 's'} match${n === 1 ? 'es' : ''}${r.excluded_total ? ` · ${r.excluded_total} excluded` : ''}${co.selected.size ? ` · ${co.selected.size} ticked` : ''}<span class="small"> · searched ${esc(searched.join(', ') || 'no database')}${left.length ? ` · left out: ${esc(left.join(', '))}` : ''}</span>`;
   const tick = !co.editing;
-  let h = `<table class="list"><tr>${tick ? '<th><input type="checkbox" id="co-all" title="Tick this page"></th>' : ''}<th>Patient</th><th>Patient ID</th><th>Sex</th>${ages() ? '<th class="num">Age</th>' : ''}<th>Data</th><th>Why</th></tr>`;
+  let h = `<table class="list"><tr>${tick ? '<th><input type="checkbox" id="co-all" title="Tick this page"></th>' : ''}<th>Patient</th><th>ID</th><th>Sex</th>${ages() ? '<th class="num">Age</th>' : ''}<th>Data</th><th>Why</th></tr>`;
   for (const p of r.items) {
     h += `<tr>${tick ? `<td><input type="checkbox" data-pick="${p.id}"${co.selected.has(p.id) ? ' checked' : ''} aria-label="Tick"></td>` : ''}${patientCells(p)}
       <td class="why">${p.reasons.map((x) => `<span>${esc(x)}</span>`).join('')}</td></tr>`;
@@ -281,7 +322,7 @@ function renderResults() {
   if (r.warnings?.length) h = `<div class="notice" role="status">${r.warnings.map((w) => `<span>${esc(w)}</span>`).join('<br>')}</div>${h}`;
   if (r.excluded_total) {
     h += `<details class="excluded"><summary>${r.excluded_total} patient${r.excluded_total === 1 ? '' : 's'} excluded</summary>
-      <table class="list"><tr><th>Patient</th><th>Patient ID</th><th>Sex</th>${ages() ? '<th class="num">Age</th>' : ''}<th>Data</th><th>Excluded for</th></tr>
+      <table class="list"><tr><th>Patient</th><th>ID</th><th>Sex</th>${ages() ? '<th class="num">Age</th>' : ''}<th>Data</th><th>Excluded for</th></tr>
       ${r.excluded.map((p) => `<tr>${patientCells(p)}<td class="why">${p.reasons.map((x) => `<span>${esc(x)}</span>`).join('')}</td></tr>`).join('')}
       ${r.excluded_total > r.excluded.length ? `<tr><td colspan="6" class="muted">and ${r.excluded_total - r.excluded.length} more</td></tr>` : ''}</table></details>`;
   }
@@ -291,13 +332,14 @@ function renderResults() {
 }
 
 function renderSave() {
-  const n = co.result?.total || 0;
+  // nothing is saved while a condition cannot be read
+  const n = co.unread.length ? 0 : co.result?.total || 0;
   const k = co.selected.size;
   const which = k ? `the ${k} ticked` : `all ${n}`;
   if (co.editing) {
     const d = co.editing.definition;
     const manual = [d.added.length && `${d.added.length} added`, d.removed.length && `${d.removed.length} removed`].filter(Boolean).join(' and ');
-    $('#co-save').innerHTML = `<button class="btn primary" id="co-save-changes">Save the changes</button>
+    $('#co-save').innerHTML = `<button class="btn primary" id="co-save-changes"${co.unread.length ? ' disabled' : ''}>Save the changes</button>
       <a class="btn" href="${esc(href('cohorts', [String(co.editing.id)]))}">Cancel</a>
       <span class="muted small">These are the patients the criteria select${manual ? `; the patients ${manual} manually stay so` : ''}. Saved criteria apply when the members are refreshed: you will see who joins and who leaves first.</span>`;
     return;
@@ -313,13 +355,25 @@ function renderSave() {
     ${others.length ? `<span class="muted">or add them to</span><select id="co-target" aria-label="Cohort">${others.map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select><button class="btn" id="co-add"${n ? '' : ' disabled'}>Add</button>` : ''}`;
 }
 
-const chosen = () => (co.selected.size ? [...co.selected] : co.result.ids);
+const chosen = () => (co.selected.size ? [...co.selected] : co.result?.ids || []);
 
 function scheduleSearch() {
   clearTimeout(co.timer);
   co.offset = 0;
   co.timer = setTimeout(() => search().catch(fail), 350);
 }
+
+// ------------------------------------------------------------ the screen drawn
+// The drawing this screen belongs to: an answer that arrives after another screen was drawn is
+// dropped (router.js).
+let drawing = 0;
+const late = () => superseded(drawing);
+
+/** Whether the user is typing in a condition (a redraw would replace the field under them). */
+const typing = () => {
+  const a = document.activeElement;
+  return !!a?.closest?.('#co-criteria, #co-exclude') && a.matches('input, select, textarea');
+};
 
 // ------------------------------------------------------------ the list of cohorts
 /** The cohorts in list order, each subcohort under its parent: [cohort, depth]. */
@@ -355,21 +409,21 @@ function newEdit() {
     <div class="nemenu hidden" role="menu">${items.join('')}</div></div>`;
 }
 
-/** Its owner deletes a cohort; any admin the demo's (and the demo with it). */
-const deletable = (c) => c.is_owner || (c.demo && isAdmin());
+/** Who manages a cohort deletes it. */
+const deletable = (c) => c.is_owner;
 
 async function loadList() {
   co.list = (await api('cohorts')).items;
   const cur = co.cohort?.id ?? co.editing?.id ?? co.parent?.id;
   $('#co-list').innerHTML = `${newEdit()}${tree(co.list).map(([c, d]) => `<a class="co${c.id === cur ? ' on' : ''}${d ? ` depth${Math.min(d, 3)}` : ''}" href="${esc(href('cohorts', [String(c.id)]))}">
-      <b>${esc(c.name)}</b><small>${c.members} patient${c.members === 1 ? '' : 's'}${c.demo ? ' · the demo' : c.is_owner ? (c.shares?.length ? ' · shared' : '') : ` · from ${esc(c.owner_name || '?')}`}</small></a>`).join('')}
+      <b>${esc(c.name)}</b><small>${c.members} patient${c.members === 1 ? '' : 's'}${c.is_owner ? (c.shares?.length ? ' · shared' : '') : ` · from ${esc(c.owner_name || '?')}`}</small></a>`).join('')}
     ${co.list.length ? '' : '<p class="muted small">Cohorts you make or that others share with you appear here.</p>'}`;
 }
 
+/** The categories, and the databases with their status now (online, offline). */
 async function references() {
-  if (co.cats.length) return;
-  const [pl, dbs] = await Promise.all([api('patients?limit=1'), api('databases')]);
-  co.cats = pl.categories;
+  const [pl, dbs] = await Promise.all([co.cats.length ? null : api('patients?limit=1'), api('databases')]);
+  if (pl) co.cats = pl.categories;
   co.dbs = dbs.items;
 }
 
@@ -414,29 +468,33 @@ function definitionHtml(c) {
 }
 
 // ------------------------------------------------------------ a cohort
-async function showCohort(id, params) {
+/** A cohort's page.  `light`: drawn again for new data, keeping the open panel (a refresh's
+ * ticks, a share being chosen), the page of members and the patients found to add. */
+async function showCohort(id, params, light = false) {
   $('#co-builder').classList.add('hidden');
   $('#co-one').classList.remove('hidden');
   co.editing = null;
   co.parent = null;
   const [cohort, version] = await Promise.all([api(`cohorts/${id}`), api('version', { background: true }).catch(() => null)]);
+  if (late()) return;
   co.cohort = cohort;
   co.version = version?.data ?? dataVersion();
   await loadList();
+  if (late()) return;
   const c = co.cohort;
   const parent = c.parent && co.list.find((x) => x.id === c.parent);
   $('#co-crumb').innerHTML = `<a class="crumb" href="#/cohorts">Cohorts</a><span class="sep">›</span>${parent ? `<a class="crumb" href="${esc(href('cohorts', [String(parent.id)]))}">${esc(parent.name)}</a><span class="sep">›</span>` : ''}<span class="crumb now">${esc(c.name)}</span>`;
   // in Privacy Mode the server exports through its gate
   const ex = (what, title, label) => `<a class="btn" href="${esc(`${API}cohorts/${c.id}/export${what ? `?${qs({ what })}` : ''}`)}" download title="${title}">${label}</a>`;
   $('#co-head').innerHTML = `<div class="cohead"><h2>${esc(c.name)}</h2>
-      <div class="sub">${c.members} patient${c.members === 1 ? '' : 's'} · ${c.demo ? 'the demo, for every user' : c.is_owner ? 'yours' : `${esc(c.owner_name)}'s, shared with you${c.can_edit ? ' to edit' : ' to read'}`} · made ${fmtDate(c.created_at)}${c.refreshed_at ? ` · members found ${fmtTime(c.refreshed_at)}` : ''}${Object.entries(c.source_versions || {}).filter(([k]) => k !== 'catalog').map(([k, v]) => ` · <span title="The version of the connected database ${esc(k)} when its members were found">${esc(k)} ${esc(v)}</span>`).join('')}</div>
+      <div class="sub">${c.members} patient${c.members === 1 ? '' : 's'} · ${c.is_owner ? 'yours' : `${esc(c.owner_name)}'s, shared with you${c.can_edit ? ' to edit' : ' to read'}`} · made ${fmtDate(c.created_at)}${c.refreshed_at ? ` · members found ${fmtTime(c.refreshed_at)}` : ''}${(c.definition.databases || []).length ? ` · searches ${esc(c.definition.databases.join(', '))}` : ''}${Object.entries(c.source_versions || {}).map(([k, v]) => ` · <span title="The version of the database ${esc(k)} when its members were found">${esc(k)} ${esc(v)}</span>`).join('')}</div>
       ${c.description ? `<p>${esc(c.description)}</p>` : ''}</div>
     <div class="ftools coacts">
       ${c.can_edit ? `<a class="btn" href="${esc(href('cohorts', [String(c.id), 'edit']))}">Edit</a>` : ''}
       <button class="btn" data-act="clone">Clone…</button>
       <a class="btn" href="${esc(href('cohorts', ['new'], { within: c.id }))}">Subcohort…</a>
       <button class="btn" data-act="merge">Merge…</button>
-      ${c.is_owner && !c.demo ? '<button class="btn" data-act="share">Share…</button>' : ''}
+      ${c.is_owner ? '<button class="btn" data-act="share">Share…</button>' : ''}
       <span class="spacer"></span>
       ${deletable(c) ? '<button class="btn danger" data-act="delete">Delete…</button>' : ''}
     </div>
@@ -450,14 +508,21 @@ async function showCohort(id, params) {
       <span class="exports"><span class="muted">Export${privacy.on ? ' (Privacy Mode)' : ''}</span>
         ${ex('', 'The members: one row per patient', 'Members (CSV)')}
         ${ex('criteria', 'The definition: criteria, source, patients added and removed manually (JSON)', 'Definition (JSON)')}
-        ${ex('data', "Every database's rows about the members, a cell per line: patient, database, line, column, value", "Members' data (CSV)")}
+        ${ex('data', "Every database's entries about the members, one per line: database, patient, time, category, name, code, value, unit, flag, text", "Members' data (CSV)")}
         ${ex('xlsx', 'Members, definition, and a sheet per database', 'Excel')}</span>
-    </div>
-    <div id="co-panel"></div>`;
-  co.moffset = 0;
-  co.found = null;
-  $('#co-find').value = '';
+    </div>`;
+  if (!light) {
+    $('#co-panel').innerHTML = '';
+    co.moffset = 0;
+    co.found = null;
+    $('#co-find').value = '';
+  }
   await loadMembers();
+  if (late()) return;
+  if (light) {
+    if ($('#co-hist').open) await loadHistory();
+    return;
+  }
   $('#co-hist').open = false;
   $('#co-hist-body').innerHTML = '';
   if (params.get('refresh') && c.can_edit) {
@@ -468,9 +533,15 @@ async function showCohort(id, params) {
 
 async function loadMembers() {
   const c = co.cohort;
-  const m = await api(`cohorts/${c.id}/members?${qs({ limit: PAGE, offset: co.moffset })}`);
+  let m = await api(`cohorts/${c.id}/members?${qs({ limit: PAGE, offset: co.moffset })}`);
+  // fewer members than the page shown began at (new data took some out): the first page
+  if (!m.items.length && co.moffset) {
+    co.moffset = 0;
+    m = await api(`cohorts/${c.id}/members?${qs({ limit: PAGE, offset: 0 })}`);
+  }
+  if (co.cohort?.id !== c.id) return;
   const how = (p) => (p.how === 'manual' ? 'added manually' : c.source ? 'by the definition' : 'by the criteria');
-  let h = `<table class="list"><tr><th>Patient</th><th>Patient ID</th><th>Sex</th>${ages() ? '<th class="num">Age</th>' : ''}<th>Data</th><th>Added</th>${c.can_edit ? '<th></th>' : ''}</tr>`;
+  let h = `<table class="list"><tr><th>Patient</th><th>ID</th><th>Sex</th>${ages() ? '<th class="num">Age</th>' : ''}<th>Data</th><th>Added</th>${c.can_edit ? '<th></th>' : ''}</tr>`;
   for (const p of m.items) {
     h += `<tr>${patientCells(p)}<td>${how(p)} <span class="faint">${fmtDate(p.added_at)}</span></td>
       ${c.can_edit ? `<td><button class="icon x" data-out="${p.id}" title="Remove from the cohort (recorded in its definition)" aria-label="Remove">✕</button></td>` : ''}</tr>`;
@@ -506,7 +577,7 @@ function renderFound() {
   const f = co.found;
   if (!f) { $('#co-found').innerHTML = ''; return; }
   const fresh = f.items.filter((p) => !p.member);
-  let h = '<table class="list"><tr><th></th><th>Patient</th><th>Patient ID</th><th>Sex</th>';
+  let h = '<table class="list"><tr><th></th><th>Patient</th><th>ID</th><th>Sex</th>';
   h += `${ages() ? '<th class="num">Age</th>' : ''}<th>Data</th></tr>`;
   for (const p of f.items) {
     h += `<tr><td>${p.member ? '<span class="faint small">member</span>' : `<input type="checkbox" data-addpick="${p.id}"${f.ticked.has(p.id) ? ' checked' : ''} aria-label="Tick">`}</td>${patientCells(p)}</tr>`;
@@ -537,11 +608,13 @@ async function addFound(all) {
 const panel = (html) => { $('#co-panel').innerHTML = `<div class="card panel">${html}</div>`; $('#co-panel').scrollIntoView({ block: 'nearest' }); };
 const closeBtn = '<button class="btn" id="co-panel-close">Cancel</button>';
 
-/** Whether the catalog's data changed since the cohort's members were found. */
+/** Whether a database's data changed since the cohort's members were found (its version). */
 function newData(c) {
-  const now = co.version;
-  const then = c.source_versions?.catalog;
-  return c.refreshed_at && now != null && then != null && String(now) !== String(then);
+  if (!c.refreshed_at) return false;
+  return Object.entries(c.source_versions || {}).some(([name, then]) => {
+    const d = co.dbs.find((x) => x.name === name);
+    return d && d.status === 'online' && d.version && String(d.version) !== String(then);
+  });
 }
 
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
@@ -562,7 +635,7 @@ async function refresh(quiet = false) {
     return;
   }
   const table = (rows, total, pick) => `<div class="table-wrap short"><table class="list">
-      <tr>${pick ? `<th class="tick"><input type="checkbox" id="co-join-all" checked aria-label="All the new patients"></th>` : ''}<th>Patient</th><th>Patient ID</th><th>Sex</th>${ages() ? '<th class="num">Age</th>' : ''}<th>Data</th></tr>
+      <tr>${pick ? `<th class="tick"><input type="checkbox" id="co-join-all" checked aria-label="All the new patients"></th>` : ''}<th>Patient</th><th>ID</th><th>Sex</th>${ages() ? '<th class="num">Age</th>' : ''}<th>Data</th></tr>
       ${rows.map((p) => `<tr>${pick ? `<td class="tick"><input type="checkbox" data-join="${p.id}" checked aria-label="Add this patient"></td>` : ''}${patientCells(p)}</tr>`).join('')}
       ${total > rows.length ? `<tr><td colspan="7" class="muted">and ${total - rows.length} more${pick ? ', added with all the others' : ''}</td></tr>` : ''}</table></div>`;
   panel(`<b>What the definition selects now</b>
@@ -635,19 +708,9 @@ async function share() {
 
 async function deletePanel() {
   const c = co.cohort;
-  if (c.demo) {
-    // the demo's cohort: the demo goes with it
-    const r = await api('demo/removal');
-    const n = (k, one) => `${r[k]} ${one}${r[k] === 1 ? '' : 's'}`;
-    panel(`<b>Delete the demo “${esc(c.name)}”?</b>
-      <p>This removes the demo's invented patients from the catalog, with everything about them: ${n('patients', 'patient')}, ${n('encounters', 'encounter')}, ${n('bed_stays', 'bed stay')}, ${n('ehr_items', 'item')} (results, notes, files) and ${n('recordings', 'recording')} with their results and indexes; its OMOP database (demo_omop) is disconnected, and this cohort is deleted.${r.kept_recordings + r.kept_encounters ? ` What other sources also hold stays (${r.kept_recordings} recording(s), ${r.kept_encounters} encounter(s)).` : ''} Nothing else in the catalog changes, and the demo's files stay where they are.</p>
-      <p class="muted small">This cannot be undone; an admin can load the demo again with <code>medorama demo add</code>.</p>
-      <div class="ftools"><button class="btn danger" id="co-delete-go">Delete the demo</button>${closeBtn}</div>`);
-    return;
-  }
   const made = co.list.filter((x) => x.definition.sources.some((s) => s.id === c.id && !s.deleted));
   panel(`<b>Delete “${esc(c.name)}”?</b>
-    <p>${c.members === 1 ? 'The patient in it stays' : `The ${c.members} patients in it stay`} in the catalog.${made.length ? ` ${made.length === 1 ? 'One cohort is' : `${made.length} cohorts are`} made from it (${made.map((x) => `“${esc(x.name)}”`).join(', ')}): ${made.length === 1 ? 'it keeps' : 'they keep'} its current members.` : ''} This cannot be undone.</p>
+    <p>${c.members === 1 ? 'The patient in it stays' : `The ${c.members} patients in it stay`} in their databases; the cohort's own file and its key are destroyed.${made.length ? ` ${made.length === 1 ? 'One cohort is' : `${made.length} cohorts are`} made from it (${made.map((x) => `“${esc(x.name)}”`).join(', ')}): ${made.length === 1 ? 'it keeps' : 'they keep'} its current members.` : ''} This cannot be undone.</p>
     <div class="ftools"><button class="btn danger" id="co-delete-go">Delete</button>${closeBtn}</div>`);
 }
 
@@ -669,9 +732,19 @@ async function loadHistory() {
 }
 
 // ------------------------------------------------------------ the builder: a new cohort, a subcohort, an edit
-async function showBuilder({ editing = null, parent = null } = {}) {
+/** The criteria builder.  `light`: drawn again for new data, keeping the criteria (and the
+ * field being typed in), the patients ticked and the page of results. */
+async function showBuilder({ editing = null, parent = null, light = false } = {}) {
   $('#co-one').classList.add('hidden');
   $('#co-builder').classList.remove('hidden');
+  if (light) {
+    await loadList();
+    if (late()) return;
+    renderDbs();
+    if (!typing()) renderCriteria();
+    await search();
+    return;
+  }
   co.cohort = null;
   co.editing = editing;
   co.parent = parent;
@@ -681,17 +754,20 @@ async function showBuilder({ editing = null, parent = null } = {}) {
     co.inc = g || [];
     co.kept = g ? null : editing.criteria.include;
     // an exclusion that is a group (made through the API) is kept as it is, never dropped
-    co.exc = (editing.criteria.exclude || []).map((e) => (e.op ? { kind: 'group', expr: e } : { ...e, mode: e.kind === 'column' && e.text ? 'text' : undefined }));
+    co.exc = (editing.criteria.exclude || []).map((e) => (e.op ? { kind: 'group', expr: e } : { ...e }));
+    co.pick = editing.databases?.length ? new Set(editing.databases) : null;
   } else if (co.mode !== mode || (!co.inc.length && !co.exc.length)) {
     // a new search starts empty; coming back to the same one keeps it
     co.inc = [[blank('expression')]];
     co.exc = [];
     co.kept = null;
+    co.pick = null;
   }
   co.mode = mode;
   co.selected = new Set();
   co.offset = 0;
   await loadList();
+  if (late()) return;
   const crumb = (c) => `<a class="crumb" href="${esc(href('cohorts', [String(c.id)]))}">${esc(c.name)}</a><span class="sep">›</span>`;
   $('#co-crumb').innerHTML = `<a class="crumb" href="#/cohorts">Cohorts</a><span class="sep">›</span>${
     editing ? `${crumb(editing)}<span class="crumb now">Edit</span>` : parent ? `${crumb(parent)}<span class="crumb now">New subcohort</span>` : '<span class="crumb now">New cohort</span>'}`;
@@ -707,20 +783,39 @@ async function showBuilder({ editing = null, parent = null } = {}) {
   } else {
     $('#co-bhead').innerHTML = '';
   }
+  renderDbs();
   renderCriteria();
   await search();
 }
 
 export default {
+  /** The data changed: expressions are checked again (a name may now mean another database's). */
+  invalidate() { co.words = {}; },
   async show(r) {
+    drawing = navigation();
+    // drawn again for new data (main.js), at the same address: what the user does stays
+    const where = `${r.parts.join('/')}?${r.params.get('within') || ''}`;
+    const light = st.redrawing && co.where === where;
+    co.where = where;
     await references();
+    if (late()) return;
     const id = r.parts[0];
+    if (light) {
+      if (id && id !== 'new' && r.parts[1] !== 'edit') return showCohort(+id, r.params, true);
+      return showBuilder({ editing: co.editing, parent: co.parent, light: true });
+    }
     if (!id) return showBuilder();
     if (id === 'new') {
       const within = r.params.get('within');
-      return showBuilder({ parent: within ? await api(`cohorts/${within}`) : null });
+      const parent = within ? await api(`cohorts/${within}`) : null;
+      if (late()) return;
+      return showBuilder({ parent });
     }
-    if (r.parts[1] === 'edit') return showBuilder({ editing: await api(`cohorts/${id}`) });
+    if (r.parts[1] === 'edit') {
+      const editing = await api(`cohorts/${id}`);
+      if (late()) return;
+      return showBuilder({ editing });
+    }
     return showCohort(+id, r.params);
   },
   wire() {
@@ -744,9 +839,20 @@ export default {
         if (g === 'x') co.exc[i] = fresh; else co.inc[g][i] = fresh;
       } else if (key === 'not') k.not = t.value === '1';
       else if (key === 'latest') k.latest = t.checked;
-      else if (key === 'import') { k.import = t.value ? +t.value : undefined; if (k.kind === 'column') { k.name = ''; if (k.import && !co.columns[k.import]) loadColumns(k.import); } }
+      else if (key === 'database') k.database = t.value ? +t.value : undefined;
       else k[key] = t.value;
-      if (['kind', 'cmp', 'import', 'name', 'mode'].includes(key)) renderCriteria();
+      if (['kind', 'cmp', 'database', 'name', 'mode'].includes(key)) renderCriteria();
+      scheduleSearch();
+    });
+    $('#co-dbs').addEventListener('change', (e) => {
+      const t = e.target.closest('[data-db]');
+      if (!t) return;
+      const online = co.dbs.filter((d) => d.permission && d.status === 'online').map((d) => d.id);
+      if (!co.pick) co.pick = new Set(online);
+      if (t.checked) co.pick.add(+t.dataset.db); else co.pick.delete(+t.dataset.db);
+      // every one ticked: every one, also those connected later
+      if (online.every((d) => co.pick.has(d))) co.pick = null;
+      co.offset = 0;
       scheduleSearch();
     });
     builder.addEventListener('click', (e) => {
@@ -789,11 +895,15 @@ export default {
     });
     $('#co-save').addEventListener('click', async (e) => {
       try {
+        // a condition that cannot be read: nothing saved (the buttons are disabled; and so)
+        if (['co-create', 'co-add', 'co-save-changes'].includes(e.target.id) && co.unread.length) {
+          return toast(`Not saved: ${co.unread.length === 1 ? 'a condition cannot' : `${co.unread.length} conditions cannot`} be read`, true);
+        }
         if (e.target.id === 'co-create') {
           const name = $('#co-name').value.trim();
           if (!name) { $('#co-name').focus(); return toast('Give the cohort a name', true); }
           const source = co.parent ? { op: 'within', of: [co.parent.id] } : undefined;
-          const c = await api('cohorts', { method: 'POST', json: { name, criteria: query(), source, patients: chosen() } });
+          const c = await api('cohorts', { method: 'POST', json: { name, criteria: query(), databases: scope().databases, source, patients: chosen() } });
           toast(`Cohort “${c.name}”: ${c.members} patient${c.members === 1 ? '' : 's'}`);
           co.inc = [];
           co.exc = [];
@@ -809,7 +919,7 @@ export default {
           const name = $('#co-ename').value.trim();
           if (!name) { $('#co-ename').focus(); return toast('A cohort needs a name', true); }
           const id = co.editing.id;
-          await api(`cohorts/${id}`, { method: 'PATCH', json: { name, description: $('#co-edesc').value, criteria: query() } });
+          await api(`cohorts/${id}`, { method: 'PATCH', json: { name, description: $('#co-edesc').value, criteria: query(), databases: scope().databases } });
           toast('Saved');
           go(href('cohorts', [String(id)], { refresh: 1 })).catch(fail);
         }
@@ -878,7 +988,7 @@ export default {
           go(href('cohorts', [String(n.id)])).catch(fail);
         } else if (id === 'co-delete-go') {
           await api(`cohorts/${c.id}`, { method: 'DELETE' });
-          toast(c.demo ? 'The demo was removed from the catalog' : `Cohort “${c.name}” deleted`);
+          toast(`Cohort “${c.name}” deleted`);
           go('#/cohorts').catch(fail);
         } else if (e.target.closest('[data-out]')) {
           const p = +e.target.closest('[data-out]').dataset.out;

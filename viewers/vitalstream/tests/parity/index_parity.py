@@ -1,5 +1,5 @@
-"""Index parity: the three viewers write the same index (docs/index-format.md) for the same
-recordings, so that they can share one cache folder.
+"""Index parity: the three viewers write the same index (docs/index-format.md, index format 3:
+the index store) for the same recordings, so that they can share one store.
 
     python tests/parity/index_parity.py [--impl py,rs,cpp] [--adapters-dir DIR] [RECORDING ...]
 
@@ -8,10 +8,16 @@ the rules of docs/index-format.md and docs/wfdb-collection.md: a collection that
 (missing, outside its folder, an empty name), a header that states more samples than its file
 holds, a folder with a rate that is not a number, a record of 300 signals (read in chunks), more
 distinct marker names than codes (with the Python module wfdbx), a folder of symbolic links
-(where links can be made), and an EDF+D file of 3000 runs.  Each viewer indexes each
-recording into its own temporary cache (`--index`); then the keys must be equal, the key must
-be the one computed here from the specification, every array file must be byte-identical, and
-meta.json must be byte-identical apart from its informative `engine` and `indexed_s`.
+(where links can be made), an EDF+D file of 3000 runs, a header without a number of samples (and
+a compressed one, with wfdbx), a multi-frequency record with a marker, a folder whose first
+record states no start time, and an EDF file whose date is a day its month does not have.  Each viewer indexes each
+recording into the plain index store of its own temporary cache (`--index`, `cache_dir/
+index.sqlite`); then each store must hold one index, under the key computed here from the
+specification (version 3), and the stores' rows must be the same: the `store` settings, the
+`meta` text apart from its informative `engine` and `indexed_s`, the `arrays` rows (the number
+of values of each array), and the `chunks` rows byte for byte.  A viewer that does not write
+index stores yet (it writes an index folder, format 2) is reported and left out of the
+comparison; a viewer that fails to index a recording is a difference.
 """
 
 import argparse
@@ -19,6 +25,7 @@ import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import struct
 import subprocess
 import sys
@@ -28,7 +35,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 from impls import TESTDATA, select, viewer  # noqa: E402
 
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 # the bounds of a folder's walk (docs/index-format.md, the key): the default max_depth, and the
 # most files listed
 MAX_DEPTH = 20
@@ -166,15 +173,69 @@ def generated(tmp):
     viewer_parity = __import__('viewer_parity')
     viewer_parity.edf_runs(tmp / 'runs.edf', 3000)
     out.append(tmp / 'runs.edf')
+    # a header without a number of samples: read to the end of its data
+    record(tmp / 'nocount', 'r', 'r 1 250', list(range(1, 9)))
+    out.append(tmp / 'nocount' / 'r.hea')
+    # a multi-frequency record (4, 1 and 2 samples per frame), a marker at frame 2
+    mf = tmp / 'multifreq'
+    mf.mkdir()
+    frames = [[4 * f + k for k in range(4)] + [1000 + f] + [2000 + 10 * f + k for k in range(2)] for f in range(5)]
+    cols = [[v for x in frames for v in x[0:4]], [x[4] for x in frames], [v for x in frames for v in x[5:7]]]
+    sums = [sum(c) & 0xffff for c in cols]
+    sums = [t - 0x10000 if t >= 0x8000 else t for t in sums]
+    (mf / 'mf.hea').write_text(f'mf 3 100 5\nmf.dat 16x4 1/mV 16 0 0 {sums[0]} 0 A\n'
+                               f'mf.dat 16 1/mV 16 0 0 {sums[1]} 0 B\nmf.dat 16x2 1/mV 16 0 0 {sums[2]} 0 C\n')
+    (mf / 'mf.dat').write_bytes(b''.join(struct.pack('<7h', *x) for x in frames))
+    (mf / 'mf.mrk').write_bytes(bytes([2, 4, 0, 0]))
+    out.append(mf / 'mf.hea')
+    # a folder whose first record states no start time: it ends where the next one starts
+    lead = tmp / 'leading'
+    record(lead, 'a', 'a 1 250 4', [1, 2, 3, 4])
+    record(lead, 'b', 'b 1 250 4 10:00:00 01/03/2024', [1, 2, 3, 4])
+    record(lead, 'c', 'c 1 250 4', [1, 2, 3, 4])
+    out.append(lead)
+    # an EDF file dated 31 February: no start
+    feb = tmp / 'feb31.edf'
+    b = bytearray((TESTDATA / 'edf' / 'psg_plus.edf').read_bytes())
+    b[168:176] = b'31.02.24'
+    feb.write_bytes(bytes(b))
+    out.append(feb)
+    try:
+        import wfdbx
+        z = tmp / 'flac'
+        z.mkdir()
+        wfdbx.write_record('z', [[k] for k in range(300)], 250, fmt=516, units=['mV'], gains=[1], adcres=[16],
+                           names=['II'], dir=str(z))
+        lines = (z / 'z.hea').read_text().splitlines()
+        (z / 'z.hea').write_text('\n'.join(['z 1 250'] + lines[1:]) + '\n')
+        out.append(z / 'z.hea')
+    except ImportError:
+        print('(no compressed record: the Python module wfdbx is not installed)')
+    except Exception as e:  # a wfdbx without that writer
+        print(f'(no compressed record: {e})')
     return out
 
 
-def meta_text(path):
-    """meta.json without its informative keys, as text (key order kept)."""
-    meta = json.loads(path.read_text(encoding='utf-8'))
+def meta_text(text):
+    """meta.json's text without its informative keys (key order kept)."""
+    meta = json.loads(text)
     for k in INFORMATIVE:
         meta.pop(k, None)
     return json.dumps(meta, separators=(',', ':'))
+
+
+def store_rows(path):
+    """The rows of a plain index store: {'store': ..., 'keys': ..., 'meta': ..., 'arrays': ...,
+    'chunks': ...}, sorted (meta without its informative keys)."""
+    c = sqlite3.connect(f'file:{path}?mode=ro', uri=True)
+    try:
+        return {'store': sorted(c.execute('SELECT name, value FROM store')),
+                'keys': [k for (k,) in c.execute('SELECT key FROM indexes ORDER BY key')],
+                'meta': sorted((k, meta_text(m)) for k, m in c.execute('SELECT key, meta FROM indexes')),
+                'arrays': sorted(c.execute('SELECT key, array, n_values FROM arrays')),
+                'chunks': sorted((k, a, n, bytes(d)) for k, a, n, d in c.execute('SELECT key, array, n, data FROM chunks'))}
+    finally:
+        c.close()
 
 
 def compare(recording, names=None, adapters_dir=None, report=print):
@@ -182,33 +243,43 @@ def compare(recording, names=None, adapters_dir=None, report=print):
     tmp = Path(tempfile.mkdtemp(prefix='index-parity-'))
     problems = []
     try:
-        folders = {}
+        stores = {}
         for impl in impls:
             cache = tmp / impl
             extra = ['--adapters-dir', adapters_dir] if adapters_dir else []
-            subprocess.run([str(viewer(impl)), '--cache-dir', str(cache), *extra, '--index', str(recording)],
-                           check=True, stdout=subprocess.DEVNULL)
-            keys = [d for d in cache.iterdir() if d.is_dir()]
-            if len(keys) != 1:
-                problems.append(f'{impl}: {len(keys)} index folders')
+            r = subprocess.run([str(viewer(impl)), '--cache-dir', str(cache), *extra, '--index', str(recording)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, errors='replace')
+            if r.returncode != 0:
+                last = (r.stderr.strip().splitlines() or [f'exit status {r.returncode}'])[-1]
+                problems.append(f'{impl}: --index failed: {last}')
                 continue
-            folders[impl] = keys[0]
+            store = cache / 'index.sqlite'
+            if not store.is_file():
+                folders = [d.name for d in cache.iterdir() if d.is_dir()] if cache.is_dir() else []
+                report(f'  ({impl}: writes no index store yet{" (an index folder, format 2)" if folders else ""}: '
+                       'left out)')
+                continue
+            try:
+                stores[impl] = store_rows(store)
+            except (sqlite3.Error, ValueError) as e:
+                problems.append(f'{impl}: its store cannot be read: {e}')
         expected = spec_key(recording)
-        for impl, d in folders.items():
-            if d.name != expected:
-                problems.append(f'{impl}: key {d.name}, the specification gives {expected}')
-        ref, *others = list(folders)
-        ref_files = sorted(f.name for f in folders[ref].iterdir())
+        for impl, rows in stores.items():
+            if rows['keys'] != [expected]:
+                problems.append(f'{impl}: keys {rows["keys"]}, the specification gives {expected}')
+        if len(stores) < 2:
+            if not problems:
+                report(f'  (only {", ".join(stores) or "no viewer"} wrote a store: nothing to compare)')
+            return problems
+        ref, *others = list(stores)
         for impl in others:
-            files = sorted(f.name for f in folders[impl].iterdir())
-            if files != ref_files:
-                problems.append(f'{impl}: files {sorted(set(files) ^ set(ref_files))} differ from {ref}')
-                continue
-            for name in files:
-                a, b = folders[ref] / name, folders[impl] / name
-                same = meta_text(a) == meta_text(b) if name == 'meta.json' else a.read_bytes() == b.read_bytes()
-                if not same:
-                    problems.append(f'{impl}: {name} differs from {ref}')
+            for table in ('store', 'meta', 'arrays'):
+                if stores[impl][table] != stores[ref][table]:
+                    problems.append(f'{impl}: the {table} rows differ from {ref}\'s')
+            a, b = stores[ref]['chunks'], stores[impl]['chunks']
+            if a != b:
+                which = sorted({(r[1], r[2]) for r in set(a) ^ set(b)})
+                problems.append(f'{impl}: chunks differ from {ref}\'s: {which[:5]}{" ..." if len(which) > 5 else ""}')
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return problems

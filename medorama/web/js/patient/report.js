@@ -1,22 +1,20 @@
 // The report: every entry of a patient, newest first (by date, or by category), or the trends
 // of every measurement; with a search, the entries found and their snippets.
 
-import { catClass, dayKey, esc, fmtDay, fmtHM, fmtShort, mark } from '../core.js';
+import { catClass, dayKey, daysBetween, esc, fmtDay, fmtHM, fmtShort, mark } from '../core.js';
 import { spark, color } from './charts.js';
 
-/** Where the patient was at time t: encounter, hospital day, unit. */
+/** Where the patient was at time t: the visit (a stay: its day), its unit, its database. */
 export function context(summary, encId, t) {
   const e = summary.encounters.find((x) => x.id === encId);
   if (!e) return '';
-  const parts = [e.encounter_id];
-  if (e.inpatient && e.admit && isFinite(t)) {
-    const d0 = Date.parse(`${dayKey(e.admit)}T00:00:00Z`);
-    const d1 = Date.parse(`${dayKey(t)}T00:00:00Z`);
-    parts.push(`hospital day ${Math.round((d1 - d0) / 86400000) + 1}`);
-  }
-  const stay = (e.stays || []).find((s) => s.start !== null && s.start <= t && (s.end === null || s.end >= t) && s.unit);
-  const unit = stay ? `${stay.unit}${stay.bed ? ` bed ${stay.bed}` : ''}` : e.admit_unit;
-  if (unit) parts.push(unit);
+  // a stay: a visit over more than one day (patient.js), its days counted in Medorama's time zone
+  const stay = e.admit && e.discharge && daysBetween(e.admit, e.discharge) >= 1;
+  const parts = [stay ? 'Stay' : 'Visit'];
+  if (stay && isFinite(t)) parts.push(`hospital day ${daysBetween(e.admit, t) + 1}`);
+  if (e.unit) parts.push(e.unit);
+  if (e.icu) parts.push('ICU');
+  parts.push(e.source);
   return parts.join(' · ');
 }
 
@@ -74,6 +72,15 @@ export function renderList(el, st) {
   el.innerHTML = html;
 }
 
+/** A measured value as it was measured: every digit of a whole number (12345, not 12350), a
+ * fraction to six significant digits at least (0.1 + 0.2 shows as 0.3). */
+export function fmtValue(v) {
+  if (!isFinite(v)) return String(v ?? '');
+  if (Number.isInteger(v)) return String(v);
+  const whole = Math.max(1, Math.ceil(Math.log10(Math.abs(v) + 1)));
+  return String(+v.toPrecision(Math.min(17, Math.max(6, whole + 3))));
+}
+
 function renderTrends(el, st) {
   if (!st.trends) {
     el.innerHTML = '<p class="placeholder">Loading…</p>';
@@ -93,7 +100,7 @@ function renderTrends(el, st) {
     }
     const last = t.points[t.points.length - 1];
     const badge = last[2] === 2 ? ' <span class="badge">critical</span>' : last[2] ? ' <span class="badge">abnormal</span>' : '';
-    const v = `${+last[1].toPrecision(4)} ${t.unit}`.trim();
+    const v = `${fmtValue(last[1])} ${t.unit}`.trim();
     html += `<div class="trend" data-trend="${esc(t.category)}|${last[0]}" tabindex="0" role="button"><span><b>${esc(t.name)}</b><br><small>${t.n} values · last ${esc(fmtShort(last[0]))}</small></span>
       <span>${esc(v)}${badge}</span>${spark(t.points.map((p) => [p[0], p[1]]), t.ref_low, t.ref_high, { w: 180, h: 28, stroke: color(`c-${t.category}`) })}</div>`;
   }

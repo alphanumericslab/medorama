@@ -26,6 +26,7 @@
   const embedded = params.has('src');
   const st = {
     rec: null, layout: store.get('layout', '3x4'), speed: store.get('speed', 25), gain: store.get('gain', 10),
+    highpass: store.get('highpass', false), notch: store.get('notch', 0),
     zoom: 0, calipers: false, marks: [], drawn: null, url: null,
   };
 
@@ -62,7 +63,7 @@
     $('#tools').classList.remove('off');
     $('#tools').classList.toggle('inert', !usable);
     for (const el of document.querySelectorAll('#tools select, #tools button')) el.disabled = !usable;
-    $('#tools').title = usable ? '' : 'A picture or a PDF is shown as it is: its layout, speed and gain are fixed, and calipers need the signal';
+    $('#tools').title = usable ? '' : 'A picture or a PDF is shown as it is: its layout, speed, gain and filters are fixed, and calipers need the signal';
     if (!usable && st.calipers) { st.calipers = false; $('#cal').classList.remove('on'); document.body.classList.remove('measuring'); }
   }
   const esc = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -185,7 +186,7 @@
 
   function render() {
     if (!st.rec) return;
-    const d = Paper.draw(st.rec, { layout: st.layout, speed: st.speed, gain: st.gain, twelve: st.twelve });
+    const d = Paper.draw(st.rec, { layout: st.layout, speed: st.speed, gain: st.gain, twelve: st.twelve, highpass: st.highpass, notch: st.notch });
     st.drawn = d;
     const stage = $('#stage');
     stage.innerHTML = `${report(st.rec.meta)}<div class="sheetwrap">${d.svg}</div>`;
@@ -203,7 +204,8 @@
     svg.setAttribute('width', Math.round(d.width * ppm));
     svg.setAttribute('height', Math.round(d.height * ppm));
     $('#zoomv').textContent = st.zoom ? `${Math.round((st.zoom / 3.78) * 100)} %` : 'Fit';
-    for (const [id, v] of [['layout', st.layout], ['speed', st.speed], ['gain', st.gain]]) $(`#${id}`).value = String(v);
+    for (const [id, v] of [['layout', st.layout], ['speed', st.speed], ['gain', st.gain], ['notch', st.notch]]) $(`#${id}`).value = String(v);
+    $('#hp').classList.toggle('on', !!st.highpass);
     drawCalipers();
   }
 
@@ -294,7 +296,14 @@
     document.body.classList.toggle('measuring', st.calipers);
     drawCalipers();
   });
-  for (const id of ['layout', 'speed', 'gain']) {
+  // the baseline: a 0.5 Hz high-pass, a 50 or 60 Hz notch (each strip is drawn about its median in any case)
+  $('#hp').addEventListener('click', () => {
+    st.highpass = !st.highpass;
+    store.set('highpass', st.highpass);
+    st.marks = [];
+    render();
+  });
+  for (const id of ['layout', 'speed', 'gain', 'notch']) {
     $(`#${id}`).addEventListener('change', (e) => {
       st[id] = id === 'layout' ? e.target.value : +e.target.value;
       store.set(id, st[id]);

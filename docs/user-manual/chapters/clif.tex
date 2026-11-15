@@ -1,103 +1,80 @@
-% Part III: CLIF. Sources: medorama/src/formats/clif.rs (its module doc and code are the
-% authority: tables(), rank(), import_folder(), the converters), docs/administration.md (the
-% clif- row of "Import formats"); main.rs (import-clif), server.rs (tables/clif),
-% web/index.html (the CLIF folder box).
+% Part III: CLIF, an input of db-builder. Sources: db-builder/src/formats/clif.rs (its module
+% doc and code are the authority: tables(), rank(), the converters), db-builder/src/add.rs
+% (add_clif_folder), db-builder/README.md (Known exports).
 \chapter{CLIF}
 \label{chap:clif}
 
-This chapter explains how Medorama imports CLIF databases. It is written for data managers who
-hold intensive-care data in CLIF. CLIF, the \emph{Common Longitudinal ICU data Format}, is an
-open format for the data of intensive care: a set of tables (patients, hospitalizations, ADT,
-vital signs, laboratory results, respiratory support, medications, assessments, microbiology and
-others) with fixed columns and standard categories, so that the data of different hospitals read
-alike. Its data dictionary and tools are published by the CLIF consortium under the Apache-2.0
-license: \url{https://github.com/Common-Longitudinal-ICU-data-Format/CLIF}. Medorama reads every
-table of CLIF 2.1, and five tables of CLIF 3.0 (\code{input}, \code{output},
-\code{intermittent\_dialysis}, \code{validated\_diagnosis} and \code{clinical\_notes\_facts},
-with their columns as in clifpy's 3.0 schemas).
+This chapter explains how a CLIF database becomes a database that Medorama connects. It is
+written for data managers who hold intensive-care data in CLIF. CLIF, the \emph{Common
+Longitudinal ICU data Format}, is an open format for the data of intensive care: a set of tables
+(patients, hospitalizations, ADT, vital signs, laboratory results, respiratory support,
+medications, assessments, microbiology and others) with fixed columns and standard categories, so
+that the data of different hospitals read alike. Its data dictionary and tools are published by
+the CLIF consortium under the Apache-2.0 license:
+\url{https://github.com/Common-Longitudinal-ICU-data-Format/CLIF}.
 
-Medorama reads CLIF as tables. Each CLIF table, as CSV or Parquet, becomes a database of the
-catalog, as an imported table does (\cref{chap:importing}), through one import format per table.
-CLIF holds no waveforms, and it is not converted to WFDB.
+Medorama does not read CLIF files itself: it imports nothing. A CLIF folder is an input of
+db-builder (\cref{chap:importing}), which reads every table of CLIF 2.1, and five tables of CLIF
+3.0 (\code{input}, \code{output}, \code{intermittent\_dialysis}, \code{validated\_diagnosis} and
+\code{clinical\_notes\_facts}, with their columns as in clifpy's 3.0 schemas), through one known
+export per table. The database it writes is then connected in Medorama, as a database of the
+kind \code{dbb} (\cref{chap:connecting}). CLIF holds no waveforms, and it is not converted to
+WFDB.
 
 \section{How CLIF is read}
 \label{sec:clif-reading}
 
 \begin{itemize}
 \item \textbf{Times.} CLIF's times are in UTC, written with their offset
-  (\code{YYYY-MM-DD HH:MM:SS+00:00}), and they are read as such, whatever the catalog's time
-  zone. A CLIF table's time written without an offset is read as UTC too, not in the catalog's
+  (\code{YYYY-MM-DD HH:MM:SS+00:00}), and they are read as such, whatever the database's time
+  zone. A CLIF table's time written without an offset is read as UTC too, not in the database's
   time zone.
 \item \textbf{Names.} CLIF's standard categories (its mCIDE: \code{vital\_category},
   \code{lab\_category}, \code{med\_category}, \code{location\_category} and so on) name the
   entries, written as words (\code{heart\_rate} becomes \code{Heart rate}), so that every site's
   data read alike. The sites' raw names (\code{vital\_name}, \code{lab\_name}, \code{med\_name}
-  and so on) stay, as the database's own columns.
+  and so on) stay, in the database's \code{extras}.
 \item \textbf{Units.} Each entry has its unit: CLIF's fixed units for vital signs, settings and
   rates (\cref{sec:clif-units}), the reference unit of a laboratory result, or the dose unit of a
   drug.
 \item \textbf{Patients and stays.} \code{patient\_id} names the patient and
-  \code{hospitalization\_id} the encounter. Most tables name only the hospitalization, and their
-  entries go to its patient.
+  \code{hospitalization\_id} the visit. Most tables name only the hospitalization, and their
+  entries go to its patient. CLIF names no issuer: give it with \opt{-{}-issuer}, so that the
+  patients' (issuer, identifier) pairs can be joined with other databases
+  (\cref{sec:importing-patients}).
 \item \textbf{Rows left out} are counted by reason, and never named, because rows hold
   identifiers. A row without the keys that its table needs (\code{rows without
   hospitalization\_id}), or one that holds no value to keep, makes no entry.
 \end{itemize}
 
-\section{Importing a CLIF folder}
+\section{Adding a CLIF folder}
 \label{sec:clif-importing}
 
 A CLIF database is a folder of tables, with one file per table (or several files per table).
-Medorama imports such a folder in one step:
+\cmd{db-builder add} adds such a folder in one step, in one transaction:
 \begin{enumerate}
 \item Every file directly in the folder whose name ends in \file{.csv} or \file{.parquet} is read
   for its columns. Subfolders are not read.
 \item Each file is recognized as a CLIF table by its columns (\cref{sec:clif-detect}). A file
-  that is not a CLIF table that Medorama reads is named in the report and left out.
-\item Each table becomes a database of its own, named after it (\code{clif\_patient},
-  \code{clif\_vitals}, \code{clif\_medication\_admin} and so on), with the source label
-  \code{clif}. A table in several files (a year per file, or CLIF's continuous and intermittent
-  medications) is one database.
-\item The tables are imported in order (\cref{sec:clif-order}), each read row by row.
+  that is not a CLIF table is named in the report and left out; a folder with no CLIF table is
+  refused.
+\item Each file is a source of its own (\cref{sec:importing-batches}).
+\item The tables are added in order (\cref{sec:clif-order}), each read row by row.
 \end{enumerate}
-
-\paragraph{In the page.} In \ui{Import} $\rightarrow$ \ui{Databases}, in the card \ui{Add a
-database}, choose \ui{Import tables}, open \ui{A CLIF folder on the server}, and type the
-folder's path on the server (\file{/data/clif}), or click \ui{Choose\ldots} and open it. Then click \ui{Preview}, a dry run that reads
-and counts everything and keeps nothing, or \ui{Import the folder}. The folder must be inside
-\code{data\_roots}. The import runs in the background, with its progress shown like any other.
-The report gives, for each table, its database's name, its files and what it added, and then
-the files that are not CLIF tables.
-
-\paragraph{On the command line,} \cmd{medorama import-clif} imports a folder:
-\begin{lstlisting}[style=signature]
-medorama import-clif DIR [--source LABEL] [--dry-run]
-\end{lstlisting}
-\begin{params}
-\item[DIR] The CLIF folder.
-\item[--source LABEL] The source label of every table's rows. Default: \code{clif}.
-\item[--dry-run] Check and count only; store nothing.
-\end{params}
-The following commands preview the import of a folder and then import it:
+The following commands make a database of a CLIF folder, check it, and connect it:
 \begin{lstlisting}[style=shell]
-medorama import-clif /data/clif --dry-run
-medorama import-clif /data/clif
+db-builder new clif.sqlite --timezone America/Chicago
+db-builder add clif.sqlite /data/clif --issuer HOSP-CLIF
+db-builder check clif.sqlite
+medorama databases connect clif --kind dbb --url sqlite:/data/clif.sqlite
 \end{lstlisting}
-The command prints a line per table: its database, its files, its rows, the patients,
-encounters, bed stays and items it added, and the rows held back, with up to five of its
-warnings. Unlike the page and the API, the command does not check the folder against
-\code{data\_roots}, because it runs as the operating-system user who can read the home folder
-(\cref{chap:cli}).
+\cmd{add} prints a line per table: its source, its rows, the persons and visits it added, its
+entries, and the rows it left out, with the first warnings. Added again, an unchanged file is not
+added twice, and a changed one replaces its earlier version.
 
-\paragraph{Through the API,} an administrator sends \code{POST api/v1/tables/clif} with the JSON
-body \code{\{"dir": "/data/clif", "source": "clif", "dry\_run": false, "background": true\}}. The
-folder must be inside \code{data\_roots}. With \code{background}, the import runs as a task that
-the page follows (\cref{chap:http-api}).
-
-\paragraph{One table at a time.} A single CLIF table can also be imported with
-\cmd{medorama import-table}. It is recognized by its columns, as any known export is, or named
-with \opt{-{}-format clif-vitals} (\cref{chap:importing}). Import the patients, then the
-hospitalizations, then the ADT, before the rest. Susceptibilities cannot be imported alone
+\paragraph{One table at a time.} A single CLIF table can also be added with \cmd{db-builder add}.
+It is recognized by its columns, as any known export is, or named with \opt{-{}-format
+clif-vitals} (\cref{sec:importing-known}). Susceptibilities cannot be added alone
 (\cref{sec:clif-micro}).
 
 \section{How tables are told apart}
@@ -106,7 +83,7 @@ hospitalizations, then the ADT, before the rest. Susceptibilities cannot be impo
 A file is a CLIF table when it has all the columns of \cref{tab:clif-detect} for that table, and
 none of the columns that belong to another table that shares them. Column names are compared
 ignoring case and surrounding spaces. The formats are those whose key begins with \code{clif-};
-\cmd{medorama formats} lists them.
+\cmd{db-builder formats} lists them.
 
 \begin{xltabular}{\linewidth}{@{}P{4.2cm}P{5.2cm}L@{}}
 \caption{The columns that recognize each CLIF table.}
@@ -172,11 +149,11 @@ ignoring case and surrounding spaces. The formats are those whose key begins wit
   \code{note\_type\_category} & \\
 \end{xltabular}
 
-\section{The import order}
+\section{The order of the tables}
 \label{sec:clif-order}
 
-The tables of a folder are imported in this order, and in the order of their formats' keys within
-each step:
+The tables of a folder are added in this order, and in the order of their formats' keys within
+each step (\code{rank} in \file{db-builder/src/formats/clif.rs}):
 \begin{enumerate}
 \item \code{patient}, which says who the patients are;
 \item \code{hospitalization}, which says which stays there are, and of which patient;
@@ -184,20 +161,19 @@ each step:
 \item every other table, whose rows name their hospitalization (or patient);
 \item \code{microbiology\_susceptibility}, last, after the cultures it names.
 \end{enumerate}
-In this way, every entry finds its encounter at once. A table imported out of this order is not
-lost: its items wait for their patient or encounter, and are matched when the table that names
-it comes (\cref{chap:importing}). ADT rows are the exception: a bed stay that names only its
-hospitalization needs the hospitalization first.
+In this way, every entry finds its visit at once. Tables added one at a time may come in any
+order: a row that names a hospitalization no table has named yet keeps its key, and the visit
+gets its person when the hospitalization's table is added (\cref{sec:importing-rows}).
 
 \section{What each table becomes}
 \label{sec:clif-tables}
 
-\Cref{tab:clif-tables} lists every CLIF table Medorama reads, its category
-(\cref{chap:importing}) and what its rows become: the entry's name, its value and unit, and the
-columns kept as the database's own.
+\Cref{tab:clif-tables} lists every CLIF table db-builder reads, its category
+(\cref{sec:importing-categories}) and what its rows become: the entry's name, its value and unit,
+and the columns kept in \code{extras} (``as columns'' below).
 
 \begin{xltabular}{\linewidth}{@{}P{3.6cm}P{2.0cm}L@{}}
-\caption{The CLIF tables Medorama reads, and what each becomes.}
+\caption{The CLIF tables db-builder reads, and what each becomes.}
 \label{tab:clif-tables}\\
 \toprule
 \tabhead CLIF table & \tabhead Category & \tabhead Becomes \\
@@ -217,8 +193,7 @@ columns kept as the database's own.
   type as a column \\
 \code{adt} & (bed stays) & A bed stay of the hospitalization, its unit the
   \code{location\_category} (\code{icu} shows as ICU), from \code{in\_dttm} to \code{out\_dttm};
-  the hospital and the location's name as columns. No bed, so ADT does not link recordings by bed
-  and time \\
+  the hospital and the location's name as columns. An ICU stay marks its visit as an ICU stay \\
 \code{vitals} & Vitals & Each vital sign, by \code{vital\_category}, in CLIF's units
   (\cref{tab:clif-units}); rows without a number are left out \\
 \code{invasive\_hemodynamics} & Vitals & Each measurement, by \code{measure\_category}: CVP, right
@@ -355,13 +330,13 @@ unit.
 \label{sec:clif-micro}
 
 A row of \code{microbiology\_susceptibility} names only its organism, by \code{organism\_id}, and
-not its patient, its hospitalization or its time. When a folder is imported, Medorama therefore
+not its patient, its hospitalization or its time. When a folder is added, db-builder therefore
 first reads the folder's \code{microbiology\_culture} files and keeps each culture by its
 \code{organism\_id}. It then puts each susceptibility on its culture, with the culture's patient,
-encounter and collection time. The susceptibility is named \code{<organism>: <antimicrobial>}
+visit and collection time. The susceptibility is named \code{<organism>: <antimicrobial>}
 (\code{Escherichia coli: Ceftriaxone}), with the culture and the organism as columns. A
 susceptibility whose culture is not in the folder, and every row of a susceptibility table
-imported on its own, is left out and counted (\code{rows without their culture}).
+added on its own, is left out and counted (\code{rows without their culture}).
 
 \section{Doses not given}
 \label{sec:clif-not-given}
@@ -392,7 +367,8 @@ following are left out on purpose:
 
 \begin{phibox}
 A CLIF database still holds identifiers: \code{patient\_id}, \code{hospitalization\_id}, dates of
-birth and every time. Once imported, they are kept like any other table's identifiers
-(\cref{chap:importing}). They are shown only to users with the PHI permission out of Privacy
-Mode, and are otherwise replaced by pseudonyms and moved dates (\cref{chap:protecting}).
+birth and every time, and so does the database db-builder makes of it (\cref{sec:importing-privacy}).
+Medorama shows them only to users with the PHI permission and the grant \code{phi} on that
+database, out of Privacy Mode; everyone else sees pseudonyms and moved dates
+(\cref{chap:protecting}).
 \end{phibox}

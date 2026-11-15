@@ -295,15 +295,38 @@ fn short(name: &str) -> String {
 /// password is checked: per name and address (`MAX_FAILS`) and per address
 /// (`MAX_ADDRESS_FAILS`) within `LOCK_S` seconds; at most `CHECKS_AT_ONCE` passwords are
 /// checked at once.
-pub async fn login(State(app): State<Shared>, ext: axum::http::Extensions, Json(req): Json<Login>) -> ApiResult {
+/// The client a sign-in is counted for: the connection's address, or, when that is one of the
+/// `trusted_proxies`, the last address in `X-Forwarded-For` that is not (the client as the
+/// proxies saw it; earlier entries could be anyone's).
+pub fn client_address(peer: Option<IpAddr>, headers: &axum::http::HeaderMap, trusted: &[IpAddr]) -> Option<IpAddr> {
+    let p = peer?;
+    if !trusted.contains(&p) {
+        return Some(p);
+    }
+    let hops: Vec<IpAddr> = headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(','))
+        .filter_map(|a| a.trim().parse().ok())
+        .collect();
+    Some(hops.into_iter().rev().find(|a| !trusted.contains(a)).unwrap_or(p))
+}
+
+pub async fn login(
+    State(app): State<Shared>,
+    ext: axum::http::Extensions,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<Login>,
+) -> ApiResult {
     if app.cfg.sign_in != Method::Password {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
-            "this catalog signs users in through the institution's sign-in, not with a password".into(),
+            "this Medorama signs users in through the institution's sign-in, not with a password".into(),
         ));
     }
     let wrong = || ApiError(StatusCode::UNAUTHORIZED, "wrong user name or password".into());
-    let ip = crate::server::peer(&ext);
+    let ip = client_address(crate::server::peer(&ext), &headers, &app.cfg.trusted_proxies);
     // a name no account can have is not looked up, nor kept
     if !users::valid_username(&req.username) {
         if !app.signin.fails.lock().unwrap().reserve_address(ip) {
@@ -413,4 +436,26 @@ pub async fn logout(
     let cookie = format!("{}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0", app.cookie);
     r.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).map_err(internal)?);
     Ok(r)
+}
+
+#[cfg(test)]
+mod client_address_tests {
+    use super::client_address;
+    use std::net::IpAddr;
+
+    #[test]
+    fn behind_a_trusted_proxy_the_client_counts() {
+        let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+        let mut h = axum::http::HeaderMap::new();
+        h.insert("x-forwarded-for", "203.0.113.9, 198.51.100.4, 10.0.0.2".parse().unwrap());
+        let trusted = [ip("10.0.0.1"), ip("10.0.0.2")];
+        // from the proxy: the last hop that is not a trusted proxy
+        assert_eq!(client_address(Some(ip("10.0.0.1")), &h, &trusted), Some(ip("198.51.100.4")));
+        // not from a proxy: its header is not believed
+        assert_eq!(client_address(Some(ip("192.0.2.7")), &h, &trusted), Some(ip("192.0.2.7")));
+        // no proxies configured: the connection's address
+        assert_eq!(client_address(Some(ip("10.0.0.1")), &h, &[]), Some(ip("10.0.0.1")));
+        // from the proxy without a header: the proxy
+        assert_eq!(client_address(Some(ip("10.0.0.1")), &axum::http::HeaderMap::new(), &trusted), Some(ip("10.0.0.1")));
+    }
 }

@@ -12,6 +12,8 @@
 #include <map>
 #include <mutex>
 #include <deque>
+#include <fstream>
+#include <iterator>
 #include <regex>
 #include <set>
 #include <thread>
@@ -21,6 +23,7 @@
 #include "engine/dataset.hpp"
 #include "engine/index.hpp"
 #include "engine/sources.hpp"
+#include "engine/store.hpp"
 #include "core/paths.hpp"
 #include "core/text.hpp"
 #include "core/pyfmt.hpp"
@@ -101,8 +104,8 @@ std::string host_name(const std::string& host) {
 
 class App {
  public:
-  App(const Settings& s, std::optional<bool> protected_)
-      : settings(s), creds(load_auth(s.auth_file)), revoked_(revoked(s.auth_file)) {
+  App(const Settings& s, std::optional<bool> protected_, std::shared_ptr<Stores> stores_)
+      : settings(s), creds(load_auth(s.auth_file)), stores(std::move(stores_)), revoked_(revoked(s.auth_file)) {
     prot = protected_.value_or(creds.has_value());
     if (prot && !creds) throw std::runtime_error("password protection requested but no password is set");
     cookie = "vitalstream_" + std::to_string(s.port);
@@ -188,7 +191,9 @@ class App {
       std::lock_guard<std::mutex> l(m);
       if (auto* d = loaded.get(key)) return *d;
     }
-    auto li = load_index(settings.cache_dir, key);
+    auto store = stores->holding(key);
+    if (!store) return nullptr;
+    auto li = store->load(key);
     if (!li) return nullptr;
     auto ds = std::make_shared<Dataset>(std::move(li->first), std::move(li->second));
     const Value* pv = ds->meta.get("path");
@@ -276,6 +281,8 @@ class App {
   std::map<std::string, Job> jobs;
   OrderedMap<std::string, std::shared_ptr<Dataset>> loaded;
   std::set<std::string> opened;
+  // the index stores (index format 3): those given on standard input, then the viewer's own
+  std::shared_ptr<Stores> stores;
   std::mutex checking;  // one password checked at a time (scrypt takes 16 MiB)
 
  private:
@@ -297,8 +304,10 @@ class App {
       std::string err;
       bool ok = true;
       try {
-        build_index_until(
-            core::utf8_path(path), settings.cache_dir, [&](double x) { fraction->store(std::clamp(x, 0.0, 1.0)); },
+        auto own = stores->own();
+        if (!own) throw std::runtime_error("no index store to write into");
+        build_into_store(
+            core::utf8_path(path), *own, [&](double x) { fraction->store(std::clamp(x, 0.0, 1.0)); },
             [&] { return cancel->load(); });
       } catch (const std::exception& e) {
         ok = false;
@@ -324,7 +333,92 @@ class App {
 };
 
 std::shared_ptr<App> make_app(const Settings& settings, std::optional<bool> protected_) {
-  return std::make_shared<App>(settings, protected_);
+  return make_app(settings, protected_, Stores::own_from(settings));
+}
+
+std::shared_ptr<App> make_app(const Settings& settings, std::optional<bool> protected_,
+                              std::shared_ptr<Stores> stores) {
+  return std::make_shared<App>(settings, protected_, std::move(stores));
+}
+
+std::shared_ptr<Stores> Stores::own_from(const Settings& settings) {
+  std::optional<StoreKey> key;
+  if (!settings.index_key_file.empty()) {
+    std::string shown = core::path_utf8(settings.index_key_file);
+    std::ifstream f(settings.index_key_file, std::ios::binary);
+    if (!f) throw std::runtime_error(shown + ": cannot be read");
+    std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    key = store_key_of(trim(text));
+    std::fill(text.begin(), text.end(), '\0');
+    if (!key) throw std::runtime_error(shown + ": not 64 hex digits");
+  }
+  auto stores = std::make_shared<Stores>();
+  stores->own_ = std::make_shared<Store>(settings.cache_dir / "index.sqlite", key);
+  return stores;
+}
+
+void Stores::apply(const std::string& line) {
+  Value v;
+  try {
+    v = Value::from_json(line);
+  } catch (const std::exception&) {
+    throw std::runtime_error("not JSON");
+  }
+  if (!v.as_dict()) throw std::runtime_error("not a JSON object");
+  if (const Value* p = v.get("forget"); p && p->as_str()) {
+    fs::path path = core::utf8_path(*p->as_str());
+    std::lock_guard<std::mutex> l(m_);
+    std::erase_if(given_, [&](const auto& s) { return s->path() == path; });
+    if (own_ && own_->path() == path) own_ = nullptr;
+    return;
+  }
+  const Value* p = v.get("store");
+  if (!p || !p->as_str()) throw std::runtime_error("no store");
+  const Value* k = v.get("key");
+  auto key = k && k->as_str() ? store_key_of(*k->as_str()) : std::nullopt;
+  if (!key) throw std::runtime_error("no key");
+  fs::path path = core::utf8_path(*p->as_str());
+  auto store = std::make_shared<Store>(path, key);
+  key->fill(0);
+  const Value* own = v.get("own");
+  std::lock_guard<std::mutex> l(m_);
+  if (own && own->as_bool() && *own->as_bool()) {
+    own_ = store;
+  } else {
+    std::erase_if(given_, [&](const auto& s) { return s->path() == path; });
+    given_.push_back(store);
+  }
+}
+
+void Stores::forget_all() {
+  std::lock_guard<std::mutex> l(m_);
+  given_.clear();
+  own_ = nullptr;
+}
+
+std::shared_ptr<Store> Stores::holding(const std::string& key) const {
+  std::vector<std::shared_ptr<Store>> all;
+  {
+    std::lock_guard<std::mutex> l(m_);
+    all = given_;
+    if (own_) all.push_back(own_);
+  }
+  for (const auto& s : all)
+    if (s->engine_of(key)) return s;
+  return nullptr;
+}
+
+std::vector<std::string> Stores::paths() const {
+  std::lock_guard<std::mutex> l(m_);
+  std::vector<std::string> out;
+  for (const auto& s : given_) out.push_back(core::path_utf8(s->path()));
+  if (own_) out.push_back(core::path_utf8(own_->path()));
+  return out;
+}
+
+std::shared_ptr<Store> Stores::own() const {
+  std::lock_guard<std::mutex> l(m_);
+  return own_;
 }
 
 bool app_protected(const App& app) { return app.prot; }
@@ -954,7 +1048,7 @@ void add_routes(httplib::Server& svr, std::shared_ptr<App> app) {
                  throw ApiError{422, e.what()};
                }
              }
-             std::string key = cache_key(core::utf8_path(p));
+             std::string key = cache_key_of(core::utf8_path(p), STORE_FORMAT);
              {
                std::lock_guard<std::mutex> l(app->m);
                app->opened.insert(key);

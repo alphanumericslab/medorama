@@ -174,6 +174,12 @@ std::int64_t integer(const std::uint8_t* b, std::size_t n, const char* what) {
 }
 
 // Days from 1970-01-01 to a date of the proleptic Gregorian calendar.
+// The days of month m (1-12) of year (Gregorian: February has 29 in leap years).
+std::int64_t days_in_month(std::int64_t year, std::int64_t m) {
+  if (m == 2) return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) ? 29 : 28;
+  return m == 4 || m == 6 || m == 9 || m == 11 ? 30 : 31;
+}
+
 std::int64_t days_from_civil(std::int64_t y, std::int64_t m, std::int64_t d) {
   y = m <= 2 ? y - 1 : y;
   std::int64_t era = (y >= 0 ? y : y - 399) / 400;
@@ -238,7 +244,7 @@ std::optional<double> start_of(const std::string& date, const std::string& time,
     year = *dmy->c >= 85 ? 1900 + *dmy->c : 2000 + *dmy->c;
   else
     return std::nullopt;
-  if (m < 1 || m > 12 || d < 1 || d > 31 || hh > 23 || mi > 59 || ss > 59) return std::nullopt;
+  if (m < 1 || m > 12 || d < 1 || d > days_in_month(year, m) || hh > 23 || mi > 59 || ss > 59) return std::nullopt;
   return static_cast<double>(days_from_civil(year, m, d) * 86400 + hh * 3600 + mi * 60 + ss);
 }
 

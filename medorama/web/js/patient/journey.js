@@ -1,9 +1,11 @@
 // The journey: a patient's data as one picture.  Time runs up (newest on top), one column per
 // category (laboratory, vital signs and medications split into a thin column per test, sign or
 // drug); busy periods get room and quiet stretches fold.  A long history scrolls under fixed
-// column names.  Drawn as SVG; hover and click are found by position.
+// column names.  Drawn as SVG; hover and click are found by position.  Each column's name is a
+// button (Tab, then Enter or Space, shows or hides the column); the drawing itself is a picture
+// whose text says its span and its columns: every mark is also an entry of the report.
 
-import { esc, fmtDate, fmtDayOfMonth, fmtHM, fmtMonth, fmtShort, fmtYear } from '../core.js';
+import { dayKey, esc, fmtDate, fmtDayOfMonth, fmtHM, fmtMonth, fmtShort, fmtYear, zonedMidnight } from '../core.js';
 import { color } from './charts.js';
 
 const TOP = 104;
@@ -12,6 +14,15 @@ const AXIS = 62;
 const SINGLE = 12;
 /** The least height of a busy six-hour cell (12 px a day); below it the journey scrolls. */
 const MIN_BIN = 3;
+/** The least width of a mark that shows a critical value's outline (narrower: colour only). */
+const OUTLINE_W = 4;
+
+/** What the journey shows, in words (its picture's text): the span, the columns shown and hidden. */
+export function journeyLabel(lanes, hidden, t0, t1) {
+  const shown = lanes.filter((l) => !hidden.has(l.key)).map((l) => l.label);
+  const off = lanes.filter((l) => hidden.has(l.key)).map((l) => l.label);
+  return `The journey, ${fmtDate(t0)} to ${fmtDate(t1)}, the newest on top: ${shown.length} column${shown.length === 1 ? '' : 's'} shown (${shown.join(', ') || 'none'})${off.length ? `, ${off.length} hidden (${off.join(', ')})` : ''}. Every entry is also listed in the report.`;
+}
 
 /**
  * Draw `data` (GET patients/{id}/journey) into `el`.  opts: hidden (Set of category keys),
@@ -92,14 +103,16 @@ export function drawJourney(el, data, opts = {}) {
   };
   const laneColor = lanes.map((l) => color(`c-${l.key}`));
   const hits = [];
-  let head = `<svg class="jhead" width="${w}" height="${TOP}" viewBox="0 0 ${w} ${TOP}">`;
-  let s = `<svg width="${w}" height="${h - TOP}" viewBox="0 ${TOP} ${w} ${h - TOP}"><defs><pattern id="jhatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="${C.hatch}" stroke-width="2"/></pattern></defs>`;
-  // headers: the legend, and the switch to hide a category
+  let head = `<svg class="jhead" width="${w}" height="${TOP}" viewBox="0 0 ${w} ${TOP}" role="group" aria-label="The journey's columns: each name shows or hides its column">`;
+  let s = `<svg width="${w}" height="${h - TOP}" viewBox="0 ${TOP} ${w} ${h - TOP}" role="img" aria-label="${esc(journeyLabel(lanes, hidden, Math.max(t0, lo), Math.min(t1, hi)))}"><defs><pattern id="jhatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="${C.hatch}" stroke-width="2"/></pattern></defs>`;
+  // headers: the legend, and the switch to hide a category (a button: pressed while shown)
   lanes.forEach((l, i) => {
     const off = hidden.has(l.key);
     const cw = l.subs.length * sw[i];
+    head += `<g class="lanehead" role="button" tabindex="0" aria-label="${esc(l.label)}" aria-pressed="${!off}" data-lane="${i}" data-lane-key="${esc(l.key)}"><title>${esc(l.label)}: ${off ? 'hidden, press to show' : 'shown, press to hide'}</title>`;
+    head += `<rect class="lhit" x="${(x0[i] - 1).toFixed(1)}" y="1" width="${(cw + 2).toFixed(1)}" height="${TOP - 2}" rx="3"/>`;
     head += `<rect x="${x0[i].toFixed(1)}" y="${TOP - 9}" width="${cw.toFixed(1)}" height="4" rx="2" fill="${off ? C.grid : laneColor[i]}"/>`;
-    head += `<text transform="translate(${(x0[i] + cw / 2 + 3.5).toFixed(1)} ${TOP - 14}) rotate(-90)" fill="${off ? C.faint : C.text}"${off ? ' text-decoration="line-through"' : ''}>${esc(l.label)}</text>`;
+    head += `<text transform="translate(${(x0[i] + cw / 2 + 3.5).toFixed(1)} ${TOP - 14}) rotate(-90)" fill="${off ? C.faint : C.text}"${off ? ' text-decoration="line-through"' : ''}>${esc(l.label)}</text></g>`;
     hits.push({ kind: 'head', lane: i, x0: x0[i] - 1, x1: x0[i] + cw + 1, y0: 0, y1: TOP });
   });
   // folded stretches
@@ -124,16 +137,19 @@ export function drawJourney(el, data, opts = {}) {
     const yb = yOf(sp.t0);
     s += `<rect x="${AXIS}" y="${(ya - 1).toFixed(1)}" width="${right - AXIS}" height="${Math.max(2, yb - ya + 2).toFixed(1)}" fill="${C.band}"/>`;
   }
-  // days and months on the axis
+  // days and months on the axis: at midnight in Medorama's time zone, a month told by its
+  // date's key (YYYY-MM), whatever order dates are written in
   let lastMonth = '';
   let lastY = Infinity;
-  const day0 = Math.floor(t0 / 86400) * 86400;
-  for (let t = day0; t < t1; t += 86400) {
-    const i = Math.floor(t / BIN) - b0;
-    if (i < 0 || i >= nb || (!busy[i] && !busy[Math.min(nb - 1, i + 2)])) continue;
+  const day0 = zonedMidnight(dayKey(t0)) ?? Math.floor(t0 / 86400) * 86400;
+  for (let step = day0; step < t1; step += 86400) {
+    const i0 = Math.floor(step / BIN) - b0;
+    if (i0 < 0 || i0 >= nb || (!busy[i0] && !busy[Math.min(nb - 1, i0 + 2)])) continue;
+    // the day's own midnight (a step drifts by an hour across a change of clocks)
+    const t = zonedMidnight(dayKey(step + 6 * 3600));
     const y = yOf(t);
     s += `<line x1="${AXIS}" x2="${right}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="${C.grid}" stroke-width=".6"/>`;
-    const month = fmtDate(t).replace(/ \d+,/, ',');
+    const month = dayKey(t).slice(0, 7);
     if (month !== lastMonth) {
       s += `<text x="${AXIS - 8}" y="${(y + 3).toFixed(1)}" text-anchor="end" fill="${C.text}" font-weight="600">${esc(fmtMonth(t))} '${esc(fmtYear(t).slice(2))}</text>`;
       lastMonth = month;
@@ -145,6 +161,9 @@ export function drawJourney(el, data, opts = {}) {
   }
   // spans (stays, drugs, recordings), then cells; light spans (ICU stays) under the others
   const fill = (lane, level) => (level === 2 ? C.crit : level === 1 ? C.abn : laneColor[lane]);
+  // a critical value: also outlined, when its mark is wide enough to show it (a second channel
+  // beside the colour: abnormal and critical are two ambers)
+  const outline = (level, width) => (level === 2 && width >= OUTLINE_W ? ` stroke="${C.text}" stroke-width="1"` : '');
   const spans = [...data.spans.filter((sp) => sp.light), ...data.spans.filter((sp) => !sp.light)];
   for (const sp of spans) {
     if (hidden.has(lanes[sp.lane].key)) continue;
@@ -154,7 +173,7 @@ export function drawJourney(el, data, opts = {}) {
     const ww = sw[sp.lane];
     const op = sp.light ? 0.4 : lanes[sp.lane].key === 'med' ? 0.55 : lanes[sp.lane].key === 'enc' ? 0.9 : 1;
     // a recording whose end is not known yet (not indexed): faint, outlined dashed
-    const est = sp.estimated ? ` stroke="${fill(sp.lane, sp.level)}" stroke-dasharray="2 2" fill-opacity="0.25"` : '';
+    const est = sp.estimated ? ` stroke="${fill(sp.lane, sp.level)}" stroke-dasharray="2 2" fill-opacity="0.25"` : outline(sp.level, ww);
     s += `<rect x="${(xx + 0.4).toFixed(1)}" y="${ya.toFixed(1)}" width="${Math.max(1, ww - 0.8).toFixed(1)}" height="${Math.max(2.5, yb - ya).toFixed(1)}" rx="${ww > 6 ? 2 : 0.6}" fill="${fill(sp.lane, sp.level)}" opacity="${op}"${est}/>`;
     // at least 8 px to click, however short the span
     const mid = (ya + yb) / 2;
@@ -168,7 +187,7 @@ export function drawJourney(el, data, opts = {}) {
     const ww = sw[lane];
     const split = lanes[lane].subs.length > 1;
     const op = level ? 1 : lanes[lane].key === 'vit' ? 0.62 : split ? 0.85 : 1;
-    s += `<rect x="${(xx + 0.4).toFixed(1)}" y="${ya.toFixed(1)}" width="${Math.max(1, ww - 0.8).toFixed(1)}" height="${Math.max(2.2, yb - ya - 0.6).toFixed(1)}" rx="${ww > 6 ? 1.5 : 0.5}" fill="${fill(lane, level)}" opacity="${op}"/>`;
+    s += `<rect x="${(xx + 0.4).toFixed(1)}" y="${ya.toFixed(1)}" width="${Math.max(1, ww - 0.8).toFixed(1)}" height="${Math.max(2.2, yb - ya - 0.6).toFixed(1)}" rx="${ww > 6 ? 1.5 : 0.5}" fill="${fill(lane, level)}" opacity="${op}"${outline(level, ww)}/>`;
     hits.push({ kind: 'cell', lane, sub, t0: t, t1: t + BIN, n, level, x0: xx, x1: xx + ww, y0: Math.min(ya, yb - 2.2) - 0.5, y1: yb + 0.5 });
   }
   // the selected entry: a band across, its column outlined, its time on the axis

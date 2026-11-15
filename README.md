@@ -4,6 +4,16 @@
 waveforms, imaging and laboratory results across databases.**
 
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
+![Version 0.2.0, pre-release](https://img.shields.io/badge/version-0.2.0%20pre--release-informational)
+
+**Version 0.2.0 (pre-release, November 2026).** Medorama now connects databases instead of
+importing data: OMOP, SQL views, or a SQLite database built with the new
+[db-builder](db-builder/README.md). Each database's workspace and indexes are encrypted with that
+database's own key, and access is granted per database. The release also has a full synthetic
+demo of 40 patients in five databases, and the fixes of a senior engineering, clinical and
+privacy review. A 0.1.0 installation is set up again rather than updated
+([upgrading from 0.1.0](docs/install.md#upgrading-from-010)); every change is in the
+[changelog](medorama/CHANGELOG.md).
 
 [Install](docs/install.md) ·
 [Get started](docs/getting-started.md) ·
@@ -35,21 +45,24 @@ Medorama brings these sources together without moving them:
   Journey*, with the waveforms, ECGs and images beside the rest of the record.
 - **It finds cohorts across every source at once**, with criteria such as
   `QTc > 470ms AND female`, and refreshes them as new data arrive.
-- **It runs inside the institution**, on its own servers, reads the data where they already
-  live, and hides identifiers from everyone who is not allowed to see them.
+- **It runs inside the institution**, on its own servers, connects the databases where they
+  already live, read-only, imports nothing, and hides identifiers from everyone who is not
+  allowed to see them.
 
 > **Research use only.** Medorama is research software, not a medical device. It is not cleared
 > for diagnosis or treatment and must not be used to make clinical decisions.
 
 ## What it does
 
-- **One patient, one page.** Admissions, bed stays, laboratory results, vital signs,
-  medications, conditions, notes, ECGs, imaging and bedside-monitor recordings from every
-  database appear on one time line, beside a searchable report of every entry
+- **One patient, one page.** Visits, laboratory results, vital signs, medications, conditions,
+  notes, ECGs, imaging and bedside-monitor recordings from every connected database appear on one
+  time line, beside a searchable report of every entry
   ([user guide](docs/user-guide.md)).
-- **Cohorts across every database.** Researchers find patients by results, ECG and imaging
-  measurements, diagnoses, medications, stays, age, sex and text, see why each patient matched,
-  and then keep, refresh, combine and export the cohort ([user guide](docs/user-guide.md)).
+- **Cohorts across the databases you choose.** Researchers tick the databases to search and find
+  patients by results, ECG and imaging measurements, diagnoses, medications, stays, age, sex,
+  text and the results of actions, see why each patient matched and which databases were
+  searched and which left out, and then keep, refresh, combine and export the cohort
+  ([user guide](docs/user-guide.md)).
 - **Viewers for long recordings, ECGs and images.** VitalStream shows weeks of ICU monitoring,
   Holter or sleep recordings down to single samples; the ECG viewer draws 12-lead ECGs on
   standard paper; the PACS viewer plays DICOM studies. They open as tabs of the patient's page,
@@ -59,13 +72,19 @@ Medorama brings these sources together without moving them:
   it did not clear ([protecting patient data](docs/protecting-patient-data.md)).
 - **Institutional sign-in.** Medorama can rely on the institution's single sign-on,
   multi-factor authentication or VPN, through configuration alone ([sign-in](docs/sign-in.md)).
-- **Open formats and existing databases.** WFDB, EDF, EDF+ and BDF, GE MUSE XML, DICOM, CLIF,
-  OMOP and tables in CSV, Excel or Parquet are read directly, and OMOP or any SQL database can be
-  connected in place ([databases](docs/databases.md), [importing](docs/importing.md)).
-- **From one laptop to many users.** The same program runs on one computer with SQLite, or on
-  several servers with PostgreSQL for a whole department ([administration](docs/administration.md)).
-- **An audit trail.** Sign-ins, views and searches of identifiers, imports, exports and changes
-  are logged in a tamper-evident log ([security](docs/security.md#12-audit-logging)).
+- **Existing databases and open formats.** OMOP databases and any SQL database (through views)
+  are connected in place. Tables in CSV, Excel or Parquet, GE MUSE and CLIF exports and folders of
+  WFDB, EDF, EDF+ and BDF recordings become an open SQLite database with
+  [db-builder](db-builder/README.md), which Medorama then connects. GE MUSE XML and DICOM files
+  open in the viewers ([databases](docs/databases.md)).
+- **Access by database.** Each user is granted the databases they may search, view, see the
+  identifiers of, or manage; what Medorama generates for a database is kept encrypted with that
+  database's own key, and removing a database removes every trace of it from Medorama
+  ([administration](docs/administration.md)).
+- **From one laptop to many users.** The same program runs on one computer with its control
+  store in SQLite, or with PostgreSQL for a whole department ([administration](docs/administration.md)).
+- **An audit trail.** Sign-ins, views and searches of identifiers, grants, databases connected
+  and removed, exports and changes are logged in a tamper-evident log ([security](docs/security.md#12-audit-logging)).
 - **Light and dark themes**, in Medorama's page and in every viewer.
 
 ## See it
@@ -85,7 +104,7 @@ examples or on your own files, which are read in your browser and never leave yo
 | You are | Medorama gives you | Start with |
 |---|---|---|
 | A researcher or clinician-scientist | Every patient's data on one page, and cohorts across all of it, without writing queries | [Get started](docs/getting-started.md), the [user guide](docs/user-guide.md) |
-| A data manager | One place to bring EHR extracts, OMOP databases, monitoring archives, ECG and imaging exports together, with the columns and checks they need | [Databases](docs/databases.md), [importing](docs/importing.md) |
+| A data manager | One place to connect EHR databases, OMOP databases, monitoring archives, ECG and imaging exports, with the columns and checks they need | [Databases](docs/databases.md), [db-builder](db-builder/README.md) |
 | An IT security or privacy office | A deployment that stays inside your network, with documented trust boundaries, controls and tests | [Security and privacy](docs/security.md), [architecture](docs/architecture.md) |
 | An administrator | A single program to install, with users, roles, backups and institutional sign-in | [Install](docs/install.md), [administration](docs/administration.md) |
 | A developer or integrator | Readers for new formats, add-ons for licensed ones, and an HTTP API | [Readers](docs/readers.md), [adapters](docs/adapters.md), [HTTP API](docs/api.md), [developing](docs/developing.md) |
@@ -99,10 +118,10 @@ The [documentation index](docs/README.md) lists every page, and the
 ![Medorama at a glance: the browser, the institution's front door, the Medorama server with sign-in, roles, handlers and the privacy gate, the readers, the viewers and the data sources](docs/images/architecture.svg)
 
 Medorama is one server that the institution runs on its own hardware, behind its own front door
-(HTTPS, single sign-on, VPN). Every request passes through sign-in and the user's roles, and
-every answer to a session in Privacy Mode leaves through the *privacy gate*. The data sources
-are only read: recordings, ECGs and images stay in their folders, and connected databases are
-queried through read-only views. Formats under a vendor's license, such as BedMasterEx `.Stp`
+(HTTPS, single sign-on, VPN). Every request passes through sign-in, the user's roles and their
+grants on each database, and every answer to a session in Privacy Mode leaves through the
+*privacy gate*. The data sources are only read: connected databases are queried through
+read-only views, and the recordings, ECGs and images they name stay in their folders. Formats under a vendor's license, such as BedMasterEx `.Stp`
 monitoring files, are read by separate *add-ons* that institutions obtain under agreement
 ([adapters](docs/adapters.md)). The [architecture](docs/architecture.md) page describes each
 part and its trust boundaries.
@@ -113,9 +132,11 @@ Medorama is designed to be deployed inside an institution's network, on servers 
 controls. It listens only on the local machine by default and sends nothing to any host other
 than the institution's own databases.
 
-- **Identifiers stay in one place.** Names, medical record numbers and dates of birth are kept
-  only in Medorama's own database, the *catalog*. Only users who hold the *PHI permission* and
-  switch *Privacy Mode* off can see them, and every such access is audited.
+- **Identifiers stay in the databases.** Medorama's own database, the *control store*, holds no
+  patient data; what Medorama keeps of each connected database (its patient links, variables,
+  results) is in its *workspace*, encrypted with that database's own key. Only users who hold
+  the *PHI permission* and the database's `phi` grant, and switch *Privacy Mode* off, can see
+  identifiers, and every such access is audited.
 - **Privacy Mode is the default** for every user except administrators. Identifiers become
   placeholders and pseudonyms (`MO-XXXX-XXXX`), dates move back while intervals are kept, and
   WFDB, EDF, GE MUSE XML and DICOM files are de-identified before they leave the server.
@@ -137,28 +158,79 @@ standard, and the deploying institution remains responsible for its deployment.
 
 Medorama and each viewer install from source on Linux, macOS and Windows, in your user account.
 [Install](docs/install.md) gives the commands for each system. On Linux or macOS, with Git,
-Python 3.9 or later and a C compiler present, these lines install Medorama with six invented
-demo patients and start it:
+Python 3.9 or later, Perl and a C compiler present, these lines install Medorama with the
+[demo](#demo) (about 40 invented patients in five databases) and start it:
 
 ```bash
 git clone https://github.com/alphanumericslab/medorama.git && cd medorama
-tools/install-medorama.sh --viewer rs --demo   # Medorama, a waveform viewer and the demo (a few minutes)
+tools/install-medorama.sh --viewer rs --demo   # shows the license terms (type y to accept), then builds Medorama, db-builder, a viewer and the demo
 source .venv/bin/activate
-medorama init --results ~/medorama-results    # once: creates the catalog; asks for the admin password
+medorama init --workspace ~/medorama-workspace --demo   # once: asks for the admin password; connects the demo
 medorama serve                                # then open http://127.0.0.1:8090 and sign in as admin
 ```
 
 [Get started](docs/getting-started.md) continues with a guided tour of the demo, and how to
-remove it before loading real data.
+remove it (its databases) before connecting real ones. Coming from 0.1.0? See
+[upgrading from 0.1.0](docs/install.md#upgrading-from-010).
+
+## Demo
+
+The demo is a complete, invented hospital world for trying, showing and teaching every feature
+of Medorama. The installers' `--demo` option makes it, and `medorama init --demo` connects it.
+
+**What it holds.** About 40 invented patients (pseudo names such as Jane Doe, MRNs starting with
+`SYN`, dates of birth and every date in an invented period), in five databases:
+
+| Database | Kind | What it shows |
+|---|---|---|
+| `demo` | db-builder | The main hospital: visits, ICU and bed stays, laboratory results with ranges and flags, vital signs, medications, transfusions, life support, procedures, ICD-10 diagnoses, assessments, microbiology, pathology, allergies, notes; ICU recordings (WFDB collections with alarms, markers, a break and a stretch without stated time), Holter ECGs, sleep studies (EDF+), routine EEGs (BDF+), 12-lead ECGs (WFDB, MUSE XML, DICOM, PDF, PNG), echo loops and reports, CT series, chest radiographs and coronary angiography |
+| `demo_north` | db-builder | A second hospital sharing some patients by MRN (one written in lower case), one identity conflict, rewrite rules and a moved folder |
+| `demo_omop` | OMOP | A third hospital's OMOP CDM database |
+| `demo_registry` | SQL views | A research registry's own tables, read through canonical views |
+| `demo_secure` | db-builder, encrypted | A clinic's database encrypted with SQLCipher, its demo key in a file |
+
+**Real-looking, yet no one's.** The ECGs are built from heart-beat templates, and the CT series
+and two chest radiographs from slices of public CT collections, all transformed from real
+recordings and pictures so that they represent no particular person (beats re-timed to new heart
+rates, blended and their leads mixed; slices re-sliced, deformed and re-mapped) and checked
+against re-identification by a maintainer-only tool kept outside this repository. Only the
+transformed pieces ship, in [`tools/demo/library`](tools/demo/README.md), with the public
+collections' attributions. Everything else, and every identifier and text, is invented.
+
+**Try each feature:**
+
+| To try | Do |
+|---|---|
+| Patient search, the Patient Journey, trends | Open **Patient Catalog**, search `Doe` or a pseudonym, open a patient; switch the report to **Trends** |
+| Patients linked across databases | Jane Doe (`demo`, `demo_registry`, `demo_secure`); Eva Lindqvist and Richard Roe (`demo`, `demo_north`, `demo_omop`) |
+| Identity conflicts | **Databases** › `demo_north` › **Identity conflicts**, or `medorama databases conflicts demo_north` |
+| Cohorts | **Cohorts**: `demo.creatinine > 1.5 OR has icu`, `female AND age > 70`, `demo.troponin > 100`, `has eeg` |
+| Privacy Mode | Turn **Privacy Mode** on: names become `[Patient Name]` (in notes too), dates move, the patient over 89 shows as `90+` |
+| Recordings and viewers | A patient's ICU monitoring, Holter, sleep study or EEG opens VitalStream; a 12-lead ECG opens the ECG viewer; CT, radiographs, echo and angiography open PACS |
+| Actions and jobs | **Actions**: run **Index** or the example plug-in **Recording summary** on all recordings; watch **Jobs** |
+| History | Open a few patients, then **History** |
+
+[Administration, The demo](docs/administration.md#the-demo) explains how it is built and
+removed; [tools/README.md](tools/README.md#the-demo) lists which feature each part of it
+demonstrates. Every new feature of Medorama extends the demo.
 
 ## License and commercial use
 
 Medorama is free for noncommercial use: research, teaching, personal study, and use by
 universities, public research and public health organizations and other noncommercial
-organizations. It is licensed under the
-[PolyForm Noncommercial License 1.0.0](LICENSE). Commercial use, including by companies and in
-commercial products and services, needs a commercial license from the author
-([COMMERCIAL.md](COMMERCIAL.md)). Contributions are accepted under the
+organizations. Commercial use, including by companies, in commercial products and as a service
+to customers, needs a commercial license from the author ([COMMERCIAL.md](COMMERCIAL.md)).
+
+| Part | License |
+|---|---|
+| The software: Medorama, db-builder, the viewers, the libraries, the tools | [PolyForm Noncommercial License 1.0.0](LICENSE) |
+| The documentation (the `docs/` folders), the user's manual, the figures and screenshots | [CC BY-NC-ND 4.0](docs/LICENSE.md): shared unchanged, noncommercially, with credit; the commands, settings and code they show are under the software's license |
+| The demo library and the viewers' examples (data) | [CC BY-NC 4.0](LICENSES/CC-BY-NC-4.0.txt); the demo's CT series and radiographs are adapted from images under CC BY 3.0 and 4.0 ([THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md#the-demo-library-toolsdemolibrary)) |
+
+[REUSE.toml](REUSE.toml) gives the license of every file, and [LICENSES/](LICENSES/) holds the
+texts; CI checks that no file lacks one ([REUSE](https://reuse.software)). The installers show
+these terms and ask you to accept them before they build anything
+([building, License terms](docs/building.md#license-terms)). Contributions are accepted under the
 [Contributor License Agreement](CLA.md).
 
 Medorama's programs include third-party components under their own licenses, listed in

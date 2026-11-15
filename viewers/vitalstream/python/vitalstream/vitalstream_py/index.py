@@ -1,7 +1,10 @@
 """Index cache (viewers/vitalstream/docs/index-format.md): per recording a folder <key>/ with meta.json and one
 little-endian binary file per array (envelopes, markers, vital-sign series), memory-mapped
-when loaded.  The key derives from the recording's real path, size and modification time.
-The Rust and C++ viewers write the same files, so the three can share one cache folder."""
+when loaded (index format 2); or an index store (format 3, store.py), built the same way in a
+private temporary folder and packed: build_into_store, or build_files (in a worker process) then
+Store.pack.  The key derives from the recording's real path, size and modification time.
+The Rust and C++ viewers write the same files and stores, so the three can share them.  The
+viewer itself uses stores; the version 2 folder (build_index, load_index) is kept for the tests."""
 
 import hashlib
 import itertools
@@ -38,14 +41,15 @@ def real_path(path):
     return p[4:] if p.startswith('\\\\?\\') else p
 
 
-def cache_key(path):
+def cache_key(path, version=INDEX_VERSION):
+    """The key of `path` in index format `version` (2: a folder, 3: a store)."""
     p = real_path(path)
     if os.path.isdir(p) or wfdb_folder.is_record(p):
         fp = [list(f) for f in wfdb_folder.fingerprint(p)]
     else:
         st = os.stat(p)
         fp = [st.st_size, st.st_mtime_ns]
-    return hashlib.sha256(dumps([INDEX_VERSION, p, fp]).encode()).hexdigest()[:20]
+    return hashlib.sha256(dumps([version, p, fp]).encode()).hexdigest()[:20]
 
 
 def paths(cache_dir, key):
@@ -90,6 +94,74 @@ def write_arrays(folder, arrays):
         np.ascontiguousarray(a, dtype=dtype).tofile(Path(folder) / file)
 
 
+class Progress:
+    """Writes an index's progress to a JSON file, at most every half second; passed to a worker
+    process (it pickles)."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+        self.t_start = time.time()
+        self.last = 0.0
+
+    def __call__(self, fraction):
+        now = time.time()
+        if now - self.last >= 0.5:
+            self.last = now
+            _write_json(self.path, {'state': 'indexing', 'fraction': min(1.0, max(0.0, fraction)),
+                                    'elapsed_s': now - self.t_start})
+
+
+def _build(path, folder, key, version, progress, stop):
+    """Write the index files of `path` (its arrays and meta.json, index format `version`) into the
+    new folder `folder`, and check them as a reader would."""
+    t_start = time.time()
+    folder.mkdir()
+    meta, arrays = build(path, folder, progress, stop)
+    if arrays is not None:          # otherwise the adapter wrote the arrays into folder
+        write_arrays(folder, arrays)
+    meta.update(path=real_path(path), name=Path(path).name, key=key, index_version=version,
+                engine=__version__, indexed_s=round(time.time() - t_start, 1))
+    _write_json(folder / 'meta.json', clean(meta))
+    # what a reader would refuse is not kept (times or rates that are not finite numbers, ...)
+    try:
+        _load_from(folder, version)
+    except ValueError as e:
+        raise ValueError(f'{path}: the index would be inconsistent: {e}') from None
+
+
+def build_files(path, tmp_root, progress=None, cancelled=None, key=None):
+    """Build the index files of `path` (index format 3) in a new private folder of `tmp_root` (a
+    store's tmp_dir): (key, that folder), for Store.pack; the caller removes the folder.  Runs
+    in a worker process: no store and no key is needed.  On any error, and once `cancelled`
+    returns true (ValueError('indexing cancelled')), nothing is left behind."""
+    from .store import STORE_FORMAT, private_dir
+    key = key or cache_key(path, STORE_FORMAT)
+    private_dir(tmp_root)
+    folder = _unique(tmp_root, key, 'tmp')
+    try:
+        (progress or (lambda f: None))(0.0)
+        _build(path, folder, key, STORE_FORMAT, progress or (lambda f: None), cancelled or (lambda: False))
+    except BaseException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    return key, str(folder)
+
+
+def build_into_store(path, store, progress=None, cancelled=None):
+    """Index `path` into the index store `store` (format 3): built in a private temporary folder,
+    then packed in one transaction; returns the key.  Stops (ValueError('indexing cancelled'),
+    nothing left behind) once `cancelled` returns true."""
+    from .store import STORE_FORMAT
+    key = cache_key(path, STORE_FORMAT)
+    with _key_lock(f'{store.path}\x01{key}'):
+        key, folder = build_files(path, store.tmp_dir, progress, cancelled, key)
+        try:
+            store.pack(key, folder)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+    return key
+
+
 def build_index(path, cache_dir, cancelled=None):
     """Index `path` into the cache (runs in a worker process).  Returns the key.  Once
     `cancelled` (a function) returns true, indexing stops with ValueError('indexing
@@ -103,33 +175,14 @@ def build_index(path, cache_dir, cancelled=None):
     os.makedirs(cache_dir, exist_ok=True)
     key = cache_key(path)
     folder, prog_path = paths(cache_dir, key)
-    last = [0.0]
-    t_start = time.time()
-
-    def progress(fraction):
-        now = time.time()
-        if now - last[0] >= 0.5:
-            last[0] = now
-            _write_json(prog_path, {'state': 'indexing', 'fraction': min(1.0, max(0.0, fraction)),
-                                    'elapsed_s': now - t_start})
+    progress = Progress(prog_path)
 
     with _key_lock(key):
         tmp = _unique(cache_dir, key, 'tmp')
         old = None
         try:
             progress(0.0)
-            tmp.mkdir()
-            meta, arrays = build(path, tmp, progress, stop)
-            if arrays is not None:          # otherwise the adapter wrote the arrays into tmp
-                write_arrays(tmp, arrays)
-            meta.update(path=real_path(path), name=Path(path).name, key=key, index_version=INDEX_VERSION,
-                        engine=__version__, indexed_s=round(time.time() - t_start, 1))
-            _write_json(tmp / 'meta.json', clean(meta))
-            # what a reader would refuse is not kept (times or rates that are not finite numbers, ...)
-            try:
-                _load_from(tmp)
-            except ValueError as e:
-                raise ValueError(f'{path}: the index would be inconsistent: {e}') from None
+            _build(path, tmp, key, INDEX_VERSION, progress, stop)
             try:
                 current = _load_from(folder)[0].get('engine') == __version__
             except ValueError:
@@ -146,7 +199,7 @@ def build_index(path, cache_dir, cancelled=None):
                         _load_from(folder)
                     except ValueError:
                         raise e from None
-            _write_json(prog_path, {'state': 'ready', 'fraction': 1.0, 'elapsed_s': time.time() - t_start})
+            _write_json(prog_path, {'state': 'ready', 'fraction': 1.0, 'elapsed_s': time.time() - progress.t_start})
         except BaseException:
             # the error is the job's (its message); nothing is left in the index folder
             try:
@@ -182,8 +235,9 @@ def load_index(cache_dir, key):
     return meta, arrays, folder
 
 
-def _load_from(folder):
-    """(meta, arrays) of the index in `folder`; a ValueError saying why it cannot be used."""
+def _load_from(folder, version=INDEX_VERSION):
+    """(meta, arrays) of the index in `folder` (format `version`); a ValueError saying why it
+    cannot be used."""
     folder = Path(folder)
     try:
         meta = json_loads((folder / 'meta.json').read_text(encoding='utf-8'))
@@ -193,7 +247,7 @@ def _load_from(folder):
         raise ValueError('meta.json is not a JSON object') from None
     if not isinstance(meta, dict):
         raise ValueError('meta.json is not a JSON object')
-    if not _is_int(meta.get('index_version')) or meta['index_version'] != INDEX_VERSION:
+    if not is_int(meta.get('index_version')) or meta['index_version'] != version:
         raise ValueError('another index version')
     names = []
     lvl = 0
@@ -206,7 +260,7 @@ def _load_from(folder):
     return meta, arrays
 
 
-def _is_int(v):
+def is_int(v):
     return isinstance(v, int) and not isinstance(v, bool)
 
 
@@ -226,13 +280,13 @@ def check(meta, arrays):
 
     def integer(v, k):
         x = get(v, k)
-        if not _is_int(x):
+        if not is_int(x):
             raise ValueError(f'a {k} that is not a whole number')
         return x
 
     def number(v, k):
         x = get(v, k)
-        if _is_int(x) or (isinstance(x, float) and math.isfinite(x)):
+        if is_int(x) or (isinstance(x, float) and math.isfinite(x)):
             return float(x)
         raise ValueError(f'a {k} that is not a finite number')
 
@@ -260,7 +314,7 @@ def check(meta, arrays):
             if len(env) > levels:
                 raise ValueError(f'{len(env)} envelope levels; the index has {levels}')
             for lvl, e in enumerate(env):
-                if not (isinstance(e, list) and len(e) == 2 and _is_int(e[0]) and _is_int(e[1])):
+                if not (isinstance(e, list) and len(e) == 2 and is_int(e[0]) and is_int(e[1])):
                     raise ValueError(f'envelope level {lvl} is not [offset, length]')
                 off, length = e
                 size = min(arrays[f'env_min_{lvl}'].size, arrays[f'env_max_{lvl}'].size)
@@ -302,4 +356,4 @@ def _load(folder, name):
         raise ValueError(f'{file}: {e}') from None
 
 
-__all__ = ['build_index', 'cache_key', 'dumps', 'kind_of', 'load_index', 'read_progress', 'write_arrays']
+__all__ = ['Progress', 'build_files', 'build_index', 'build_into_store', 'cache_key', 'dumps', 'kind_of', 'load_index', 'read_progress', 'write_arrays']

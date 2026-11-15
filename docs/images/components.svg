@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 640" width="1000" height="640" role="img" aria-labelledby="t d">
-<title id="t">Medorama server: components and request path</title><desc id="d">Requests pass the security headers and request check, the privacy layer (session lookup, Privacy Mode decision, the gate on the way out), then the handlers, which use the core modules over the catalog database.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 824" width="1000" height="824" role="img" aria-labelledby="t d">
+<title id="t">Medorama server: components and request path</title><desc id="d">Requests pass the security headers and request check, the privacy layer (sign-in, Privacy Mode decision, the gate on the way out), then the handlers, which check the role and the grants, unwrap the data keys they need, and use the core modules over the control store, the workspace and the connected databases.</desc>
 <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#4B5563"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#B97A00"/></marker></defs>
-<rect x="0" y="0" width="1000" height="640" rx="14" fill="#FFFFFF"/>
+<rect x="0" y="0" width="1000" height="824" rx="14" fill="#FFFFFF"/>
 <g font-family="Inter, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="13" fill="#1F2937">
 <text x="24" y="34" font-size="17" font-weight="700" fill="#1F2937" text-anchor="start">Inside the server: one request’s path</text>
 <text x="24" y="54" font-size="12" font-weight="400" fill="#4B5563" text-anchor="start">Layers are axum middleware; the privacy layer wraps every route, so every answer passes it on the way out.</text>
@@ -9,23 +9,23 @@
 <text x="36" y="105" font-size="13.5" font-weight="650" fill="#374151" text-anchor="start">guard  (server.rs)</text>
 <text x="36" y="124.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">security headers on every answer (CSP, frame rules, nosniff, no-referrer, no-store on the API); X-Medorama: 1 required on every changing API request</text>
 <rect x="24" y="152" width="952" height="72" rx="9" fill="#FDF1DC" stroke="#B97A00" stroke-width="1.4"/>
-<text x="36" y="173" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">privacy layer  (server.rs privacy, gate.rs)</text>
-<text x="36" y="192.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">in: finds the session’s user once; Privacy Mode unless the user has the PHI permission and turned it off (POST privacy)</text>
+<text x="36" y="173" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">privacy layer  (server.rs privacy, signin.rs, gate.rs)</text>
+<text x="36" y="192.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">in: signin.rs identify finds the user once; Privacy Mode unless the user has the PHI permission and turned it off (POST privacy)</text>
 <text x="36" y="208.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">out, in Privacy Mode: JSON through the gate; files only if the gate cleared them; anything else refused (fail closed)</text>
 <rect x="24" y="240" width="232" height="126" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
 <text x="36" y="261" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">API  /api/v1</text>
-<text x="36" y="280.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">patients, report, detail</text>
-<text x="36" y="296.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">cohorts, databases</text>
-<text x="36" y="313.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">imports, review (admins)</text>
-<text x="36" y="329.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">users, audit (admins)</text>
-<text x="36" y="346.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">files: patients/{id}/file/…</text>
+<text x="36" y="280.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">patients, report, detail, files</text>
+<text x="36" y="296.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">cohorts, search across databases</text>
+<text x="36" y="313.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">databases: connect, check,</text>
+<text x="52" y="329.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">refresh, grants, remove</text>
+<text x="36" y="346.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">users, audit (admins)</text>
 <rect x="264" y="240" width="232" height="126" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
 <text x="276" y="261" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">Gateway  /viewer/</text>
-<text x="276" y="280.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">allow-list of viewer API v1</text>
-<text x="276" y="296.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">per-user browse and open</text>
-<text x="276" y="313.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">rules; Privacy Mode: tokens,</text>
-<text x="276" y="329.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">times translated, no</text>
-<text x="276" y="346.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">folders</text>
+<text x="276" y="280.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">allow-list of viewer API v1;</text>
+<text x="276" y="296.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">only recordings of databases</text>
+<text x="276" y="313.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">the user may view; Privacy</text>
+<text x="276" y="329.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Mode: tokens, times</text>
+<text x="276" y="346.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">translated, no folders</text>
 <rect x="504" y="240" width="232" height="126" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
 <text x="516" y="261" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">Pages  /, /viewers/</text>
 <text x="516" y="280.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">the Medorama page and the</text>
@@ -34,54 +34,89 @@
 <text x="516" y="329.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">embedded in the binary</text>
 <rect x="744" y="240" width="232" height="126" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
 <text x="756" y="261" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">Command line  medorama</text>
-<text x="756" y="280.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">init, import, serve, run,</text>
-<text x="756" y="296.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">work, users, addons;</text>
-<text x="756" y="313.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">the local account is the</text>
-<text x="756" y="329.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">catalog’s owner</text>
-<rect x="24" y="388" width="232" height="92" rx="9" fill="#FDF1DC" stroke="#B97A00" stroke-width="1.4"/>
-<text x="36" y="409" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">gate.rs</text>
-<text x="36" y="428.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">dictionary of identifiers</text>
-<text x="36" y="444.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">placeholders, file tokens</text>
-<text x="36" y="461.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">table cells, notes</text>
-<rect x="264" y="388" width="232" height="92" rx="9" fill="#FDF1DC" stroke="#B97A00" stroke-width="1.4"/>
-<text x="276" y="409" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">deid.rs</text>
-<text x="276" y="428.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">dates moved back</text>
-<text x="276" y="444.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(per patient), ages 90+</text>
-<text x="276" y="461.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">WFDB, EDF headers; MUSE XML</text>
-<rect x="504" y="388" width="232" height="92" rx="9" fill="#FDF1DC" stroke="#B97A00" stroke-width="1.4"/>
-<text x="516" y="409" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">dicom.rs</text>
-<text x="516" y="428.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">DICOM headers (PS3.15</text>
-<text x="516" y="444.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Basic Profile), pixels</text>
-<text x="516" y="461.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">copied byte for byte</text>
-<rect x="744" y="388" width="232" height="92" rx="9" fill="#FDF1DC" stroke="#B97A00" stroke-width="1.4"/>
-<text x="756" y="409" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">pseudonyms.rs</text>
-<text x="756" y="428.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">MO-XXXX-XXXX, random,</text>
-<text x="756" y="444.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">stored, check character,</text>
-<text x="756" y="461.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">aliases on merges</text>
-<rect x="24" y="492" width="232" height="92" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
-<text x="36" y="513" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">patient/, cohorts/</text>
-<text x="36" y="532.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">the patient page, search,</text>
-<text x="36" y="548.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">cohort definitions,</text>
-<text x="36" y="565.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">exports</text>
-<rect x="264" y="492" width="232" height="92" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
-<text x="276" y="513" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">tables.rs, imports.rs</text>
-<text x="276" y="532.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">databases in, columns</text>
-<text x="276" y="548.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">kept as imported,</text>
-<text x="276" y="565.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">identity, removal</text>
-<rect x="504" y="492" width="232" height="92" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
-<text x="516" y="513" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">users.rs</text>
-<text x="516" y="532.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Argon2id, sessions</text>
-<text x="516" y="548.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(SHA-256 of a random</text>
-<text x="516" y="565.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">token), roles, PHI</text>
-<rect x="744" y="492" width="232" height="92" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
-<text x="756" y="513" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">jobs.rs, actions.rs</text>
-<text x="756" y="532.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">queue, workers, indexing,</text>
-<text x="756" y="548.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">plug-ins as processes</text>
-<text x="756" y="565.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">(pseudonyms only)</text>
-<rect x="24" y="596" width="952" height="30" rx="9" fill="#F6E8F1" stroke="#A8507E" stroke-width="1.4"/>
-<text x="36" y="617" font-size="12" font-weight="650" fill="#4A1D36" text-anchor="start">catalog database  (db.rs, sql/: SQLite or PostgreSQL, migrations, owner-only files, optional SQLCipher; identifiers only in their tables)</text>
+<text x="756" y="280.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">init, serve, databases, keys,</text>
+<text x="756" y="296.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">run, work, user, audit;</text>
+<text x="756" y="313.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">the person at the terminal</text>
+<text x="756" y="329.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">holds every grant</text>
 <path d="M140 224 L140 240" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M140 366 L140 382" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
 <path d="M380 224 L380 240" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M380 366 L380 382" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
 <path d="M620 224 L620 240" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M620 366 L620 382" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
 <path d="M860 224 L860 240" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<path d="M860 366 L860 382" fill="none" stroke="#4B5563" stroke-width="1.5" marker-end="url(#a)"/>
+<rect x="24" y="382" width="952" height="66" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="36" y="403" font-size="13" font-weight="650" fill="#0B3C5D" text-anchor="start">Every handler  (grants.rs, workspace.rs)</text>
+<text x="36" y="422.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">checks the role and the grants the request needs (search &lt; view &lt; phi &lt; manage on a database; view &lt; edit &lt; manage on a cohort),</text>
+<text x="36" y="438.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">then unwraps the data key of each database or cohort it reads, only for a user who holds a grant on it</text>
+<rect x="24" y="464" width="232" height="84" rx="9" fill="#FDF1DC" stroke="#B97A00" stroke-width="1.4"/>
+<text x="36" y="485" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">gate.rs</text>
+<text x="36" y="504.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">dictionary of identifiers,</text>
+<text x="36" y="520.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">placeholders, file tokens,</text>
+<text x="36" y="537.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">table cells, notes</text>
+<rect x="264" y="464" width="232" height="84" rx="9" fill="#FDF1DC" stroke="#B97A00" stroke-width="1.4"/>
+<text x="276" y="485" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">deid.rs</text>
+<text x="276" y="504.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">dates moved back (per</text>
+<text x="276" y="520.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">patient), ages 90+; WFDB,</text>
+<text x="276" y="537.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">EDF headers; MUSE XML</text>
+<rect x="504" y="464" width="232" height="84" rx="9" fill="#FDF1DC" stroke="#B97A00" stroke-width="1.4"/>
+<text x="516" y="485" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">dicom.rs</text>
+<text x="516" y="504.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">DICOM headers (PS3.15</text>
+<text x="516" y="520.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Basic Profile), pixels</text>
+<text x="516" y="537.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">copied byte for byte</text>
+<rect x="744" y="464" width="232" height="84" rx="9" fill="#FDF1DC" stroke="#B97A00" stroke-width="1.4"/>
+<text x="756" y="485" font-size="13.5" font-weight="650" fill="#5C3D00" text-anchor="start">pseudonyms.rs</text>
+<text x="756" y="504.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">MO-XXXX-XXXX, random,</text>
+<text x="756" y="520.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">with a check character,</text>
+<text x="756" y="537.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">never derived from an ID</text>
+<rect x="24" y="560" width="232" height="84" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="36" y="581" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">databases.rs, sources/</text>
+<text x="36" y="600.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">connect, check, refresh,</text>
+<text x="36" y="616.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">remove; OMOP, views,</text>
+<text x="36" y="633.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">db-builder: read only</text>
+<rect x="264" y="560" width="232" height="84" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="276" y="581" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">persons.rs, variables.rs</text>
+<text x="276" y="600.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">exact (issuer, identifier)</text>
+<text x="276" y="616.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">links, conflicts; what</text>
+<text x="276" y="633.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">each database holds</text>
+<rect x="504" y="560" width="232" height="84" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="516" y="581" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">patient/, cohorts/</text>
+<text x="516" y="600.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">the patient page, read live;</text>
+<text x="516" y="616.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">criteria sent to the</text>
+<text x="516" y="633.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">databases that may hold them</text>
+<rect x="744" y="560" width="232" height="84" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="756" y="581" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">recordings.rs, jobs.rs</text>
+<text x="756" y="600.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">recordings’ state, indexing,</text>
+<text x="756" y="616.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">actions as separate</text>
+<text x="756" y="633.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">processes (pseudonyms only)</text>
+<rect x="24" y="656" width="232" height="84" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="36" y="677" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">signin.rs, users.rs</text>
+<text x="36" y="696.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">password or proxy sign-in;</text>
+<text x="36" y="712.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">Argon2id, sessions, roles,</text>
+<text x="36" y="729.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">the PHI permission</text>
+<rect x="264" y="656" width="232" height="84" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="276" y="677" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">grants.rs</text>
+<text x="276" y="696.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">grants per database and</text>
+<text x="276" y="712.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">per cohort; the admin who</text>
+<text x="276" y="729.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">connects gets every grant</text>
+<rect x="504" y="656" width="232" height="84" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="516" y="677" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">workspace.rs</text>
+<text x="516" y="696.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">data keys wrapped by the</text>
+<text x="516" y="712.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">master key (AES-256-GCM);</text>
+<text x="516" y="729.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">SQLCipher files</text>
+<rect x="744" y="656" width="232" height="84" rx="9" fill="#E8F1FA" stroke="#0072B2" stroke-width="1.4"/>
+<text x="756" y="677" font-size="13.5" font-weight="650" fill="#0B3C5D" text-anchor="start">audit.rs</text>
+<text x="756" y="696.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">who did what, when;</text>
+<text x="756" y="712.5" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">sealed every minute by</text>
+<text x="756" y="729.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">a SHA-256 chain</text>
+<rect x="24" y="756" width="300" height="52" rx="9" fill="#F2F3F5" stroke="#6B7280" stroke-width="1.4"/>
+<text x="36" y="777" font-size="12.5" font-weight="650" fill="#1F2937" text-anchor="start">Control store  (db.rs, sql/, schema/)</text>
+<text x="36" y="796.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">SQLite or PostgreSQL; no identifiers</text>
+<rect x="350" y="756" width="300" height="52" rx="9" fill="#F6E8F1" stroke="#A8507E" stroke-width="1.4"/>
+<text x="362" y="777" font-size="12.5" font-weight="650" fill="#4A1D36" text-anchor="start">Workspace  (workspace.rs)</text>
+<text x="362" y="796.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">one folder per database, a file per cohort</text>
+<rect x="676" y="756" width="300" height="52" rx="9" fill="#FFFFFF" stroke="#9CA3AF" stroke-width="1.4" stroke-dasharray="5 4"/>
+<text x="688" y="777" font-size="12.5" font-weight="650" fill="#374151" text-anchor="start">Connected databases  (sources/)</text>
+<text x="688" y="796.0" font-size="11.5" font-weight="400" fill="#374151" text-anchor="start">read in place, read-only sessions</text>
 </g></svg>

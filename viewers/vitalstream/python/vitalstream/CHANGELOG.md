@@ -1,7 +1,56 @@
 # Changelog: vitalstream_py
 
-## Unreleased
+## 0.2.0 (2026-11-15, pre-release)
 
+- `viewers/vitalstream/install.sh` and `install.ps1` show the license terms and go on only if
+  they are accepted (`y` or `yes`; `--accept-license`, `-AcceptLicense` or
+  `MEDORAMA_ACCEPT_LICENSE=yes` in scripts). The documentation (`docs/`) is now under
+  CC BY-NC-ND 4.0; the software's license is unchanged.
+- **The page** (shared `web/`): a channel's unit as the engine states it: `adu` only for an
+  uncalibrated signal, nothing when no unit is stated.
+- **Review fixes (index content changes within version 3, noted in index-format.md's Versions
+  table; the three engines write the same bytes, checked by `tests/parity/index_parity.py`, which
+  now also makes these recordings):**
+  - a WFDB header whose record line states no number of samples (or 0) is read to the end of its
+    data, as libwfdb reads it (it gave no samples); a compressed file's frames are counted by
+    decoding them;
+  - a signal of several samples per frame is a piece at its own rate (frame rate times its samples
+    per frame) with every sample, read in WFDB's high-resolution mode (it was averaged to the frame
+    rate); its markers are at the first sample of their frame; samples are read again by range of
+    the signal's own samples;
+  - records without a start time before the first record with one end where it starts, with a
+    note (they started at 0, 1970-01-01);
+  - an EDF/BDF date with a day its month does not have (`31.02.24`) states no start (it became
+    March 2).
+- **Windows:** with more pieces of a channel than pixel columns, each column keeps the piece that
+  ends latest and every piece that reaches past it (it kept the first to start, and could drop a
+  long piece) (viewer-api.md).
+  (The store already packed on a connection of its own.) Tests: `test_limits.py`, `test_edf.py`.
+- **Index format 3, the index store** (viewers/vitalstream/docs/index-format.md, "Version 3: the
+  index store"): the viewer keeps its indexes in one SQLite database, `cache_dir/index.sqlite`,
+  encrypted with SQLCipher 4 when the new setting `index_key_file` names a file of 64 hex digits
+  (raw key, SQLCipher 4's defaults), the same stores and rows as the Rust and C++ viewers (keys
+  of version 3; `store`, `indexes`, `arrays` and `chunks` tables, 4096 values per chunk in a new
+  store). An index is built as the version 2 files in a private folder next to the store
+  (`index.tmp/`), checked, then packed in one transaction: an index of the key written by the
+  same engine is kept, any other replaced. Envelopes are read by range, a chunk at a time (16
+  chunks of an array kept); markers and vital signs whole; a chunk or an array not of the length
+  the `arrays` table states is refused. The worker processes build the files; the server packs
+  them (the workers need no key). An adapter's recording loaded from a store gets a private
+  folder holding only its `meta.json`, removed when the dataset is closed. New module
+  `store.py` (`Store`, `Stores`, `Chunked`, `read_keys`); `index.build_into_store`,
+  `index.build_files`, `index.cache_key(path, version)`. The progress files of the jobs are in the
+  server's private temporary folder, no longer in `cache_dir`. `--index PATH` writes into the own
+  store. The version 2 folder (`build_index`, `load_index`) is kept for the tests.
+- `--keys-on-stdin`: launched by Medorama, the viewer reads its stores and their keys on standard
+  input, one JSON line each (`{"store": PATH, "key": HEX}`, `"own": true` for the store it
+  writes; `{"forget": PATH}`), looks recordings up in the stores given, then in its own, and
+  forgets every store when standard input closes. Keys are kept in memory only, never logged.
+- New dependency: `sqlcipher3` ≥ 0.6.5 (zlib licence; its wheels bundle SQLCipher 4.20.0
+  community on SQLite 3.54.1, with OpenSSL 3.6.0), for encrypted and plain stores.
+- Tests: `tests/test_store.py`; the server tests check that nothing is left in the store or next
+  to it. `tests/parity/index_parity.py` compares the viewers' stores (keys of version 3, the
+  `store`, `meta`, `arrays` and `chunks` rows), and reports a viewer that writes no store yet.
 - Documentation: the speed of the three viewers, measured on WFDB (with `.dat` and `.mat`
   files), EDF, BDF and `.Stp` recordings, indexing and reading, in place of the estimates ("about
   a minute" for the Python viewer was wrong): the VitalStream README's "Speed" and

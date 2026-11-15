@@ -54,7 +54,9 @@ wfdbx.wfdbquiet()           # problems come back as exceptions, not printed mess
 def _header(record):
     """The header of a record (no signal file is opened); ValueError if it cannot be read or
     states no sampling frequency (or one that is not a finite positive number).  The number of
-    samples is at most what the signal files can hold (_frames_held)."""
+    samples is at most what the signal files can hold (_frames_held); a header that states none
+    (0, or no count on its record line) is read to the end of its data, as libwfdb reads it: up to
+    what the files hold, 2**63 - 1 when no file can be measured (_counted then counts them)."""
     try:
         with _WFDB:
             h = wfdbx.read_header(str(record))
@@ -62,8 +64,41 @@ def _header(record):
         raise ValueError(f'{record}: {e}') from e
     if not (h.fs > 0 and math.isfinite(h.fs)):
         raise ValueError(f'{record}: the header states no sampling frequency')
-    h.nsamples = min(max(h.nsamples, 0), _frames_held(record, h))
+    held = _frames_held(record, h)
+    h.nsamples = min(h.nsamples, held) if h.nsamples > 0 else held
     return h
+
+
+def _counted(record):
+    """_header, with the frames counted by decoding them when the header states no number of
+    samples and no signal file can be measured (compressed formats): 0 for a header that names no
+    signal file (a layout segment's)."""
+    h = _header(record)
+    if h.nsamples == _UNBOUNDED:
+        frames = 0
+        if any(_signal_file(record, s.fname) is not None for s in h.siginfo):
+            spf0 = _spf(h.siginfo[0])
+
+            def count(cols):
+                nonlocal frames
+                frames += len(cols[0]) // spf0
+            _decode(record, h, 0, _UNBOUNDED, [0], count)
+        h.nsamples = frames
+    return h
+
+
+_UNBOUNDED = 2 ** 63 - 1
+
+
+def _spf(s):
+    """Samples per frame of a signal (at least 1)."""
+    return max(s.spf, 1)
+
+
+def _spf_max(h):
+    """The most samples per frame of a record's signals: 1 when every signal has one sample per
+    frame; more for a multi-frequency record, which is decoded in WFDB's high-resolution mode."""
+    return max((_spf(s) for s in h.siginfo), default=1)
 
 
 # three times the bits a sample of each WFDB storage format of a fixed size takes
@@ -95,7 +130,7 @@ def _frames_held(record, h):
         bits = None if b3 is None else b3 * max(s.spf, 1)
         prev = per_file.get(f, 0)
         per_file[f] = None if prev is None or bits is None else prev + bits
-    held = 2 ** 63 - 1
+    held = _UNBOUNDED
     for f, bits in per_file.items():
         if not bits:
             continue
@@ -174,17 +209,24 @@ def _names_units(h):
     return [(s.desc or '', 'adu' if s.gain == 0 else (s.units or '')) for s in h.siginfo]
 
 
-def _physical(x, siginfo):
-    """Stored samples (frames x signals) in physical units, as float64: (value - baseline) / gain,
-    the stored value for an uncalibrated signal, NaN for WFDB's invalid sample."""
+def _physical(x, siginfo, m):
+    """Each signal's stored samples in `x` (high-resolution vectors x signals: whole frames of `m`
+    vectors, the first at a frame's start) in physical units, as float64: (value - baseline) /
+    gain, the stored value for an uncalibrated signal, NaN for WFDB's invalid sample.  WFDB's
+    high-resolution mode repeats sample floor(k * spf / m) of a signal of spf samples per frame at
+    vector k of a frame, so each sample is taken once, where it first appears."""
     x = np.asarray(x, dtype=np.int64)
-    out = np.empty(x.shape, dtype=np.float64)
+    k_of = np.arange(x.shape[0], dtype=np.int64) % m
+    out = []
     for k, s in enumerate(siginfo):
-        col = x[:, k].astype(np.float64)
+        raw = x[:, k]
+        if m > 1:
+            raw = raw[(k_of * _spf(s)) % m < _spf(s)]
+        col = raw.astype(np.float64)
         if s.gain != 0:
             col = (col - float(s.baseline)) / s.gain
-        col[x[:, k] == wfdbx.WFDB_INVALID_SAMPLE] = np.nan
-        out[:, k] = col
+        col[raw == wfdbx.WFDB_INVALID_SAMPLE] = np.nan
+        out.append(col)
     return out
 
 
@@ -193,13 +235,16 @@ def _chunk_frames(nsig):
     return max(CHUNK_SAMPLES // max(nsig, 1), MIN_CHUNK_FRAMES)
 
 
-def _read_some(record, a, b, channels):
-    """(signals, siginfo) of frames [a, b) of a record, or of the frames from a that it holds
-    when its data end before b (wfdb-x refuses to read past the end of the data)."""
+def _read_some(record, a, b, channels, m):
+    """(vectors, siginfo) of frames [a, b) of a record (m high-resolution vectors per frame when
+    m > 1, whole frames), or of the frames from a that it holds when its data end before b
+    (wfdb-x refuses to read past the end of the data)."""
     def read(to):
         with _WFDB:
-            r = wfdbx.read_record(str(record), channels=channels, sampfrom=a, sampto=to, checksum_warning=False)
-        return r.signals, r.siginfo
+            r = wfdbx.read_record(str(record), channels=channels, sampfrom=a * m, sampto=to * m, highres=m > 1,
+                                  checksum_warning=False)
+        x = r.signals
+        return x[:x.shape[0] - x.shape[0] % m], r.siginfo
     try:
         return read(b)
     except OSError as e:
@@ -219,34 +264,35 @@ def _read_some(record, a, b, channels):
             hi = mid - 1
     if lo <= a:
         return None
-    return got if got is not None and len(got[0]) == lo - a else read(lo)
+    return got if got is not None and len(got[0]) == (lo - a) * m else read(lo)
 
 
-def _decode(record, nsig, a, b, channels, sink):
-    """Frames [a, b) of a record of `nsig` signals, a chunk at a time: sink(x) gets the physical
-    samples of each chunk (frames x signals `channels`, all when None).  Stops at the end of the
-    data (a chunk read short), whatever the header states."""
-    chunk = _chunk_frames(nsig)
+def _decode(record, h, a, b, channels, sink):
+    """Frames [a, b) of a record of header `h`, a chunk at a time: sink(cols) gets, for each of the
+    signals `channels` (all when None), its physical samples in the chunk (every sample: spf per
+    frame for a signal of spf samples per frame).  Stops at the end of the data (a chunk read
+    short), whatever the header states."""
+    m = _spf_max(h)
+    chunk = max(_chunk_frames(h.nsig) // m, 1)
     while a < b:
         n = min(chunk, b - a)
-        got = _read_some(record, a, a + n, channels)
+        got = _read_some(record, a, a + n, channels, m)
         if got is None:
             return
-        x = _physical(*got)
-        sink(x)
-        if x.shape[0] < n:
+        frames = got[0].shape[0] // m
+        sink(_physical(got[0], got[1], m))
+        if frames < n:
             return
         a += n
 
 
-def _read(record, nsig, a, b, channels=None):
-    """Frames [a, b) of a record of `nsig` signals (signals `channels`, all when None) in
-    physical units, up to the end of its data."""
+def _read(record, h, a, b, channels=None):
+    """Frames [a, b) of a record of header `h` (signals `channels`, all when None) in physical
+    units, up to the end of its data: one array per signal."""
     parts = []
-    _decode(record, nsig, a, b, channels, parts.append)
-    if not parts:
-        return np.empty((0, len(channels) if channels is not None else 0), np.float64)
-    return np.concatenate(parts) if len(parts) > 1 else parts[0]
+    _decode(record, h, a, b, channels, parts.append)
+    k = len(channels) if channels is not None else h.nsig
+    return [np.concatenate([p[j] for p in parts]) if parts else np.empty(0, np.float64) for j in range(k)]
 
 
 def _float(v):
@@ -351,7 +397,7 @@ def _unit(base, name, row=None):
     """The record `name` (relative to `base`), with `row` from index.csv or None."""
     check_files(base, name)
     path = Path(base) / name
-    h = _header(path)
+    h = _counted(path)
     # a MAT signal file is read as frames from the header's byte offset: one of another layout
     # would be read as noise
     wfdb_files.check_mat_files(_hea(path))
@@ -368,7 +414,7 @@ def _unit(base, name, row=None):
                 nulls.append((offset, n))
         elif n > 0:
             rec = _beside(name, seg)
-            parts.append(_Part(rec, offset, _header(Path(base) / rec)))
+            parts.append(_Part(rec, offset, _counted(Path(base) / rec)))
         offset += max(n, 0)          # a layout segment has no samples
     return _Unit(name, row, h.fs, offset, parts, nulls, h)
 
@@ -429,16 +475,8 @@ def _rec_path(units, name):
     return name
 
 
-def _placement(units, gap_rows):
-    """Start of each record on the time axis, and whether it is stated: records in order; those
-    without a start follow the data before them, after the break gaps.csv states before them
-    (gap_s), if any; records of the same stretch start together."""
-    counted = {}                  # record -> the break stated before it
-    for g in gap_rows:
-        gs = _float(g.get('gap_s'))
-        if g.get('scope') == 'all' and gs is not None:
-            for name in (g.get('records_after') or '').split(';'):
-                counted[_rec_path(units, name)] = gs
+def _place(units, counted, origin):
+    """_placement with the first record without a start (and no data before it) at `origin`."""
     out = []
     last_end, untimed_group = None, {}
     for i, u in enumerate(units):
@@ -449,12 +487,41 @@ def _placement(units, gap_rows):
         else:
             g = r.get('stretch') or f'record {i}'
             if g not in untimed_group:
-                untimed_group[g] = (last_end if last_end is not None else 0.0) + counted.get(u.name, 0.0)
+                untimed_group[g] = (last_end if last_end is not None else origin) + counted.get(u.name, 0.0)
             s = (untimed_group[g], False)
         out.append(s)
         end = s[0] + u.n / u.fs
         last_end = end if last_end is None else max(last_end, end)
     return out
+
+
+def _first_timed(units):
+    """The position of the first record with a start, or None."""
+    return next((i for i, u in enumerate(units) if _float(u.row.get('start_unix')) is not None), None)
+
+
+def _placement(units, gap_rows):
+    """Start of each record on the time axis, and whether it is stated: records in order; those
+    without a start follow the data before them, after the break gaps.csv states before them
+    (gap_s), if any; records of the same stretch start together.  Records without a start that
+    come before the first record with one (the leading ones) are placed so that they end just
+    where it starts; when no record has a start, the first starts at 0."""
+    counted = {}                  # record -> the break stated before it
+    for g in gap_rows:
+        gs = _float(g.get('gap_s'))
+        if g.get('scope') == 'all' and gs is not None:
+            for name in (g.get('records_after') or '').split(';'):
+                counted[_rec_path(units, name)] = gs
+    origin = 0.0
+    f = _first_timed(units)
+    if f:
+        # the leading records, placed from 0: where they end
+        lead = _place(units[:f], counted, 0.0)
+        end = -math.inf
+        for (t, _), u in zip(lead, units[:f]):
+            end = max(end, t + u.n / u.fs)
+        origin = _float(units[f].row.get('start_unix')) - end
+    return _place(units, counted, origin)
 
 
 class _Lanes:
@@ -510,24 +577,25 @@ def build(path, progress, cancelled=lambda: False):
                 lane = lanes.place(key, tp, tend)
                 key, label = (key, name) if lane == 1 else (key + (lane,), f'{name} ({lane})')
                 cid = channels.get(key, label, unit, modality)
-                ps.append(pieces.new(cid, part.h.fs, t0=tp, timed=timed))
+                # a signal of several samples per frame at its own rate
+                ps.append(pieces.new(cid, part.h.fs * _spf(part.h.siginfo[j]), t0=tp, timed=timed))
                 piece_info.append((part.rec, j))
                 by_name.setdefault(name, j)
             everything += ps
             rec_path = base / part.rec
             n = max(part.h.nsamples, 0)
 
-            def sink(x, ps=ps, nsig=part.h.nsig):
+            def sink(cols, ps=ps, nsig=part.h.nsig, spf0=_spf(part.h.siginfo[0])):
                 nonlocal done
                 if cancelled():
                     raise ValueError('indexing cancelled')
-                for j, p in enumerate(ps):
-                    pieces.add(p, x[:, j].astype(np.float32))
-                done += x.shape[0] * nsig
+                for p, col in zip(ps, cols):
+                    pieces.add(p, col.astype(np.float32))
+                done += len(cols[0]) // spf0 * nsig
                 progress(done / total)
             if cancelled():
                 raise ValueError('indexing cancelled')
-            _decode(rec_path, part.h.nsig, 0, n, None, sink)
+            _decode(rec_path, part.h, 0, n, None, sink)
             part_pieces.append((ps, by_name))
         rec_pieces[u.name] = everything
         # markers: the record's .mrk annotations (of a multi-segment record: the record's, with
@@ -549,7 +617,8 @@ def build(path, progress, cancelled=lambda: False):
                     if master is None:
                         ps = part_pieces[0][0]
                         if 0 <= c < len(ps):
-                            pieces.marker(ps[c], s, name)
+                            # a marker is at a frame: the first sample of that frame of its signal
+                            pieces.marker(ps[c], s * _spf(u.parts[0].h.siginfo[c]), name)
                         continue
                     # the segment the marker falls in, and the signal of that name there
                     if not 0 <= c < len(master):
@@ -561,7 +630,7 @@ def build(path, progress, cancelled=lambda: False):
                     ps, by_name = part_pieces[k]
                     j = by_name.get(master[c])
                     if j is not None:
-                        pieces.marker(ps[j], s - u.parts[k].offset, name)
+                        pieces.marker(ps[j], (s - u.parts[k].offset) * _spf(u.parts[k].h.siginfo[j]), name)
         for off, n in u.nulls:
             a, b = t0 + off / u.fs, t0 + (off + n) / u.fs
             null_gaps.append({'t0': a, 't1': b, 'reason': 'null segment', 'gap_s': b - a, 'exact': True,
@@ -634,6 +703,9 @@ def build(path, progress, cancelled=lambda: False):
     if any(not p['timed'] for p in items):
         notes.append('Some records have no start time; they are placed after the data before them '
                      'and marked "time not stated".')
+    if _first_timed(units):
+        notes.append('The records without a start time that come before the first record with one end where it '
+                     'starts.')
     if any(len(spans) > 1 for spans in lanes.taken.values()):
         notes.append('Some records overlap in time: a signal recorded twice at once is shown in a second lane '
                      '("II (2)").')
@@ -733,11 +805,15 @@ class Reader:
         check_files(self.folder, p['record'])
         path = self.folder / p['record']
         h = _header(path)
-        n = max(h.nsamples, 0)
+        sig = p['sig']
+        k = _spf(h.siginfo[sig]) if 0 <= sig < len(h.siginfo) else 1
+        # samples [a, b) of a signal of k samples per frame: in frames [a // k, ceil(b / k))
+        n = max(h.nsamples, 0) * k
         a, b = min(max(0, a), n), min(max(0, b), n)
         if b <= a:
             return np.empty(0, dtype=np.float64)
-        return _read(path, h.nsig, a, b, channels=[p['sig']])[:, 0]
+        fa, fb = a // k, -(-b // k)
+        return _read(path, h, fa, fb, channels=[sig])[0][a - fa * k:b - fa * k]
 
     def close(self):
         pass

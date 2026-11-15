@@ -8,7 +8,7 @@ described in [user-guide.md](user-guide.md).
 
 ## Conventions
 
-- **Sign-in.** How users sign in depends on the catalog's `sign_in` setting
+- **Sign-in.** How users sign in depends on the `sign_in` setting
   ([sign-in.md](sign-in.md)), which `GET sign-in` reports before anyone is signed in:
   - With `password` (the default), `POST login` checks a name and a password and sets the
     session cookie (HttpOnly, SameSite=Strict, and `Secure` with `secure_cookies`). Every other
@@ -20,37 +20,45 @@ described in [user-guide.md](user-guide.md).
     a reason the page shows.
 - **Changes.** Every request other than GET, `POST login` included, needs the header
   `X-Medorama: 1`. The page sends it, and a cross-site form cannot; without it, the answer is 403.
-- **Answers** are JSON, sent with `Cache-Control: no-store`: 200, or 202 for an import started in
-  the background (`background`: the answer is its task, followed with `GET import-tasks/{id}`).
-  Errors are `{"detail": "…"}`, with these statuses:
+- **Answers** are JSON, sent with `Cache-Control: no-store`, with status 200. Errors are
+  `{"detail": "…"}`, with these statuses:
 
   | Status | When |
   |---|---|
-  | 400 | The request is wrong (a missing or invalid value, a search that cannot be parsed), or asks for a password sign-in or change when users sign in through a proxy. |
+  | 400 | The request is wrong (a missing or invalid value, a search that cannot be parsed, a database that cannot be connected), or asks for a password sign-in or change when users sign in through a proxy. |
   | 401 | Not signed in, or the session ended. |
-  | 403 | The role or the PHI permission does not allow it; the `X-Medorama` header is missing; Privacy Mode does not let the answer out; the proxy names a user without an account. |
-  | 404 | No such thing. |
-  | 413 | The body is too large: 1 GiB for the uploads (`tables/inspect`, `tables`, `tables/files`), 2 MB for any other request. |
+  | 403 | The role, the PHI permission or a grant does not allow it; the `X-Medorama` header is missing; Privacy Mode does not let the answer out; the proxy names a user without an account. |
+  | 404 | No such thing, or one the user is not granted (a database, a recording, a cohort). |
+  | 413 | The body is larger than 2 MB. |
   | 429 | Too many failed sign-ins: the user name is locked for a minute. |
   | 500 | A fault of the server (also written to its standard error). |
-  | 503 | The catalog's one writer is busy saving an import (SQLite), with `Retry-After: 5`; or `POST viewer/start` cannot start the viewer. |
+  | 503 | The control store's one writer is busy (SQLite, while a database is refreshed), with `Retry-After: 5`; or `POST viewer/start` cannot start the viewer. |
 
   A body that is not JSON of the expected shape is refused before the route runs, with a
   plain-text error: 400 (not JSON), 415 (no `Content-Type: application/json`) or 422 (a field
-  missing, of the wrong type, or unknown to a route that refuses unknown fields, such as the
-  removals).
+  missing, of the wrong type, or unknown to a route that refuses unknown fields).
 - **Privacy Mode** (chosen with `POST privacy` and kept by the server for the session; a new sign-in starts in the user's default mode) applies to every answer
   of the session: identifiers become placeholders and pseudonyms, dates move back, and files pass
   the privacy gate ([user-guide.md, Privacy Mode](user-guide.md#privacy-mode)). A file that the
   gate sends as it is (a picture, a video, a PDF) carries the header
   `x-medorama-may-contain-phi: 1`.
-- **Roles.** The table below says who may call each route. Identifiers are sent only to users
-  with the PHI permission, outside Privacy Mode.
+- **Roles and grants.** The table below says who may call each route. A role is not enough for
+  a database's data: each database and each cohort is used only by the users granted it
+  ([user-guide.md, Terms](user-guide.md#terms-used-in-this-guide)). On a database, `search`
+  lets criteria find its patients; `view` also shows its data on patient pages, its recordings
+  and the viewer; `phi` also sends its identifiers, to a user with the PHI permission outside
+  Privacy Mode; `manage` also lets one check, refresh, grant and remove it, and see its URL,
+  settings, status error and identity conflicts. On a cohort: `view`, `edit`, `manage`. Each
+  permission includes the weaker ones. The admin who connects a database, or the user who makes a
+  cohort, gets every permission on it; other admins are not granted a database by being admins,
+  but may grant it to themselves (audited as `grant_self`). A database or recording the user is
+  not granted answers 404, as if it did not exist.
 
 ## Routes
 
 Paths are relative to `api/v1/`. In the Role column, "any" means any signed-in user, "analyst"
-an analyst or an administrator, and "admin" an administrator.
+an analyst or an administrator, and "admin" an administrator; a grant named there is needed on
+the database or cohort the route names.
 
 | Method, path | Role | Does |
 |---|---|---|
@@ -58,77 +66,59 @@ an analyst or an administrator, and "admin" an administrator.
 | `POST login` `{username, password}` | (public) | sign in (sets the cookie); 400 when users sign in through a proxy |
 | `POST logout` `{everywhere}` | | sign out: `{logout_url}`. With `password`, ends this session, or with `everywhere` every session of the user (audited); with `proxy`, `logout_url` is where the page sends the browser to end the proxy's session. The Privacy Mode cookie is cleared either way |
 | `GET me`, `POST me/password` `{old, new}` | any | who am I; change my password (400 when users sign in through a proxy) |
-| `GET config` | any | `version`, `timezone`, `sign_in` (`password` or `proxy`), `viewer_url` (a viewer running elsewhere, opened in a new browser tab; empty when Medorama runs its own), `auto_index`, `workers`, `user`, `viewer` (its status), `deid` (Privacy Mode's settings), `display` (date and time formats); `results_dir` and `index_dir` for admins (else null) |
+| `GET config` | any | `version`, `timezone`, `sign_in` (`password` or `proxy`), `viewer_url` (a viewer running elsewhere, opened in a new browser tab; empty when Medorama runs its own), `auto_index`, `workers`, `user`, `viewer` (its status), `deid` (Privacy Mode's settings), `display` (date and time formats); `workspace_dir` for admins (else null); `db_builder` for admins (else null): `mode` (`off`, `run`: Medorama runs it, `link`: `db_builder_url`), `url` (its page, opened by **Create a database…**), `running`, `reason` (why it does not run) |
 | `POST privacy` `{on}` | any | switch the session's Privacy Mode (off: PHI permission only); audited |
-| `GET deid`, `PUT admin/deid` `{fields, offset: {years, months, days, hours}, spread_days}` | admin | what Privacy Mode withholds, how dates move (the offset; `spread_days` from 30 to 3650), the choices; `GET config` gives other users what is withheld, without the offset |
+| `GET deid`, `PUT admin/deid` `{fields, offset: {years, months, days, hours}, spread_days}` | admin | what Privacy Mode withholds, how dates move (the offset; `spread_days` from 30 to 3650), the choices (`fields`: `dates`, `age_over_89`, `notes`; names, MRNs, dates of birth and account numbers are always withheld and not listed); withholding less (a choice unticked, fewer days, a smaller offset) needs the PHI permission (403); `GET config` gives other users what is withheld, without the offset |
 | `PUT admin/display` `{date, clock}` | admin | how the page writes dates and times (`date`: `ymd`, `mdy`, `dmy`, `dmy_dot`; `clock`: `24h`, `12h`) |
 | `GET admin/addons` | admin | the installed adapters: `{dir, items: [{name, version, implementation, program, formats}]}` |
-| `GET version` | any | `{data}`: the data's version, which moves at every import, removal or change (open pages redraw when it moves) |
+| `GET health` | none (no session) | liveness for a service manager or load balancer: `{ok, control_store, background}`; 200 when the control store answers and the background thread (checks, audit sealing, automatic indexing) went round in the last two minutes, else 503. Nothing else: no names, no counts |
+| `GET version` | any | `{data}`: the data's version, which moves when a database is connected, refreshed or removed, or patients are linked (open pages redraw when it moves) |
 | **Patients** | | |
-| `GET patients?q&has&cohort&mark&limit&offset` | any | patients, latest encounter first: `{total, items, categories}`; `has`: categories, comma-separated (`!icu`: without); `cohort`: its members only; `mark`: each item says whether it is in that cohort |
-| `GET patients/{id}` | any | a patient's summary: identity (PHI), encounters with bed stays, problems, medications, allergies; the connected databases' stays (`visits`) and those that did not answer (`unavailable`) |
-| `GET patients/{id}/journey` | any | the journey: columns, 6-hour cells (items, worst level), spans (stays, drugs, recordings) |
-| `GET patients/{id}/report?q` | any | the report's entries; with `q`, the search (counts per category, words highlighted, fuzzy matches) |
-| `GET patients/{id}/detail?key` | any | one entry's detail (panel rows, text, attachment, ICU overview, notes around) |
-| `GET patients/{id}/trends` | any | every numeric series of the patient |
-| `GET patients/{id}/file/{item}` | any | an item's attached file; for a folder (a DICOM series), its files: `{files: [names]}`. In Privacy Mode through the gate, names as tokens (`mo-f0003.dcm`) |
-| `GET patients/{id}/file/{item}/{name}` | any | a file of that attachment by name: the file, the signal files its WFDB header names, a file of its folder; nothing else of the folder it lies in. In Privacy Mode, by token only |
-| **Encounters and recordings** | | |
-| `GET encounters?q&unit&from&to&status&limit&offset` | any | search ([syntax](user-guide.md#searching)): `{total, items}` |
-| `GET encounters/{id}` | any | an encounter with bed stays, recordings (status, link, results), item counts, the patient's other encounters; adds it to the history |
-| `GET encounters/{id}/ehr?domain&patient_level&limit&offset` | any | items in time order (`patient_level`: the patient's items outside every encounter) |
-| `POST encounters/remove` `{ids, dry_run}`, `POST encounters/remove-matching` `{search, dry_run}` | admin | remove encounters (with their bed stays and items; recordings stay): `{removed, report}`, and the report (`{dry_run, encounters, patients, bed_stays, ehr_items, …}`); `search` as `GET encounters` takes it; with `dry_run`, what would go, and nothing changes. Other fields (`purge`, `q`, `unlinked`) are refused (422) |
-| `GET recordings?q&unlinked&limit&offset`, `GET recordings/{id}` | any | recordings |
-| `POST recordings/remove` `{ids, purge, dry_run}`, `POST recordings/remove-matching` `{q, unlinked, purge, dry_run}` | admin | remove recordings (their files untouched): `{dry_run, removed}`, `{dry_run, recordings}`; `q` and `unlinked` as `GET recordings` takes them; `purge` also deletes their results and indexes (inside `results_dir` and `index_dir`); with `dry_run`, how many would go, and nothing changes. Other fields are refused (422) |
-| `POST recordings/{id}/link` `{encounter}` | admin | link manually (`null`: forget the manual links) |
-| `POST recordings/{id}/decision` `{encounter_id, decision}` | admin | `link`, `never`, or `null` (forget the decision) |
-| `POST check` | admin | re-check the recordings |
-| **Review** | | |
-| `GET review` | admin | held-back rows, waiting items; for PHI users also possible duplicates and recordings whose files disagree |
-| `POST review/held/{id}` `{action}` | admin | `apply` (with the fix the problem calls for) or `dismiss` |
-| `POST review/merge` `{a, b}`, `POST review/distinct` `{a, b}` | admin + PHI | merge patient `a` into `b`; mark them as different people (403 without the PHI permission, or in Privacy Mode) |
-| **Databases and imports** | | |
-| `GET databases` | any | the databases in use: rows, patients reached, categories, held-back rows, waiting items; a connected database's `connection` |
-| `GET databases/{id}/rows?q&f<pos>&sort&desc&limit&offset` | any | a database's rows as imported (one page): columns (`header`, `maps_to`), the columns not shown, each row's cells, status, patient, entry and file link; `f<pos>`: a column's filter |
-| `GET databases/{id}/export?privacy` | admin | the database as CSV, as imported; in Privacy Mode or with `privacy=1` (or `deid=1`, its earlier name), through the gate |
-| `GET formats` | admin | the import formats (built in and the site's), the files that could not be read, the categories |
-| `POST tables/inspect?name&format` (body: the file) | admin | headers, the mapping and category they suggest, the format it is (converted), the catalog's columns by group; the first rows for PHI users |
-| `POST tables?name&batch&source&category&mapping&format&dry_run` (body: the file) | admin | import a database (one batch); `mapping` is JSON or TOML (empty: by the headers); `format`: `auto` (default), `none` or a format's key |
-| `POST tables/files?batch&source&category&mapping&format&dry_run&background` (multipart: each `file`) | admin | one database from one or several files with the same columns; with `background`, the answer (202) is the import's task |
-| `POST tables/clif` `{dir, source, dry_run, background}` | admin | a CLIF folder on the server (inside `data_roots`): each table a database |
-| `GET server-files?dir&kind` | admin | a folder on the server, inside `data_roots`, as the page's **Choose on the server** dialog shows it: `{dir, parent, items: [{name, path, dir, size}], truncated}`; `kind`: `tables` (default: CSV, spreadsheets, Parquet), `databases` (SQLite files) or `folders`; without `dir`, the data roots; `parent` empty above a root. Refused (403) in Privacy Mode |
-| `POST tables/server/inspect` `{path, format}` | admin | as `tables/inspect`, a table on the server (inside `data_roots`), read where it is, row by row |
-| `POST tables/server` `{paths, batch, source, category, mapping, format, dry_run, background}` | admin | tables on the server imported where they are, of any size, as `import-table`: one, or several with the same columns as one database named by `batch`; a relative `file` path is read from the first table's folder |
-| `GET import-tasks`, `GET import-tasks/{id}`, `POST import-tasks/{id}/cancel` | admin | imports running in the background (and those ended within the hour): `{id, label, state, started, progress: {phase, rows, done, elapsed_s, rate, left_s, cancelling}, report, error}` (`state`: `running`, `done`, `failed`, `cancelled`; `cancelling`: a stop was asked and is under way); stop one (nothing of it is kept) |
-| `GET imports`, `POST imports/{id}/remove` `{purge, dry_run}` | admin | batches; remove one |
-| `GET sources`, `POST sources/remove` `{source, purge, dry_run}` | any, admin | `{items, waiting}`: the sources with what they contribute, and the number of items waiting for their encounter; remove one |
-| `GET demo/removal` | admin | what deleting the cohort DEMO would remove (a dry run; [administration.md, The demo](administration.md#the-demo)) |
-| `GET mappings`, `POST mappings` `{name, kind, columns}`, `DELETE mappings/{name}` | admin | saved column mappings |
-| **Connected databases** | | |
-| `GET connections`, `POST connections` `{name, kind, url, password, settings}` | admin | the connected databases (no secrets), with the persons linked; connect one (checked first) |
-| `POST connections/{id}/check`, `POST connections/{id}/sync`, `DELETE connections/{id}` | admin | whether one answers: `{ok, views, version, ms}` or `{ok: false, error}`; link its persons; disconnect it |
+| `GET patients?q&has&cohort&mark&limit&offset` | any; `view` | the patients of the databases the user may view, latest first: `{total, items, categories}`; `q`: the [search](user-guide.md#searching) (`patient`, `sex`, `has`, `database`; `name`, `first`, `last`, `mrn`, `dob` with the PHI permission, of the databases granted `phi`); `has`: categories, comma-separated (`!icu`: without); `cohort`: its members only; `mark`: each item says whether it is in that cohort. Read from what Medorama keeps of each database, so it answers while a database is offline |
+| `GET patients/{id}` | any; `view` | a patient's summary, read from each database the user may view: identity (PHI, only from the databases granted `phi`), visits (each with its database), problems, medications, allergies, the databases that hold the patient (`sources`) and those that did not answer (`unavailable`); adds the patient to the history |
+| `GET patients/{id}/journey` | any; `view` | the journey: columns, 6-hour cells (entries, worst level), spans (stays, drugs, recordings) |
+| `GET patients/{id}/report?q` | any; `view` | the report's entries; with `q`, the search (counts per category, words highlighted, fuzzy matches) |
+| `GET patients/{id}/detail?key` | any; `view` | one entry's detail (panel rows, text, attachment, ICU overview, notes around); `key`: `item:…`, `labs:<patient>:<time>`, `vit:<patient>:<day>`, `rec:…`, `live:…` |
+| `GET patients/{id}/trends` | any; `view` | every numeric series of the patient |
+| `GET patients/{id}/file/{item}` | any; `view` | an entry's attached file, or a recording's (`item`: a recording's number); for a folder (a DICOM series), its files: `{files: [names]}`. In Privacy Mode, and for a database the user holds without `phi`, through the gate, names as tokens (`mo-f0003.dcm`). Sent with `Cache-Control: no-store` |
+| `GET patients/{id}/file/{item}/{name}` | any; `view` | a file of that attachment by name: the file, the signal files its WFDB header names, a file of its folder; nothing else of the folder it lies in. In Privacy Mode, by token only |
+| `GET history`, `DELETE history/{patient}`, `DELETE history` | any | my history: the patients whose page I opened, latest first; forget one; forget all |
 | **Cohorts** | | |
-| `POST cohorts/search` `{criteria, source, within_source_of, limit, offset}` | any | the patients meeting the criteria, with why: `{total, items, ids, excluded_total, excluded}` |
-| `POST cohorts/parse` `{text}` | any | criteria written as text: `{ok, expr, words}` or `{ok: false, error}` |
-| `GET cohorts`, `POST cohorts` `{name, description, criteria, source, patients}` | any | the cohorts one may see, each with its `definition`; make one (`source`: `{op: within \| union \| intersection \| difference, of: [ids]}`; no `patients`: all the definition selects) |
-| `GET cohorts/{id}`, `PATCH cohorts/{id}` `{name, description, criteria, add, add_search, remove, shares}`, `DELETE cohorts/{id}` | any (as shared) | a cohort; change it (editors; sharing: its owner); delete it (its owner; the demo's cohort DEMO: an admin, and the demo goes with it: the answer's `removed` says what) |
-| `POST cohorts/{id}/clone` `{name}`, `GET cohorts/{id}/history` | any (as shared) | a copy of one's own; its changes, latest first |
-| `GET cohorts/{id}/members?limit&offset`, `POST cohorts/{id}/refresh` `{dry_run, join, leave}` | any (as shared) | its members; what its definition selects now (`added`, `removed`; a dry run lists who would join and leave), applied unless `dry_run` |
-| `GET cohorts/{id}/export?what&privacy` | any (as shared) | `what`: `members` (CSV, the default), `criteria` (the definition, JSON), `data` (the members' data, CSV), `xlsx`; in Privacy Mode or with `privacy=1`, through the gate |
-| `GET cohorts/people` | any | the users a cohort can be shared with (names only) |
+| `POST cohorts/search` `{criteria, databases, source, within_source_of, limit, offset}` | any; `search` | the patients meeting the criteria, with why: `{total, items, ids, excluded_total, excluded, searched, left_out}`. `databases`: the databases ticked (empty: every one the user may search); only those granted `search` and online are searched; `searched` names them and `left_out` the others with why (`not ticked`, `offline`) |
+| `POST cohorts/parse` `{text}` | any | criteria written as text: `{ok, expr, words}` or `{ok: false, error}`; names resolve against the variables of the databases the user may search |
+| `GET cohorts`, `POST cohorts` `{name, description, criteria, databases, source, patients}` | any | the cohorts one may see (own, or granted), each with its `definition`; make one (`databases`: those it searches, empty: every one; `source`: `{op: within \| union \| intersection \| difference, of: [ids]}`; no `patients`: all the definition selects). Its maker gets every permission on it |
+| `GET cohorts/{id}`, `PATCH cohorts/{id}` `{name, description, criteria, databases, add, add_search, remove, shares}`, `DELETE cohorts/{id}` | `view`; `edit` (`shares`: `manage`); `manage` | a cohort, with the databases it searches and their versions when its members were found (`source_versions`); change it (`shares`: the users granted `view`, or `edit` with `can_edit`); delete it: its key is destroyed, then its workspace file; cohorts made from it keep its last members |
+| `POST cohorts/{id}/clone` `{name}`, `GET cohorts/{id}/history` | `view` | a copy of one's own; its changes, latest first |
+| `GET cohorts/{id}/members?limit&offset`, `POST cohorts/{id}/refresh` `{dry_run, join, leave, remove}` | `view`; `edit` | its members; what its definition selects now (`added`, `removed`; a dry run lists who would join and leave), applied unless `dry_run` |
+| `GET cohorts/{id}/export?what&privacy` | `view` | `what`: `members` (CSV, the default), `criteria` (the definition, JSON), `data` (the members' data, CSV), `xlsx`; in Privacy Mode or with `privacy=1`, through the gate |
+| `GET cohorts/people` | any | the users a cohort or a database can be granted to (names only) |
+| **Databases** | | |
+| `GET databases` | any | the databases granted to the user (admins: every one, to grant it), online first: `{items: [{id, name, kind, engine, status, status_error, checked_at, version, recordings, permission, persons, patients, conflicts, variables, created_at, url, settings}]}`. Counts only to those granted; `url` (without a password), `settings` and `status_error` only to who manages it. `status`: `online`, `offline` or `unknown` (not checked yet) |
+| `POST databases` `{name, kind, url, password, ca_file, settings}` | admin | connect a database: `kind` `omop`, `views` or `dbb`; `url` `sqlite:/path/file.sqlite` (inside `data_roots`, never inside the workspace) or `postgres://…` (no password in it); `password` kept wrapped by the master key, never written to a file nor sent back; `settings`: `schema`, `vocabulary_schema`, `identifier` (OMOP: `mrn`, `patient_id`, `none`), `issuer`, `mrn_authority`, `timezone`, `files_root`, `timeout_s`, `max_rows`, and for `views` the queries `persons`, `visits`, `entries`, `recordings`, `version` ([databases.md](databases.md)). Checked first; then its data key and workspace folder are made, its variables read, its persons linked, and every permission on it granted to the admin: `{id}` |
+| `DELETE databases/{id}` | `manage` | remove the database and every trace of it: its data key destroyed (and those of the results derived from it), then its workspace folder, then every cohort row whose provenance includes it, its patient links, the patients no database links any more (with their pseudonyms), its jobs, grants and row. Audited. The database itself is never touched. A removal a crash interrupted finishes when the server or any command starts |
+| `POST databases/{id}/check` | `search` | check it now: `{online, status, version, checked_at}`; when its data version changed, its variables, persons and recordings are read again |
+| `POST databases/{id}/refresh` | `manage` | read its variables, persons and recordings again now |
+| `GET databases/{id}/variables` | `search` | what it holds, kept per data version: `{items: [{category, name, vocabulary, code, unit, entries, persons, numeric}]}`; kept while it is offline |
+| `GET databases/{id}/conflicts` | `manage` | its identity conflicts: persons whose identifiers name two patients, `{items: [{person_key, detail}]}`, by the database's own key (never their identifiers); they are not linked |
+| `GET databases/{id}/grants`, `POST databases/{id}/grants` `{user_id, permission}`, `DELETE databases/{id}/grants` `{user_id, permission}` | `manage` (`POST` without `user_id`: an admin) | who may use it: `{items: [{user_id, username, permission}]}`; grant `search`, `view`, `phi` or `manage` (without `user_id`: to the admin asking, audited as `grant_self`); revoke a permission and the stronger ones (one's own `manage` cannot be revoked). Audited. Like `GET databases/{id}/conflicts`, 404 to who may not search the database, whether it exists or not; 403 to who may search it without managing it |
+| `GET server-files?dir&kind` | admin | a folder on the server, inside `data_roots`, as the page's **Choose…** dialog shows it: `{dir, parent, items: [{name, path, dir, size}], truncated}`; `kind`: `databases` (default: SQLite files) or `folders`; without `dir`, the data roots; `parent` empty above a root. Refused (403) in Privacy Mode |
+| **Recordings** | | |
+| `GET recordings?q&limit&offset` | any; `view` | the recordings of the recording databases the user may view, newest first, matching words in their name, format, status or database (de-identified: their token, label, format, status, database, never their file name; sorted by times as shown): `{total, items}`. A recording's number is its database's id × 1,000,000,000 + its number in that database |
+| `GET recordings/{id}` | any; `view` | a recording and the results of the actions run on it (each job's `summary`); de-identified, the whole answer moves by its patient's offset, times under a summary's own keys too |
+| `POST check` | admin | re-check every recording's file: `{checked, missing, returned, changed, index_lost}` |
 | **Work** | | |
 | `GET actions`, `POST actions/reload` | any, admin | the actions |
-| `POST runs` `{actions, selection, params, force, priority}` | analyst | queue a run. `selection`: `{"encounters": [ids]}`, `{"recordings": [ids]}`, `{"search": {…}}`, `{"cohort": id}` or `{"all": true}` |
-| `GET jobs?state&run&limit` | any | jobs and counts per state |
+| `POST runs` `{actions, selection, params, force, priority}` | analyst; `view` | queue a run on recordings of the databases the user may view. `selection`: `{"recordings": [ids]}`, `{"patients": [ids]}`, `{"cohort": id}` (its members' recordings) or `{"all": true}` |
+| `GET jobs?state&run&limit` | any | jobs and counts per state (non-admins: those of the databases granted `view`, the errors of their own runs only); `output_dir` for admins only; in Privacy Mode a failed job's error is `failed` |
 | `POST jobs/cancel` `{job}` or `{run}` (or `{}`: all, admin) | analyst | cancel (a viewer: 403) |
-| `GET history`, `DELETE history/{encounter}`, `DELETE history` | any | my history |
 | **Users and the audit log** | | |
-| `GET users`, `POST users`, `PATCH users/{id}`, `DELETE users/{id}` | admin | users; `POST users` `{username, role, phi, display_name, password}` (with proxy sign-in the password may be left out: the account gets one nobody knows); `PATCH` `{sign_out: true}` ends the user's sessions everywhere (audited) |
-| `GET audit?limit`, `GET audit/verify` | admin | the audit log; whether its seals hold: `{seals, entries, unsealed, broken}` |
+| `GET users`, `POST users`, `PATCH users/{id}`, `DELETE users/{id}` | admin | users; `POST users` `{username, role, phi, display_name, password}` (with proxy sign-in the password may be left out: the account gets one nobody knows); `PATCH` `{sign_out: true}` ends the user's sessions everywhere (audited); a `password` for a user with the PHI permission needs it (403), ends that user's sessions and is audited `phi_password_reset` |
+| `GET audit?limit`, `GET audit/verify` | admin | the audit log; whether its seals hold: `{seals, entries, unsealed, broken, exported_seals}` |
 | **The waveform viewer** | | |
 | `GET viewer`, `POST viewer/start` | any | the viewer's status `{mode: embedded\|link\|none, flavor, running, reason, url}`; start it now |
 
-The VitalStream viewer itself is served under `/viewer/`, not under `api/v1`, behind the catalog's
-sign-in and its gateway ([administration.md, The waveform viewer](administration.md#the-waveform-viewer)).
-The ECG and PACS viewers' pages are served under `/viewers/ecg/` and `/viewers/pacs/`. They hold no
-data: they read the files above with the user's session.
+The VitalStream viewer itself is served under `/viewer/`, not under `api/v1`, behind Medorama's
+sign-in and its gateway ([administration.md, The waveform viewer](administration.md#the-waveform-viewer)). A user who is not an admin
+opens there only the recordings of the databases granted to them with `view`. The ECG and PACS
+viewers' pages are served under `/viewers/ecg/` and `/viewers/pacs/`. They hold no data: they
+read the files above with the user's session.

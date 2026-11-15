@@ -4,7 +4,9 @@ What Medorama and its viewers use from others, per part, with each license. This
 inventory for the maintainers' licensing decisions, not legal advice.
 
 The project's own code is licensed under the PolyForm Noncommercial License 1.0.0
-([LICENSE](LICENSE)); commercial use needs a commercial license ([COMMERCIAL.md](COMMERCIAL.md)).
+([LICENSE](LICENSE)), its documentation (the `docs/` folders) under CC BY-NC-ND 4.0 ([docs/LICENSE.md](docs/LICENSE.md))
+and its demo and example data under CC BY-NC 4.0; commercial use needs a commercial license
+([COMMERCIAL.md](COMMERCIAL.md)). [REUSE.toml](REUSE.toml) gives the license of every file.
 Nothing from other parties is vendored in this repository.
 
 ## WFDB: wfdb-x
@@ -43,7 +45,7 @@ commit (both public). The release workflow (`.github/workflows/release.yml`) put
 wfdb-x's library license (as `LICENSE-wfdb-x`) into every archive it builds. Medorama's own code
 stays under the PolyForm Noncommercial License 1.0.0.
 
-## Rust (the workspace: `medorama`, `vitalstream-rs`, `libs/`)
+## Rust (the workspace: `medorama`, `db-builder`, `vitalstream-rs`, `libs/`)
 
 Fetched by Cargo at the versions in [`Cargo.lock`](Cargo.lock): from crates.io, every crate
 under a permissive license that permits its use in Medorama; and wfdb-x (LGPL v2.1 or later) from GitHub (above). `cargo deny check`
@@ -65,7 +67,7 @@ under a permissive license that permits its use in Medorama; and wfdb-x (LGPL v2
 | (MIT OR Apache-2.0) AND Unicode-3.0 | 2 (`unicode-ident`, `unicode-normalization`) |
 | Apache-2.0 OR BSL-1.0 OR MIT | 2 (`wasite`, `whoami`) |
 | BSD-2-Clause OR Apache-2.0 OR MIT | 2 (`zerocopy`, `zerocopy-derive`) |
-| Apache-2.0 AND ISC | 1 (`ring`: the cryptography of TLS, with no OpenSSL) |
+| Apache-2.0 AND ISC | 1 (`ring`: the cryptography of TLS; OpenSSL serves SQLCipher alone) |
 | (Apache-2.0 OR MIT) AND BSD-3-Clause | 1 (`encoding_rs`) |
 | MIT AND BSD-3-Clause | 1 (`matchit`) |
 | 0BSD OR MIT OR Apache-2.0 | 1 (`adler2`) |
@@ -74,13 +76,19 @@ under a permissive license that permits its use in Medorama; and wfdb-x (LGPL v2
 | LGPL-2.1-or-later AND GPL-3.0-or-later | 1 (`wfdbx`, wfdb-x: its library is used, under the LGPL; above) |
 
 Direct dependencies:
-- **`medorama`:** `axum`, `tokio`, `hyper-util` (the gateway), `rusqlite` (SQLite compiled in),
-  `tokio-postgres`, `tokio-postgres-rustls`, `rustls`, `rustls-native-certs` (PostgreSQL over
+- **`medorama`:** `axum`, `tokio`, `hyper-util` (the gateway), `rusqlite` (SQLCipher compiled
+  in), `tokio-postgres`, `tokio-postgres-rustls`, `rustls`, `rustls-native-certs` (PostgreSQL over
   verified TLS), `argon2`, `hmac`, `sha2`, `getrandom` (passwords, sessions, the audit log's
-  seals), `calamine` (spreadsheets), `csv`, `parquet` (CLIF's tables, without Arrow), `chrono`,
-  `chrono-tz`, `clap`, `serde`, `serde_json`, `toml`, `include_dir`, `mime_guess`, `rpassword`,
-  `bytes`, `futures-util`, `http-body-util`, `anyhow`; tests: `tempfile`, `tower`, `tungstenite`
-  (the browser test), `zip`.
+  seals, the patient index's keyed hashes), `aes-gcm` (the workspace's keys, wrapped by the
+  master key), `csv`, `chrono`, `chrono-tz`, `clap`, `serde`, `serde_json`, `toml`,
+  `include_dir`, `mime_guess`, `rpassword`, `bytes`, `futures-util`, `http-body-util`, `anyhow`;
+  tests: `tempfile`, `calamine`, `tower`, `tungstenite` (the browser test), `zip`.
+- **`db-builder`:** `rusqlite` (SQLCipher compiled in, for `--encrypt`), `regex` (rewrite rules), `calamine`
+  (spreadsheets), `csv`, `parquet` (CLIF's tables, without Arrow), `chrono`, `chrono-tz`, `clap`,
+  `serde`, `serde_json`, `sha2`, `toml`, `bytes`, `anyhow`, `recording-engine`, `signal-core`;
+  its web interface (`db-builder serve`): `axum`, `tokio`, `argon2`, `getrandom` (its password
+  and sessions), `include_dir`, `mime_guess`, `rpassword`, all of them crates Medorama already
+  uses; tests: `tempfile`, `zip`, `tower`, `http-body-util`.
 - **`vitalstream-rs`:** `axum`, `tokio`, `scrypt`, `hmac`, `sha2`, `getrandom`, `toml`,
   `chrono-tz`, `clap`, `serde`, `serde_json`, `include_dir`, `mime_guess`, `rpassword`,
   `indexmap`.
@@ -89,9 +97,9 @@ Direct dependencies:
 
 | Compiled in | License | |
 |---|---|---|
-| SQLite (`rusqlite`, `libsqlite3-sys`) | public domain | |
-| With `--features encryption`: SQLCipher | BSD-3-Clause | |
-| With `--features encryption`: OpenSSL (built from source by `openssl-src`) | Apache-2.0 | |
+| SQLite (`rusqlite`, `libsqlite3-sys`; SQLCipher is built on it) | public domain | |
+| SQLCipher 4.20 on SQLite 3.54.1 (`rusqlite` 0.42, `libsqlite3-sys`, `sqlcipher-src`: `medorama`, `db-builder`) | BSD-3-Clause; SQLite's public-domain blessing; the crate also carries libtomcrypt's sources (public domain / WTFPL), not compiled | |
+| OpenSSL (built from source by `openssl-src`, for SQLCipher) | Apache-2.0 | |
 
 Each release archive of the Rust programs carries this file, wfdb-x's `LICENSE` and
 `THIRD_PARTY_CRATES.txt`, the license texts of every crate compiled in (written by `cargo about`
@@ -108,6 +116,8 @@ at fixed versions, each checked against the SHA-256 in
 | wfdb-x (C++ library) | 1.2.1, commit `4a91916` | LGPL-2.1-or-later | reading WFDB records, headers and annotation files | `vitalstream-cpp` (static; above) |
 | CLI11 | 2.4.2 | BSD-3-Clause | the command line | `vitalstream-cpp` |
 | toml++ | 3.4.0 | MIT | the settings file | `vitalstream-cpp` |
+| SQLCipher (with SQLite 3.54.1), from the crates.io archive `sqlcipher-src` 420.0.0 (its own files MIT) | 4.20.0 | BSD-3-Clause; SQLite's public-domain blessing | the index store (index format 3: encrypted SQLite), built from source | `vitalstream-cpp` (static) |
+| libtomcrypt, in the same archive | 1.18.2 | public domain or WTFPL | SQLCipher's crypto provider (AES, SHA, HMAC, PBKDF2, Fortuna): no OpenSSL | `vitalstream-cpp` (static) |
 | cpp-httplib | 0.65.0 | MIT | the HTTP server | `vitalstream-cpp` |
 | GoogleTest | 1.15.2 | BSD-3-Clause | unit tests | tests only |
 
@@ -121,7 +131,7 @@ domain).
 ## Python
 
 Installed by `pip`: from PyPI, except wfdb-x (from GitHub at the pinned commit); nothing is
-vendored.
+vendored, except what the `sqlcipher3` wheels bundle.
 
 | Package | Version | License | Needed by |
 |---|---|---|---|
@@ -129,6 +139,9 @@ vendored.
 | uvicorn | ≥ 0.20 | BSD-3-Clause | `vitalstream_py` |
 | numpy | ≥ 1.22 | BSD-3-Clause | `vitalstream_py`, `dicom_index_py` |
 | wfdb-x | 1.2.1, commit `4a91916` | LGPL-2.1-or-later (the library; the package's tools, GPL-3.0-or-later, are not used) | `vitalstream_py` (reading WFDB records) |
+| sqlcipher3 | ≥ 0.6.5 | Zlib (the binding, from pysqlite) | `vitalstream_py` (the index store, index format 3: encrypted and plain) |
+| SQLCipher 4.20.0 community on SQLite 3.54.1 (bundled in the `sqlcipher3` wheels) | 0.6.5 | BSD-3-Clause; SQLite's public-domain blessing | `vitalstream_py`, through `sqlcipher3` |
+| OpenSSL 3.6.0 (statically linked in the `sqlcipher3` wheels, for SQLCipher) | 0.6.5 | Apache-2.0 | `vitalstream_py`, through `sqlcipher3` |
 | tomli | ≥ 1.1 | MIT | `vitalstream_py` on Python < 3.11 |
 | tzdata | any | Apache-2.0 | `vitalstream_py` on Windows (the IANA time zones, which Windows does not have) |
 | pydicom | ≥ 2.4 | MIT | `dicom_index_py` (`viewers/pacs/python/dicom`: DICOM headers, structured reports, waveforms) |
@@ -141,10 +154,39 @@ standard.
 
 ## The web pages
 
-`medorama/web/`, `viewers/vitalstream/web/`, `viewers/ecg/` and `viewers/pacs/` are written for
+`medorama/web/`, `db-builder/web/`, `viewers/vitalstream/web/`, `viewers/ecg/` and `viewers/pacs/` are written for
 this project, with no third-party JavaScript or CSS (the PACS viewer's JPEG decoders included).
 Medorama's heart-rate detector for Holter recordings follows a published method (Pan and
 Tompkins, 1985), implemented here.
+
+## The demo library (`tools/demo/library/`)
+
+The demo library's CT series and chest radiographs ([tools/demo/README.md](tools/demo/README.md))
+are adapted from four collections of The Cancer Imaging Archive, as redistributed by Saga IT
+(saga-it.com/dicom/samples) from the NCI Imaging Data Commons, under Creative Commons
+Attribution licences. They were re-sliced, cropped, resampled, rotated, elastically deformed,
+intensity-remapped and noised (the radiographs projected from the chest volumes); every
+identifier and date was dropped. Each series the demo writes carries an `ATTRIBUTION.txt` with
+its collection and licence. The adaptations are licensed under CC BY-NC 4.0, like the rest of the
+library, and the source images stay under their own licences ([REUSE.toml](REUSE.toml) lists
+both for each file).
+
+| Collection | Licence | Data citation |
+|---|---|---|
+| C4KC-KiTS (Kidney Tumor Segmentation Challenge) | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | Heller, N., Sathianathen, N., Kalapara, A., Walczak, E., Moore, K., Kaluzniak, H., Rosenberg, J., Blake, P., Rengel, Z., Oestreich, M., Dean, J., Tradewell, M., Shah, A., Tejpaul, R., Edgerton, Z., Peterson, M., Raza, S., Regmi, S., Papanikolopoulos, N., Weight, C. (2019). Data from C4KC-KiTS [Data set]. The Cancer Imaging Archive. https://doi.org/10.7937/TCIA.2019.IX49E8NX |
+| LIDC-IDRI (Lung Image Database Consortium) | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | Armato III, S. G., McLennan, G., Bidaut, L., McNitt-Gray, M. F., Meyer, C. R., Reeves, A. P., Zhao, B., Aberle, D. R., Henschke, C. I., Hoffman, E. A., Kazerooni, E. A., MacMahon, H., Van Beek, E. J. R., Yankelevitz, D., et al. (2015). Data From LIDC-IDRI [Data set]. The Cancer Imaging Archive. https://doi.org/10.7937/K9/TCIA.2015.LO9QL9SX |
+| NLST (National Lung Screening Trial) | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) | National Lung Screening Trial Research Team. (2013). Data from the National Lung Screening Trial (NLST) [Data set]. The Cancer Imaging Archive. https://doi.org/10.7937/TCIA.HMQ8-J677 |
+| Pancreas-CT | [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) | Roth, H., Lu, L., Farag, A., Shin H-C, Liu, J., Turkbey EB, Summers RM. Data From Pancreas-CT (Version 2) [Data set]. The Cancer Imaging Archive. https://doi.org/10.7937/K9/TCIA.2016.tNB1kqBU |
+
+The library's heart-beat templates are derived from ECGs and transformed beyond recognition
+(blended across sources and with synthetic beats); they carry no third-party licence.
+
+## The website
+
+The website's page layout (`_layouts/default.html`) is adapted from GitHub's Minimal theme
+([pages-themes/minimal](https://github.com/pages-themes/minimal), CC0 1.0), whose stylesheet the
+site imports (`theme: jekyll-theme-minimal`); the site is built with Jekyll and its plug-ins on
+GitHub Pages, none of which is part of the programs.
 
 ## Add-ons
 

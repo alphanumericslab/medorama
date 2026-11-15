@@ -12,10 +12,9 @@ use crate::actions::Registry;
 use crate::config::Config;
 use crate::db::{audit, Db};
 use crate::jobs::{self, Selection};
-use crate::query::{self, Search};
+use crate::recordings;
 use crate::users::{self, Changes, Role, User};
-use crate::{ehr, linkage, recordings};
-use axum::extract::{DefaultBodyLimit, FromRequestParts, Path as UrlPath, Query, Request, State};
+use axum::extract::{FromRequestParts, Path as UrlPath, Query, Request, State};
 use axum::http::request::Parts;
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
@@ -73,48 +72,70 @@ static VIEWERS: [(&str, &[(&str, &[u8])]); 2] = [
     ),
 ];
 
-/// Largest CSV file accepted by the import endpoints.
-const MAX_UPLOAD: usize = 1 << 30;
-
 pub struct App {
     pub cfg: Arc<Config>,
     pub db: Arc<Db>,
     pub reg: Arc<RwLock<Registry>>,
     pub viewer: Arc<crate::viewer::Supervisor>,
+    /// db-builder's web interface, run or linked for "Create a database…" (dbbuilder.rs).
+    pub dbbuilder: Arc<crate::dbbuilder::DbBuilder>,
     pub gateway: crate::gateway::Gateway,
-    /// The name of the sign-in cookie (one per port, so that catalogs on one host do not mix).
+    /// The name of the sign-in cookie (one per port, so that servers on one host do not mix).
     pub(crate) cookie: String,
     pub(crate) signin: crate::signin::SignIn,
     /// The privacy gate's identifier dictionary, kept while the data do not change.
     dict: Mutex<Option<Arc<crate::gate::Dict>>>,
-    /// Imports running in the background (and those just ended).
-    pub tasks: crate::progress::Tasks,
+    /// One dictionary built at a time: the requests that find it outdated wait for one build.
+    building: Mutex<()>,
+    /// When the background thread last went round (Unix seconds): the health endpoint tells.
+    pub(crate) heartbeat: Arc<std::sync::atomic::AtomicU64>,
 }
 
 pub type Shared = Arc<App>;
 
 impl App {
+    /// The background thread's heartbeat, to set from that thread.
+    fn heartbeat_handle(&self) -> Arc<std::sync::atomic::AtomicU64> {
+        self.heartbeat.clone()
+    }
+}
+
+impl App {
     pub fn new(cfg: Arc<Config>, db: Arc<Db>) -> App {
         let reg = Arc::new(RwLock::new(Registry::load(&cfg)));
         let viewer = Arc::new(crate::viewer::Supervisor::new(&cfg));
+        // the index stores and their keys, written to the viewer at each start (viewer.rs)
+        {
+            let (cfg, db) = (cfg.clone(), db.clone());
+            viewer.set_store_lines(Arc::new(move || {
+                let lines = db.get().and_then(|c| crate::viewer::store_lines(&cfg, &c));
+                lines.unwrap_or_else(|e| {
+                    eprintln!("medorama: the viewer's index stores: {e}");
+                    vec![]
+                })
+            }));
+        }
+        let dbbuilder = Arc::new(crate::dbbuilder::DbBuilder::new(&cfg));
         App {
             cookie: format!("medorama_{}", cfg.port),
             cfg,
             db,
             reg,
             viewer,
+            dbbuilder,
             gateway: crate::gateway::Gateway::default(),
             signin: Default::default(),
             dict: Mutex::new(None),
-            tasks: Default::default(),
+            building: Mutex::new(()),
+            heartbeat: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 }
 
 pub struct ApiError(pub(crate) StatusCode, pub(crate) String);
 
-/// What a user is told when the catalog's one writer is busy (SQLite, during an import).
-const BUSY: &str = "The catalog is busy saving an import: try again when it is done (Databases shows its progress).";
+/// What a user is told when the control store's one writer is busy (SQLite, during a refresh).
+const BUSY: &str = "Medorama is busy saving a database's refresh: try again in a moment.";
 
 impl IntoResponse for ApiError {
     fn into_response(mut self) -> Response {
@@ -238,21 +259,50 @@ impl FromRequestParts<Shared> for Auth {
     }
 }
 
+/// Liveness, without a session (a service manager, a load balancer): whether the control store
+/// answers and the background thread (checks, sealing, automatic indexing) went round in the
+/// last two minutes.  Nothing else: no names, no counts.
+async fn health(State(app): State<Shared>) -> Response {
+    let beat = app.heartbeat.load(std::sync::atomic::Ordering::Relaxed);
+    let alive = beat > 0 && crate::db::now() as u64 - beat < 120;
+    let store = {
+        let app = app.clone();
+        tokio::task::spawn_blocking(move || {
+            app.db.get().and_then(|c| Ok(c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))?)).is_ok()
+        })
+        .await
+        .unwrap_or(false)
+    };
+    let body = json!({ "ok": alive && store, "control_store": store, "background": alive });
+    let code = if alive && store { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    (code, Json(body)).into_response()
+}
+
 /// The privacy gate for a session in Privacy Mode (gate.rs): its settings, the identifier
 /// dictionary (rebuilt when the identifiers it holds change: the `identifiers` version, which
-/// triggers move on every change of the tables it is built from), the catalog's secret.
+/// triggers move on every change of what it is built from), the gate's secret.
 pub fn restricted(app: &App, c: &crate::sql::Connection) -> Result<Arc<crate::gate::Restricted>, ApiError> {
-    // a catalog whose schema lacks the version: a dictionary built for this answer alone
+    // a control store whose schema lacks the version: a dictionary built for this answer alone
     let version: Option<i64> = c.query_row("SELECT identifiers FROM data_version", [], |r| r.get(0)).ok();
+    let current = |d: &Arc<crate::gate::Dict>| version.is_some_and(|v| d.version == v);
     let cached = app.dict.lock().unwrap().clone();
-    let dict = match (cached, version) {
-        (Some(d), Some(v)) if d.version == v => d,
-        (_, v) => {
-            let d = Arc::new(crate::gate::Dict::build(c, v.unwrap_or(-1)).map_err(internal)?);
-            if v.is_some() {
-                *app.dict.lock().unwrap() = Some(d.clone());
+    let dict = match cached {
+        Some(d) if current(&d) => d,
+        _ => {
+            // one build at a time: a request that waited takes the one just built
+            let _one = app.building.lock().unwrap_or_else(|e| e.into_inner());
+            // (the lock taken and released here: the arm below takes it again)
+            let now = app.dict.lock().unwrap().clone();
+            match now {
+                Some(d) if current(&d) => d,
+                _ => {
+                    let d = Arc::new(crate::gate::Dict::build(c, &app.cfg, version.unwrap_or(-1)).map_err(internal)?);
+                    if version.is_some() {
+                        *app.dict.lock().unwrap() = Some(d.clone());
+                    }
+                    d
+                }
             }
-            d
         }
     };
     Ok(Arc::new(crate::gate::Restricted {
@@ -340,7 +390,7 @@ struct PasswordChange {
 async fn my_password(State(app): State<Shared>, Auth(u): Auth, Json(req): Json<PasswordChange>) -> ApiResult {
     if app.cfg.sign_in != crate::signin::Method::Password {
         return Err(bad(
-            "this catalog signs users in through the institution's sign-in: Medorama's passwords are not used",
+            "this Medorama signs users in through the institution's sign-in: Medorama's passwords are not used",
         ));
     }
     blocking(move || {
@@ -356,7 +406,7 @@ async fn my_password(State(app): State<Shared>, Auth(u): Auth, Json(req): Json<P
     .await
 }
 
-// ------------------------------------------------------------------ catalog
+// ------------------------------------------------------------------ control store
 
 async fn config(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
     let c = &app.cfg;
@@ -369,9 +419,10 @@ async fn config(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
         "workers": c.workers,
         "user": u,
         "sign_in": c.sign_in.name(),
-        "results_dir": path(&c.results_dir),
-        "index_dir": path(&c.index_dir),
+        "workspace_dir": path(&c.workspace_dir),
         "viewer": app.viewer.status(),
+        // db-builder's page (its own sign-in: Medorama only links to it), for admins only
+        "db_builder": u.is_admin().then(|| app.dbbuilder.status()),
         // the date offset is for admins only: with it, any shown date gives the real one
         "deid": app.db.get().ok().and_then(|c| crate::deid::load(&c).ok()).map(|s| {
             let mut d = crate::deid::describe(&s);
@@ -399,7 +450,14 @@ async fn deid_put(State(app): State<Shared>, Auth(u): Auth, Json(b): Json<crate:
         return Err(forbidden("only admins change what the de-identified view hides"));
     }
     blocking(move || {
-        ok(crate::deid::describe(&crate::deid::save(&*app.db.get().map_err(internal)?, &u, &b).map_err(bad)?))
+        let c = app.db.get().map_err(internal)?;
+        // withholding less is for who may see what it withholds
+        if !u.phi_allowed && b.weaker_than(&crate::deid::load(&c).map_err(internal)?) {
+            return Err(forbidden(
+                "only an admin with the PHI permission may withhold less (untick a choice, fewer days of each patient's own, a smaller offset)",
+            ));
+        }
+        ok(crate::deid::describe(&crate::deid::save(&c, &u, &b).map_err(bad)?))
     })
     .await
 }
@@ -415,578 +473,91 @@ async fn display_put(State(app): State<Shared>, Auth(u): Auth, Json(b): Json<cra
     .await
 }
 
-async fn encounters(State(app): State<Shared>, Auth(u): Auth, Query(s): Query<Search>) -> ApiResult {
-    blocking(move || {
-        let c = app.db.get().map_err(internal)?;
-        // in Privacy Mode, searched, filtered and sorted on what the session is shown
-        let g = if u.privacy { Some(restricted(&app, &c)?) } else { None };
-        let (total, rows) = query::search_in(&c, &u, g.as_deref(), &s, &app.cfg.timezone).map_err(bad)?;
-        ok(json!({ "total": total, "items": rows }))
-    })
-    .await
-}
-
-async fn encounter(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
-    blocking(move || {
-        let c = app.db.get().map_err(internal)?;
-        match query::encounter(&c, &u, id).map_err(bad)? {
-            Some(d) => ok(d),
-            None => Err(not_found()),
-        }
-    })
-    .await
-}
-
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct EhrQuery {
-    domain: Option<String>,
-    /// The patient's items outside every encounter, instead of the encounter's.
-    patient_level: bool,
-    limit: Option<i64>,
-    offset: Option<i64>,
-}
-
-async fn encounter_ehr(
-    State(app): State<Shared>,
-    Auth(u): Auth,
-    UrlPath(id): UrlPath<i64>,
-    Query(q): Query<EhrQuery>,
-) -> ApiResult {
-    blocking(move || {
-        let c = app.db.get().map_err(internal)?;
-        let (total, items) = ehr::items(
-            &c,
-            id,
-            q.patient_level,
-            q.domain.as_deref().filter(|d| !d.is_empty()),
-            u.phi,
-            q.limit.unwrap_or(500).clamp(1, 5000),
-            q.offset.unwrap_or(0).max(0),
-        )
-        .map_err(bad)?;
-        ok(json!({ "total": total, "items": items }))
-    })
-    .await
-}
-
-/// Recordings to remove: `purge` also deletes their results; `dry_run` says what would go and
-/// changes nothing.  Unknown fields are refused, so that a misspelt one is never ignored.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Ids {
-    ids: Vec<i64>,
-    #[serde(default)]
-    purge: bool,
-    #[serde(default)]
-    dry_run: bool,
-}
-
-/// Encounters to remove (they hold no files or results: nothing to purge).
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct EncounterIds {
-    ids: Vec<i64>,
-    #[serde(default)]
-    dry_run: bool,
-}
-
-async fn remove_encounters(State(app): State<Shared>, Auth(u): Auth, Json(req): Json<EncounterIds>) -> ApiResult {
-    admin(&u)?;
-    blocking(move || {
-        let mut c = app.db.get().map_err(internal)?;
-        let r = linkage::remove_encounters(&mut c, &u, &req.ids, req.dry_run).map_err(bad)?;
-        ok(json!({ "removed": r.encounters, "report": r }))
-    })
-    .await
-}
-
-/// The encounters a search finds (`search`: as `GET encounters` takes it).  Unknown fields are
-/// refused: a field this route does not read (`q`, say) must not widen the removal to every
-/// encounter.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RemoveMatchingEncounters {
-    #[serde(default)]
-    search: Search,
-    #[serde(default)]
-    dry_run: bool,
-}
-
-/// The recordings a search finds (`q`, `unlinked`: as `GET recordings` takes them).
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RemoveMatchingRecordings {
-    #[serde(default)]
-    q: String,
-    #[serde(default)]
-    unlinked: bool,
-    #[serde(default)]
-    purge: bool,
-    #[serde(default)]
-    dry_run: bool,
-}
-
-/// The encounters matching a search, with their bed stays and EHR items (recordings stay).
-async fn remove_matching_encounters(
-    State(app): State<Shared>,
-    Auth(u): Auth,
-    Json(req): Json<RemoveMatchingEncounters>,
-) -> ApiResult {
-    admin(&u)?;
-    blocking(move || {
-        let mut c = app.db.get().map_err(internal)?;
-        let g = if u.privacy { Some(restricted(&app, &c)?) } else { None };
-        let ids = query::search_ids_in(&c, &u, g.as_deref(), &req.search, &app.cfg.timezone).map_err(bad)?;
-        let r = linkage::remove_encounters(&mut c, &u, &ids, req.dry_run).map_err(bad)?;
-        if !req.dry_run {
-            audit(
-                &c,
-                Some(&u),
-                "remove_matching",
-                &format!("encounters: {}", req.search.q),
-                &serde_json::to_string(&r).unwrap_or_default(),
-            );
-        }
-        ok(r)
-    })
-    .await
-}
-
-/// The recordings matching a search.
-async fn remove_matching_recordings(
-    State(app): State<Shared>,
-    Auth(u): Auth,
-    Json(req): Json<RemoveMatchingRecordings>,
-) -> ApiResult {
-    admin(&u)?;
-    blocking(move || {
-        let mut c = app.db.get().map_err(internal)?;
-        let g = if u.privacy { Some(restricted(&app, &c)?) } else { None };
-        let ids =
-            recordings::search_ids_in(&c, &u, g.as_deref(), &req.q, req.unlinked, &app.cfg.timezone).map_err(bad)?;
-        let n = if req.dry_run {
-            ids.len()
-        } else {
-            recordings::remove(&mut c, &app.cfg, &u, &ids, req.purge).map_err(bad)?
-        };
-        if !req.dry_run {
-            audit(&c, Some(&u), "remove_matching", &format!("recordings: {}", req.q), &n.to_string());
-        }
-        ok(json!({ "dry_run": req.dry_run, "recordings": n }))
-    })
-    .await
-}
-
 #[derive(Deserialize, Default)]
 #[serde(default)]
 struct RecQuery {
     q: String,
-    unlinked: bool,
-    limit: Option<i64>,
-    offset: Option<i64>,
+    limit: Option<usize>,
+    offset: Option<usize>,
 }
 
+/// The recordings of the databases a user may view, matching a search.
 async fn recordings_list(State(app): State<Shared>, Auth(u): Auth, Query(q): Query<RecQuery>) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
         let limit = q.limit.unwrap_or(100).clamp(1, 1000);
-        let g = if u.privacy { Some(restricted(&app, &c)?) } else { None };
-        let (total, items) = recordings::list_in(
-            &c,
-            &u,
-            g.as_deref(),
-            &q.q,
-            q.unlinked,
-            limit,
-            q.offset.unwrap_or(0).max(0),
-            &app.cfg.timezone,
-        )
-        .map_err(bad)?;
+        // the recordings this session sees de-identified (Privacy Mode; outside it, those of the
+        // databases granted without `phi`)
+        let shown = crate::patient::without_phi(&c, &u).map_err(internal)?;
+        let g = if shown.is_empty() { None } else { Some(restricted(&app, &c)?) };
+        let (total, items) =
+            recordings::list_with(&app.cfg, &c, &u, &q.q, limit, q.offset.unwrap_or(0), g.as_deref()).map_err(bad)?;
+        if u.privacy && !u.phi && !q.q.trim().is_empty() {
+            audit(&c, Some(&u), "privacy_search", "recordings", &q.q);
+        }
+        let mut items = serde_json::to_value(items).map_err(internal)?;
+        if let (false, Some(g)) = (u.privacy, &g) {
+            // (in Privacy Mode the last layer gates the whole answer)
+            for it in items.as_array_mut().into_iter().flatten() {
+                if it["database"].as_i64().is_some_and(|d| shown.contains(&d)) {
+                    g.json(it);
+                }
+            }
+        }
         ok(json!({ "total": total, "items": items }))
     })
     .await
 }
 
-async fn recording(State(app): State<Shared>, Auth(_u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
+/// A recording (of a database the user may view) and the results of the actions run on it.
+async fn recording(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
-        let Some(r) = recordings::get(&c, id).map_err(bad)? else { return Err(not_found()) };
+        let Some(r) = recordings::get(&app.cfg, &c, id).map_err(bad)? else { return Err(not_found()) };
+        if !crate::grants::can(&c, &u, &format!("db:{}", r.database), "view").map_err(internal)? {
+            return Err(not_found());
+        }
+        let gated = file_restricted(&c, &u, id)?;
         let mut st = c
             .prepare(
-                "SELECT e.id, e.encounter_id, l.method FROM recording_links l JOIN encounters e ON e.id = l.encounter
-                 WHERE l.recording = ?1 ORDER BY e.admit_time",
+                "SELECT id, action, action_version, state, finished_at, summary, error FROM jobs
+                 WHERE recording = ?1 AND state IN ('done', 'failed') ORDER BY id DESC LIMIT 100",
             )
             .map_err(internal)?;
-        let links: Vec<Value> = st
+        let results: Vec<Value> = st
             .query_map([id], |x| {
-                Ok(json!({"id": x.get::<_, i64>(0)?, "encounter_id": x.get::<_, String>(1)?, "method": x.get::<_, String>(2)?}))
+                let summary: String = x.get(5)?;
+                Ok(json!({
+                    "job": x.get::<_, i64>(0)?, "action": x.get::<_, String>(1)?, "version": x.get::<_, String>(2)?,
+                    "state": x.get::<_, String>(3)?, "finished_at": x.get::<_, Option<f64>>(4)?,
+                    "summary": serde_json::from_str::<Value>(&summary).unwrap_or(Value::Null),
+                    "error": x.get::<_, String>(6)?,
+                }))
             })
             .map_err(internal)?
             .collect::<Result<_, _>>()
             .map_err(internal)?;
-        ok(json!({ "recording": r, "encounters": links, "results": query::results(&c, id).map_err(bad)? }))
-    })
-    .await
-}
-
-async fn remove_recordings(State(app): State<Shared>, Auth(u): Auth, Json(req): Json<Ids>) -> ApiResult {
-    admin(&u)?;
-    blocking(move || {
-        let mut c = app.db.get().map_err(internal)?;
-        let n = if req.dry_run {
-            recordings::existing(&c, &req.ids).map_err(bad)?
-        } else {
-            recordings::remove(&mut c, &app.cfg, &u, &req.ids, req.purge).map_err(bad)?
-        };
-        ok(json!({ "dry_run": req.dry_run, "removed": n }))
-    })
-    .await
-}
-
-#[derive(Deserialize)]
-struct LinkReq {
-    encounter: Option<i64>,
-}
-
-async fn link_recording(
-    State(app): State<Shared>,
-    Auth(u): Auth,
-    UrlPath(id): UrlPath<i64>,
-    Json(req): Json<LinkReq>,
-) -> ApiResult {
-    admin(&u)?;
-    blocking(move || {
-        let mut c = app.db.get().map_err(internal)?;
-        linkage::link_manual(&mut c, &u, id, req.encounter).map_err(bad)?;
-        ok(json!({}))
-    })
-    .await
-}
-
-#[derive(Deserialize)]
-struct DecisionReq {
-    encounter_id: String,
-    /// `link`, `never`, or null (forget the decision).
-    decision: Option<String>,
-}
-
-async fn link_decision(
-    State(app): State<Shared>,
-    Auth(u): Auth,
-    UrlPath(id): UrlPath<i64>,
-    Json(req): Json<DecisionReq>,
-) -> ApiResult {
-    admin(&u)?;
-    blocking(move || {
-        let mut c = app.db.get().map_err(internal)?;
-        linkage::decide_link(&mut c, &u, id, &req.encounter_id, req.decision.as_deref()).map_err(bad)?;
-        ok(json!({}))
-    })
-    .await
-}
-
-async fn review(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
-    admin(&u)?;
-    blocking(move || {
-        let c = app.db.get().map_err(internal)?;
-        ok(crate::review::review(&c, &u).map_err(bad)?)
-    })
-    .await
-}
-
-#[derive(Deserialize)]
-struct HeldReq {
-    /// `apply` or `dismiss`.
-    action: String,
-}
-
-async fn decide_held(
-    State(app): State<Shared>,
-    Auth(u): Auth,
-    UrlPath(id): UrlPath<i64>,
-    Json(req): Json<HeldReq>,
-) -> ApiResult {
-    admin(&u)?;
-    let apply = match req.action.as_str() {
-        "apply" => true,
-        "dismiss" => false,
-        other => return Err(bad(format!("unknown action {other:?} (apply, dismiss)"))),
-    };
-    blocking(move || {
-        let mut c = app.db.get().map_err(internal)?;
-        crate::review::decide_held(&mut c, &u, id, apply, &app.cfg.timezone).map_err(bad)?;
-        ok(json!({}))
-    })
-    .await
-}
-
-#[derive(Deserialize)]
-struct PairReq {
-    a: String,
-    b: String,
-}
-
-/// Merge patient `a` into patient `b`.
-async fn merge_patients(State(app): State<Shared>, Auth(u): Auth, Json(req): Json<PairReq>) -> ApiResult {
-    admin(&u)?;
-    if !u.phi {
-        return Err(forbidden("merging patients needs an admin with the PHI permission"));
-    }
-    blocking(move || {
-        let mut c = app.db.get().map_err(internal)?;
-        crate::review::merge(&mut c, &u, &req.a, &req.b).map_err(bad)?;
-        ok(json!({}))
-    })
-    .await
-}
-
-async fn distinct_patients(State(app): State<Shared>, Auth(u): Auth, Json(req): Json<PairReq>) -> ApiResult {
-    admin(&u)?;
-    if !u.phi {
-        return Err(forbidden("deciding on duplicates needs an admin with the PHI permission"));
-    }
-    blocking(move || {
-        let c = app.db.get().map_err(internal)?;
-        crate::review::distinct(&c, &u, &req.a, &req.b).map_err(bad)?;
-        ok(json!({}))
-    })
-    .await
-}
-
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct UploadQuery {
-    /// The file's name, for the import log (and the default batch name and source).
-    name: String,
-    /// The batch's name and source label (default: the file's name).
-    batch: String,
-    source: String,
-    /// A column mapping: JSON object or TOML text (see linkage.rs).
-    mapping: String,
-    /// Databases: the category of the table's items when it has no category column.
-    category: String,
-    /// Databases: a known export to convert (`auto`, `none`, or a format's key).
-    format: String,
-    dry_run: bool,
-    /// Run in the background: the answer is the import's task (202), its progress asked for
-    /// at `import-tasks/{id}` until it is done.
-    background: bool,
-}
-
-impl UploadQuery {
-    fn opts(&self) -> crate::imports::Opts {
-        crate::imports::Opts::new(
-            if self.batch.is_empty() { &self.name } else { &self.batch },
-            &self.source,
-            self.dry_run,
-        )
-    }
-}
-
-/// Headers, the kind it looks like and the suggested mapping of an uploaded table.
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct InspectQuery {
-    name: String,
-    /// `auto` (default), `none`, or a format's key.
-    format: String,
-}
-
-async fn inspect_table(
-    State(app): State<Shared>,
-    Auth(u): Auth,
-    Query(q): Query<InspectQuery>,
-    body: axum::body::Bytes,
-) -> ApiResult {
-    admin(&u)?;
-    blocking(move || {
-        let known = crate::formats::all(&app.cfg).0;
-        let choice = crate::formats::Choice::parse(&q.format, &known).map_err(bad)?;
-        ok(crate::tables::inspect(&app.cfg, &q.name, &body, u.phi, &choice).map_err(bad)?)
-    })
-    .await
-}
-
-async fn import_table(
-    State(app): State<Shared>,
-    Auth(u): Auth,
-    Query(q): Query<UploadQuery>,
-    body: axum::body::Bytes,
-) -> ApiResult {
-    admin(&u)?;
-    blocking(move || {
-        let map = if q.mapping.trim().is_empty() {
-            Default::default()
-        } else {
-            linkage::read_mapping(&q.mapping).map_err(bad)?
-        };
-        let known = crate::formats::all(&app.cfg).0;
-        let format = crate::formats::Choice::parse(&q.format, &known).map_err(bad)?;
-        let parts = [crate::tables::Part { name: q.name.clone(), data: crate::tables::PartData::Bytes(&body) }];
-        let mut c = app.db.get().map_err(internal)?;
-        ok(crate::tables::import_parts(&mut c, &app.cfg, &u, &parts, &map, &q.category, None, &q.opts(), format)
-            .map_err(bad)?)
-    })
-    .await
-}
-
-/// Several files with the same columns, one database (a multipart upload: each `file` part; the
-/// query as `POST tables`, `batch` the database's name).  Held in memory, never written to disk.
-async fn import_table_files(
-    State(app): State<Shared>,
-    Auth(u): Auth,
-    Query(q): Query<UploadQuery>,
-    mut form: axum::extract::Multipart,
-) -> ApiResult {
-    admin(&u)?;
-    if q.batch.trim().is_empty() {
-        return Err(bad("several files make one database: give it a name"));
-    }
-    let (label, background_wanted, u2) = (q.batch.trim().to_string(), q.background, u.clone());
-    let mut files: Vec<(String, axum::body::Bytes)> = vec![];
-    while let Some(field) = form.next_field().await.map_err(|e| bad(format!("the upload: {e}")))? {
-        if field.name() != Some("file") {
-            continue;
+        let mut v = json!({ "recording": r, "results": results });
+        if !gated {
+            return ok(v);
         }
-        let name = field.file_name().unwrap_or("table.csv").to_string();
-        let data = field.bytes().await.map_err(|e| bad(format!("{name}: {e}")))?;
-        files.push((name, data));
-    }
-    if files.is_empty() {
-        return Err(bad("no file"));
-    }
-    let run = move |app: Shared, progress: Option<Arc<crate::progress::Progress>>| -> Result<Value, ApiError> {
-        let map = if q.mapping.trim().is_empty() {
-            Default::default()
-        } else {
-            linkage::read_mapping(&q.mapping).map_err(bad)?
+        // the whole answer as its patient's (each patient's own offset, the recording's and its
+        // results' times alike), the times a plug-in wrote under keys of its own too
+        let g = restricted(&app, &c)?;
+        let g = match r.patient {
+            Some(p) => g.for_patient(p),
+            None => g.for_recording(&crate::gate::recording_token(id)),
         };
-        let known = crate::formats::all(&app.cfg).0;
-        let format = crate::formats::Choice::parse(&q.format, &known).map_err(bad)?;
-        let parts: Vec<crate::tables::Part> = files
-            .iter()
-            .map(|(name, data)| crate::tables::Part { name: name.clone(), data: crate::tables::PartData::Bytes(data) })
-            .collect();
-        let mut c = app.db.get().map_err(internal)?;
-        let mut opts = q.opts();
-        opts.progress = progress;
-        let r = crate::tables::import_parts(&mut c, &app.cfg, &u, &parts, &map, &q.category, None, &opts, format)
-            .map_err(bad)?;
-        serde_json::to_value(r).map_err(internal)
-    };
-    if background_wanted {
-        return in_background(&app, &u2, &label, move |a, p| run(a, Some(p)));
-    }
-    blocking(move || run(app, None).and_then(ok)).await
-}
-
-/// Run an import in the background (a thread of its own): the answer is its task, at once.
-fn in_background(
-    app: &Shared,
-    user: &User,
-    label: &str,
-    f: impl FnOnce(Shared, Arc<crate::progress::Progress>) -> Result<Value, ApiError> + Send + 'static,
-) -> ApiResult {
-    let task = app.tasks.start(user.id, label).map_err(internal)?;
-    let (t, a, u, label) = (task.clone(), app.clone(), user.clone(), label.to_string());
-    std::thread::Builder::new()
-        .name("import".into())
-        .spawn(move || {
-            let p = t.progress.clone();
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(a.clone(), p)))
-                .unwrap_or_else(|_| Err(internal("the import stopped on an internal error")));
-            // a cancelled import, rolled back: said in the audit log (now that it can be written)
-            if t.progress.cancelled() && r.is_err() {
-                if let Ok(c) = a.db.get() {
-                    audit(&c, Some(&u), "cancel_import", &label, "");
-                }
-            }
-            t.finish(r.map_err(|e| busy_text(&e.1)));
-        })
-        .map_err(internal)?;
-    Ok((StatusCode::ACCEPTED, Json(task.view())).into_response())
-}
-
-/// A message for a person: the catalog's being busy said plainly.
-fn busy_text(e: &str) -> String {
-    if e.contains("database is locked") || e.contains("database is busy") {
-        BUSY.into()
-    } else {
-        e.to_string()
-    }
-}
-
-/// The imports running in the background, and those ended within the hour (admins).
-async fn import_tasks(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
-    admin(&u)?;
-    let items: Vec<Value> = app.tasks.list().iter().map(|t| t.view()).collect();
-    ok(json!({ "items": items }))
-}
-
-/// One import's progress, or its end (admins).
-async fn import_task(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<String>) -> ApiResult {
-    admin(&u)?;
-    let t = app.tasks.get(&id).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such import running".into()))?;
-    ok(t.view())
-}
-
-/// Stop an import (admins): at its next chunk of rows; nothing of it is kept.
-async fn import_task_cancel(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<String>) -> ApiResult {
-    admin(&u)?;
-    let t = app.tasks.get(&id).ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such import running".into()))?;
-    t.progress.cancel();
-    ok(t.view())
-}
-
-#[derive(Deserialize)]
-struct ClifFolder {
-    dir: String,
-    #[serde(default)]
-    source: String,
-    #[serde(default)]
-    dry_run: bool,
-    /// Run in the background (as `tables/files`).
-    #[serde(default)]
-    background: bool,
-}
-
-/// A CLIF folder on this server imported (admins): inside `data_roots`; each table a database.
-async fn import_clif(State(app): State<Shared>, Auth(u): Auth, Json(b): Json<ClifFolder>) -> ApiResult {
-    admin(&u)?;
-    let (background_wanted, u2) = (b.background, u.clone());
-    let run = move |app: Shared, progress: Option<Arc<crate::progress::Progress>>| -> Result<Value, ApiError> {
-        let dir = crate::config::real(std::path::Path::new(&recording_engine::paths::absolute(b.dir.trim())));
-        if !dir.is_dir() {
-            return Err(bad(format!("no folder {}", dir.display())));
+        for x in v["results"].as_array_mut().into_iter().flatten() {
+            crate::deid::shift_unknown_times(&mut x["summary"], &g.settings);
         }
-        if !app.cfg.import_allowed(&dir) {
-            return Err(bad(OUTSIDE_ROOTS));
-        }
-        let source = if b.source.trim().is_empty() { "clif" } else { b.source.trim() };
-        let mut c = app.db.get().map_err(internal)?;
-        let done = crate::formats::clif::import_folder(&mut c, &app.cfg, &u, &dir, source, b.dry_run, progress)
-            .map_err(bad)?;
-        let tables: Vec<Value> =
-            done.imported.iter().map(|(name, files, r)| json!({ "name": name, "files": files, "report": r })).collect();
-        let skipped: Vec<String> = done
-            .skipped
-            .iter()
-            .map(|p| p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default())
-            .collect();
-        Ok(json!({ "tables": tables, "skipped": skipped }))
-    };
-    if background_wanted {
-        return in_background(&app, &u2, "CLIF folder", move |a, p| run(a, Some(p)));
-    }
-    blocking(move || run(app, None).and_then(ok)).await
+        g.json(&mut v);
+        Ok(cleared(Json(v).into_response()))
+    })
+    .await
 }
 
-/// What an import is told of a folder or file outside `data_roots`.
 const OUTSIDE_ROOTS: &str = "the folder is outside the folders data may come from (data_roots)";
-
-/// The extensions of the tables the page imports (as its upload accepts).
-const TABLE_EXTENSIONS: &[&str] = &["csv", "xlsx", "xls", "ods", "parquet"];
 
 /// The extensions of the SQLite database files that may be connected.
 const DATABASE_EXTENSIONS: &[&str] = &["sqlite", "sqlite3", "db"];
@@ -999,26 +570,25 @@ const MAX_LISTED: usize = 5000;
 struct FolderQuery {
     /// An absolute folder; empty: the folders data may come from.
     dir: String,
-    /// The files listed with the folders: `tables` (default), `databases` (SQLite files) or
-    /// `folders` (none).
+    /// The files listed with the folders: `databases` (SQLite files, the default) or `folders`
+    /// (none).
     kind: String,
 }
 
-/// A folder on this server, as the page's "Choose on the server" dialog shows it (admins: the
-/// tables to import, a CLIF folder, a database file): its folders and the files of the kind
-/// asked for, inside `data_roots` (anywhere when it is empty).  Not in Privacy Mode, as the
-/// viewer's Open dialog: folders' and files' names may identify.
+/// A folder on this server, as the page's "Choose on the server" dialog shows it (admins: a
+/// SQLite database file to connect, a folder): its folders and the files of the kind asked for,
+/// inside `data_roots` (anywhere when it is empty).  Not in Privacy Mode, as the viewer's Open
+/// dialog: folders' and files' names may identify.
 async fn server_files(State(app): State<Shared>, Auth(u): Auth, Query(q): Query<FolderQuery>) -> ApiResult {
     admin(&u)?;
     let wanted: &'static [&'static str] = match q.kind.as_str() {
-        "" | "tables" => TABLE_EXTENSIONS,
-        "databases" => DATABASE_EXTENSIONS,
+        "" | "databases" => DATABASE_EXTENSIONS,
         "folders" => &[],
-        other => return Err(bad(format!("unknown kind {other:?} (tables, databases, folders)"))),
+        other => return Err(bad(format!("unknown kind {other:?} (databases, folders)"))),
     };
     if u.privacy {
         return Err(forbidden(
-            "folders are not browsed in Privacy Mode (their names may identify): leave Privacy Mode to choose tables on the server",
+            "folders are not browsed in Privacy Mode (their names may identify): leave Privacy Mode to choose a file on the server",
         ));
     }
     blocking(move || {
@@ -1040,7 +610,7 @@ async fn server_files(State(app): State<Shared>, Auth(u): Auth, Query(q): Query<
         if !dir.is_dir() {
             return Err(bad(format!("no folder {}", dir.display())));
         }
-        if !app.cfg.import_allowed(&dir) {
+        if !app.cfg.in_data_roots(&dir) {
             return Err(bad(OUTSIDE_ROOTS));
         }
         let rd = std::fs::read_dir(&dir).map_err(|e| bad(format!("{}: {e}", dir.display())))?;
@@ -1058,7 +628,7 @@ async fn server_files(State(app): State<Shared>, Auth(u): Auth, Query(q): Query<
                 && std::path::Path::new(&name)
                     .extension()
                     .is_some_and(|x| wanted.iter().any(|t| x.eq_ignore_ascii_case(t)));
-            if !(meta.is_dir() || file) || (link && !app.cfg.import_allowed(&path)) {
+            if !(meta.is_dir() || file) || (link && !app.cfg.in_data_roots(&path)) {
                 continue;
             }
             if items.len() == MAX_LISTED {
@@ -1072,7 +642,7 @@ async fn server_files(State(app): State<Shared>, Auth(u): Auth, Query(q): Query<
         // one level up: the parent while it stays inside a root, else the list of the roots
         let is_root = roots.iter().any(|r| crate::config::real(std::path::Path::new(r)) == dir);
         let parent = match dir.parent() {
-            Some(p) if !is_root && app.cfg.import_allowed(p) => p.to_string_lossy().to_string(),
+            Some(p) if !is_root && app.cfg.in_data_roots(p) => p.to_string_lossy().to_string(),
             _ => String::new(),
         };
         let items: Vec<Value> = items
@@ -1084,118 +654,6 @@ async fn server_files(State(app): State<Shared>, Auth(u): Auth, Query(q): Query<
     .await
 }
 
-/// A table file on this server that may be imported: it exists, inside `data_roots`.
-fn server_table(cfg: &crate::config::Config, path: &str) -> Result<std::path::PathBuf, ApiError> {
-    let p = crate::config::real(std::path::Path::new(&recording_engine::paths::absolute(path.trim())));
-    if !p.is_file() {
-        return Err(bad(format!("no file {}", p.display())));
-    }
-    if !cfg.import_allowed(&p) {
-        return Err(bad(OUTSIDE_ROOTS));
-    }
-    Ok(p)
-}
-
-fn file_name_of(p: &std::path::Path) -> String {
-    p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()
-}
-
-#[derive(Deserialize)]
-struct ServerTable {
-    path: String,
-    /// `auto` (default), `none`, or a format's key.
-    #[serde(default)]
-    format: String,
-}
-
-/// As `tables/inspect`, a table on this server, read where it is, row by row (any size).
-async fn inspect_server_table(State(app): State<Shared>, Auth(u): Auth, Json(b): Json<ServerTable>) -> ApiResult {
-    admin(&u)?;
-    blocking(move || {
-        let path = server_table(&app.cfg, &b.path)?;
-        let known = crate::formats::all(&app.cfg).0;
-        let choice = crate::formats::Choice::parse(&b.format, &known).map_err(bad)?;
-        let part = crate::tables::Part { name: file_name_of(&path), data: crate::tables::PartData::File(path) };
-        ok(crate::tables::inspect_part(&app.cfg, &part, u.phi, &choice).map_err(bad)?)
-    })
-    .await
-}
-
-#[derive(Deserialize)]
-struct ServerTables {
-    /// One table, or several with the same columns (one database, named by `batch`).
-    paths: Vec<String>,
-    /// The rest as `POST tables` (`name`: by default the first file's name).
-    #[serde(flatten)]
-    q: UploadQuery,
-}
-
-/// Tables on this server imported where they are, as `medorama import-table` does (admins):
-/// read row by row, so of any size; a relative path in a `file` column is read from the first
-/// table's folder.
-async fn import_server_tables(State(app): State<Shared>, Auth(u): Auth, Json(b): Json<ServerTables>) -> ApiResult {
-    admin(&u)?;
-    let ServerTables { paths, mut q } = b;
-    if paths.is_empty() {
-        return Err(bad("no file"));
-    }
-    if paths.len() > 1 && q.batch.trim().is_empty() {
-        return Err(bad("several files make one database: give it a name"));
-    }
-    if q.name.is_empty() {
-        q.name = file_name_of(std::path::Path::new(paths[0].trim()));
-    }
-    let label = if q.batch.trim().is_empty() { q.name.clone() } else { q.batch.trim().to_string() };
-    let (background_wanted, u2) = (q.background, u.clone());
-    let run = move |app: Shared, progress: Option<Arc<crate::progress::Progress>>| -> Result<Value, ApiError> {
-        let files = paths.iter().map(|p| server_table(&app.cfg, p)).collect::<Result<Vec<_>, _>>()?;
-        let map = if q.mapping.trim().is_empty() {
-            Default::default()
-        } else {
-            linkage::read_mapping(&q.mapping).map_err(bad)?
-        };
-        let known = crate::formats::all(&app.cfg).0;
-        let format = crate::formats::Choice::parse(&q.format, &known).map_err(bad)?;
-        let parts: Vec<crate::tables::Part> = files
-            .iter()
-            .map(|f| crate::tables::Part { name: file_name_of(f), data: crate::tables::PartData::File(f.clone()) })
-            .collect();
-        let base = files[0].parent().map(|p| p.to_path_buf());
-        let mut c = app.db.get().map_err(internal)?;
-        let mut opts = q.opts();
-        opts.progress = progress;
-        let r = crate::tables::import_parts(
-            &mut c,
-            &app.cfg,
-            &u,
-            &parts,
-            &map,
-            &q.category,
-            base.as_deref(),
-            &opts,
-            format,
-        )
-        .map_err(bad)?;
-        serde_json::to_value(r).map_err(internal)
-    };
-    if background_wanted {
-        return in_background(&app, &u2, &label, move |a, p| run(a, Some(p)));
-    }
-    blocking(move || run(app, None).and_then(ok)).await
-}
-
-/// The import formats the catalog knows (admins): built in and described in `formats_dirs`,
-/// and the files that could not be read.
-async fn formats_list(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
-    admin(&u)?;
-    let (known, problems) = crate::formats::all(&app.cfg);
-    let categories: Vec<Value> =
-        crate::categories::CATEGORIES.iter().map(|c| json!({"key": c.0, "label": c.1})).collect();
-    ok(json!({ "items": crate::formats::describe(&known), "problems": problems, "categories": categories }))
-}
-
-/// The installed adapters (Admin › Add-ons). Installing is done on the server only:
-/// `medorama addons install` (crate::addons).
 async fn addons_list(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
     admin(&u)?;
     let dir = app.cfg.adapters_dir.clone();
@@ -1223,15 +681,23 @@ async fn patients(State(app): State<Shared>, Auth(u): Auth, Query(q): Query<Pati
         let c = app.db.get().map_err(internal)?;
         let has: Vec<String> = q.has.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
         let only = match q.cohort {
-            Some(co) => Some(crate::cohorts::member_ids(&c, &u, co).map_err(|_| not_found())?),
+            Some(co) => Some(crate::cohorts::member_ids(&c, &app.cfg, &u, co).map_err(|_| not_found())?),
             None => None,
         };
-        let (total, items) =
-            crate::patient::list_in(&c, &u, &q.q, &has, only.as_ref(), q.limit.unwrap_or(100), q.offset.unwrap_or(0))
-                .map_err(bad)?;
+        let (total, items) = crate::patient::list_in(
+            &c,
+            &app.cfg,
+            &u,
+            &q.q,
+            &has,
+            only.as_ref(),
+            q.limit.unwrap_or(100),
+            q.offset.unwrap_or(0),
+        )
+        .map_err(bad)?;
         let items: Vec<serde_json::Value> = match q.mark {
             Some(co) => {
-                let members = crate::cohorts::member_ids(&c, &u, co).map_err(|_| not_found())?;
+                let members = crate::cohorts::member_ids(&c, &app.cfg, &u, co).map_err(|_| not_found())?;
                 items
                     .iter()
                     .map(|p| {
@@ -1243,7 +709,7 @@ async fn patients(State(app): State<Shared>, Auth(u): Auth, Query(q): Query<Pati
             }
             None => items.iter().map(|p| serde_json::to_value(p).unwrap_or_default()).collect(),
         };
-        let categories: Vec<(&str, &str)> = crate::patient::present(&c)
+        let categories: Vec<(&str, &str)> = crate::patient::present(&c, &app.cfg, &u)
             .map_err(bad)?
             .into_iter()
             .filter(|k| *k != "enc")
@@ -1256,43 +722,6 @@ async fn patients(State(app): State<Shared>, Auth(u): Auth, Query(q): Query<Pati
 
 // ------------------------------------------------------------------ databases
 
-async fn databases(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
-    let _ = &u;
-    blocking(move || ok(json!({ "items": crate::databases::list(&*app.db.get().map_err(internal)?).map_err(bad)? })))
-        .await
-}
-
-/// `?q&sort&desc&limit&offset`, and `f<pos>=text` per column.
-async fn database_rows(
-    State(app): State<Shared>,
-    Auth(u): Auth,
-    UrlPath(id): UrlPath<i64>,
-    Query(p): Query<HashMap<String, String>>,
-) -> ApiResult {
-    blocking(move || {
-        let num = |k: &str| p.get(k).and_then(|v| v.parse::<usize>().ok());
-        let q = crate::databases::Query {
-            q: p.get("q").cloned().unwrap_or_default(),
-            filters: p
-                .iter()
-                .filter_map(|(k, v)| k.strip_prefix('f').and_then(|n| n.parse::<usize>().ok()).map(|n| (n, v.clone())))
-                .collect(),
-            sort: num("sort"),
-            desc: p.get("desc").is_some_and(|v| v == "1" || v == "true"),
-            limit: num("limit").unwrap_or(100),
-            offset: num("offset").unwrap_or(0),
-        };
-        let c = app.db.get().map_err(internal)?;
-        let g = if u.privacy { Some(restricted(&app, &c)?) } else { None };
-        ok(crate::databases::rows(&c, &u, g.as_deref(), id, &q).map_err(bad)?)
-    })
-    .await
-}
-
-/// A database as CSV (admins).
-/// A download's `Content-Disposition` (RFC 6266): the name as plain ASCII (letters, digits,
-/// `-`, `_`, `.`; anything else `_`, so that no quote or line break reaches the header), and
-/// as written, percent-encoded UTF-8 (`filename*`).
 fn attachment_name(name: &str) -> String {
     let plain: String =
         name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.') { c } else { '_' }).collect();
@@ -1306,34 +735,6 @@ fn attachment_name(name: &str) -> String {
     format!("attachment; filename=\"{plain}\"; filename*=UTF-8''{encoded}")
 }
 
-async fn database_export(
-    State(app): State<Shared>,
-    Auth(u): Auth,
-    UrlPath(id): UrlPath<i64>,
-    Query(q): Query<ExportWhat>,
-) -> ApiResult {
-    admin(&u)?;
-    blocking(move || {
-        let c = app.db.get().map_err(internal)?;
-        // through the gate when asked, and always in Privacy Mode
-        let g = if q.privacy() || u.privacy { Some(restricted(&app, &c)?) } else { None };
-        let (name, text) = crate::databases::export_csv(&c, &u, id, g.as_deref()).map_err(bad)?;
-        Ok(cleared(
-            (
-                [
-                    (header::CONTENT_TYPE, "text/csv; charset=utf-8".to_string()),
-                    (header::CONTENT_DISPOSITION, attachment_name(&name)),
-                ],
-                text,
-            )
-                .into_response(),
-        ))
-    })
-    .await
-}
-
-/// The data's version: it moves when databases, patients, encounters or recordings change, so
-/// open pages know to redraw.
 async fn data_version(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
     let _ = &u;
     blocking(move || {
@@ -1358,6 +759,8 @@ struct CohortSearch {
     source: Option<crate::cohorts::Source>,
     /// … or among those of a stored cohort's source (its criteria being edited).
     within_source_of: Option<i64>,
+    /// The databases ticked (none: every one the user may search).
+    databases: Vec<i64>,
     limit: Option<usize>,
     offset: Option<usize>,
 }
@@ -1367,17 +770,19 @@ async fn cohort_search(State(app): State<Shared>, Auth(u): Auth, Json(b): Json<C
         let c = app.db.get().map_err(internal)?;
         let source = match (&b.source, b.within_source_of) {
             (Some(s), _) => Some(crate::cohorts::checked_source(&c, &u, s).map_err(bad)?),
-            (None, Some(id)) => crate::cohorts::get(&c, &u, id).map_err(|_| not_found())?.source,
+            (None, Some(id)) => crate::cohorts::get(&c, &app.cfg, &u, id).map_err(|_| not_found())?.source,
             (None, None) => None,
         };
         // a parent cohort counts only while the user may still read it
-        let within = source.map(|s| crate::cohorts::readable_source_members(&c, &u, &s)).transpose().map_err(bad)?;
+        let within =
+            source.map(|s| crate::cohorts::readable_source_members(&c, &app.cfg, &u, &s)).transpose().map_err(bad)?;
         // the criteria evaluated once, for the members and for those excluded
         ok(crate::cohorts::search_page(
             &c,
+            &app.cfg,
             &u,
-            &app.cfg.timezone,
             &b.criteria,
+            Some(&b.databases),
             within.as_ref(),
             b.limit.unwrap_or(100),
             b.offset.unwrap_or(0),
@@ -1398,7 +803,7 @@ struct ParseText {
 async fn cohort_parse(State(app): State<Shared>, Auth(u): Auth, Json(b): Json<ParseText>) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
-        match crate::cohorts::parse_text(&c, &u, &b.text) {
+        match crate::cohorts::parse_text(&c, &app.cfg, &u, &b.text) {
             Ok(e) => ok(json!({ "ok": true, "expr": e, "words": crate::cohorts::describe_expr(&e) })),
             Err(e) => ok(json!({ "ok": false, "error": e.to_string() })),
         }
@@ -1407,8 +812,10 @@ async fn cohort_parse(State(app): State<Shared>, Auth(u): Auth, Json(b): Json<Pa
 }
 
 async fn cohorts_list(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
-    blocking(move || ok(json!({ "items": crate::cohorts::list(&*app.db.get().map_err(internal)?, &u).map_err(bad)? })))
-        .await
+    blocking(move || {
+        ok(json!({ "items": crate::cohorts::list(&*app.db.get().map_err(internal)?, &app.cfg, &u).map_err(bad)? }))
+    })
+    .await
 }
 
 async fn cohort_create(
@@ -1418,14 +825,17 @@ async fn cohort_create(
 ) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
-        let id = crate::cohorts::create(&c, &u, &app.cfg.timezone, &b).map_err(bad)?;
-        ok(crate::cohorts::get(&c, &u, id).map_err(bad)?)
+        let id = crate::cohorts::create(&c, &app.cfg, &u, &b).map_err(bad)?;
+        ok(crate::cohorts::get(&c, &app.cfg, &u, id).map_err(bad)?)
     })
     .await
 }
 
 async fn cohort_get(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
-    blocking(move || ok(crate::cohorts::get(&*app.db.get().map_err(internal)?, &u, id).map_err(|_| not_found())?)).await
+    blocking(move || {
+        ok(crate::cohorts::get(&*app.db.get().map_err(internal)?, &app.cfg, &u, id).map_err(|_| not_found())?)
+    })
+    .await
 }
 
 async fn cohort_change(
@@ -1434,10 +844,8 @@ async fn cohort_change(
     UrlPath(id): UrlPath<i64>,
     Json(b): Json<crate::cohorts::Change>,
 ) -> ApiResult {
-    blocking(move || {
-        ok(crate::cohorts::change(&*app.db.get().map_err(internal)?, &u, &app.cfg.timezone, id, &b).map_err(bad)?)
-    })
-    .await
+    blocking(move || ok(crate::cohorts::change(&*app.db.get().map_err(internal)?, &app.cfg, &u, id, &b).map_err(bad)?))
+        .await
 }
 
 #[derive(Deserialize, Default)]
@@ -1454,8 +862,8 @@ async fn cohort_clone(
 ) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
-        let new = crate::cohorts::clone(&c, &u, id, &b.name).map_err(bad)?;
-        ok(crate::cohorts::get(&c, &u, new).map_err(bad)?)
+        let new = crate::cohorts::clone(&c, &app.cfg, &u, id, &b.name).map_err(bad)?;
+        ok(crate::cohorts::get(&c, &app.cfg, &u, new).map_err(bad)?)
     })
     .await
 }
@@ -1470,25 +878,9 @@ async fn cohort_history(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): U
 
 async fn cohort_delete(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
     blocking(move || {
-        let mut c = app.db.get().map_err(internal)?;
-        // the demo's cohort: the demo goes with it (admins)
-        if crate::cohorts::is_demo(&c, id).map_err(internal)? {
-            admin(&u)?;
-            let r = crate::demo::remove(&mut c, &app.cfg, &u, false).map_err(bad)?;
-            return ok(json!({ "removed": r }));
-        }
-        crate::cohorts::delete(&c, &u, id).map_err(bad)?;
+        let c = app.db.get().map_err(internal)?;
+        crate::cohorts::delete(&c, &app.cfg, &u, id).map_err(bad)?;
         ok(json!({}))
-    })
-    .await
-}
-
-/// What deleting the demo's cohort would remove (admins): a dry run.
-async fn demo_removal(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
-    admin(&u)?;
-    blocking(move || {
-        let mut c = app.db.get().map_err(internal)?;
-        ok(crate::demo::remove(&mut c, &app.cfg, &u, true).map_err(bad)?)
     })
     .await
 }
@@ -1509,6 +901,7 @@ async fn cohort_members(
     blocking(move || {
         let (total, items) = crate::cohorts::members(
             &*app.db.get().map_err(internal)?,
+            &app.cfg,
             &u,
             id,
             p.limit.unwrap_or(100),
@@ -1527,8 +920,7 @@ async fn cohort_refresh(
     Json(b): Json<crate::cohorts::RefreshOpts>,
 ) -> ApiResult {
     blocking(move || {
-        ok(crate::cohorts::refresh_with(&*app.db.get().map_err(internal)?, &u, &app.cfg.timezone, id, &b)
-            .map_err(bad)?)
+        ok(crate::cohorts::refresh_with(&*app.db.get().map_err(internal)?, &app.cfg, &u, id, &b).map_err(bad)?)
     })
     .await
 }
@@ -1563,21 +955,21 @@ async fn cohort_export(
         let deid = g.as_deref();
         let (name, kind, body): (String, &str, Vec<u8>) = match q.what.as_str() {
             "criteria" => {
-                let (n, t) = crate::cohorts::export_criteria(&c, &u, id).map_err(|_| not_found())?;
+                let (n, t) = crate::cohorts::export_criteria(&c, &app.cfg, &u, id).map_err(|_| not_found())?;
                 let v: Value = serde_json::from_str(&t).map_err(internal)?;
                 let t = serde_json::to_string_pretty(&gated_json(deid, v)).map_err(internal)?;
                 (n, "application/json; charset=utf-8", t.into_bytes())
             }
             "data" => {
-                let (n, t) = crate::cohorts::export_data_csv(&c, &u, id, deid).map_err(|_| not_found())?;
+                let (n, t) = crate::cohorts::export_data_csv(&c, &app.cfg, &u, id, deid).map_err(|_| not_found())?;
                 (n, "text/csv; charset=utf-8", t.into_bytes())
             }
             "xlsx" => {
-                let (n, b) = crate::cohorts::export_xlsx(&c, &u, id, deid).map_err(|_| not_found())?;
+                let (n, b) = crate::cohorts::export_xlsx(&c, &app.cfg, &u, id, deid).map_err(|_| not_found())?;
                 (n, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", b)
             }
             _ => {
-                let (n, t) = crate::cohorts::export_csv(&c, &u, id, deid).map_err(|_| not_found())?;
+                let (n, t) = crate::cohorts::export_csv(&c, &app.cfg, &u, id, deid).map_err(|_| not_found())?;
                 (n, "text/csv; charset=utf-8", t.into_bytes())
             }
         };
@@ -1606,10 +998,16 @@ async fn cohort_people(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
 /// An answer about one patient.  In Privacy Mode, their own names and date of birth are also
 /// replaced wherever its text names them (notes, reports), besides what the gate's last layer
 /// does to every answer.
-fn patient_answer(c: &crate::sql::Connection, u: &User, patient: i64, x: impl serde::Serialize) -> ApiResult {
+fn patient_answer(
+    c: &crate::sql::Connection,
+    cfg: &Config,
+    u: &User,
+    patient: i64,
+    x: impl serde::Serialize,
+) -> ApiResult {
     let mut v = serde_json::to_value(x).map_err(internal)?;
     if u.privacy {
-        let (names, birth) = crate::gate::Restricted::identity_words(c, patient);
+        let (names, birth) = crate::gate::Restricted::identity_words(c, cfg, patient);
         crate::gate::scrub_names(&mut v, &names, &birth);
     }
     ok(v)
@@ -1618,7 +1016,9 @@ fn patient_answer(c: &crate::sql::Connection, u: &User, patient: i64, x: impl se
 async fn patient_summary(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
-        patient_answer(&c, &u, id, crate::patient::summary(&c, &u, id).map_err(bad)?)
+        let summary = crate::patient::summary(&c, &app.cfg, &u, id).map_err(bad)?;
+        crate::patient::seen(&c, &u, id).map_err(internal)?;
+        patient_answer(&c, &app.cfg, &u, id, summary)
     })
     .await
 }
@@ -1626,7 +1026,7 @@ async fn patient_summary(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): 
 async fn patient_trends(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
-        patient_answer(&c, &u, id, crate::patient::trends(&c, &u, id).map_err(bad)?)
+        patient_answer(&c, &app.cfg, &u, id, crate::patient::trends(&c, &app.cfg, &u, id).map_err(bad)?)
     })
     .await
 }
@@ -1634,7 +1034,7 @@ async fn patient_trends(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): U
 async fn patient_journey(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
-        patient_answer(&c, &u, id, crate::patient::journey(&c, &u, id).map_err(bad)?)
+        patient_answer(&c, &app.cfg, &u, id, crate::patient::journey(&c, &app.cfg, &u, id).map_err(bad)?)
     })
     .await
 }
@@ -1653,11 +1053,11 @@ async fn patient_report(
 ) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
-        let r = crate::patient::report(&c, &u, id, &q.q).map_err(bad)?;
+        let r = crate::patient::report(&c, &app.cfg, &u, id, &q.q).map_err(bad)?;
         if u.phi && !q.q.trim().is_empty() {
             audit(&c, Some(&u), "phi_search", &format!("patient {id}"), &q.q);
         }
-        patient_answer(&c, &u, id, r)
+        patient_answer(&c, &app.cfg, &u, id, r)
     })
     .await
 }
@@ -1678,21 +1078,22 @@ async fn patient_detail(
         let c = app.db.get().map_err(internal)?;
         // in Privacy Mode, the key as it was sent (its time moved back)
         let key = if u.privacy { restricted(&app, &c)?.real_key(&q.key) } else { q.key.clone() };
-        patient_answer(&c, &u, id, crate::patient::detail(&c, &app.cfg, &u, id, &key).map_err(bad)?)
+        patient_answer(&c, &app.cfg, &u, id, crate::patient::detail(&c, &app.cfg, &u, id, &key).map_err(bad)?)
     })
     .await
 }
 
-/// An item's attached file (an image, a PDF, a text file), or an attached folder's listing.
+/// A recording's file (an ECG, an image, a PDF), or a recording folder's listing.
 /// In Privacy Mode, files are named by their tokens (gate.rs `file_token`) and pass the gate.
 async fn patient_file(State(app): State<Shared>, Auth(u): Auth, UrlPath((id, item)): UrlPath<(i64, i64)>) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
-        match crate::patient::attachment(&c, &app.cfg, id, item).map_err(|_| not_found())? {
+        let restricted_file = file_restricted(&c, &u, item)?;
+        match crate::patient::attachment(&c, &app.cfg, &u, id, item).map_err(|_| not_found())? {
             // an attached folder (a DICOM series): its files, for a viewer
-            crate::patient::Attached::Listing(files) if u.privacy => {
+            crate::patient::Attached::Listing(files) if restricted_file => {
                 // only the files the gate would send, by their tokens (numbered as in the folder)
-                let dir = crate::patient::item_file(&c, &app.cfg, id, item).map_err(|_| not_found())?;
+                let dir = crate::patient::item_file(&c, &app.cfg, &u, id, item).map_err(|_| not_found())?;
                 let signals = crate::patient::signal_names(&dir);
                 let tokens: Vec<String> = files
                     .iter()
@@ -1709,10 +1110,22 @@ async fn patient_file(State(app): State<Shared>, Auth(u): Auth, UrlPath((id, ite
     .await
 }
 
-/// A file as the user gets it.  In Privacy Mode it passes the gate (gate.rs `FileKind`): WFDB
-/// headers and MUSE XML de-identified, DICOM headers rewritten (dicom.rs) with the pixels as
-/// they are, pictures, videos and PDF as they are but marked, anything else refused.  Shown in a
-/// sandbox where it could carry scripts (SVG, XML).
+/// Whether a recording's files leave de-identified, through the gate: in Privacy Mode, and
+/// outside it when the user holds no `phi` grant on the recording's database (the PHI
+/// permission shows the databases granted `phi` only: patient/restricted.rs).
+fn file_restricted(c: &crate::sql::Connection, u: &User, recording: i64) -> Result<bool, ApiError> {
+    if u.privacy {
+        return Ok(true);
+    }
+    let (db, _) = recordings::split(recording);
+    Ok(!crate::grants::can(c, u, &format!("db:{db}"), "phi").map_err(internal)?)
+}
+
+/// A file as the user gets it.  De-identified ([`file_restricted`]) it passes the gate
+/// (gate.rs `FileKind`): WFDB headers and MUSE XML de-identified, DICOM headers rewritten
+/// (dicom.rs) with the pixels as they are, SVG pictures without their texts and PDF documents
+/// without their descriptive fields (deid.rs `svg`, `pdf_info`), pictures, videos and PDF
+/// marked, anything else refused.  Shown in a sandbox where it could carry scripts (SVG, XML).
 fn attachment_response(
     app: &App,
     c: &crate::sql::Connection,
@@ -1723,7 +1136,7 @@ fn attachment_response(
     mime: &'static str,
 ) -> Result<Response, ApiError> {
     use crate::gate::FileKind;
-    if !u.privacy {
+    if !file_restricted(c, u, item)? {
         return file_response(path, mime, None, 0);
     }
     // the patient's own date offset
@@ -1741,20 +1154,20 @@ fn attachment_response(
                 .into_response(),
         )
     };
-    let signals = crate::patient::item_file(c, &app.cfg, patient, item)
+    let signals = crate::patient::item_file(c, &app.cfg, u, patient, item)
         .map(|p| crate::patient::signal_names(&p))
         .unwrap_or_default();
     match crate::gate::file_kind(path, &signals) {
         FileKind::WfdbHeader => {
             let text = std::fs::read_to_string(path).map_err(|_| not_found())?;
-            let names = crate::patient::attachment_names(c, &app.cfg, patient, item).map_err(|_| not_found())?;
+            let names = crate::patient::attachment_names(c, &app.cfg, u, patient, item).map_err(|_| not_found())?;
             let real = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
             // the header's own number among the attachment's files names the record
             let at = names.iter().position(|n| *n == real).unwrap_or(0);
             let tokens: HashMap<String, String> =
                 names.iter().enumerate().map(|(i, n)| (n.clone(), crate::gate::file_token(i, n))).collect();
             let record = crate::gate::file_token(at, "");
-            let (who, birth) = crate::gate::Restricted::identity_words(c, patient);
+            let (who, birth) = crate::gate::Restricted::identity_words(c, &app.cfg, patient);
             Ok(text_response(crate::gate::wfdb_header(&g, &text, &record, &tokens, (&who, &birth))))
         }
         FileKind::Signal => Ok(cleared(file_response(path, mime, None, 0)?)),
@@ -1774,7 +1187,7 @@ fn attachment_response(
                 return Err(forbidden("this XML file is not one the privacy gate can de-identify (GE MUSE): not available in Privacy Mode"));
             }
             // the patient's own names and date of birth in its texts (statements) first
-            let (who, birth) = crate::gate::Restricted::identity_words(c, patient);
+            let (who, birth) = crate::gate::Restricted::identity_words(c, &app.cfg, patient);
             let text = crate::gate::xml_texts(&text, &|t| crate::gate::own_words(t, &who, &birth));
             let x = crate::deid::muse_xml(&text, &g.settings)
                 .map_err(|e| forbidden(&format!("not available in Privacy Mode: {e}")))?;
@@ -1783,7 +1196,7 @@ fn attachment_response(
         }
         FileKind::Dicom => {
             let pseudonym = g.pseudonym(patient);
-            let (names, birth) = crate::gate::Restricted::identity_words(c, patient);
+            let (names, birth) = crate::gate::Restricted::identity_words(c, &app.cfg, patient);
             let r = crate::dicom::Rewrite {
                 pseudonym: &pseudonym,
                 offset_s: if g.settings.hides("dates") { g.settings.offset_seconds() } else { 0 },
@@ -1800,10 +1213,37 @@ fn attachment_response(
                 .map_err(|e| forbidden(&format!("not available in Privacy Mode: {e}")))?;
             Ok(cleared(file_response(path, mime, Some(w.0), w.1)?))
         }
+        FileKind::Opaque if mime.starts_with("image/svg") => {
+            // its texts (labels, title, description, metadata) left out: they may name the patient
+            let text = String::from_utf8_lossy(&std::fs::read(path).map_err(|_| not_found())?).to_string();
+            let mut r = text_response(crate::deid::svg(&text));
+            r.headers_mut().insert(
+                header::CONTENT_SECURITY_POLICY,
+                HeaderValue::from_static(
+                    "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'; frame-ancestors 'self'",
+                ),
+            );
+            Ok(may_hold_phi(r))
+        }
+        FileKind::Opaque
+            if mime == "application/pdf" && std::fs::metadata(path).is_ok_and(|m| m.len() <= PDF_IN_MEMORY) =>
+        {
+            // its descriptive fields (author, title, subject, keywords …) blanked, in place
+            let mut b = std::fs::read(path).map_err(|_| not_found())?;
+            crate::deid::pdf_info(&mut b);
+            Ok(may_hold_phi(cleared(
+                ([(header::CONTENT_TYPE, mime.to_string()), (header::CACHE_CONTROL, "no-store".into())], b)
+                    .into_response(),
+            )))
+        }
         FileKind::Opaque => Ok(may_hold_phi(cleared(file_response(path, mime, None, 0)?))),
         FileKind::Refused => Err(forbidden("this kind of file is not available in Privacy Mode")),
     }
 }
+
+/// PDF documents whose descriptive fields are blanked in Privacy Mode, at most: larger ones are
+/// sent as they are (marked, as every PDF is).
+const PDF_IN_MEMORY: u64 = 64 << 20;
 
 /// Files of EDF+ annotations rewritten in memory, at most: larger ones are refused in Privacy
 /// Mode (VitalStream shows them, through the gate).
@@ -1854,14 +1294,15 @@ async fn patient_file_part(
 ) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
-        let name = if u.privacy {
+        let name = if file_restricted(&c, &u, item)? {
             let i = crate::gate::token_index(&name).ok_or_else(not_found)?;
-            let names = crate::patient::attachment_names(&c, &app.cfg, id, item).map_err(|_| not_found())?;
+            let names = crate::patient::attachment_names(&c, &app.cfg, &u, id, item).map_err(|_| not_found())?;
             names.get(i).filter(|n| crate::gate::file_token(i, n) == name).cloned().ok_or_else(not_found)?
         } else {
             name
         };
-        let (path, mime) = crate::patient::attachment_part(&c, &app.cfg, id, item, &name).map_err(|_| not_found())?;
+        let (path, mime) =
+            crate::patient::attachment_part(&c, &app.cfg, &u, id, item, &name).map_err(|_| not_found())?;
         attachment_response(&app, &c, &u, id, item, &path, mime)
     })
     .await
@@ -1916,15 +1357,15 @@ fn file_part_response(
                 (
                     header::CONTENT_SECURITY_POLICY,
                     if mime.starts_with("image/svg") || mime == "application/xml" {
-                        // an SVG or XML file can carry scripts: they must not run with the catalog's rights
+                        // an SVG or XML file can carry scripts: they must not run with Medorama's rights
                         "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'; frame-ancestors 'self'"
                     } else {
                         "frame-ancestors 'self'"
                     }
                     .into(),
                 ),
-                (header::CACHE_CONTROL, "private, max-age=300".into()),
-                // cached per mode: the same address answers differently in Privacy Mode
+                // patients' files are never kept by the browser (nor by a proxy)
+                (header::CACHE_CONTROL, "no-store".into()),
                 (header::VARY, "Cookie".into()),
                 (header::CONTENT_LENGTH, len.to_string()),
             ],
@@ -1934,113 +1375,11 @@ fn file_part_response(
     }
 }
 
-async fn batches(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
-    admin(&u)?;
-    blocking(move || ok(json!({ "items": crate::imports::list(&*app.db.get().map_err(internal)?).map_err(bad)? })))
-        .await
-}
-
-#[derive(Deserialize, Default)]
-#[serde(default)]
-struct RemoveReq {
-    source: String,
-    purge: bool,
-    dry_run: bool,
-}
-
-async fn remove_batch(
-    State(app): State<Shared>,
-    Auth(u): Auth,
-    UrlPath(id): UrlPath<i64>,
-    Json(req): Json<RemoveReq>,
-) -> ApiResult {
-    admin(&u)?;
-    blocking(move || {
-        let mut c = app.db.get().map_err(internal)?;
-        ok(crate::imports::remove_import(&mut c, &app.cfg, &u, id, req.purge, req.dry_run).map_err(bad)?)
-    })
-    .await
-}
-
-async fn sources(State(app): State<Shared>, Auth(_u): Auth) -> ApiResult {
-    blocking(move || {
-        let c = app.db.get().map_err(internal)?;
-        let items = crate::imports::sources(&c).map_err(bad)?;
-        ok(json!({ "items": items, "waiting": ehr::waiting_count(&c).map_err(bad)? }))
-    })
-    .await
-}
-
-async fn remove_source(State(app): State<Shared>, Auth(u): Auth, Json(req): Json<RemoveReq>) -> ApiResult {
-    admin(&u)?;
-    if req.source.is_empty() {
-        return Err(bad("source required"));
-    }
-    blocking(move || {
-        let mut c = app.db.get().map_err(internal)?;
-        ok(crate::imports::remove_source(&mut c, &app.cfg, &u, &req.source, req.purge, req.dry_run).map_err(bad)?)
-    })
-    .await
-}
-
-async fn mappings(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
-    admin(&u)?;
-    blocking(move || {
-        let c = app.db.get().map_err(internal)?;
-        let mut st = c.prepare("SELECT name, kind, columns FROM mappings ORDER BY name").map_err(internal)?;
-        let v: Vec<Value> = st
-            .query_map([], |r| {
-                Ok(json!({"name": r.get::<_, String>(0)?, "kind": r.get::<_, String>(1)?,
-                          "columns": serde_json::from_str::<Value>(&r.get::<_, String>(2)?).unwrap_or(Value::Null)}))
-            })
-            .map_err(internal)?
-            .collect::<Result<_, _>>()
-            .map_err(internal)?;
-        ok(json!({ "items": v }))
-    })
-    .await
-}
-
-#[derive(Deserialize)]
-struct MappingReq {
-    name: String,
-    kind: String,
-    columns: HashMap<String, String>,
-}
-
-async fn save_mapping(State(app): State<Shared>, Auth(u): Auth, Json(req): Json<MappingReq>) -> ApiResult {
-    admin(&u)?;
-    if req.name.trim().is_empty() || req.kind != "table" {
-        return Err(bad("a name, and kind table"));
-    }
-    blocking(move || {
-        let c = app.db.get().map_err(internal)?;
-        c.execute(
-            "INSERT INTO mappings (name, kind, columns, updated_at) VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT (name) DO UPDATE SET kind = excluded.kind, columns = excluded.columns, updated_at = excluded.updated_at",
-            crate::sql::params![req.name.trim(), req.kind, serde_json::to_string(&req.columns).unwrap_or_default(), crate::db::now()],
-        )
-        .map_err(internal)?;
-        ok(json!({}))
-    })
-    .await
-}
-
-async fn delete_mapping(State(app): State<Shared>, Auth(u): Auth, UrlPath(name): UrlPath<String>) -> ApiResult {
-    admin(&u)?;
-    blocking(move || {
-        let c = app.db.get().map_err(internal)?;
-        c.execute("DELETE FROM mappings WHERE name = ?1", [name]).map_err(internal)?;
-        ok(json!({}))
-    })
-    .await
-}
-
 async fn check(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
     admin(&u)?;
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
-        let r = recordings::check(&c, &app.cfg).map_err(bad)?;
+        let r = recordings::check(&app.cfg, &c).map_err(bad)?;
         audit(&c, Some(&u), "check", "", &serde_json::to_string(&r).unwrap_or_default());
         ok(r)
     })
@@ -2081,18 +1420,8 @@ async fn create_run(State(app): State<Shared>, Auth(u): Auth, Json(req): Json<Ru
         let reg = app.reg.read().unwrap().clone();
         let mut c = app.db.get().map_err(internal)?;
         let p = req.priority.clamp(0, 100);
-        ok(jobs::create_run(
-            &mut c,
-            &reg,
-            &u,
-            &req.actions,
-            &req.params,
-            &req.selection,
-            req.force,
-            p,
-            &app.cfg.timezone,
-        )
-        .map_err(bad)?)
+        ok(jobs::create_run(&mut c, &app.cfg, &reg, &u, &req.actions, &req.params, &req.selection, req.force, p)
+            .map_err(bad)?)
     })
     .await
 }
@@ -2105,23 +1434,34 @@ struct JobQuery {
     limit: Option<i64>,
 }
 
-/// The jobs.  A job's results folder is an admin's to know; in Privacy Mode, a failed job's error
-/// (whose text may name the recording's files) is only `failed`.
+/// The jobs a user may see (jobs.rs `list_for`: an admin's every one; others' those of the
+/// databases granted to them, with the errors of their own runs).  A job's results folder is an
+/// admin's to know; de-identified (Privacy Mode, or a database granted without `phi`), a failed
+/// job's error (whose text may name the recording's files) is only `failed`, and its recording
+/// is not named.
 async fn jobs_list(State(app): State<Shared>, Auth(u): Auth, Query(q): Query<JobQuery>) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
         let state = q.state.as_deref().filter(|s| !s.is_empty());
-        let items = jobs::list(&c, state, q.run, q.limit.unwrap_or(200).clamp(1, 2000)).map_err(bad)?;
-        let mut items = serde_json::to_value(items).map_err(internal)?;
-        for it in items.as_array_mut().into_iter().flatten() {
+        let limit = q.limit.unwrap_or(200).clamp(1, 2000);
+        let items = jobs::list_for(&c, &app.cfg, &u, state, q.run, limit).map_err(bad)?;
+        let shown = crate::patient::without_phi(&c, &u).map_err(internal)?;
+        let mut out = vec![];
+        for j in items {
+            let deidentified = u.privacy || shown.contains(&j.database);
+            let mut it = serde_json::to_value(&j).map_err(internal)?;
             if !u.is_admin() || u.privacy {
                 it["output_dir"] = json!("");
             }
-            if u.privacy && it["error"].as_str().is_some_and(|e| !e.is_empty()) {
+            if deidentified && !j.error.is_empty() {
                 it["error"] = json!("failed");
             }
+            if deidentified && !u.privacy {
+                it["recording_name"] = json!(crate::gate::RECORDING);
+            }
+            out.push(it);
         }
-        ok(json!({ "items": items, "counts": jobs::counts(&c).map_err(bad)? }))
+        ok(json!({ "items": out, "counts": jobs::counts_for(&c, &u).map_err(bad)? }))
     })
     .await
 }
@@ -2151,7 +1491,7 @@ async fn cancel(State(app): State<Shared>, Auth(u): Auth, Json(req): Json<Cancel
 async fn history(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
-        ok(json!({ "items": query::history(&c, &u, 500).map_err(bad)? }))
+        ok(json!({ "items": crate::patient::history(&c, &u, 500).map_err(bad)? }))
     })
     .await
 }
@@ -2159,7 +1499,7 @@ async fn history(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
 async fn forget_one(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
-        ok(json!({ "removed": query::forget(&c, &u, Some(id)).map_err(bad)? }))
+        ok(json!({ "removed": crate::patient::forget(&c, &u, Some(id)).map_err(bad)? }))
     })
     .await
 }
@@ -2167,7 +1507,7 @@ async fn forget_one(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPa
 async fn forget_all(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
-        ok(json!({ "removed": query::forget(&c, &u, None).map_err(bad)? }))
+        ok(json!({ "removed": crate::patient::forget(&c, &u, None).map_err(bad)? }))
     })
     .await
 }
@@ -2176,97 +1516,211 @@ async fn forget_all(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
 
 // ------------------------------------------------------------------ connected databases
 
-/// The connected databases (admins): no secrets, the password file's name only.
-async fn connections_list(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
-    admin(&u)?;
-    blocking(move || ok(json!({ "items": crate::sources::shown(&*app.db.get().map_err(internal)?).map_err(bad)? })))
-        .await
-}
-
-/// Whether a connected database answers: each view, its version, how long it took (admins).
-async fn connection_check(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
-    admin(&u)?;
+/// The connected databases a user is shown (docs/design/databases-only.md): those granted to
+/// them, with their status; admins see every one, to grant it.
+async fn databases(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
-        let s = crate::sources::get(&c, id).map_err(internal)?.ok_or_else(not_found)?;
-        match s.check() {
-            Ok(ck) => ok(json!({ "ok": true, "views": ck.views, "version": ck.version, "ms": ck.ms })),
-            Err(e) => ok(json!({ "ok": false, "error": e.to_string() })),
-        }
+        ok(json!({ "items": crate::databases::shown(&app.cfg, &c, &u).map_err(bad)? }))
     })
     .await
 }
 
 #[derive(Deserialize)]
-struct NewConnection {
+struct NewDatabase {
     name: String,
     kind: String,
     url: String,
-    /// Kept in `<home>/secrets/<name>.password` (0600), never in the database nor sent back.
+    /// Kept wrapped by the master key, never in a file nor sent back.
     #[serde(default)]
     password: String,
+    #[serde(default)]
+    ca_file: String,
     #[serde(default)]
     settings: crate::sources::Settings,
 }
 
-/// Connect a database from the page (admins): checked first, as `medorama connections add`.
-async fn connection_add(State(app): State<Shared>, Auth(u): Auth, Json(b): Json<NewConnection>) -> ApiResult {
+/// Connect a database (admins): checked, then kept with its key and workspace folder, its
+/// variables read and its persons linked (`medorama databases connect`).
+async fn database_connect(State(app): State<Shared>, Auth(u): Auth, Json(b): Json<NewDatabase>) -> ApiResult {
     admin(&u)?;
     blocking(move || {
-        let name = b.name.trim().to_string();
-        if !crate::sources::valid_name(&name) {
-            return Err(bad("a connection's name: letters, digits, - and _, starting with a letter (criteria write it: name.lactate)"));
-        }
-        // a database file on this server: inside the folders data may come from, never the catalog
-        let url = crate::sources::checked_url(&app.cfg, &b.url).map_err(bad)?;
         let mut settings = b.settings.clone();
         if settings.timezone.trim().is_empty() {
             settings.timezone = app.cfg.timezone.clone();
         }
         let n = crate::sources::NewSource {
-            name: name.clone(),
+            name: b.name.trim().to_string(),
             kind: b.kind.trim().to_string(),
-            url,
+            url: b.url.trim().to_string(),
             password_file: String::new(),
-            ca_file: String::new(),
+            ca_file: b.ca_file.trim().to_string(),
             settings,
         };
         let c = app.db.get().map_err(internal)?;
-        // the password is written only once the connection is checked: a name already used, or
-        // a database that does not answer, leaves every file as it was
-        let id = crate::sources::add_with_password(&c, &app.cfg, &u, &n, &b.password).map_err(bad)?;
-        let s = crate::sources::get(&c, id).map_err(internal)?.ok_or_else(not_found)?;
-        let ck = s.check().map_err(bad)?;
-        ok(json!({ "id": id, "name": s.name, "views": ck.views, "version": ck.version }))
+        let id = crate::databases::connect(&app.cfg, &c, &u, &n, &b.password).map_err(bad)?;
+        // a running viewer gets its index store (the lines it has are given again, unchanged)
+        for l in crate::viewer::store_lines(&app.cfg, &c).unwrap_or_default() {
+            app.viewer.tell(&l);
+        }
+        ok(json!({ "id": id }))
     })
     .await
 }
 
-/// Link every person of a connected database to the catalog's patients (admins).
-async fn connection_sync(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
-    admin(&u)?;
+/// Check a database now (who may search it): online or offline, and its data read again when
+/// its version changed.
+async fn database_check(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
-        let s = crate::sources::get(&c, id).map_err(internal)?.ok_or_else(not_found)?;
-        let (persons, linked) = crate::sources::link::sync(&c, &s, s.zone(&app.cfg.timezone), &u).map_err(bad)?;
-        ok(json!({ "persons": persons, "linked": linked }))
+        if !crate::grants::can(&c, &u, &format!("db:{id}"), "search").map_err(internal)? {
+            return Err(not_found());
+        }
+        let online = crate::databases::check(&app.cfg, &c, id).map_err(bad)?;
+        let d = crate::databases::get(&c, id).map_err(internal)?.ok_or_else(not_found)?;
+        ok(json!({ "online": online, "status": d.status, "version": d.data_version, "checked_at": d.checked_at }))
     })
     .await
 }
 
-/// Disconnect a database (admins): its links and what it added go; its password file too.
-async fn connection_remove(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
-    admin(&u)?;
+/// Who manages database `id`: 404 for who may not even search it (it is not shown), else 403.
+fn require_manage(c: &crate::sql::Connection, u: &User, id: i64) -> Result<(), ApiError> {
+    let owner = format!("db:{id}");
+    if !crate::grants::can(c, u, &owner, "search").map_err(internal)? {
+        return Err(not_found());
+    }
+    if !crate::grants::can(c, u, &owner, "manage").map_err(internal)? {
+        return Err(forbidden("only who manages this database may do this"));
+    }
+    Ok(())
+}
+
+/// Read everything kept of a database again (who manages it).
+async fn database_refresh(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
     blocking(move || {
-        let mut c = app.db.get().map_err(internal)?;
-        crate::sources::get(&c, id).map_err(internal)?.ok_or_else(not_found)?;
-        // with its pools and the password file the page made (sources::removed)
-        crate::sources::remove(&mut c, &app.cfg, &u, id).map_err(bad)?;
+        let c = app.db.get().map_err(internal)?;
+        require_manage(&c, &u, id)?;
+        crate::databases::refresh(&app.cfg, &c, &u, id).map_err(bad)?;
         ok(json!({}))
     })
     .await
 }
 
+/// Remove a database and every trace of it (who manages it): its key destroyed, its workspace
+/// folder, cohort rows and links removed.  The database itself is not touched.
+async fn database_remove(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
+    blocking(move || {
+        let c = app.db.get().map_err(internal)?;
+        require_manage(&c, &u, id)?;
+        // the viewer forgets its index store first
+        app.viewer.tell(&crate::viewer::forget_line(&app.cfg, id));
+        crate::databases::remove(&app.cfg, &c, &u, id).map_err(bad)?;
+        crate::recordings::sweep_index(&app.cfg, &c).map_err(internal)?;
+        ok(json!({}))
+    })
+    .await
+}
+
+/// What a database holds (who may search it): its variables, kept per data version.
+async fn database_variables(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
+    blocking(move || {
+        let c = app.db.get().map_err(internal)?;
+        if !crate::grants::can(&c, &u, &format!("db:{id}"), "search").map_err(internal)? {
+            return Err(not_found());
+        }
+        ok(json!({ "items": crate::variables::of(&app.cfg, &c, id).map_err(bad)? }))
+    })
+    .await
+}
+
+/// A database's identity conflicts (who manages it): persons whose identifiers name two
+/// patients, by their database's key (never their identifiers).
+async fn database_conflicts(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
+    blocking(move || {
+        let c = app.db.get().map_err(internal)?;
+        require_manage(&c, &u, id)?;
+        let items: Vec<Value> = crate::persons::conflicts(&app.cfg, &c, id)
+            .map_err(bad)?
+            .into_iter()
+            .map(|(k, d)| json!({ "person_key": k, "detail": d }))
+            .collect();
+        ok(json!({ "items": items }))
+    })
+    .await
+}
+
+/// Who may use a database (who manages it).
+async fn database_grants(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
+    blocking(move || {
+        let c = app.db.get().map_err(internal)?;
+        let o = format!("db:{id}");
+        require_manage(&c, &u, id)?;
+        let items: Vec<Value> = crate::grants::of_object(&c, &o)
+            .map_err(internal)?
+            .into_iter()
+            .map(|(uid, name, p)| json!({ "user_id": uid, "username": name, "permission": p }))
+            .collect();
+        ok(json!({ "items": items }))
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+struct GrantReq {
+    /// None: the user asking (an admin granting themselves).
+    #[serde(default)]
+    user_id: Option<i64>,
+    permission: String,
+}
+
+/// Grant a permission on a database (who manages it).  An admin may grant themselves any
+/// (audited): admins are not granted every database by being admins.
+async fn database_grant(
+    State(app): State<Shared>,
+    Auth(u): Auth,
+    UrlPath(id): UrlPath<i64>,
+    Json(b): Json<GrantReq>,
+) -> ApiResult {
+    blocking(move || {
+        let c = app.db.get().map_err(internal)?;
+        let o = format!("db:{id}");
+        let to = b.user_id.unwrap_or(u.id);
+        // an admin granting themselves a database they do not manage (admins are shown every
+        // database: its number tells them nothing); anyone else manages it, else 404 to who may
+        // not search it, as if it did not exist
+        let own = u.is_admin() && to == u.id && !crate::grants::can(&c, &u, &o, "manage").map_err(internal)?;
+        if !own {
+            require_manage(&c, &u, id)?;
+        }
+        crate::sources::get(&c, id).map_err(internal)?.ok_or_else(not_found)?;
+        let by = if own {
+            // an admin's own grant: made as the person at the terminal would, and said so
+            crate::db::audit(&c, Some(&u), "grant_self", &o, &b.permission);
+            User::local()
+        } else {
+            u.clone()
+        };
+        crate::grants::grant(&c, &by, to, &o, &b.permission).map_err(|e| forbidden(&e.to_string()))?;
+        ok(json!({}))
+    })
+    .await
+}
+
+async fn database_revoke(
+    State(app): State<Shared>,
+    Auth(u): Auth,
+    UrlPath(id): UrlPath<i64>,
+    Json(b): Json<GrantReq>,
+) -> ApiResult {
+    blocking(move || {
+        let c = app.db.get().map_err(internal)?;
+        require_manage(&c, &u, id)?;
+        crate::grants::revoke(&c, &u, b.user_id.unwrap_or(u.id), &format!("db:{id}"), &b.permission)
+            .map_err(|e| forbidden(&e.to_string()))?;
+        ok(json!({}))
+    })
+    .await
+}
 async fn users_list(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
     admin(&u)?;
     blocking(move || ok(json!({ "items": users::list(&*app.db.get().map_err(internal)?).map_err(bad)? }))).await
@@ -2334,6 +1788,13 @@ async fn user_change(
     };
     blocking(move || {
         let mut c = app.db.get().map_err(internal)?;
+        let target = users::get(&c, id).map_err(internal)?.ok_or_else(not_found)?;
+        // another's password, for a user who may see identifiers: only who may see them too
+        // (else an admin without the permission could sign in as them)
+        let phi_reset = req.password.is_some() && target.phi_allowed && id != u.id;
+        if phi_reset && !u.phi_allowed {
+            return Err(forbidden("only an admin with the PHI permission may reset the password of a user who has it"));
+        }
         let ch = Changes {
             display_name: req.display_name.as_deref(),
             role,
@@ -2341,7 +1802,11 @@ async fn user_change(
             disabled: req.disabled,
             password: req.password.as_deref(),
         };
+        // (a new password ends every session of the user: users.rs `update`)
         users::update(&mut c, id, &ch).map_err(bad)?;
+        if phi_reset {
+            audit(&c, Some(&u), "phi_password_reset", &target.username, "the user's sessions ended");
+        }
         let mut detail = vec![];
         if let Some(r) = role {
             detail.push(format!("role {}", r.as_str()));
@@ -2516,7 +1981,8 @@ async fn privacy(State(app): State<Shared>, mut req: Request, next: Next) -> Res
         return r; // an error without data
     }
     // the session itself (who is signed in, its mode)
-    if ["/api/v1/me", "/api/v1/login", "/api/v1/logout", "/api/v1/privacy", "/api/v1/sign-in"].contains(&path.as_str())
+    if ["/api/v1/me", "/api/v1/login", "/api/v1/logout", "/api/v1/privacy", "/api/v1/sign-in", "/api/v1/health"]
+        .contains(&path.as_str())
     {
         return r;
     }
@@ -2530,13 +1996,22 @@ async fn privacy(State(app): State<Shared>, mut req: Request, next: Next) -> Res
     };
     let a = app.clone();
     let g = tokio::task::spawn_blocking(move || a.db.get().map_err(internal).and_then(|c| restricted(&a, &c))).await;
-    let Ok(Ok(g)) = g else {
-        return internal("the privacy gate's settings could not be read").into_response();
+    let g = match g {
+        Ok(Ok(g)) => g,
+        Ok(Err(ApiError(_, why))) => {
+            return internal(format!("the privacy gate's settings could not be read: {why}")).into_response()
+        }
+        Err(_) => return internal("the privacy gate's settings could not be read").into_response(),
     };
-    // a patient's own pages: their dates move by their own offset, whatever the objects name
-    match patient_of_path(&path) {
+    // a patient's own pages: their dates move by their own offset, whatever the objects name.
+    // A fault in the gate refuses the answer (fail closed), never drops the connection
+    let gated = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match patient_of_path(&path) {
         Some(p) => g.for_patient(p).json(&mut v),
         None => g.json(&mut v),
+    }));
+    if gated.is_err() {
+        eprintln!("medorama: privacy gate: an internal error on an answer to {path}: refused");
+        return internal("the privacy gate could not clear this answer").into_response();
     }
     let out = serde_json::to_vec(&v).unwrap_or_default();
     parts.headers.remove(header::CONTENT_LENGTH);
@@ -2562,8 +2037,8 @@ async fn guard(req: Request, next: Next) -> Response {
     let mut r = next.run(req).await;
     let h = r.headers_mut();
     if viewer {
-        // the viewer's page, shown in the catalog's VitalStream tab: its own scripts and styles
-        // only (it has no inline ones; its icon is a data: picture), framing by the catalog only
+        // the viewer's page, shown in Medorama's VitalStream tab: its own scripts and styles
+        // only (it has no inline ones; its icon is a data: picture), framing by Medorama only
         h.insert(
             header::CONTENT_SECURITY_POLICY,
             HeaderValue::from_static(
@@ -2578,7 +2053,7 @@ async fn guard(req: Request, next: Next) -> Response {
         return r;
     }
     if viewers {
-        // the ECG, echo and imaging viewers: shown in the catalog's tabs; they read the patients'
+        // the ECG, echo and imaging viewers: shown in Medorama's tabs; they read the patients'
         // files through the API and show them from blob: addresses (pictures, PDF, video)
         h.insert(
             header::CONTENT_SECURITY_POLICY,
@@ -2593,7 +2068,7 @@ async fn guard(req: Request, next: Next) -> Response {
         return r;
     }
     if h.contains_key(header::CONTENT_SECURITY_POLICY) {
-        // a response with a policy of its own (patients' files): shown inside the catalog's page
+        // a response with a policy of its own (patients' files): shown inside Medorama's page
         h.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("SAMEORIGIN"));
     } else {
         h.insert(
@@ -2624,21 +2099,8 @@ pub fn router(app: Shared) -> Router {
         .route("/deid", get(deid_get))
         .route("/admin/deid", axum::routing::put(deid_put))
         .route("/admin/display", axum::routing::put(display_put))
-        .route("/encounters", get(encounters))
-        .route("/encounters/remove", post(remove_encounters))
-        .route("/encounters/remove-matching", post(remove_matching_encounters))
-        .route("/encounters/{id}", get(encounter))
-        .route("/encounters/{id}/ehr", get(encounter_ehr))
         .route("/recordings", get(recordings_list))
-        .route("/recordings/remove", post(remove_recordings))
-        .route("/recordings/remove-matching", post(remove_matching_recordings))
         .route("/recordings/{id}", get(recording))
-        .route("/recordings/{id}/link", post(link_recording))
-        .route("/recordings/{id}/decision", post(link_decision))
-        .route("/review", get(review))
-        .route("/review/held/{id}", post(decide_held))
-        .route("/review/merge", post(merge_patients))
-        .route("/review/distinct", post(distinct_patients))
         .route("/check", post(check))
         .route("/actions", get(actions))
         .route("/actions/reload", post(reload_actions))
@@ -2647,10 +2109,15 @@ pub fn router(app: Shared) -> Router {
         .route("/jobs/cancel", post(cancel))
         .route("/history", get(history).delete(forget_all))
         .route("/history/{id}", delete(forget_one))
-        .route("/databases", get(databases))
-        .route("/databases/{id}/rows", get(database_rows))
-        .route("/databases/{id}/export", get(database_export))
+        .route("/databases", get(databases).post(database_connect))
+        .route("/databases/{id}", axum::routing::delete(database_remove))
+        .route("/databases/{id}/check", post(database_check))
+        .route("/databases/{id}/refresh", post(database_refresh))
+        .route("/databases/{id}/variables", get(database_variables))
+        .route("/databases/{id}/conflicts", get(database_conflicts))
+        .route("/databases/{id}/grants", get(database_grants).post(database_grant).delete(database_revoke))
         .route("/version", get(data_version))
+        .route("/health", get(health))
         .route("/cohorts", get(cohorts_list).post(cohort_create))
         .route("/cohorts/search", post(cohort_search))
         .route("/cohorts/parse", post(cohort_parse))
@@ -2661,30 +2128,11 @@ pub fn router(app: Shared) -> Router {
         .route("/cohorts/{id}/history", get(cohort_history))
         .route("/cohorts/{id}/refresh", post(cohort_refresh))
         .route("/cohorts/{id}/export", get(cohort_export))
-        .route("/connections", get(connections_list).post(connection_add))
-        .route("/connections/{id}/check", post(connection_check))
-        .route("/connections/{id}/sync", post(connection_sync))
-        .route("/connections/{id}", axum::routing::delete(connection_remove))
         .route("/users", get(users_list).post(user_add))
         .route("/users/{id}", axum::routing::patch(user_change).delete(user_delete))
         .route("/audit", get(audit_list))
         .route("/audit/verify", get(audit_verify))
-        .route("/imports", get(batches))
-        .route("/import-tasks", get(import_tasks))
-        .route("/import-tasks/{id}", get(import_task))
-        .route("/import-tasks/{id}/cancel", post(import_task_cancel))
-        .route("/imports/{id}/remove", post(remove_batch))
-        .route("/sources", get(sources))
-        .route("/sources/remove", post(remove_source))
-        .route("/demo/removal", get(demo_removal))
-        .route("/tables/inspect", post(inspect_table).layer(DefaultBodyLimit::max(MAX_UPLOAD)))
-        .route("/tables", post(import_table).layer(DefaultBodyLimit::max(MAX_UPLOAD)))
-        .route("/tables/files", post(import_table_files).layer(DefaultBodyLimit::max(MAX_UPLOAD)))
-        .route("/formats", get(formats_list))
         .route("/admin/addons", get(addons_list))
-        .route("/tables/clif", post(import_clif))
-        .route("/tables/server", post(import_server_tables))
-        .route("/tables/server/inspect", post(inspect_server_table))
         .route("/server-files", get(server_files))
         .route("/patients", get(patients))
         .route("/patients/{id}", get(patient_summary))
@@ -2695,8 +2143,6 @@ pub fn router(app: Shared) -> Router {
         .route("/patients/{id}/file/{item}", get(patient_file))
         .route("/patients/{id}/file/{item}/", get(patient_file))
         .route("/patients/{id}/file/{item}/{name}", get(patient_file_part))
-        .route("/mappings", get(mappings).post(save_mapping))
-        .route("/mappings/{name}", delete(delete_mapping))
         .route("/viewer", get(viewer_status))
         .route("/viewer/start", post(viewer_start))
         .fallback(|| async { not_found() });
@@ -2714,44 +2160,56 @@ pub fn router(app: Shared) -> Router {
         .with_state(app)
 }
 
-/// Background threads: `workers` job workers, and a scheduler that queues automatic indexing
-/// and re-checks the recordings.  They end when `stop` is set.
+/// How often the server checks each connected database (online, offline, its data version).
+const DATABASE_CHECK: Duration = Duration::from_secs(60);
+
+/// Background threads: `workers` job workers, and a scheduler that checks the databases, queues
+/// automatic indexing and re-checks the recordings.  They end when `stop` is set.
 pub fn start_background(app: &App, stop: Arc<AtomicBool>) -> Vec<std::thread::JoinHandle<()>> {
     let mut threads = vec![];
     for n in 0..app.cfg.workers {
         let (db, cfg, reg, stop) = (app.db.clone(), app.cfg.clone(), app.reg.clone(), stop.clone());
         threads.push(std::thread::spawn(move || jobs::work(db, cfg, reg, n, stop, false)));
     }
-    // databases imported before they had their table of numbers (typed.rs): given one, once
-    let db = app.db.clone();
-    threads.push(std::thread::spawn(move || match db.get().and_then(|mut c| crate::typed::build_missing(&mut c)) {
-        Ok(0) => {}
-        Ok(n) => eprintln!("medorama: {n} database(s) given their table of numbers (for criteria on their columns)"),
-        Err(e) => eprintln!("medorama: the databases' tables of numbers: {e}"),
-    }));
     let (db, cfg) = (app.db.clone(), app.cfg.clone());
+    let app_heartbeat = app.heartbeat_handle();
     threads.push(std::thread::spawn(move || {
+        let app_heartbeat = &*app_heartbeat;
         let mut last_check: Option<Instant> = None;
+        let mut last_status: Option<Instant> = None;
         let mut last_queue: Option<Instant> = None;
         let mut last_seal: Option<Instant> = None;
+        // each step on its own: a panic in one is reported and the others go on (the health
+        // endpoint shows the heartbeat, which a dead thread would stop)
+        let step = |what: &str, f: &dyn Fn() -> anyhow::Result<()>| match std::panic::catch_unwind(
+            std::panic::AssertUnwindSafe(f),
+        ) {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => eprintln!("medorama: {what}: {e}"),
+            Err(_) => eprintln!("medorama: {what}: stopped on an internal error (reported above)"),
+        };
         while !stop.load(Ordering::Relaxed) {
+            app_heartbeat.store(crate::db::now() as u64, Ordering::Relaxed);
             let interval = Duration::from_secs(cfg.check_interval_s);
             if cfg.check_interval_s > 0 && last_check.is_none_or(|t| t.elapsed() >= interval) {
-                if let Err(e) = db.get().and_then(|c| recordings::check(&c, &cfg)) {
-                    eprintln!("medorama: check: {e}");
-                }
+                step("check", &|| db.get().and_then(|c| recordings::check(&cfg, &c)).map(|_| ()));
                 last_check = Some(Instant::now());
             }
+            // each database online or offline (and read again when its data changed)
+            if last_status.is_none_or(|t| t.elapsed() >= DATABASE_CHECK) {
+                step("checking the databases", &|| {
+                    db.get().and_then(|c| crate::databases::check_all(&cfg, &c)).map(|_| ())
+                });
+                last_status = Some(Instant::now());
+            }
             if last_seal.is_none_or(|t| t.elapsed() >= Duration::from_secs(60)) {
-                if let Err(e) = db.get().and_then(|c| crate::audit::seal(&c, cfg.audit_export.as_deref())) {
-                    eprintln!("medorama: sealing the audit log: {e}");
-                }
+                step("sealing the audit log", &|| {
+                    db.get().and_then(|c| crate::audit::seal(&c, cfg.audit_export.as_deref())).map(|_| ())
+                });
                 last_seal = Some(Instant::now());
             }
             if cfg.auto_index && last_queue.is_none_or(|t| t.elapsed() >= Duration::from_secs(15)) {
-                if let Err(e) = db.get().and_then(|c| jobs::queue_auto_index(&c)) {
-                    eprintln!("medorama: automatic indexing: {e}");
-                }
+                step("automatic indexing", &|| db.get().and_then(|c| jobs::queue_auto_index(&c, &cfg)).map(|_| ()));
                 last_queue = Some(Instant::now());
             }
             std::thread::sleep(Duration::from_millis(500));

@@ -15,14 +15,13 @@
 //! | `diagnosis "I21"`, `dx sepsis` | a condition's code starts with it, or its name contains it |
 //! | `medication heparin` (`med`, `drug`) | a drug named like it |
 //! | `text "pulmonary edema"` (`mentions`) | an item's text contains it |
-//! | `in "ecg_index"` | the database holds data about the patient |
-//! | `QT > 400ms`, `"R axis" < -30`, `ecg_index.QT > 0.4 s` | a database's column (or an EHR measurement) compared, in its unit |
+//! | `in hospital` | that connected database links the patient |
+//! | `QT > 400ms`, `"R axis" < -30`, `muse.QT > 0.4 s` | a measurement (a result, a vital sign, an action's result) compared, in its unit |
 //! | `latest QTc > 470` | only each patient's latest value counts (else: any value, ever) |
-//! | `ecg_index.interpretation contains "fibrillation"` (`~`) | a column's text |
 //!
-//! A bare name (`QT`) is a database's column when exactly one database has it, else EHR items of
-//! that name in one database; when several databases have it, the database must be named
-//! (`ecg_index.QT`): columns of different databases are never merged.
+//! A bare name (`QT`) is the measurement of that name in the one database that holds it; when
+//! several databases hold it, the database must be named (`muse.QT`): measurements of different
+//! databases are never merged by a name.
 
 use crate::cohorts::{Criterion, Expr, Group};
 
@@ -131,7 +130,7 @@ fn tokens(s: &str) -> anyhow::Result<Vec<(usize, Tok)>> {
             }
             _ if c.is_alphanumeric() || c == '_' || c == 'µ' || c == '°' => {
                 let mut j = i;
-                while j < cs.len() && (cs[j].is_alphanumeric() || "_.-µ°/%".contains(cs[j])) {
+                while j < cs.len() && (cs[j].is_alphanumeric() || "_.-µ°/%^*".contains(cs[j])) {
                     j += 1;
                 }
                 let w: String = cs[i..j].iter().collect();
@@ -151,8 +150,8 @@ fn tokens(s: &str) -> anyhow::Result<Vec<(usize, Tok)>> {
     Ok(out)
 }
 
-/// What a name refers to: the parser asks (qualifier, name), the catalog answers with a
-/// criterion of kind `column` or `measurement` naming its database.
+/// What a name refers to: the parser asks (qualifier, name), Medorama answers with a criterion
+/// of kind `measurement` (or `database`) naming its database.
 pub type Resolve<'a> = dyn FnMut(Option<&str>, &str) -> anyhow::Result<Criterion> + 'a;
 
 struct P<'a, 'b> {
@@ -172,7 +171,7 @@ const MAX_DEPTH: usize = 64;
 /// Units read after a number (`m` is not one: `age > 18 m` means male, `QT > 400 m` too).
 const UNITS: &[&str] = &[
     "ms", "s", "sec", "min", "h", "uv", "µv", "mv", "v", "bpm", "%", "kg", "g", "mg", "cm", "mm", "°", "deg", "mmhg",
-    "mmol/l", "mg/dl", "g/dl", "ng/l", "ng/ml",
+    "kpa", "cmh2o", "°c", "°f", "degc", "degf", "cel", "mmol/l", "mg/dl", "g/dl", "ng/l", "ng/ml",
 ];
 
 /// The units an age may be written in (`age > 18 years`): years only.
@@ -379,8 +378,8 @@ impl P<'_, '_> {
                     let c = self.atom();
                     self.depth -= 1;
                     let mut c = c?;
-                    if !matches!(c.kind.as_str(), "column" | "measurement") {
-                        anyhow::bail!("at {start}: latest applies to a measurement or a column");
+                    if c.kind != "measurement" {
+                        anyhow::bail!("at {start}: latest applies to a measurement");
                     }
                     c.latest = true;
                     return Ok(c);
@@ -460,9 +459,21 @@ pub fn parse(text: &str, resolve: &mut Resolve) -> anyhow::Result<Expr> {
 
 // ------------------------------------------------------------------ units
 
-fn unit_scale(u: &str) -> Option<(&'static str, f64)> {
-    let u = u.trim().to_lowercase().replace(['µ', 'μ'], "u").replace(' ', "");
-    Some(match u.as_str() {
+/// A unit as (the thing it measures, its scale, its offset): a value `x` in it is
+/// `x * scale + offset` of that thing's base unit (seconds, volts, mmHg, °C, g/L, mol/L, per
+/// litre …).  UCUM's spellings are read too (`mm[Hg]`, `Cel`, `[degF]`, `10*9/L`).
+fn unit_scale(u: &str) -> Option<(&'static str, f64, f64)> {
+    let raw = u.trim().replace(' ', "");
+    // G/L is giga per litre (a count), g/L grams per litre: told apart before the case is lost
+    if raw == "G/L" || raw == "G/l" {
+        return Some(("count concentration", 1e9, 0.0));
+    }
+    if raw == "T/L" || raw == "T/l" {
+        return Some(("count concentration", 1e12, 0.0));
+    }
+    let u = raw.to_lowercase().replace(['µ', 'μ'], "u").replace("mcg", "ug").replace(['[', ']', '×'], "");
+    let u = u.strip_prefix('x').filter(|r| r.starts_with("10")).unwrap_or(&u).replace('^', "*");
+    let (kind, scale) = match u.as_str() {
         "s" | "sec" | "secs" | "second" | "seconds" => ("time", 1.0),
         "ms" | "msec" => ("time", 1e-3),
         "us" | "usec" => ("time", 1e-6),
@@ -476,23 +487,41 @@ fn unit_scale(u: &str) -> Option<(&'static str, f64)> {
         "kg" => ("mass", 1.0),
         "g" => ("mass", 1e-3),
         "mg" => ("mass", 1e-6),
+        "ug" => ("mass", 1e-9),
         "m" => ("length", 1.0),
         "cm" => ("length", 1e-2),
         "mm" => ("length", 1e-3),
+        // pressures, in mmHg
+        "mmhg" => ("pressure", 1.0),
+        "kpa" => ("pressure", 7.500_62),
+        "cmh2o" => ("pressure", 0.735_559),
+        // a fraction, in percent
+        "%" | "percent" => ("fraction", 1.0),
+        // temperatures, in °C (°F has an offset too: below)
+        "°c" | "degc" | "cel" | "celsius" => ("temperature", 1.0),
+        "°f" | "degf" | "fahrenheit" => return Some(("temperature", 5.0 / 9.0, -160.0 / 9.0)),
         // concentrations: by mass (g/L), by amount (mol/L); one does not convert to the other
         // without the substance's molar mass
         "g/l" => ("mass concentration", 1.0),
         "g/dl" => ("mass concentration", 10.0),
         "mg/dl" => ("mass concentration", 1e-2),
         "mg/l" | "ug/ml" => ("mass concentration", 1e-3),
+        "ug/dl" => ("mass concentration", 1e-5),
         "ug/l" | "ng/ml" => ("mass concentration", 1e-6),
         "ng/l" | "pg/ml" => ("mass concentration", 1e-9),
         "mol/l" => ("amount concentration", 1.0),
-        "mmol/l" => ("amount concentration", 1e-3),
+        // mEq/L is mmol/L for a monovalent ion (Na, K, Cl, HCO3), as laboratories report them
+        "mmol/l" | "meq/l" => ("amount concentration", 1e-3),
         "umol/l" => ("amount concentration", 1e-6),
         "nmol/l" => ("amount concentration", 1e-9),
+        // counts per litre: cells (10^9/L is 10^3/µL)
+        "10*9/l" | "giga/l" | "/nl" | "10*3/ul" | "k/ul" | "thou/ul" | "10*3/mm3" => ("count concentration", 1e9),
+        "10*12/l" | "10*6/ul" | "m/ul" | "10*6/mm3" => ("count concentration", 1e12),
+        "10*6/l" | "/ul" | "/mm3" => ("count concentration", 1e6),
+        "/l" => ("count concentration", 1.0),
         _ => return None,
-    })
+    };
+    Some((kind, scale, 0.0))
 }
 
 /// `x` in unit `from` (a criterion's) converted to unit `to` (the data's): as it is in the same
@@ -501,14 +530,15 @@ fn unit_scale(u: &str) -> Option<(&'static str, f64)> {
 /// data without a unit against a criterion with one.
 pub fn convert(x: f64, from: &str, to: &str) -> Option<f64> {
     let (f, t) = (from.trim(), to.trim());
-    if f.eq_ignore_ascii_case(t) || f.is_empty() {
+    // (G/L and g/L differ by their case alone)
+    if f.is_empty() || f == t || (f.eq_ignore_ascii_case(t) && unit_scale(f) == unit_scale(t)) {
         return Some(x);
     }
     if t.is_empty() {
         return None;
     }
     match (unit_scale(f), unit_scale(t)) {
-        (Some((df, sf)), Some((dt, st))) if df == dt => Some(x * sf / st),
+        (Some((df, sf, of)), Some((dt, st, ot))) if df == dt => Some((x * sf + of - ot) / st),
         // different things, or units we do not know: only the same unit compares
         _ => None,
     }
@@ -524,15 +554,15 @@ mod tests {
                 return Ok(Criterion {
                     kind: "measurement".into(),
                     name: n.into(),
-                    import: Some(1),
+                    database: Some(1),
                     ..Default::default()
                 });
             }
             match q {
                 Some("ecg") | None => Ok(Criterion {
-                    kind: "column".into(),
-                    name: if n.is_empty() { String::new() } else { format!("{n} (ms)") },
-                    import: Some(7),
+                    kind: if n.is_empty() { "database".into() } else { "measurement".into() },
+                    name: n.into(),
+                    database: Some(7),
                     ..Default::default()
                 }),
                 Some(x) => anyhow::bail!("no database {x}"),
@@ -561,8 +591,8 @@ mod tests {
         assert_eq!(leaf(&b.of[2]).text, "M");
         let q = leaf(&b.of[3]);
         assert_eq!(
-            (q.kind.as_str(), q.name.as_str(), q.import, q.cmp.as_str(), q.value, q.unit.as_str()),
-            ("column", "QT (ms)", Some(7), ">", Some(400.0), "ms")
+            (q.kind.as_str(), q.name.as_str(), q.database, q.cmp.as_str(), q.value, q.unit.as_str()),
+            ("measurement", "QT", Some(7), ">", Some(400.0), "ms")
         );
     }
 
@@ -575,7 +605,7 @@ mod tests {
         let k: Vec<&Criterion> = g.of.iter().map(leaf).collect();
         assert!(k[0].not && k[0].kind == "has" && k[0].category == "icu");
         assert_eq!((k[1].kind.as_str(), k[1].text.as_str()), ("diagnosis", "I21"));
-        assert!(k[2].latest && k[2].unit == "s" && k[2].import == Some(7));
+        assert!(k[2].latest && k[2].unit == "s" && k[2].database == Some(7));
         assert_eq!(k[3].kind, "measurement");
         assert!(k[4].not && k[4].category == "holter");
         let e = parse(r#"ecg."QT" contains "long" or in ecg"#, &mut r).unwrap();
@@ -667,5 +697,44 @@ mod tests {
         assert_eq!(convert(1.0, "g/dL", "g/L"), Some(10.0));
         assert_eq!(convert(14.0, "ng/L", "pg/mL"), Some(14.0));
         assert_eq!(convert(7.0, "mmol/L", "mg/dL"), None);
+    }
+
+    fn near(a: Option<f64>, b: f64) -> bool {
+        a.is_some_and(|a| (a - b).abs() < 1e-6 * b.abs().max(1.0))
+    }
+
+    #[test]
+    fn units_of_pressure_temperature_counts_and_ions() {
+        // pressures
+        assert_eq!(convert(120.0, "mmHg", "mm[Hg]"), Some(120.0));
+        assert!(near(convert(16.0, "kPa", "mmHg"), 120.009_92));
+        assert!(near(convert(10.0, "cmH2O", "mmHg"), 7.355_59));
+        assert_eq!(convert(5.0, "mmHg", "%"), None);
+        // fractions; temperatures, with their offset
+        assert_eq!(convert(94.0, "%", "percent"), Some(94.0));
+        assert!(near(convert(38.0, "°C", "Cel"), 38.0));
+        assert!(near(convert(100.4, "°F", "°C"), 38.0));
+        assert!(near(convert(38.0, "Cel", "[degF]"), 100.4));
+        assert_eq!(convert(38.0, "°C", "°"), None, "a temperature is no angle");
+        // counts: 10^9/L is 10^3/µL; G/L is a count, g/L a mass
+        for u in ["10*9/L", "10^9/L", "x10^9/L", "×10^9/L", "G/L", "10*3/uL", "K/uL", "10^3/µL"] {
+            assert!(near(convert(4.5, "10*9/L", u), 4.5), "{u}");
+        }
+        assert!(near(convert(4.5, "10*12/L", "10*6/uL"), 4.5));
+        assert!(near(convert(250.0, "G/L", "/uL"), 250_000.0));
+        assert_eq!(convert(4.5, "G/L", "g/L"), None);
+        assert_eq!(convert(4.5, "g/L", "G/L"), None);
+        // mEq/L is mmol/L (monovalent ions)
+        assert_eq!(convert(140.0, "mEq/L", "mmol/L"), Some(140.0));
+        // micrograms however written; litres in either case
+        assert!(near(convert(1.0, "mcg/mL", "µg/mL"), 1.0));
+        assert!(near(convert(1.0, "ug/ml", "mg/L"), 1.0));
+        assert!(near(convert(10.0, "mcg/dL", "ug/L"), 100.0));
+        // written in criteria
+        let mut r = resolver();
+        let e = parse("WBC > 11 x10^9/L AND temp > 38 °C AND PaO2 < 8 kPa", &mut r).unwrap();
+        let Expr::Group(g) = &e else { panic!("{e:?}") };
+        let units: Vec<&str> = g.of.iter().map(|x| leaf(x).unit.as_str()).collect();
+        assert_eq!(units, ["x10^9/L", "°C", "kPa"]);
     }
 }

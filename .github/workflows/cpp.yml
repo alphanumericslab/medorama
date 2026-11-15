@@ -131,11 +131,11 @@ jobs:
         with:
           python-version: "3.12"
       - name: tools\install.ps1 -Cpp
-        run: powershell -ExecutionPolicy Bypass -File tools\install.ps1 -Cpp; if ($LASTEXITCODE) { exit 1 }
+        run: powershell -ExecutionPolicy Bypass -File tools\install.ps1 -Cpp -AcceptLicense; if ($LASTEXITCODE) { exit 1 }
       - name: The installed program
         run: .venv\Scripts\vitalstream-cpp.exe --version
       - name: Run again (an existing build folder is reused or replaced)
-        run: powershell -ExecutionPolicy Bypass -File tools\install.ps1 -Cpp; if ($LASTEXITCODE) { exit 1 }
+        run: powershell -ExecutionPolicy Bypass -File tools\install.ps1 -Cpp -AcceptLicense; if ($LASTEXITCODE) { exit 1 }
 
   standalone:
     # viewers/vitalstream/install.sh: VitalStream alone, without Medorama; also without WFDB
@@ -158,7 +158,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: viewers/vitalstream/install.sh --viewer ${{ matrix.viewer }} ${{ matrix.options }}
-        run: viewers/vitalstream/install.sh --viewer ${{ matrix.viewer }} ${{ matrix.options }} --prefix "$RUNNER_TEMP/vs"
+        run: viewers/vitalstream/install.sh --viewer ${{ matrix.viewer }} ${{ matrix.options }} --prefix "$RUNNER_TEMP/vs" --accept-license
       - name: The installed program
         run: '"$RUNNER_TEMP/vs/bin/vitalstream-${{ matrix.viewer }}" --help > /dev/null'
       - name: Without WFDB support, a WFDB record is refused with its message, an EDF file indexed
