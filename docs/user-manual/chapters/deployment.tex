@@ -275,7 +275,8 @@ with \cmd{cargo build -{}-release -{}-locked} and \cmd{cmake -{}-build -{}-prese
 \cref{chap:installation}), and restart the server. A newer version brings its control store's
 changes and applies them at its first start; an older version refuses to open a control store
 that a newer one has updated (\code{the database has schema version N, newer than this program
-knows}), so back up first. An installer run again without \opt{-{}-demo} leaves
+knows}), so back up first. From 0.2 to 0.3 nothing is done by hand: each database is read
+again at its next check (\cref{sec:connecting-kept}). An installer run again without \opt{-{}-demo} leaves
 \cmd{medorama init -{}-demo} nothing to connect; a Medorama that connected the demo keeps it.
 
 \section{Uninstalling}

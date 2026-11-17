@@ -207,6 +207,9 @@ feature('muse-db', "A MUSE ECG archive and its ECG metadata database, connected 
     lambda out: (_db(out, 'demo_muse') or {}).get('kind') == 'views' and (Path(out) / 'muse/ecg_metadata.sqlite').is_file()
     and any(b'<SampleBase>250</SampleBase>' in p.read_bytes() for p in Path(out).glob('muse/xml/*/*.xml'))
     and any(b'<SampleBase></SampleBase>' in p.read_bytes() for p in Path(out).glob('muse/xml/*/*.xml')))
+feature('catalog', 'A catalog view: what demo_muse holds, named without reading its entries', 'muse/views.toml')(
+    lambda out: 'variables' in (_db(out, 'demo_muse') or {}).get('settings', {})
+    and 'variables =' in (Path(out) / 'muse/views.toml').read_text(encoding='utf-8'))
 feature('ecg-median', 'MUSE ECGs with their median beats and P, QRS and T onsets', 'ecg/*.xml')(
     lambda out: all(b'<WaveformType>Median</WaveformType>' in p.read_bytes() and b'<QOnset>' in p.read_bytes()
                     for p in Path(out).glob('ecg/*.xml')))
@@ -2471,6 +2474,9 @@ FROM ecg WHERE patient_id <> ''
 FROM ecg WHERE patient_id <> ''
   AND source_file IS NOT NULL AND source_file <> ''""",
     'version': "SELECT COUNT(*) || ' ' || MAX(added_at) FROM additions",
+    # the catalog, as constants: connecting reads no entry for it (docs/design/connected-databases.md)
+    'variables': "SELECT 'ecg' AS category, '12-lead ECG' AS name, '' AS vocabulary, '' AS code, '' AS unit, 0 AS numeric\n"
+                 + '\n'.join(f"UNION ALL SELECT 'ecg', '{n}', '', '', '{u}', 1" for _, n, _, u in MUSE_MEASURES),
 }
 
 

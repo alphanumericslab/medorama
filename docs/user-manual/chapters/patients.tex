@@ -48,13 +48,13 @@ Recording & A file that a recording database names, with its patient and its tim
 \label{sec:patients-catalog}
 
 \screenshot{patients.png}{The Patient Catalog: the patients of the databases the user may view,
-latest data first, with the kinds of data each has.}{fig:patients-catalog}
+latest encounter first, with the kinds of data each has.}{fig:patients-catalog}
 
 The list shows the patients of every database that the user is granted \code{view} on
-(\cref{sec:users-privacy-grants}), the one with the latest data first, a hundred to a page
+(\cref{sec:users-privacy-grants}), the one with the latest encounter first, a hundred to a page
 (\ui{$\langle$ Previous}, \ui{Next $\rangle$}). It is drawn from what Medorama keeps of each
-database's persons in the workspace, so it answers the same whether a database is online or
-offline, and reads none of them. Its columns are the following:
+database's persons and their encounters in the workspace, so it lists the same patients whether
+a database is online or offline. Its columns are the following:
 \begin{itemize}
 \item \ui{Patient}: the name\phimark{} for users who may see it, otherwise the pseudonym;
 \item \ui{Patient ID}, \ui{MRN}\phimark{} and \ui{Born}\phimark{} for users who may see
@@ -62,9 +62,15 @@ offline, and reads none of them. Its columns are the following:
 \item \ui{Sex}, and \ui{Age} for users with the PHI permission or in Privacy Mode (in Privacy
   Mode, ages above 89 are shown as \code{90+});
 \item \ui{Visits} (their number in every database), \ui{Latest} (the latest time of the
-  patient's data), \ui{Databases} (the databases that link the patient), \ui{Data} (the
-  categories of data the patient has) and \ui{Entries}.
+  patient's encounters, or of their data in an online database), \ui{Databases} (the databases
+  that link the patient), \ui{Data} (the categories of data the patient has) and \ui{Entries}.
 \end{itemize}
+The patients, their identity and their encounters come from the workspace. The \ui{Data} and
+\ui{Entries} columns are read from the online databases for the page shown only, one grouped
+query per database over those patients' entries and recordings (\cref{sec:connecting-kept});
+\ui{Entries} shows ``---'' when nothing was read for the patient (their databases offline, or
+holding nothing of theirs). A filter on a kind of data (\code{has:ecg}, \ui{Filter by}) asks
+each online database which of its persons have it; an offline database answers for none.
 A click on a row opens the patient's page. A user sees a patient's identifiers only from the
 databases on which they hold the \code{phi} grant, with the PHI permission and Privacy Mode off.
 When no database is connected yet, the list says ``No patients yet: connect a database in

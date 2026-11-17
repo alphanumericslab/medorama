@@ -1,11 +1,14 @@
-//! Each connected database's variables (docs/design/databases-only.md, "Variables"): what it
-//! holds, read when it is connected and again when its data version changes, and kept in its
-//! workspace folder (`variables.sqlite`).
+//! Each connected database's variables (docs/design/connected-databases.md, "The catalog"):
+//! what it holds, read when it is connected and again when its data version changes, and kept
+//! in its workspace folder (`variables.sqlite`).
 //!
-//! A variable is a (category, name, vocabulary, code, unit) with how many entries and persons
-//! hold it and whether it has numbers.  The planner sends a criterion only to the databases
-//! whose variables hold it; the Cohort tab completes names from them, offline databases
-//! included.
+//! A variable is a (category, name, vocabulary, code, unit) with whether it has numbers: its
+//! names and units only.  They come from the database's `variables` view when it has one (no
+//! entry read), else from one grouped query over its entries.  How many entries and persons
+//! hold each one is counted only when asked (`count`, the Databases tab's **Count now**), and
+//! a count below [`SMALL`] is shown as "< 11".  The planner sends a criterion only to the
+//! databases whose variables hold it; the Cohort tab completes names from them, offline
+//! databases included.
 
 use crate::config::Config;
 use crate::db::now;
@@ -19,14 +22,17 @@ CREATE TABLE IF NOT EXISTS variables (
     vocabulary  TEXT NOT NULL DEFAULT '',
     code        TEXT NOT NULL DEFAULT '',
     unit        TEXT NOT NULL DEFAULT '',
-    entries     INTEGER NOT NULL,
-    persons     INTEGER NOT NULL,
+    entries     INTEGER,                      -- NULL: not counted
+    persons     INTEGER,
     numeric     INTEGER NOT NULL,
     PRIMARY KEY (category, name, vocabulary, code, unit)
 );
 CREATE INDEX IF NOT EXISTS variables_name ON variables(name);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 ";
+
+/// Counts below this are shown as "< 11", never as they are (small cells).
+pub const SMALL: i64 = 11;
 
 /// One variable of a database.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -36,37 +42,79 @@ pub struct Variable {
     pub vocabulary: String,
     pub code: String,
     pub unit: String,
-    pub entries: i64,
-    pub persons: i64,
+    /// How many entries and persons hold it, once counted; never sent as they are ([`shown`]).
+    #[serde(skip)]
+    pub entries: Option<i64>,
+    #[serde(skip)]
+    pub persons: Option<i64>,
     pub numeric: bool,
+}
+
+/// A count as it is shown: none when not counted, "< 11" when small, else the number.
+pub fn shown(n: Option<i64>) -> Option<String> {
+    n.map(|n| if n > 0 && n < SMALL { format!("< {SMALL}") } else { n.to_string() })
+}
+
+/// A variable as the API and the page show it: its counts as [`shown`].
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ShownVariable {
+    #[serde(flatten)]
+    pub variable: Variable,
+    pub entries: Option<String>,
+    pub persons: Option<String>,
+}
+
+impl From<Variable> for ShownVariable {
+    fn from(v: Variable) -> Self {
+        let (entries, persons) = (shown(v.entries), shown(v.persons));
+        ShownVariable { variable: v, entries, persons }
+    }
 }
 
 fn open(cfg: &Config, c: &Connection, database: i64) -> anyhow::Result<rusqlite::Connection> {
     let w = crate::workspace::open_database_file(cfg, c, database, "variables.sqlite")?;
+    // a table of 0.2, whose counts were required: made again (it is read again at the next check)
+    let old: bool = w
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('variables') WHERE name = 'entries' AND \"notnull\" = 1",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)?;
+    if old {
+        w.execute_batch("DROP TABLE variables")?;
+    }
     w.execute_batch(SCHEMA)?;
     Ok(w)
 }
 
-/// Read a database's variables now and keep them, with the data version they were read at.
-/// Notes are counted, never named by their text.
+fn int(v: Value) -> i64 {
+    match v {
+        Value::Integer(x) => x,
+        Value::Real(x) => x as i64,
+        other => text_of(&other).parse().unwrap_or(0),
+    }
+}
+
+/// Read a database's variables now (their names and units) and keep them, with the data version
+/// they were read at and the categories of its recordings.  Notes are named by their kind, never
+/// by their text.
 pub fn read(cfg: &Config, c: &Connection, s: &Source, version: &str) -> anyhow::Result<usize> {
-    let v = s.views().entries;
+    let views = s.views();
     let db = s.db()?;
-    let mut st = db.prepare_native(&format!(
-        "SELECT category, name, vocabulary, code, unit, COUNT(*), COUNT(DISTINCT person_key),
-                MAX(CASE WHEN value_num IS NOT NULL THEN 1 ELSE 0 END)
-         FROM ({v}) e GROUP BY category, name, vocabulary, code, unit"
-    ))?;
+    let sql = if !views.variables.trim().is_empty() {
+        format!("SELECT {} FROM ({}) v", crate::sources::VARIABLE_COLS, views.variables)
+    } else {
+        format!(
+            "SELECT category, name, vocabulary, code, unit, MAX(CASE WHEN value_num IS NOT NULL THEN 1 ELSE 0 END)
+             FROM ({}) e GROUP BY category, name, vocabulary, code, unit",
+            views.entries
+        )
+    };
+    let mut st = db.prepare_native(&sql)?;
     let rows: Vec<Variable> = st
         .query_map([], |r| {
             let t = |i: usize| -> crate::sql::Result<String> { Ok(text_of(&r.get::<_, Value>(i)?).trim().to_string()) };
-            let n = |i: usize| -> crate::sql::Result<i64> {
-                Ok(match r.get::<_, Value>(i)? {
-                    Value::Integer(x) => x,
-                    Value::Real(x) => x as i64,
-                    other => text_of(&other).parse().unwrap_or(0),
-                })
-            };
             let (cat, name, voc, code) = (t(0)?, t(1)?, t(2)?, t(3)?);
             Ok(Variable {
                 category: crate::categories::of_entry(&cat, &name, &voc, &code),
@@ -74,46 +122,100 @@ pub fn read(cfg: &Config, c: &Connection, s: &Source, version: &str) -> anyhow::
                 vocabulary: voc,
                 code,
                 unit: t(4)?,
-                entries: n(5)?,
-                persons: n(6)?,
-                numeric: n(7)? != 0,
+                entries: None,
+                persons: None,
+                numeric: int(r.get::<_, Value>(5)?) != 0,
             })
         })
         .map_err(|e| anyhow::anyhow!("{}: {e}", s.name))?
         .collect::<Result<_, _>>()
         .map_err(|e| anyhow::anyhow!("{}: {e}", s.name))?;
+    drop(st);
+    let recording_categories = s.recording_categories().map_err(|e| anyhow::anyhow!("{}: {e}", s.name))?;
     let mut w = open(cfg, c, s.id)?;
     let tx = w.transaction()?;
     tx.execute("DELETE FROM variables", [])?;
     {
         let mut ins = tx.prepare(
-            "INSERT INTO variables (category, name, vocabulary, code, unit, entries, persons, numeric)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT DO UPDATE SET entries = entries + excluded.entries, persons = MAX(persons, excluded.persons),
-                numeric = MAX(numeric, excluded.numeric)",
+            "INSERT INTO variables (category, name, vocabulary, code, unit, numeric) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT DO UPDATE SET numeric = MAX(numeric, excluded.numeric)",
         )?;
         for x in &rows {
-            // a note's name is its kind ("Discharge summary"), never its text
-            ins.execute(rusqlite::params![
-                x.category,
-                x.name,
-                x.vocabulary,
-                x.code,
-                x.unit,
-                x.entries,
-                x.persons,
-                x.numeric
-            ])?;
+            ins.execute(rusqlite::params![x.category, x.name, x.vocabulary, x.code, x.unit, x.numeric])?;
         }
     }
     tx.execute(
-        "INSERT INTO meta (key, value) VALUES ('version', ?1), ('read_at', ?2)
+        "INSERT INTO meta (key, value) VALUES ('version', ?1), ('read_at', ?2), ('recording_categories', ?3)
          ON CONFLICT (key) DO UPDATE SET value = excluded.value",
-        rusqlite::params![version, now().to_string()],
+        rusqlite::params![version, now().to_string(), recording_categories.join(" ")],
     )?;
+    tx.execute("DELETE FROM meta WHERE key = 'counted_at'", [])?;
     tx.commit()?;
     c.execute("UPDATE databases SET variables_version = ?1 WHERE id = ?2", params![version, s.id])?;
     Ok(rows.len())
+}
+
+/// Count, for each variable of a database, the entries and persons that hold it (one grouped
+/// query over its entries: asked for, never done when connecting): how many variables.
+pub fn count(cfg: &Config, c: &Connection, s: &Source) -> anyhow::Result<usize> {
+    let v = s.views().entries;
+    let db = s.db()?;
+    let mut st = db.prepare_native(&format!(
+        "SELECT category, name, vocabulary, code, unit, COUNT(*), COUNT(DISTINCT person_key)
+         FROM ({v}) e GROUP BY category, name, vocabulary, code, unit"
+    ))?;
+    let rows: Vec<(String, String, String, String, String, i64, i64)> = st
+        .query_map([], |r| {
+            let t = |i: usize| -> crate::sql::Result<String> { Ok(text_of(&r.get::<_, Value>(i)?).trim().to_string()) };
+            let (cat, name, voc, code) = (t(0)?, t(1)?, t(2)?, t(3)?);
+            Ok((
+                crate::categories::of_entry(&cat, &name, &voc, &code),
+                name,
+                voc,
+                code,
+                t(4)?,
+                int(r.get::<_, Value>(5)?),
+                int(r.get::<_, Value>(6)?),
+            ))
+        })
+        .map_err(|e| anyhow::anyhow!("{}: {e}", s.name))?
+        .collect::<Result<_, _>>()
+        .map_err(|e| anyhow::anyhow!("{}: {e}", s.name))?;
+    drop(st);
+    let mut w = open(cfg, c, s.id)?;
+    let tx = w.transaction()?;
+    tx.execute("UPDATE variables SET entries = 0, persons = 0", [])?;
+    {
+        // the variables read before, counted (a category two names share is summed)
+        let mut up = tx.prepare(
+            "UPDATE variables SET entries = entries + ?6, persons = MAX(persons, ?7)
+             WHERE category = ?1 AND name = ?2 AND vocabulary = ?3 AND code = ?4 AND unit = ?5",
+        )?;
+        for (cat, name, voc, code, unit, e, p) in &rows {
+            up.execute(rusqlite::params![cat, name, voc, code, unit, e, p])?;
+        }
+    }
+    tx.execute(
+        "INSERT INTO meta (key, value) VALUES ('counted_at', ?1) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        [now().to_string()],
+    )?;
+    tx.commit()?;
+    Ok(rows.len())
+}
+
+/// When a database's variables were last counted (none: never, or not since they were read).
+pub fn counted_at(cfg: &Config, c: &Connection, database: i64) -> anyhow::Result<Option<f64>> {
+    let w = open(cfg, c, database)?;
+    let v: Option<String> = w.query_row("SELECT value FROM meta WHERE key = 'counted_at'", [], |r| r.get(0)).ok();
+    Ok(v.and_then(|t| t.parse().ok()))
+}
+
+/// The categories of a database's recordings, as read with its variables.
+pub fn recording_categories(cfg: &Config, c: &Connection, database: i64) -> anyhow::Result<Vec<String>> {
+    let w = open(cfg, c, database)?;
+    let v: Option<String> =
+        w.query_row("SELECT value FROM meta WHERE key = 'recording_categories'", [], |r| r.get(0)).ok();
+    Ok(v.unwrap_or_default().split(' ').filter(|x| !x.is_empty()).map(String::from).collect())
 }
 
 /// A database's variables, as kept.
@@ -133,7 +235,7 @@ pub fn of(cfg: &Config, c: &Connection, database: i64) -> anyhow::Result<Vec<Var
                 unit: r.get(4)?,
                 entries: r.get(5)?,
                 persons: r.get(6)?,
-                numeric: r.get(7)?,
+                numeric: r.get::<_, i64>(7)? != 0,
             })
         })?
         .collect::<Result<_, _>>()?;

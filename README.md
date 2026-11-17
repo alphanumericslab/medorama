@@ -4,11 +4,14 @@
 waveforms, imaging and laboratory results across databases.**
 
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
-![Version 0.2.1, pre-release](https://img.shields.io/badge/version-0.2.1%20pre--release-informational)
+![Version 0.3.0, pre-release](https://img.shields.io/badge/version-0.3.0%20pre--release-informational)
 
-**Version 0.2.1 (pre-release, November 2026).** 0.2.1 reads the rates and formats of GE MUSE
-ECGs strictly, shows their median beats, and connects MUSE ECG metadata databases through
-views. Since 0.2.0, Medorama connects databases instead of
+**Version 0.3.0 (pre-release, November 2026).** Medorama keeps of each connected database only
+its subjects (their identities and encounters) and the names and units of its variables, and
+reads the rest from the database when it is asked: connecting a database of millions of rows
+takes minutes, not hours ([connected-databases.md](docs/design/connected-databases.md)). 0.2.1
+added strict reading of GE MUSE ECGs, with their median beats. Since 0.2.0, Medorama connects
+databases instead of
 importing data: OMOP, SQL views, or a SQLite database built with the new
 [db-builder](db-builder/README.md). Each database's workspace and indexes are encrypted with that
 database's own key, and access is granted per database. The release also has a full synthetic

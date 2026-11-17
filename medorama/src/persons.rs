@@ -1,14 +1,16 @@
-//! The patient index (docs/design/databases-only.md, "Identity: the patient index"): each
-//! connected database's persons, linked to Medorama's patient numbers.
+//! The patient index (docs/design/connected-databases.md, "The subject index"): each connected
+//! database's persons, linked to Medorama's patient numbers.
 //!
 //! A person names themselves by (issuer, identifier) pairs: their patient ID under its issuer,
 //! their MRN under its authority.  Each pair is assumed to name one patient (a requirement on the
 //! databases: Medorama does not resolve identity).  Linking keeps, in the control store, a keyed
 //! hash of each pair with the patient number it maps to (`patient_keys`): two databases' persons
 //! with an equal pair are one patient, and no pair can be read back.  What the database says of
-//! the person (identifiers, names, birth date, sex) is kept in its workspace folder,
-//! `persons.sqlite`, encrypted with its key: the privacy gate's dictionary and the patient list
-//! read it there.  A person whose pairs lead to two patients is a conflict: listed, never linked.
+//! the person (identifiers, names, birth date, sex) and their encounters (key, start, end, ICU)
+//! are kept in its workspace folder, `persons.sqlite`, encrypted with its key, and nothing more:
+//! the privacy gate's dictionary and the patient list read them there; everything else is read
+//! from the database when a patient is opened.  A person whose pairs lead to two patients is a
+//! conflict: listed, never linked.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -46,13 +48,14 @@ CREATE TABLE IF NOT EXISTS persons (
     linked_at          REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS persons_patient ON persons(patient);
--- what the patient list shows of each person, read at each refresh (summarize)
-CREATE TABLE IF NOT EXISTS summary (
-    person_key  TEXT PRIMARY KEY,
-    visits      INTEGER NOT NULL DEFAULT 0,
-    latest      REAL,
-    entries     INTEGER NOT NULL DEFAULT 0,
-    kinds       TEXT NOT NULL DEFAULT ''      -- category keys, apart by spaces
+-- each person's encounters, as the database's visits give them (the patient list's dates)
+CREATE TABLE IF NOT EXISTS encounters (
+    visit_key   TEXT NOT NULL,
+    person_key  TEXT NOT NULL,
+    start_time  REAL,
+    end_time    REAL,
+    icu         INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (person_key, visit_key)
 );
 CREATE TABLE IF NOT EXISTS conflicts (
     person_key  TEXT PRIMARY KEY,
@@ -64,6 +67,8 @@ CREATE TABLE IF NOT EXISTS conflicts (
 /// A database's `persons.sqlite`, opened with its key (made when first opened).
 pub fn open(cfg: &Config, c: &Connection, database: i64) -> anyhow::Result<rusqlite::Connection> {
     let w = crate::workspace::open_database_file(cfg, c, database, "persons.sqlite")?;
+    // (0.2 kept a summary of each person's data: no longer)
+    w.execute_batch("DROP TABLE IF EXISTS summary")?;
     w.execute_batch(SCHEMA)?;
     Ok(w)
 }
@@ -209,10 +214,10 @@ fn normal_sex(s: &str) -> &'static str {
     }
 }
 
-/// Link every person of `s`, and forget the persons it no longer holds (`medorama databases
-/// refresh`; connecting).
+/// Link every person of `s`, forget the persons it no longer holds, and read their encounters
+/// (`medorama databases refresh`; connecting): one pass over its persons and one over its visits.
 pub fn sync(cfg: &Config, c: &Connection, s: &Source, user: Option<&User>) -> anyhow::Result<Linked> {
-    let all = s.all_persons()?;
+    let all = s.every_person()?;
     let mut rep = Linked::default();
     for chunk in all.chunks(2000) {
         let r = link(cfg, c, s, chunk, user)?;
@@ -262,118 +267,42 @@ pub fn sync(cfg: &Config, c: &Connection, s: &Source, user: Option<&User>) -> an
     if rep.removed > 0 {
         sweep(c)?;
     }
-    summarize(cfg, c, s)?;
+    encounters_read(cfg, c, s)?;
     Ok(rep)
 }
 
-/// Read what the patient list shows of each person of `s`: their visits, latest time, entries
-/// and the categories they have (three grouped queries, at each refresh), kept in its
-/// persons file.
-pub fn summarize(cfg: &Config, c: &Connection, s: &Source) -> anyhow::Result<()> {
-    use crate::sources::{text_of, time_of};
-    use crate::sql::Value;
-    let zone = s.zone(&cfg.timezone);
-    let v = s.views();
-    let db = s.db()?;
-    let mut sum: HashMap<String, (i64, Option<f64>, i64, BTreeSet<String>)> = HashMap::new();
-    let num = |x: &Value| match x {
-        Value::Integer(i) => *i,
-        Value::Real(r) => *r as i64,
-        other => text_of(other).parse().unwrap_or(0),
-    };
-    if !v.visits.trim().is_empty() {
-        let mut st = db.prepare_native(&format!(
-            "SELECT person_key, COUNT(*), MAX(start_time), MAX(CASE WHEN icu = 1 THEN 1 ELSE 0 END) FROM ({}) v GROUP BY person_key",
-            v.visits
-        ))?;
-        let rows: Vec<(String, i64, Option<f64>, bool)> = st
-            .query_map([], |r| {
-                Ok((
-                    text_of(&r.get::<_, Value>(0)?),
-                    num(&r.get::<_, Value>(1)?),
-                    time_of(&r.get::<_, Value>(2)?, zone),
-                    num(&r.get::<_, Value>(3)?) != 0,
-                ))
-            })?
-            .collect::<Result<_, _>>()?;
-        for (k, n, latest, icu) in rows {
-            let e = sum.entry(k).or_default();
-            e.0 = n;
-            e.1 = latest;
-            if icu {
-                e.3.insert("icu".into());
-            }
-        }
-    }
-    let mut st = db.prepare_native(&format!(
-        "SELECT person_key, category, COUNT(*), MAX(time) FROM ({}) e GROUP BY person_key, category",
-        v.entries
-    ))?;
-    let rows: Vec<(String, String, i64, Option<f64>)> = st
-        .query_map([], |r| {
-            Ok((
-                text_of(&r.get::<_, Value>(0)?),
-                text_of(&r.get::<_, Value>(1)?),
-                num(&r.get::<_, Value>(2)?),
-                time_of(&r.get::<_, Value>(3)?, zone),
-            ))
-        })?
-        .collect::<Result<_, _>>()?;
-    drop(st);
-    for (k, cat, n, t) in rows {
-        let e = sum.entry(k).or_default();
-        e.2 += n;
-        e.1 = match (e.1, t) {
-            (Some(a), Some(b)) => Some(a.max(b)),
-            (a, b) => a.or(b),
-        };
-        let cat = crate::categories::of_entry(&cat, "", "", "");
-        if cat != "allergy" {
-            e.3.insert(cat);
-        }
-    }
+/// Read every encounter of `s` (its visits: key, person, start, end, ICU) into its persons file.
+pub fn encounters_read(cfg: &Config, c: &Connection, s: &Source) -> anyhow::Result<usize> {
+    let visits = s.every_visit(s.zone(&cfg.timezone))?;
     let mut w = open(cfg, c, s.id)?;
     let tx = w.transaction()?;
-    tx.execute("DELETE FROM summary", [])?;
+    tx.execute("DELETE FROM encounters", [])?;
     {
-        let mut ins =
-            tx.prepare("INSERT INTO summary (person_key, visits, latest, entries, kinds) VALUES (?1, ?2, ?3, ?4, ?5)")?;
-        for (k, (visits, latest, entries, kinds)) in &sum {
-            ins.execute(rusqlite::params![
-                k,
-                visits,
-                latest,
-                entries,
-                kinds.iter().cloned().collect::<Vec<_>>().join(" ")
-            ])?;
+        let mut ins = tx.prepare(
+            "INSERT INTO encounters (visit_key, person_key, start_time, end_time, icu) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT DO UPDATE SET start_time = excluded.start_time, end_time = excluded.end_time, icu = excluded.icu",
+        )?;
+        for v in &visits {
+            ins.execute(rusqlite::params![v.key, v.person, v.start, v.end, v.icu])?;
         }
     }
     tx.commit()?;
-    Ok(())
+    Ok(visits.len())
 }
 
-/// What the patient list shows of a database's persons: person key → (visits, latest,
-/// entries, categories).
-pub fn summaries(
+/// What the patient list shows of a database's persons, from their encounters: person key →
+/// (encounters, the latest start, whether one was in intensive care).
+pub fn encounter_summaries(
     cfg: &Config,
     c: &Connection,
     database: i64,
-) -> anyhow::Result<HashMap<String, (i64, Option<f64>, i64, Vec<String>)>> {
+) -> anyhow::Result<HashMap<String, (i64, Option<f64>, bool)>> {
     let w = open(cfg, c, database)?;
-    let mut st = w.prepare("SELECT person_key, visits, latest, entries, kinds FROM summary")?;
+    let mut st = w.prepare(
+        "SELECT person_key, COUNT(*), MAX(COALESCE(start_time, end_time)), MAX(icu) FROM encounters GROUP BY person_key",
+    )?;
     let v = st
-        .query_map([], |r| {
-            let kinds: String = r.get(4)?;
-            Ok((
-                r.get(0)?,
-                (
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    kinds.split(' ').filter(|k| !k.is_empty()).map(String::from).collect(),
-                ),
-            ))
-        })?
+        .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?, r.get::<_, i64>(3)? != 0))))?
         .collect::<Result<_, _>>()?;
     Ok(v)
 }

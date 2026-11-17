@@ -72,6 +72,11 @@ pub struct Settings {
     /// Kind `views`: a query whose one value names the data's version (for cohorts).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub version: String,
+    /// Kind `views`, optional: what the database holds, one row per variable (category, name,
+    /// vocabulary, code, unit, numeric), so that connecting reads no entry; empty: the names
+    /// and units are read from the entries.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub variables: String,
 }
 
 fn is_zero(x: &u64) -> bool {
@@ -118,6 +123,8 @@ pub struct Views {
     /// A visit's stays in its units (optional: empty when the database has none).
     pub stays: String,
     pub version: String,
+    /// What the database holds, one row per variable (optional: empty, read from the entries).
+    pub variables: String,
 }
 
 const COLS: &str = "id, name, kind, url, password_file, password_wrapped, ca_file, settings, created_at";
@@ -408,6 +415,7 @@ impl Source {
                 recordings: format!("SELECT {RECORDING_COLS} FROM recordings"),
                 stays: DBB_STAYS.into(),
                 version: "SELECT value FROM meta WHERE key = 'version'".into(),
+                variables: String::new(),
             },
             _ => Views {
                 persons: self.settings.persons.clone(),
@@ -416,6 +424,7 @@ impl Source {
                 recordings: self.settings.recordings.clone(),
                 stays: self.settings.stays.clone(),
                 version: self.settings.version.clone(),
+                variables: self.settings.variables.clone(),
             },
         }
     }
@@ -463,6 +472,7 @@ impl Source {
             ("recordings", &v.recordings, RECORDING_COLS),
             // (stays are optional: only a site's own view is checked)
             ("stays", if self.kind == "views" { &v.stays } else { &none }, STAY_COLS),
+            ("variables", &v.variables, VARIABLE_COLS),
         ] {
             // a db-builder database without recordings, or recordings without entries
             if self.kind == "dbb" && !self.has_table(&db, name)? {
@@ -585,6 +595,8 @@ const DBB_STAYS: &str = "SELECT b.stay_key, v.person_key, b.visit_key, b.start_t
                   COALESCE(MAX(CASE WHEN name = 'care_unit' THEN value END), '') AS unit
            FROM extras WHERE table_name = 'bed_stays' GROUP BY row_key) b
      JOIN visits v ON v.visit_key = b.visit_key";
+/// The optional `variables` view: one row per variable the database holds.
+pub const VARIABLE_COLS: &str = "category, name, vocabulary, code, unit, numeric";
 const RECORDING_COLS: &str =
     "recording_key, person_key, visit_key, file, format, start_time, end_time, label, category, size, fingerprint";
 
@@ -1045,10 +1057,24 @@ impl Source {
 
     /// Every person (with their sex and birth date), at most `max_rows`.
     pub fn all_persons(&self) -> anyhow::Result<Vec<Person>> {
-        let v = self.views().persons;
         let max = self.settings.max_rows();
+        let rows = self.persons_limited(Some(max + 1))?;
+        if rows.len() > max {
+            anyhow::bail!("{}: more than {max} persons: narrow the criteria", self.name);
+        }
+        Ok(rows)
+    }
+
+    /// Every person, however many: the subject index (persons.rs), which no criterion bounds.
+    pub fn every_person(&self) -> anyhow::Result<Vec<Person>> {
+        self.persons_limited(None)
+    }
+
+    fn persons_limited(&self, limit: Option<usize>) -> anyhow::Result<Vec<Person>> {
+        let v = self.views().persons;
         let db = self.db()?;
-        let mut st = db.prepare_native(&format!("SELECT {PERSON_COLS} FROM ({v}) p LIMIT {}", max + 1))?;
+        let limit = limit.map(|n| format!(" LIMIT {n}")).unwrap_or_default();
+        let mut st = db.prepare_native(&format!("SELECT {PERSON_COLS} FROM ({v}) p{limit}"))?;
         let rows: Vec<Person> = st
             .query_map([], |r| {
                 let t =
@@ -1066,26 +1092,33 @@ impl Source {
                 })
             })?
             .collect::<Result<_, _>>()?;
-        if rows.len() > max {
-            anyhow::bail!("{}: more than {max} persons: narrow the criteria", self.name);
-        }
         Ok(rows.into_iter().map(|p| self.with_issuers(p)).collect())
     }
 
     /// Every visit, at most `max_rows`.
     pub fn all_visits(&self, zone: chrono_tz::Tz) -> anyhow::Result<Vec<Visit>> {
-        let v = self.views().visits;
-        if v.trim().is_empty() {
-            return Ok(vec![]);
-        }
         let max = self.settings.max_rows();
-        let db = self.db()?;
-        let mut st = db.prepare_native(&format!("SELECT {VISIT_COLS} FROM ({v}) v LIMIT {}", max + 1))?;
-        let rows: Vec<Visit> = st.query_map([], |r| visit_of(r, zone))?.collect::<Result<_, _>>()?;
+        let rows = self.visits_limited(zone, Some(max + 1))?;
         if rows.len() > max {
             anyhow::bail!("{}: more than {max} visits: narrow the criteria", self.name);
         }
         Ok(rows)
+    }
+
+    /// Every visit, however many: the subject index's encounters (persons.rs).
+    pub fn every_visit(&self, zone: chrono_tz::Tz) -> anyhow::Result<Vec<Visit>> {
+        self.visits_limited(zone, None)
+    }
+
+    fn visits_limited(&self, zone: chrono_tz::Tz, limit: Option<usize>) -> anyhow::Result<Vec<Visit>> {
+        let v = self.views().visits;
+        if v.trim().is_empty() {
+            return Ok(vec![]);
+        }
+        let db = self.db()?;
+        let limit = limit.map(|n| format!(" LIMIT {n}")).unwrap_or_default();
+        let mut st = db.prepare_native(&format!("SELECT {VISIT_COLS} FROM ({v}) v{limit}"))?;
+        Ok(st.query_map([], |r| visit_of(r, zone))?.collect::<Result<_, _>>()?)
     }
 
     /// The names of what the source holds, by category, with whether they have numbers: read
@@ -1203,6 +1236,135 @@ impl Source {
             |r| recording_of(r, zone),
         )?;
         out.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal).then(a.key.cmp(&b.key)));
+        Ok(out)
+    }
+
+    /// The persons with a recording of this category (cohorts' `has`), read from the view.
+    pub fn recording_persons(&self, category: &str) -> anyhow::Result<Vec<String>> {
+        let v = self.views().recordings;
+        if v.trim().is_empty() || !self.has_recordings() {
+            return Ok(vec![]);
+        }
+        let db = self.db()?;
+        let mut st = db.prepare_native(&format!(
+            "SELECT DISTINCT person_key, category FROM ({v}) r WHERE person_key IS NOT NULL"
+        ))?;
+        let rows: Vec<(String, String)> = st
+            .query_map([], |r| Ok((text_of(&r.get::<_, Value>(0)?), text_of(&r.get::<_, Value>(1)?))))?
+            .collect::<Result<_, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter(|(_, c)| {
+                let c = if c.trim().is_empty() { "icu" } else { crate::categories::named(c).unwrap_or("icu") };
+                c == category
+            })
+            .map(|(p, _)| p)
+            .collect())
+    }
+
+    /// The persons who have data of a category (`has`: cohorts, the patient list's filters):
+    /// visits for `enc` and `icu`, the entries of the category (lab results and vital signs told
+    /// apart by their names, so read as rows), and the recordings of the category.
+    pub fn persons_with(&self, category: &str, zone: chrono_tz::Tz) -> anyhow::Result<Vec<String>> {
+        let mut keys = match category {
+            "icu" => self.visit_persons(true)?,
+            "enc" => self.visit_persons(false)?,
+            "lab" | "vit" => self
+                .find(&Find { categories: vec![category.into()], ..Default::default() }, zone)?
+                .into_iter()
+                .map(|e| e.person)
+                .collect(),
+            _ => self.find_persons(&Find {
+                categories: vec![category.into()],
+                notes: category == "note",
+                ..Default::default()
+            })?,
+        };
+        keys.extend(self.recording_persons(category)?);
+        keys.sort();
+        keys.dedup();
+        Ok(keys)
+    }
+
+    /// What the patient list shows of these persons (one page of it), read now: person key →
+    /// (the categories they have data of, their entries, the latest time of an entry).
+    pub fn summaries(
+        &self,
+        keys: &[String],
+        zone: chrono_tz::Tz,
+    ) -> anyhow::Result<HashMap<String, (std::collections::BTreeSet<String>, i64, Option<f64>)>> {
+        let mut out: HashMap<String, (std::collections::BTreeSet<String>, i64, Option<f64>)> = HashMap::new();
+        if keys.is_empty() {
+            return Ok(out);
+        }
+        let db = self.db()?;
+        let v = self.views().entries;
+        let rows = db.query_in_native(
+            &format!(
+                "SELECT person_key, category, name, vocabulary, code, COUNT(*), MAX(time) FROM ({v}) e
+                 WHERE person_key IN ({{}}) GROUP BY person_key, category, name, vocabulary, code"
+            ),
+            keys,
+            |r| {
+                let t = |i: usize| -> crate::sql::Result<String> { Ok(text_of(&r.get::<_, Value>(i)?)) };
+                let n = match r.get::<_, Value>(5)? {
+                    Value::Integer(x) => x,
+                    Value::Real(x) => x as i64,
+                    other => text_of(&other).parse().unwrap_or(0),
+                };
+                Ok((
+                    t(0)?,
+                    crate::categories::of_entry(&t(1)?, &t(2)?, &t(3)?, &t(4)?),
+                    n,
+                    time_of(&r.get::<_, Value>(6)?, zone),
+                ))
+            },
+        )?;
+        for (k, cat, n, at) in rows {
+            let e = out.entry(k).or_default();
+            if cat != "allergy" {
+                e.0.insert(cat);
+            }
+            e.1 += n;
+            e.2 = match (e.2, at) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (a, b) => a.or(b),
+            };
+        }
+        for r in self.recordings(keys, zone)? {
+            let cat = if r.category.trim().is_empty() {
+                "icu"
+            } else {
+                crate::categories::named(&r.category).unwrap_or("icu")
+            };
+            let e = out.entry(r.person).or_default();
+            e.0.insert(cat.to_string());
+            e.2 = match (e.2, r.start) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                (a, b) => a.or(b),
+            };
+        }
+        Ok(out)
+    }
+
+    /// The categories of the recordings the database lists (one grouped query).
+    pub fn recording_categories(&self) -> anyhow::Result<Vec<String>> {
+        let v = self.views().recordings;
+        if v.trim().is_empty() || !self.has_recordings() {
+            return Ok(vec![]);
+        }
+        let db = self.db()?;
+        let mut st = db.prepare_native(&format!("SELECT DISTINCT category FROM ({v}) r"))?;
+        let mut out: Vec<String> = st
+            .query_map([], |r| Ok(text_of(&r.get::<_, Value>(0)?)))?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|c| {
+                if c.trim().is_empty() { "icu" } else { crate::categories::named(&c).unwrap_or("icu") }.to_string()
+            })
+            .collect();
+        out.sort();
+        out.dedup();
         Ok(out)
     }
 

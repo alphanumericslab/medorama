@@ -90,9 +90,9 @@ every database, and opens recordings and images in its own viewers.
   as rows of a recording database, which name their patient; they are read where they lie and
   never written (\cref{chap:recordings}). Tables and folders are turned into such a database by
   db-builder, a separate tool (\cref{chap:importing}).
-\item \textbf{What Medorama keeps} of a database (its persons as linked, its variables, its
-  recordings' list, actions' results) is in its workspace, encrypted
-  (\cref{sec:protecting-workspace}).
+\item \textbf{What Medorama keeps} of a database (its persons as linked and their encounters,
+  the names and units of its variables, the recordings it has opened, actions' results) is in its
+  workspace, encrypted (\cref{sec:connecting-kept,sec:protecting-workspace}).
 \end{itemize}
 What Medorama does \textbf{not} provide, and a deployment must: TLS termination, the identity
 provider for single sign-on or multi-factor authentication, host hardening, the master key's
@@ -179,10 +179,12 @@ setting and endpoint is specified in \cref{chap:settings-reference} and \cref{ch
 \endfoot
 Patients' data: identifiers, clinical data, notes, with their real dates & \textbf{PHI} & The
   connected databases, read in place; their owners' to protect \\
-What Medorama keeps of each database's persons: their identifiers, names, birth dates and sex &
+What Medorama keeps of each database's persons: their identifiers, names, birth dates and sex,
+  and their encounters' dates &
   \textbf{PHI} & The database's \file{persons.sqlite} in the workspace, encrypted with its data
   key \\
-Other workspace files: variables, recordings' list, actions' results, cohorts' members &
+Other workspace files: the catalog of variables (counts only once counted), the recordings
+  opened, actions' results, cohorts' members &
   Sensitive (dated, linkable; paths may identify) & The workspace, each file encrypted with its
   owner's data key \\
 Files: recordings, ECGs, DICOM studies, PDFs, pictures, videos & \textbf{PHI} (headers, file
@@ -531,7 +533,9 @@ Identifier dictionary & The databases' patient IDs become pseudonyms; MRNs place
   recordings' paths tokens and the folders they lie in \code{[Folder]}, in every string of an
   answer (paths inside text too: an error that names a file). Built from each database's persons
   and recordings as kept in the workspace, and rebuilt whenever they change
-  (\code{data\_version.identifiers}) & \file{gate.rs} \code{Dict}, \code{Restricted::json};
+  (\code{data\_version.identifiers}); recordings first kept, as patients are opened, are added
+  to the dictionary in use (\code{data\_version.recordings}) before the answer that read them is
+  cleared & \file{gate.rs} \code{Dict}, \code{Restricted::json};
   \file{server.rs} \code{restricted} & \file{gate.rs} unit tests; \file{tests/privacy.rs}
   (\code{the\_dictionary\_follows\_the\_identifiers}) \\
 Placeholders & Names, dates of birth and staff names become fixed text & \file{gate.rs} &
@@ -542,6 +546,9 @@ Dates and ages & Every date moved back by the offset and the patient's own days;
   above 89 as \code{90+} & \file{deid.rs} \code{Settings}, \code{answer\_with},
   \code{shift\_text} & \file{deid.rs} unit tests; \file{tests/privacy.rs} (no JSON number is a
   real time) \\
+Small counts & A variable's entries and persons, once counted, from 1 to 10 shown as ``< 11''
+  in the page, the command and the API & \file{variables.rs} \code{shown}, \code{ShownVariable} &
+  \file{tests/connected.rs} \\
 Notes & The patient's own names (each part of a compound name: \code{Smith-Jones},
   \code{O'Brien}) and date of birth replaced; marked; withheld if the administrator chooses &
   \file{gate.rs} \code{Restricted::note}, \code{scrub\_names}, \code{name\_words} &

@@ -436,8 +436,12 @@ session. Any user.
 \begin{lstlisting}[style=signature]
 GET /api/v1/patients?q=&has=&cohort=&mark=&limit=&offset=
 \end{lstlisting}
-The patients of the databases the user may view, latest first, from what Medorama keeps of
-each database (so offline databases' patients are listed too). Any user; identifiers only as
+The patients of the databases the user may view, latest encounter first, from what Medorama
+keeps of each database: its persons and their encounters (so offline databases' patients are
+listed too). For the page asked (a \code{limit} up to 1000), each online database is asked what
+it holds of those patients (one grouped query over their entries and recordings), which gives
+each item's \code{kinds}, \code{items} and a later \code{latest}; a \code{has} filter asks each
+online database which persons have that kind of data. Any user; identifiers only as
 \cref{sec:http-api-roles} says. A search by a user who sees identifiers is audited
 (\code{phi\_search}).
 \begin{params}
@@ -453,7 +457,8 @@ each database (so offline databases' patients are listed too). Any user; identif
 \end{params}
 \returns{\code{\{total, items, categories\}}: each item has \code{id}, \code{patient\_id}
 (empty unless shown), \code{pseudonym}, \code{sex}, \code{age}, \code{encounters} (the number of
-visits), \code{latest}, \code{latest\_where}, \code{kinds}, \code{items}, \code{sources} (the
+visits), \code{latest}, \code{latest\_where}, \code{kinds}, \code{items} (the entries read
+from the online databases; \code{null} when none was read), \code{sources} (the
 databases that link the patient), and \code{phi} (the identifiers) for users who see them; \code{categories} lists the categories present, each as \code{[key, label]}.}
 \raises{\code{404} a cohort the user may not see.}
 \begin{lstlisting}[style=shell]
@@ -550,7 +555,8 @@ recordings of the databases granted to them for \code{view}.
 \begin{lstlisting}[style=signature]
 GET /api/v1/recordings?q=&limit=&offset=
 \end{lstlisting}
-The recordings of the databases the user may view, latest first. Any user. A search in Privacy
+The recordings Medorama keeps of the databases the user may view (those opened or indexed:
+\cref{sec:connecting-kept}), latest first. Any user. A search in Privacy
 Mode is audited (\code{privacy\_search}).
 \begin{params}
 \item[q] Words that a recording's name, format, status, database or kind must all contain.
@@ -579,7 +585,7 @@ A recording and the results of the actions run on it (up to 100, latest first). 
 \begin{lstlisting}[style=signature]
 POST /api/v1/check
 \end{lstlisting}
-Checks every recording again: whether its files are still there, whether they changed, and
+Checks every recording kept again: whether its files are still there, whether they changed, and
 whether its index is still in its database's index store. Admins. Audited (\code{check}).
 \returns{the counts of the check: \code{checked}, \code{missing}, \code{returned},
 \code{changed}, \code{index\_lost}.}
@@ -604,7 +610,8 @@ Any user.
 \code{offline} or \code{unknown}), \code{checked\_at}, \code{version} (its data's version),
 \code{permission} (the user's strongest, or \code{null}), \code{created\_at}; for a user granted
 it, \code{persons}, \code{patients}, \code{conflicts}, \code{variables} (counts) and
-\code{recordings}; for a user who manages it, \code{url} (without a password),
+\code{recordings} (those opened or indexed), \code{has\_recordings} (whether it lists
+recordings); for a user who manages it, \code{url} (without a password),
 \code{status\_error} (why it is offline) and \code{settings}.}
 
 \apientry{POST databases}{Connect a database}
@@ -614,7 +621,8 @@ POST /api/v1/databases   {"name": NAME, "kind": "omop" | "views" | "dbb", "url":
 \end{lstlisting}
 Connects a database, as \cmd{medorama databases connect} does (\cref{sec:connecting-page}): it is
 checked first, then kept with its own data key and workspace folder, granted to the admin with
-every permission, its variables read, its persons linked and its recordings listed. Admins.
+every permission, its catalog read (the names and units of its variables, not counted), its
+persons linked and their encounters kept; no recording is read (\cref{sec:connecting-kept}). Admins.
 Audited (\code{connect}).
 \begin{params}
 \item[name] Letters, digits, \code{-} and \code{\_}, starting with a letter, at most 40
@@ -633,7 +641,8 @@ Audited (\code{connect}).
   \code{mrn\_authority}, \code{timezone} (when none is given, Medorama's time zone is written
   into the database's settings, and stays fixed from then on), \code{files\_root},
   \code{timeout\_s}, \code{max\_rows}; for kind \code{views}, the views \code{persons} and
-  \code{entries} (required), \code{visits}, \code{recordings} and \code{version}.
+  \code{entries} (required), \code{visits}, \code{recordings}, \code{stays}, \code{version} and
+  \code{variables}.
 \end{params}
 \returns{\code{\{"id": ID\}}.}
 \raises{\code{400} an invalid name, kind or URL, a URL that holds a password, a file outside
@@ -652,7 +661,8 @@ curl -s -b jar -H 'X-Medorama: 1' -H 'Content-Type: application/json' \
 POST /api/v1/databases/{id}/check
 \end{lstlisting}
 Checks the database, as the server does every 60 seconds: whether it answers, and its data's
-version; a changed version reads its variables, persons and recordings again. Any user granted
+version; a changed version reads its catalog (variables' names and units), persons and
+encounters again. Any user granted
 \code{search} on it.
 \returns{\code{\{online, status, version, checked\_at\}}.}
 \raises{\code{404} no such database, or one the user may not search.}
@@ -661,10 +671,35 @@ version; a changed version reads its variables, persons and recordings again. An
 \begin{lstlisting}[style=signature]
 POST /api/v1/databases/{id}/refresh
 \end{lstlisting}
-Checks the database, then reads again everything Medorama keeps of it: its variables, its
-persons (linked again) and its recordings. Who manages it. Audited (\code{refresh}).
+Checks the database, then reads again what Medorama keeps of it: its catalog (the names and
+units of its variables), its persons (linked again) and their encounters. No recording is read.
+Who manages it. Audited (\code{refresh}).
 \returns{\code{\{\}}.}
 \raises{\code{400} no \code{manage} permission, or a database that does not answer.}
+
+\apientry{POST databases/\{id\}/count}{Count a database's variables}
+\begin{lstlisting}[style=signature]
+POST /api/v1/databases/{id}/count
+\end{lstlisting}
+Counts how many entries and persons hold each of the database's variables (\ui{Count now}): one
+grouped query over its entries. The counts are kept until the catalog is read again, and
+\code{GET databases/\{id\}/variables} returns them. Who manages it. Audited (\code{count}).
+\returns{\code{\{"counted": N\}}: the variables counted.}
+\raises{\code{400} a database that is offline or does not answer; \code{403} a user who may
+search it without managing it; \code{404} no such database, or one the user may not search.}
+
+\apientry{POST databases/\{id\}/index}{Read and index every recording of a database}
+\begin{lstlisting}[style=signature]
+POST /api/v1/databases/{id}/index
+\end{lstlisting}
+Reads every recording the database lists (at most its \code{max\_rows}), checks their files and
+keeps them, and queues the new or changed ones for indexing (\ui{Index all recordings}).
+Otherwise a patient's recordings are read when the patient is opened. Who manages it. Audited
+(\code{index\_all}).
+\returns{\code{\{recordings, added, changed, missing, removed, queued\}}.}
+\raises{\code{400} a database that is offline or does not answer, or that lists more recordings
+than \code{max\_rows}; \code{403} a user who may search it without managing it; \code{404} no such
+database, or one the user may not search.}
 
 \apientry{DELETE databases/\{id\}}{Remove a database and every trace of it}
 \begin{lstlisting}[style=signature]
@@ -682,10 +717,12 @@ database's name to be typed first; the route does not. Who manages it. Audited (
 \begin{lstlisting}[style=signature]
 GET /api/v1/databases/{id}/variables
 \end{lstlisting}
-The database's variables, as last read (kept per data version). Any user granted \code{search}
+The database's variables, as last read (kept per data version): their names and units, and
+their counts once counted (\code{POST databases/\{id\}/count}). Any user granted \code{search}
 on it.
 \returns{\code{\{"items": [\{category, name, vocabulary, code, unit, entries, persons,
-numeric\}]\}}.}
+numeric\}], "counted\_at": TIME\}}: \code{entries} and \code{persons} are \code{null} until
+counted (and \code{counted\_at} too), otherwise texts, a count from 1 to 10 as \code{"< 11"}.}
 \raises{\code{404} no such database, or one the user may not search.}
 
 \apientry{GET databases/\{id\}/conflicts}{A database's identity conflicts}

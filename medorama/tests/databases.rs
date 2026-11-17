@@ -319,6 +319,7 @@ fn an_actions_results_are_found_by_name() {
     let id = s.connect("hospa", &a);
     let c = s.db.get().unwrap();
     let boss = s.user("boss");
+    medorama::databases::index_recordings(&s.cfg, &c, &boss, id).unwrap();
     let src = medorama::sources::get(&c, id).unwrap().unwrap();
     let rec = medorama::recordings::of_database(&s.cfg, &c, &src).unwrap().remove(0);
     assert_eq!(medorama::derived::store_result(&s.cfg, &c, &rec, "hrv", r#"{"rmssd": 62.5}"#).unwrap(), 1);
@@ -419,6 +420,10 @@ fn indexes_go_into_the_databases_encrypted_store_and_leave_with_it() {
     a.recording("r1", "a1", "rec/rec.hea", "icu");
     let id = s.connect("hospa", &a);
     let c = s.db.get().unwrap();
+    // connecting reads no recording; indexing all of them reads them (`medorama databases index`)
+    assert_eq!(medorama::recordings::count(&s.cfg, &c, id).unwrap(), 0);
+    assert_eq!(medorama::jobs::queue_auto_index(&c, &s.cfg).unwrap(), 0);
+    medorama::databases::index_recordings(&s.cfg, &c, &s.user("boss"), id).unwrap();
     assert_eq!(medorama::jobs::queue_auto_index(&c, &s.cfg).unwrap(), 1);
     let reg = std::sync::Arc::new(std::sync::RwLock::new(medorama::actions::Registry::load(&s.cfg)));
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

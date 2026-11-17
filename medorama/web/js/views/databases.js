@@ -28,7 +28,7 @@ function status(d) {
 
 function row(d) {
   const counts = d.permission
-    ? `${d.patients ?? 0} patient${d.patients === 1 ? '' : 's'} · ${d.variables ?? 0} variable${d.variables === 1 ? '' : 's'}${d.recordings ? ` · ${d.recordings} recording${d.recordings === 1 ? '' : 's'}` : ''}${d.conflicts ? ` · <span title="Persons whose identifiers name two patients: not linked">${d.conflicts} conflict${d.conflicts === 1 ? '' : 's'}</span>` : ''}`
+    ? `${d.patients ?? 0} patient${d.patients === 1 ? '' : 's'} · ${d.variables ?? 0} variable${d.variables === 1 ? '' : 's'}${d.recordings ? ` · ${d.recordings} recording${d.recordings === 1 ? '' : 's'} opened` : ''}${d.conflicts ? ` · <span title="Persons whose identifiers name two patients: not linked">${d.conflicts} conflict${d.conflicts === 1 ? '' : 's'}</span>` : ''}`
     : '<span class="faint">not granted to you</span>';
   return `<tr class="${d.status === 'online' ? '' : 'off'}"><td><a href="${esc(href('databases', [String(d.id)]))}"><b>${esc(d.name)}</b></a></td><td>${esc(kindText(d.kind))} · ${esc(d.engine)}</td><td>${status(d)}</td><td>${counts}</td><td>${esc(d.permission || '')}</td></tr>`;
 }
@@ -53,7 +53,12 @@ async function drawOne(d) {
   if (d.status_error) h += `<p class="err">${esc(d.status_error)}</p>`;
   if (d.permission) {
     h += '<div class="ftools"><button data-act="check">Check now</button>';
-    if (manage) h += '<button data-act="refresh" title="Read its variables, persons and recordings again">Refresh</button><button data-act="remove" class="danger">Remove…</button>';
+    if (manage) {
+      h += '<button data-act="refresh" title="Read its catalog (the names and units of its variables), its persons and their encounters again">Refresh</button>';
+      h += '<button data-act="count" title="Count how many entries and persons hold each variable: one pass over its entries, which takes a while on a large database">Count now</button>';
+      if (d.has_recordings) h += '<button data-act="index" title="Read every recording it lists, check its files and index them (a patient\'s recordings are otherwise read and indexed when they are opened)">Index all recordings</button>';
+      h += '<button data-act="remove" class="danger">Remove…</button>';
+    }
     h += '</div><h3>Variables</h3><div id="db-vars" class="table-wrap short"><p class="muted">Reading…</p></div>';
   }
   if (manage) {
@@ -72,9 +77,13 @@ async function drawOne(d) {
   if (d.permission) {
     api(`databases/${d.id}/variables`).then((v) => {
       if (!still()) return;
-      const rows = v.items.slice(0, 500).map((x) => `<tr><td>${esc(x.category)}</td><td>${esc(x.name)}</td><td>${esc(x.unit)}</td><td>${esc([x.vocabulary, x.code].filter(Boolean).join(' '))}</td><td class="num">${x.entries}</td><td class="num">${x.persons}</td></tr>`).join('');
+      const n = (x) => (x === null || x === undefined ? '<span class="faint">—</span>' : esc(x));
+      const rows = v.items.slice(0, 500).map((x) => `<tr><td>${esc(x.category)}</td><td>${esc(x.name)}</td><td>${esc(x.unit)}</td><td>${esc([x.vocabulary, x.code].filter(Boolean).join(' '))}</td><td class="num">${n(x.entries)}</td><td class="num">${n(x.persons)}</td></tr>`).join('');
+      const when = v.counted_at
+        ? `<p class="muted small">Counted ${fmtTime(v.counted_at)}; counts below 11 are shown as “&lt; 11”.</p>`
+        : '<p class="muted small">Not counted: the names and units only (Count now counts them).</p>';
       $('#db-vars').innerHTML = v.items.length
-        ? `<table class="grid"><tr><th>Category</th><th>Name</th><th>Unit</th><th>Code</th><th class="num">Entries</th><th class="num">Persons</th></tr>${rows}</table>${v.items.length > 500 ? `<p class="muted small">The first 500 of ${v.items.length}.</p>` : ''}`
+        ? `${when}<table class="grid"><tr><th>Category</th><th>Name</th><th>Unit</th><th>Code</th><th class="num">Entries</th><th class="num">Persons</th></tr>${rows}</table>${v.items.length > 500 ? `<p class="muted small">The first 500 of ${v.items.length}.</p>` : ''}`
         : '<p class="muted">No variables.</p>';
     }).catch((e) => { if (still()) $('#db-vars').innerHTML = `<p class="err">${esc(e.message)}</p>`; });
   }
@@ -203,6 +212,14 @@ async function act(what) {
     await api(`databases/${id}/refresh`, { method: 'POST' });
     toast(`${name} refreshed`);
     checkData();
+  } else if (what === 'count') {
+    toast(`Counting ${name}'s variables…`);
+    const r = await api(`databases/${id}/count`, { method: 'POST' });
+    toast(`${r.counted} variable${r.counted === 1 ? '' : 's'} counted`);
+  } else if (what === 'index') {
+    toast(`Reading ${name}'s recordings…`);
+    const r = await api(`databases/${id}/index`, { method: 'POST' });
+    toast(`${r.recordings} recording${r.recordings === 1 ? '' : 's'} read, ${r.missing} missing; ${r.queued} queued for indexing`);
   } else if (what === 'remove') {
     const typed = prompt(`Remove ${name} and every trace of it from Medorama?\n\nIts key is destroyed, then its workspace folder (its persons, indexes, results); its patients leave every cohort. The database itself is not touched. This cannot be undone.\n\nType its name to remove it:`);
     if (typed === null) return;

@@ -87,11 +87,11 @@ The tabs are in three groups (\cref{tab:page-tabs}):
 \ui{Cohorts} & Everyone & Find patients by criteria in the databases ticked, with why each
   matched and which databases were searched; save them as named cohorts; edit, clone, merge,
   refine, refresh, share and export them (\cref{chap:cohorts}). \\
-\ui{Patient Catalog} & Everyone & Every patient of the databases the user may view, latest data
-  first, with the kinds of data each has; a patient's page (\cref{chap:patients}). \\
+\ui{Patient Catalog} & Everyone & Every patient of the databases the user may view, latest
+  encounter first, with the kinds of data each has; a patient's page (\cref{chap:patients}). \\
 \ui{Databases} & Everyone & The connected databases, each with its status and its own page, and
-  the form to connect one (administrators); the \ui{Recordings} subtab lists the recordings of
-  the recording databases (\cref{chap:databases-tab}). \\
+  the form to connect one (administrators); the \ui{Recordings} subtab lists the recordings
+  opened or indexed of the recording databases (\cref{chap:databases-tab}). \\
 \ui{ECG}, \ui{PACS} & Everyone & The ECG and PACS viewers, at the file a patient's page sent
   them. Dimmed until something is opened in them (\cref{chap:viewers-in-medorama}). \\
 \ui{VitalStream} & Everyone & The waveform viewer that Medorama runs. Grayed out, with the
@@ -145,8 +145,8 @@ opens \ui{Cohorts}.
   entry chosen, the visit shown, the report's search and its mode \\
 \code{\#/databases}, \code{\#/databases/12} & The connected databases; one on a page of its
   own \\
-\code{\#/recordings} & The recordings of the recording databases (the Databases tab's
-  \ui{Recordings} subtab) \\
+\code{\#/recordings} & The recordings opened or indexed of the recording databases (the
+  Databases tab's \ui{Recordings} subtab) \\
 \code{\#/viewer?path=\dots\&t0=\dots\&t1=\dots} & VitalStream, at a recording and a time span \\
 \code{\#/ecg?src=\dots}, \code{\#/pacs?src=\dots}, \code{\#/pacs?list=\dots} & The ECG and PACS
   viewers, at a file or a folder \\

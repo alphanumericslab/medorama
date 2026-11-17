@@ -62,7 +62,7 @@ shows placeholders, a pseudonym and dates moved back by about a century.
 | PHI | Protected health information: anything that can identify a patient, together with their health data. |
 | Connected database | A database that Medorama reads in place, read-only: an OMOP instance, any SQL database through views, or a SQLite file made by db-builder. Medorama imports nothing. |
 | Control store | Medorama's own database: users, grants, the audit log, the list of connected databases, cohort definitions, patient numbers and pseudonyms, wrapped keys (SQLite or PostgreSQL). It holds no identifier. |
-| Workspace | The folder where Medorama keeps what it generates from each database (its persons as linked, its variables, its recordings' state) and each cohort, each encrypted with its own key. |
+| Workspace | The folder where Medorama keeps what it holds of each database (its persons as linked and their encounters, the names and units of its variables, the recordings it has opened) and each cohort, each encrypted with its own key. |
 | Identifier | A value that names a person directly: a name, a medical record number (MRN), a date of birth, a database's patient ID. |
 | Grant | A right to use one database (`search`, `view`, `phi`, `manage`) or one cohort, given to a user. |
 | PHI permission | A right given to a user account by an administrator. Without it, a user can never see identifiers. With it, a user sees the identifiers of the databases on which they hold the `phi` grant. |
@@ -78,9 +78,14 @@ shows placeholders, a pseudonym and dates moved back by about a century.
   accounts are their owners'.
 - **In each database's `persons.sqlite`**, in its folder of Medorama's workspace: the identifiers
   of the database's persons as Medorama linked them (patient IDs, MRNs, names, dates of birth,
-  sex), which the privacy gate needs to recognize them in answers. The file is encrypted with
-  SQLCipher (AES-256) with that database's own data key; the key is kept only wrapped by a master
-  key that is not in the workspace. Without the master key, a copy of the workspace cannot be read.
+  sex), which the privacy gate needs to recognize them in answers, and their encounters (each
+  visit's key, start, end and whether it was in intensive care), which the patient list shows.
+  Nothing else of a database's data is kept: no entry, no count of anyone's data, no list of
+  all its files. Beside this file, its folder holds the names and units of its variables
+  (`variables.sqlite`), the recordings Medorama has opened (`recordings.sqlite`, with their
+  paths), their indexes and the results of actions. Each file is encrypted with SQLCipher
+  (AES-256) with that database's own data key; the key is kept only wrapped by a master key that
+  is not in the workspace. Without the master key, a copy of the workspace cannot be read.
 - **Not in the control store.** To join databases, Medorama keeps only a keyed hash
   (HMAC-SHA-256) of each (issuer, identifier) pair, and the patient number it leads to. Two
   databases that name a patient by the same issuer and identifier are one patient; Medorama never
@@ -264,8 +269,10 @@ because it is often essential for research, with the following protections:
   and `[Date of Birth]`;
 - identifiers Medorama knows (the connected databases' MRNs and patient IDs, of four or more
   characters that contain a digit) are replaced wherever they appear, whatever their case and
-  however their digits are written (`SYN-0004`, `syn4`), and so are recordings'
-  paths and the folders they lie in (`[Folder]`), which may be named after the patient;
+  however their digits are written (`SYN-0004`, `syn4`), and so are the paths of the
+  recordings Medorama keeps (those opened or indexed) and the folders they lie in (`[Folder]`),
+  which may be named after the patient. A recording first kept while an answer is made is in
+  the dictionary that clears that answer;
 - telephone numbers, e-mail and web addresses, social security numbers, street addresses and
   MRNs after their label (`MRN: …`) are replaced (`[Phone]`, `[Email]`, `[URL]`, `[SSN]`,
   `[Address]`, `[MRN]`), by rules that miss forms they do not know;
@@ -319,7 +326,9 @@ visits become pseudonyms, file names become tokens, staff names become `[Staff N
 files the gate cannot de-identify are refused.
 
 **For reviewers:** placeholders and the identifier dictionary (built from each database's
-persons file) are in `gate.rs` (`Dict`, `Restricted::json`); identity per database in
+persons file and the recordings it keeps; new recordings added by `Dict::with_new_recordings`
+when `data_version.recordings` moves, the whole built again when `data_version.identifiers`
+does) are in `gate.rs` (`Dict`, `Restricted::json`); identity per database in
 `patient/identity.rs` and `patient/list.rs`; dates, ages and the settings
 in `deid.rs` (`FIELDS`, `Settings`, `answer_with`, `shift_text`); pseudonyms in
 `pseudonyms.rs`. Unit tests in each module; end to end in `medorama/tests/privacy.rs`.
@@ -483,7 +492,8 @@ views, a SQLite file made by db-builder), read in place, read-only, and its data
 the same gate.
 
 - **Only canonical columns are read.** Medorama reads a connected database through views of fixed
-  columns (persons, visits, entries, and recordings), each column with a privacy class: key,
+  columns (persons, visits, entries, and recordings; and the optional `variables` catalog, of
+  names and units only), each column with a privacy class: key,
   identifier, date, free text, staff or clinical value. A view cannot add a field that the gate
   does not know ([databases.md](databases.md)). Columns that a db-builder database keeps beside
   them (`extras`) are not read.

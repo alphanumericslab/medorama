@@ -17,8 +17,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// (version, SQL), in order, per database.  Never edit one that has been released; add the next.
-const SQLITE_MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("schema/sqlite/001_schema.sql"))];
-const PG_MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("schema/postgres/001_schema.sql"))];
+const SQLITE_MIGRATIONS: &[(i64, &str)] =
+    &[(1, include_str!("schema/sqlite/001_schema.sql")), (2, include_str!("schema/sqlite/002_federated.sql"))];
+const PG_MIGRATIONS: &[(i64, &str)] =
+    &[(1, include_str!("schema/postgres/001_schema.sql")), (2, include_str!("schema/postgres/002_federated.sql"))];
 
 /// The most connections to a PostgreSQL database a server opens at once (a request waits for
 /// one beyond that); idle ones kept, and how long one may be idle before it is checked.

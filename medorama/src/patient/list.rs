@@ -1,6 +1,8 @@
 //! The list of patients (the Patient Catalog): the patients of the databases a user may view,
-//! from what Medorama keeps of each database's persons (persons.rs): it answers the same
-//! whether a database is online or not, and reads none of them.
+//! from what Medorama keeps of each database's persons (persons.rs: their identities and
+//! encounters), so that it answers whether a database is online or not.  What else a row shows
+//! (the kinds of data, the entries, the latest one) is read from the online databases for the
+//! page shown only, and a filter on a kind of data (`has`) asks each online database.
 
 use super::*;
 
@@ -21,9 +23,11 @@ pub struct PatientRow {
     pub encounters: i64,
     pub latest: Option<f64>,
     pub latest_where: String,
-    /// Categories of data the patient has (category keys).
+    /// Categories of data the patient has (category keys): their encounters, then (the page
+    /// shown) what the online databases hold of them.
     pub kinds: Vec<String>,
-    pub items: i64,
+    /// Their entries in the online databases (the page shown; none: not read).
+    pub items: Option<i64>,
     /// The databases that link them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<String>,
@@ -54,13 +58,7 @@ fn gather(cfg: &Config, c: &Connection, user: &User) -> anyhow::Result<HashMap<i
         if !viewable.contains(&s.id) {
             continue;
         }
-        let sums = crate::persons::summaries(cfg, c, s.id)?;
-        let mut rec_kinds: HashMap<String, BTreeSet<String>> = HashMap::new();
-        if crate::recordings::count(cfg, c, s.id)? > 0 {
-            for r in crate::recordings::of_database(cfg, c, &s)? {
-                rec_kinds.entry(r.person_key.clone()).or_default().insert(r.category.clone());
-            }
-        }
+        let sums = crate::persons::encounter_summaries(cfg, c, s.id)?;
         for k in crate::persons::all_of(cfg, c, s.id)? {
             let g = out.entry(k.patient).or_insert_with(|| Gathered {
                 row: PatientRow {
@@ -74,32 +72,25 @@ fn gather(cfg: &Config, c: &Connection, user: &User) -> anyhow::Result<HashMap<i
                     latest: None,
                     latest_where: String::new(),
                     kinds: vec![],
-                    items: 0,
+                    items: None,
                     sources: vec![],
                 },
                 records: vec![],
             });
-            if let Some((visits, latest, entries, kinds)) = sums.get(&k.person_key) {
+            if let Some((visits, latest, icu)) = sums.get(&k.person_key) {
                 let latest = match (&offsets, deidentified.contains(&s.id)) {
                     (Some(o), true) => latest.map(|t| o.shift(Some(k.patient), t)),
                     _ => *latest,
                 };
-                let latest = &latest;
                 g.row.encounters += visits;
-                g.row.items += entries;
-                g.row.latest = match (g.row.latest, *latest) {
+                g.row.latest = match (g.row.latest, latest) {
                     (Some(a), Some(b)) => Some(a.max(b)),
                     (a, b) => a.or(b),
                 };
-                for x in kinds {
-                    if !g.row.kinds.contains(x) {
-                        g.row.kinds.push(x.clone());
+                for (x, on) in [("enc", *visits > 0), ("icu", *icu)] {
+                    if on && !g.row.kinds.iter().any(|k| k == x) {
+                        g.row.kinds.push(x.to_string());
                     }
-                }
-            }
-            for x in rec_kinds.get(&k.person_key).into_iter().flatten() {
-                if !g.row.kinds.contains(x) {
-                    g.row.kinds.push(x.clone());
                 }
             }
             if !g.row.sources.contains(&s.name) {
@@ -116,6 +107,66 @@ fn gather(cfg: &Config, c: &Connection, user: &User) -> anyhow::Result<HashMap<i
         g.row.kinds.sort_by_key(|k| order.iter().position(|o| o == k).unwrap_or(99));
     }
     Ok(out)
+}
+
+/// The patients who have data of a category in the online databases `user` may view.
+fn patients_with(cfg: &Config, c: &Connection, user: &User, category: &str) -> anyhow::Result<HashSet<i64>> {
+    let viewable = crate::databases::online(c, &crate::databases::granted(c, user, "view")?)?;
+    let mut out = HashSet::new();
+    for s in crate::sources::list(c)?.into_iter().filter(|s| viewable.contains(&s.id)) {
+        let keys = s.persons_with(category, s.zone(&cfg.timezone))?;
+        out.extend(crate::persons::known(cfg, c, s.id, &keys)?.into_values());
+    }
+    Ok(out)
+}
+
+/// A page's rows, with what the online databases hold of them (one grouped query each, over
+/// these persons only): the kinds of data, the entries, the latest time.
+fn enrich(cfg: &Config, c: &Connection, user: &User, page: &mut [Gathered]) -> anyhow::Result<()> {
+    let viewable = crate::databases::online(c, &crate::databases::granted(c, user, "view")?)?;
+    let deidentified = if user.privacy { HashSet::new() } else { without_phi(c, user)? };
+    let offsets = if deidentified.is_empty() { None } else { Some(crate::search::Offsets::load(c)?) };
+    for s in crate::sources::list(c)?.into_iter().filter(|s| viewable.contains(&s.id)) {
+        let keys: Vec<String> = page
+            .iter()
+            .flat_map(|g| g.records.iter().filter(|r| r.database == s.id).map(|r| r.person_key.clone()))
+            .collect();
+        if keys.is_empty() {
+            continue;
+        }
+        let sums = match s.summaries(&keys, s.zone(&cfg.timezone)) {
+            Ok(v) => v,
+            // a database that stops answering: the page is shown without it
+            Err(e) => {
+                eprintln!("medorama: {}: {e}", s.name);
+                continue;
+            }
+        };
+        for g in page.iter_mut() {
+            for r in g.records.iter().filter(|r| r.database == s.id) {
+                let Some((kinds, n, latest)) = sums.get(&r.person_key) else { continue };
+                let latest = match (&offsets, deidentified.contains(&s.id)) {
+                    (Some(o), true) => latest.map(|t| o.shift(Some(g.row.id), t)),
+                    _ => *latest,
+                };
+                g.row.items = Some(g.row.items.unwrap_or(0) + n);
+                g.row.latest = match (g.row.latest, latest) {
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                    (a, b) => a.or(b),
+                };
+                for x in kinds {
+                    if !g.row.kinds.contains(x) {
+                        g.row.kinds.push(x.clone());
+                    }
+                }
+            }
+        }
+    }
+    let order: Vec<&str> = categories::journey_keys().collect();
+    for g in page.iter_mut() {
+        g.row.kinds.sort_by_key(|k| order.iter().position(|o| o == k).unwrap_or(99));
+    }
+    Ok(())
 }
 
 /// Patients, latest first; `q` uses the search syntax (fields: [`LIST_FIELDS`]; `has:icu` …),
@@ -181,18 +232,21 @@ fn list_core(
     crate::search::check(&terms, LIST_FIELDS, user.phi).map_err(anyhow::Error::msg)?;
     let phi_dbs: Vec<i64> = if user.phi { crate::databases::granted(c, user, "phi")? } else { vec![] };
     let mut found: Vec<Gathered> = vec![];
+    // `ecg`: has ECGs; `!ecg`: has none (asked of each online database)
+    let mut with: Vec<(bool, HashSet<i64>)> = vec![];
+    for h in has {
+        let (want, name) = h.strip_prefix('!').map_or((true, h.as_str()), |n| (false, n));
+        let cat = categories::named(name).ok_or_else(|| anyhow::anyhow!("no category {name:?}"))?;
+        with.push((want, patients_with(cfg, c, user, cat)?));
+    }
     for (id, g) in gather(cfg, c, user)? {
         if only.is_some_and(|o| !o.contains(&id)) {
             continue;
         }
-        // `ecg`: has ECGs; `!ecg`: has none
-        let k = &g.row.kinds;
-        if !has.iter().all(|h| {
-            let (want, name) = h.strip_prefix('!').map_or((true, h.as_str()), |n| (false, n));
-            categories::named(name).is_some_and(|c| k.iter().any(|x| x == c) == want)
-        }) {
+        if !with.iter().all(|(want, set)| set.contains(&id) == *want) {
             continue;
         }
+        let k = &g.row.kinds;
         if !terms.is_empty() {
             let mut d = Doc::default();
             d.add("patient", &g.row.pseudonym);
@@ -232,10 +286,13 @@ fn list_core(
     });
     let total = found.len();
     let ids: Vec<i64> = found.iter().map(|g| g.row.id).collect();
+    let mut found: Vec<Gathered> = found.into_iter().skip(offset).take(limit).collect();
+    // the page's rows (not an export's every row): what the online databases hold of them
+    if limit <= 1000 {
+        enrich(cfg, c, user, &mut found)?;
+    }
     let page: Vec<PatientRow> = found
         .into_iter()
-        .skip(offset)
-        .take(limit)
         .map(|g| {
             let mut row = g.row;
             let mine: Vec<crate::persons::Known> =

@@ -1,16 +1,18 @@
 % Part II: the Databases tab. Sources: docs/user-guide.md ("The Databases tab");
 % docs/design/databases-only.md (as built). Checked against medorama/web/index.html
 % (#view-databases, #view-recordings), web/js/views/databases.js and recordings.js,
-% medorama/src/databases.rs (shown, check, refresh, remove), grants.rs, server.rs
+% medorama/src/databases.rs (shown, check, refresh, count_variables, index_recordings, remove),
+% docs/design/connected-databases.md, grants.rs, server.rs
 % (database_grant: grant_self).
 \chapter{The Databases tab}
 \label{chap:databases-tab}
 
 The \ui{Databases} tab lists the databases that Medorama connects: whether each one answers,
 what it holds, and who may use it. Each database has a page of its own, from which those who
-manage it check it, refresh what Medorama keeps of it, grant it to other users, and remove it.
-Administrators connect databases from this tab too. Its second subtab, \ui{Recordings}, lists
-the recordings of the recording databases (\cref{sec:databases-tab-recordings}).
+manage it check it, refresh what Medorama keeps of it, count its variables, index all its
+recordings, grant it to other users, and remove it. Administrators connect databases from this
+tab too. Its second subtab, \ui{Recordings}, lists the recordings Medorama has opened or indexed
+(\cref{sec:databases-tab-recordings}).
 \Cref{chap:connecting} explains what a connected database is and how its persons become
 patients.
 
@@ -31,8 +33,9 @@ first, then the others, each group by name. Each line gives the following:
 \item[\ui{Status}] A green dot and \ui{online}, or a grey dot and \ui{offline} (\ui{not checked}
   before its first check), with when it was last checked. Its tooltip gives the reason a database
   is offline. Offline lines are dimmed; no status is ever red, since red is kept for alarms.
-\item[\ui{What it holds}] Its numbers of patients and variables, of recordings (a recording
-  database), and of identity conflicts, if any (\cref{sec:connecting-identity}). A database not
+\item[\ui{What it holds}] Its numbers of patients and variables, of recordings opened (a
+  recording database: those Medorama has read, \cref{sec:connecting-kept}), and of identity
+  conflicts, if any (\cref{sec:connecting-identity}). A database not
   granted to you says \ui{not granted to you}, and nothing of what it holds.
 \item[\ui{Yours}] Your strongest permission on it: \code{search}, \code{view}, \code{phi} or
   \code{manage}.
@@ -53,11 +56,19 @@ you)''. The page shows:
 \item the reason it is offline, for those who manage it;
 \item \ui{Check now}, for anyone granted it: it is checked at once, and read again if its version
   changed (\cref{sec:connecting-status});
-\item \ui{Refresh} and \ui{Remove\dots}, for those who manage it: \ui{Refresh} reads its
-  variables, persons and recordings again, and \ui{Remove\dots} removes it
+\item \ui{Refresh}, \ui{Count now}, \ui{Index all recordings} and \ui{Remove\dots}, for those
+  who manage it: \ui{Refresh} reads its persons, their encounters and its catalog again (no
+  recording); \ui{Count now} counts how many entries and persons hold each variable, one pass
+  over its entries, which takes a while on a large database; \ui{Index all recordings} (a
+  recording database) reads every recording it lists, checks its files and indexes them in the
+  background, where otherwise a patient's recordings are read and indexed when the patient is
+  opened (\cref{sec:connecting-kept}); and \ui{Remove\dots} removes it
   (\cref{sec:databases-tab-remove});
 \item \ui{Variables}, for anyone granted it: the table of what it holds (\ui{Category},
-  \ui{Name}, \ui{Unit}, \ui{Code}, \ui{Entries}, \ui{Persons}), the first 500;
+  \ui{Name}, \ui{Unit}, \ui{Code}, \ui{Entries}, \ui{Persons}), the first 500. \ui{Entries} and
+  \ui{Persons} show ``---'' until the database is counted (``Not counted: the names and units
+  only''), then the counts, with when they were counted; a count from 1 to 10 is shown as
+  ``< 11'';
 \item \ui{Who may use it}, for those who manage it (\cref{sec:databases-tab-grants});
 \item \ui{Identity conflicts}, for those who manage it, when there are some: each person whose
   identifiers name two different patients, by the database's key for that person (\ui{Person
@@ -140,14 +151,18 @@ reason is written beside it.
 \section{The Recordings subtab}
 \label{sec:databases-tab-recordings}
 
-\ui{Recordings} lists the recordings of the recording databases you may view, newest first, a
+\ui{Recordings} lists the recordings Medorama keeps of the recording databases you may view:
+those opened (a patient's page, a job or a cohort's selection read them) or indexed (\ui{Index
+all recordings}). A recording the database lists but no one has opened is not listed yet. They
+come newest first, a
 page at a time (\ui{$\langle$}, \ui{$\rangle$}). For each recording it shows its status dot,
 its name (with what went wrong, if anything), its kind and format, its start, its length, a link
 to its patient, its database and its path, with the buttons \ui{View} (in VitalStream),
 \ui{Copy path} and, for users who may run actions, \ui{Index now}. The search line keeps the
 recordings with every word in their name, format, status, kind or database. Administrators also
 have \ui{Re-check the files}. A recording leaves this list only when its database no longer lists
-it, or when its database is removed. \Cref{sec:recordings-tab} describes the statuses and the
+it (as seen when its patient is opened again, or at \ui{Index all recordings}), or when its
+database is removed. \Cref{sec:recordings-tab} describes the statuses and the
 checks.
 
 \paragraph{Changes show everywhere at once.} When a database is connected, refreshed or removed,

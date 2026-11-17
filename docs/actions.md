@@ -134,7 +134,7 @@ The job description has this form:
 
 ```json
 {
-  "medorama": "medorama 0.2.1",
+  "medorama": "medorama 0.3.0",
   "job_id": 12, "action": "heart_rate", "version": "1",
   "params": {"window_s": 10},
   "recording": {"id": 7000000003, "database": "icu", "path": "/data/…/ICU7_12-…", "kind": "wfdb", "name": "ICU7_12-…",

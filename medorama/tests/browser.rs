@@ -460,7 +460,9 @@ fn fixture() -> (tempfile::TempDir, medorama::config::Config) {
         url: d.url(),
         ..Default::default()
     };
-    medorama::databases::connect(&cfg, &c, &boss, &n, "").unwrap();
+    let id = medorama::databases::connect(&cfg, &c, &boss, &n, "").unwrap();
+    // its recordings read and indexed (`medorama databases index`): connecting reads none
+    medorama::databases::index_recordings(&cfg, &c, &boss, id).unwrap();
     // a connected OMOP database: one person, the second patient (the same MRN)
     let omop = data.join("omop.sqlite");
     let o = rusqlite::Connection::open(&omop).unwrap();

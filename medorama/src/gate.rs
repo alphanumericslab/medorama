@@ -53,10 +53,16 @@ pub const CLEARED: &str = "x-medorama-gate";
 /// Every identifier Medorama knows, with what Privacy Mode writes instead: the databases'
 /// patient IDs (their patients' pseudonyms), MRNs (placeholders), recordings' paths and file
 /// names (tokens).  Built from each connected database's persons and recordings as kept in the
-/// workspace, kept while they do not change.
+/// workspace, kept while they do not change; the recordings first kept since are added to it
+/// ([`Dict::with_new_recordings`]) without building it again.
+#[derive(Clone)]
 pub struct Dict {
     /// The version of the identifiers it was built at (`data_version.identifiers`).
     pub version: i64,
+    /// The version of the recordings it holds (`data_version.recordings`) …
+    pub recordings_version: i64,
+    /// … and, by database, the last recording (its number in the database's file) it holds.
+    seen: HashMap<i64, i64>,
     /// Whole values, lower case: a string equal to one of these (case ignored) is replaced.
     whole: HashMap<String, String>,
     /// Words, lower case: identifiers of 4 characters or more with a digit, replaced inside any
@@ -118,9 +124,16 @@ fn normal(s: &str) -> Option<String> {
 }
 
 impl Dict {
-    pub fn build(c: &Connection, cfg: &crate::config::Config, version: i64) -> anyhow::Result<Dict> {
+    pub fn build(
+        c: &Connection,
+        cfg: &crate::config::Config,
+        version: i64,
+        recordings_version: i64,
+    ) -> anyhow::Result<Dict> {
         let mut d = Dict {
             version,
+            recordings_version,
+            seen: HashMap::new(),
             whole: HashMap::new(),
             words: HashMap::new(),
             normal: HashMap::new(),
@@ -155,10 +168,52 @@ impl Dict {
                     }
                 }
             }
-            if crate::recordings::count(cfg, c, s.id)? == 0 {
-                continue;
-            }
-            for r in crate::recordings::of_database(cfg, c, &s)? {
+            d.add_recordings(cfg, c, &s)?;
+        }
+        d.sort_paths();
+        Ok(d)
+    }
+
+    /// This dictionary with the recordings kept since it was made (their paths, names and
+    /// folders): `recordings_version` the version they are at.
+    pub fn with_new_recordings(
+        &self,
+        c: &Connection,
+        cfg: &crate::config::Config,
+        recordings_version: i64,
+    ) -> anyhow::Result<Dict> {
+        let mut d = self.clone();
+        d.recordings_version = recordings_version;
+        for s in crate::sources::list(c)? {
+            d.add_recordings(cfg, c, &s)?;
+        }
+        d.sort_paths();
+        Ok(d)
+    }
+
+    fn sort_paths(&mut self) {
+        let mut lengths: Vec<usize> = self.paths.keys().map(|k| k.len()).collect();
+        lengths.sort_unstable_by(|a, b| b.cmp(a));
+        lengths.dedup();
+        self.path_lengths = lengths;
+    }
+
+    /// A database's recordings kept after the last one this dictionary holds.
+    fn add_recordings(
+        &mut self,
+        cfg: &crate::config::Config,
+        c: &Connection,
+        s: &crate::sources::Source,
+    ) -> anyhow::Result<()> {
+        if crate::recordings::count(cfg, c, s.id)? == 0 {
+            return Ok(());
+        }
+        let after = self.seen.get(&s.id).copied().unwrap_or(0);
+        let d = self;
+        {
+            for r in crate::recordings::after(cfg, c, s, after)? {
+                let n = crate::recordings::split(r.id).1;
+                d.seen.entry(s.id).and_modify(|m| *m = (*m).max(n)).or_insert(n);
                 let token = recording_token(r.id);
                 d.whole.insert(r.path.to_lowercase(), token.clone());
                 d.whole.insert(r.name.to_lowercase(), RECORDING.into());
@@ -176,11 +231,7 @@ impl Dict {
                 d.recordings.insert(token, r.path);
             }
         }
-        let mut lengths: Vec<usize> = d.paths.keys().map(|k| k.len()).collect();
-        lengths.sort_unstable_by(|a, b| b.cmp(a));
-        lengths.dedup();
-        d.path_lengths = lengths;
-        Ok(d)
+        Ok(())
     }
 
     /// An identifier and what replaces it: as a whole value always; inside text when it is
@@ -1086,6 +1137,8 @@ mod tests {
     fn dict() -> Dict {
         let mut d = Dict {
             version: 0,
+            recordings_version: 0,
+            seen: HashMap::new(),
             whole: HashMap::new(),
             words: HashMap::new(),
             normal: HashMap::new(),

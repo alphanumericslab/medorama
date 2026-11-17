@@ -52,8 +52,8 @@ The top bar has three groups of tabs:
 | Tab | What it shows |
 |---|---|
 | Cohorts | Find patients by criteria in the databases you tick, with the reason each one matched, and which databases were searched and which were left out. Save them as named cohorts; create, edit, clone, merge and refine cohorts; refresh, share and export them; run actions on their recordings. |
-| Patient Catalog | Every patient of the databases you may view, the one with the latest data first, with the kinds of data each has. A patient's page shows their whole journey. |
-| Databases | The databases granted to you, each with its status (online or offline) and what it holds; a database's own page; connecting a database, and creating one with db-builder (administrators). Its **Recordings** subtab lists the recordings of the recording databases you may view. |
+| Patient Catalog | Every patient of the databases you may view, the one with the latest encounter first, with the kinds of data each has. A patient's page shows their whole journey. |
+| Databases | The databases granted to you, each with its status (online or offline) and what it holds; a database's own page; connecting a database, and creating one with db-builder (administrators). Its **Recordings** subtab lists the recordings opened or indexed of the recording databases you may view. |
 | ECG, PACS, VitalStream | The viewers: 12-lead ECGs; DICOM studies, pictures and videos; waveform recordings. |
 | History | The patients whose page you opened, the most recent first. Only you see your history. |
 | Actions, Jobs | Run actions on recordings, and follow the queue of jobs. |
@@ -182,7 +182,7 @@ each expression's meaning or error as they change.
 | `AND`, `OR`, `NOT`, parentheses | `AND` binds before `OR`. The words can be in any case, and `&&`, `\|\|` and `!` also work. Two conditions written side by side must both hold. |
 | `female`, `male` (or `F`, `M`) | The patient's sex. |
 | `age > 18`, `age > 18 years` | The patient's age today, not at a visit or a result: `age > 65 AND QT > 470` finds patients over 65 now who once had a long QT, perhaps at 50. You can also write `y`, `yr` or `yrs`, and use `<`, `>=`, `<=`, `=` and `!=`. Age needs the PHI permission and Privacy Mode turned off; otherwise the builder grays out Age. A date of birth known only by its year (OMOP's `year_of_birth`) is read as 1 July of that year, and by its year and month as the 15th: such ages are within six months. |
-| `has ecg`, or a category alone: `icu`, `holter`, `sleep` | The patient has data of that category, or a recording of that category in a recording database. `has icu`: a visit the database marks as an intensive-care stay, in a unit named like an intensive-care unit (ICU, MICU, CCU …; not a step-down, post-ICU or intermediate-care unit), or with a stay in one. |
+| `has ecg`, or a category alone: `icu`, `holter`, `sleep` | The patient has data of that category, or a recording of that category in a recording database (each database is asked, whether or not its recordings were opened). `has icu`: a visit the database marks as an intensive-care stay, in a unit named like an intensive-care unit (ICU, MICU, CCU …; not a step-down, post-ICU or intermediate-care unit), or with a stay in one. |
 | `dx I21`, `diagnosis "sepsis"` | A condition whose code starts with the text, compared without dots and in any case (`I21.4`, `I214` and `i21` all find `I21.4`), or, for a word (three characters or more, with a letter, not shaped like a code), whose name contains it. Codes of every vocabulary are compared alike: `dx 410` finds an ICD-9 `410.1`. |
 | `medication heparin` | A drug whose name contains the text. |
 | `text "pulmonary edema"` | An entry whose text contains the words. |
@@ -276,11 +276,14 @@ permission and the `phi` grant on the database that holds them.
 ### Find a patient
 
 The **Patient Catalog** lists the patients of the databases you may view, the one with the latest
-data first: the pseudonym (or, with the PHI permission out of Privacy Mode, the patient ID, the
-name, the MRN and the date of birth of the databases granted to you with `phi`), the sex, the
+encounter first: the pseudonym (or, with the PHI permission out of Privacy Mode, the patient ID,
+the name, the MRN and the date of birth of the databases granted to you with `phi`), the sex, the
 age, the number of visits, the latest time, the databases that hold the patient, the kinds of
-data and the number of entries. The list is kept by Medorama for each database, so a patient of a
-database that is offline is still listed.
+data (**Data**) and the number of entries (**Entries**). The patients and their encounters are
+kept by Medorama for each database, so a patient of a database that is offline is still listed.
+The **Data** and **Entries** columns are read from the online databases for the page shown only;
+**Entries** shows "—" when nothing was read for the patient (their databases offline, or
+holding nothing of theirs), and a database offline adds nothing to either.
 
 ![The Patient Catalog: every patient with the kinds of data each has](images/screens/patients.png)
 
@@ -289,7 +292,8 @@ database that is offline is still listed.
   patient ID and date of birth, as the databases granted to you with `phi` hold them.
 - **Filter by kind of data.** After **Filter by**, click a category once to keep the patients who
   have it (✓), a second time to keep those who have none of it (✕), and a third time to clear
-  it.
+  it. Each online database is asked which of its patients have it; a database offline answers
+  for none.
 - **Add to cohort…** adds every patient that the search finds to a cohort.
 
 ### Read a patient's page
@@ -364,7 +368,7 @@ codes, values, results, notes and reports.
 
 The Databases tab lists the databases granted to you, the online ones first, each with its kind
 (db-builder, OMOP or SQL views) and engine, its status, what it holds (its patients, variables,
-recordings and identity conflicts) and your grant on it (**Yours**). Administrators also see the
+the recordings opened and identity conflicts) and your grant on it (**Yours**). Administrators also see the
 databases that are not granted to them, so that they can grant them.
 
 ![The Databases tab: the connected databases with their status](images/screens/databases.png)
@@ -383,16 +387,18 @@ data version and when it was connected, and then:
 
 | Part | What it does | Who |
 |---|---|---|
-| **Check now** | Checks whether the database answers. When its version changed, what Medorama keeps of it (its variables, persons and recordings) is read again. | Granted |
-| **Refresh** | Reads its variables, persons and recordings again now. | Who manages it |
+| **Check now** | Checks whether the database answers. When its version changed, what Medorama keeps of it (its persons, their encounters and its catalog of variables) is read again. | Granted |
+| **Refresh** | Reads its persons, their encounters and its catalog again now. No recording is read. | Who manages it |
+| **Count now** | Counts how many entries and persons hold each variable: one pass over all its entries, which takes a while on a large database. The counts are kept until the catalog is read again (a new version, **Refresh**). | Who manages it |
+| **Index all recordings** | A recording database: reads every recording it lists, checks its files, and indexes the new or changed ones in the background. Otherwise a patient's recordings are read, checked and indexed when the patient is opened. | Who manages it |
 | **Remove…** | Removes the database and every trace of it from Medorama (below). You confirm by typing its name. | Who manages it |
-| Variables | What it holds: each measurement, diagnosis, drug or other name by category, with its unit, its code and vocabulary, its number of entries and its number of persons. | Granted |
+| Variables | What it holds: each measurement, diagnosis, drug or other name by category, with its unit, its code and vocabulary; once counted (**Count now**), its number of entries and its number of persons, with when they were counted ("—" before). A count from 1 to 10 is shown as "< 11". | Granted |
 | Who may use it | The users granted the database and their permissions; a form to grant a user `search`, `view`, `phi` or `manage`; **Revoke all** to take a user's grants away. | Who manages it |
 | Identity conflicts | Persons of the database whose identifiers name two different patients, by the database's own key. They are not linked until the database is corrected; Medorama never merges patients. | Who manages it |
 | **Grant it to me** | An administrator is not granted a database by being an administrator. One who is not granted it can grant it to themselves; this is recorded in the audit log (`grant_self`). | Administrators |
 
 **Removing a database** destroys its key first, then its folder of Medorama's workspace (its
-persons, variables, indexes and results), and then takes its patients out of every cohort that
+persons, encounters, variables, the recordings opened, indexes and results), and then takes its patients out of every cohort that
 they were in because of it. Patients that no other database links leave Medorama, with their
 pseudonyms. The database itself is not touched, and nothing of it can be found afterwards in
 Medorama. This cannot be undone.
@@ -417,7 +423,9 @@ and folders of recordings become a database with [db-builder](../db-builder/READ
 | Time zone of its times | When it is not Medorama's. |
 | SQL views | For any layout: the queries for persons, visits, entries, stays (optional: the stays in units, such as ICU stays, within visits), recordings (a recording database) and its version. |
 
-Medorama checks the database, reads its variables, links its patients and grants it to you. What
+Medorama checks the database, reads the names and units of its variables, links its patients
+(with their encounters) and grants it to you. It counts nothing and reads no recording, so a
+database of millions of rows connects in minutes. What
 every database must provide, and how to build one, is described in [databases.md](databases.md).
 
 **Create a database…**, at the top of the card, opens db-builder's own page in a browser tab of
@@ -430,12 +438,13 @@ When db-builder is set up but not running, the reason is written beside the butt
 
 ## Recordings
 
-The **Recordings** subtab of the Databases tab lists the recordings of the recording databases
-you may view, the newest first: their status, name, kind and format, start, length, patient,
+The **Recordings** subtab of the Databases tab lists the recordings Medorama keeps of the
+recording databases you may view: those opened (a patient's page, a job or a cohort's selection
+read them) or indexed (**Index all recordings** on the database's page), the newest first: their status, name, kind and format, start, length, patient,
 database and path, with **View** (opens VitalStream), **Copy path** and **Index now** (analysts
 and administrators). You can search it by words in a recording's name, format, status or
-database. Administrators can **Re-check the files**: whether every recording's file is still
-there, unchanged.
+database. Administrators can **Re-check the files**: whether every listed recording's file is
+still there, unchanged. A recording the database lists but no one has opened is not listed yet.
 
 | Status | Dot | Meaning |
 |---|---|---|

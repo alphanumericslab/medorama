@@ -35,7 +35,7 @@ come in any order after the subcommand.
 \item[-h, --help] Prints the usage of the program, or of a subcommand
   (\cmd{medorama databases connect -{}-help}), and exits. \cmd{medorama help} \textit{COMMAND}
   does the same.
-\item[-V, --version] Prints the version (\code{medorama 0.2.1}) and exits.
+\item[-V, --version] Prints the version (\code{medorama 0.3.0}) and exits.
 \item[--home DIR] Medorama's home folder, which holds \file{medorama.toml}, the SQLite control
   store, the master key file (by default) and the folder \file{actions/}. It is accepted by every
   subcommand, before or after it (\cmd{medorama -{}-home DIR serve},
@@ -166,6 +166,8 @@ into a database with \cmd{db-builder} first (\cref{sec:cli-db-builder}), then co
 \multicolumn{2}{@{}l}{\textit{Connected databases}} \\
 \cmd{databases connect} & Connect a database \\
 \cmd{databases list}, \cmd{check}, \cmd{refresh} & The databases, their status, read again \\
+\cmd{databases count}, \cmd{index} & Count a database's variables; read and index all its
+  recordings \\
 \cmd{databases variables}, \cmd{conflicts} & What a database holds; its identity conflicts \\
 \cmd{databases grants}, \cmd{grant}, \cmd{revoke} & Who may use a database \\
 \cmd{databases remove} & Remove a database and every trace of it \\
@@ -236,7 +238,10 @@ apart from the workspace's backups (\cref{sec:protecting-backups}).
   named in the file \file{medorama.demo} next to the programs), as the first admin's: the
   db-builder database \code{demo} (kind \code{dbb}) and the OMOP database \code{demo\_omop}
   (kind \code{omop}, MRN authority \code{DEMO}), invented patients, two of them in both
-  (\cref{chap:quickstart}). Without the installer's demo it says so, and connects nothing.
+  (\cref{chap:quickstart}). It then reads every recording of the demo's databases, as
+  \cmd{medorama databases index} does (connecting alone reads none), and prints how many are to
+  be indexed: \code{serve} indexes them. Without the installer's demo it says so, and connects
+  nothing.
 \end{params}
 \begin{lstlisting}[style=shell]
 medorama init --workspace /data/medorama-workspace
@@ -266,8 +271,8 @@ Serves the web page and the HTTP API (\cref{chap:http-api}), and runs the backgr
 workers that run queued jobs (the setting \code{workers}), the automatic indexing of new and
 changed recordings (\code{auto\_index}), the check of every connected database every 60 seconds
 (online or offline, and read again when its data's version changed;
-\cref{sec:connecting-status}), the re-check of every recording every \code{check\_interval\_s}
-seconds, and the sealing of the audit log every minute. It prints the address to open, the home,
+\cref{sec:connecting-status}), the re-check of every recording kept every
+\code{check\_interval\_s} seconds, and the sealing of the audit log every minute. It prints the address to open, the home,
 the control store, the waveform viewer it will start (on first use, in the \ui{VitalStream} tab)
 or link to, the workspace (where each database's indexes are), and the number of workers. On an address other
 than \code{127.0.0.1}, \code{localhost} or \code{::1} without \code{secure\_cookies = true}, it
@@ -333,10 +338,12 @@ medorama databases connect NAME --kind omop|views|dbb --url URL
 Connects a database, read in place and never written (\cref{chap:connecting}). It is checked
 first: the file or the server answers, and each view answers. Then Medorama keeps it in the
 control store with its settings, makes its data key and its workspace folder, reads its version
-and its variables, links its persons to Medorama's patients by their exact (issuer, identifier)
-pairs (\cref{sec:connecting-identity}), and lists its recordings. It prints the version, the
-persons linked and the patients they are, the variables, the recordings, and the identity
-conflicts found, if any. A name already connected (ignoring case), a SQLite file outside
+and its catalog (the names and units of its variables), and links its persons to Medorama's
+patients by their exact (issuer, identifier) pairs (\cref{sec:connecting-identity}), keeping
+their encounters. It counts no entry and reads no recording (\cref{sec:connecting-kept}). It
+prints the version, the persons linked and the patients they are, the variables, that the
+recordings are read when a patient is opened (a recording database), and the identity conflicts
+found, if any. A name already connected (ignoring case), a SQLite file outside
 \code{data\_roots}, inside the workspace, or that is Medorama's own control store, and a URL
 that holds a password are refused. When the database is connected but reading it fails, the
 message says so: \cmd{databases refresh} reads it again.
@@ -358,8 +365,8 @@ message says so: \cmd{databases refresh} reads it again.
 \item[--ca-file FILE] Certificate authorities (PEM) trusted for the server's certificate,
   besides the system's.
 \item[--views FILE] Kind \code{views}: a TOML file whose keys \code{persons}, \code{visits},
-  \code{entries}, \code{recordings} and \code{version} each hold a view as SQL
-  (\cref{sec:connecting-views}); \code{persons} and \code{entries} are required.
+  \code{entries}, \code{recordings}, \code{stays}, \code{version} and \code{variables} each hold
+  a view as SQL (\cref{sec:connecting-views}); \code{persons} and \code{entries} are required.
 \item[--schema S] Kind \code{omop}: the schema of the CDM's tables. Default: none (the database's
   default).
 \item[--vocabulary-schema S] Kind \code{omop}: the schema of OMOP's vocabulary, when it is apart
@@ -377,7 +384,9 @@ message says so: \cmd{databases refresh} reads it again.
 \item[--files-root DIR] The folder from which a recording's relative \code{file} is read.
   Default: the folder of a SQLite database's file.
 \item[--timeout-s N] Each query's time limit, in seconds (PostgreSQL). Default (0): 60.
-\item[--max-rows N] The number of rows a criterion may read. Default (0): 1\,000\,000.
+\item[--max-rows N] The number of rows a criterion may read, and of recordings that
+  \cmd{databases index} reads. Default (0): 1\,000\,000. Connecting reads every person and visit,
+  however many: a large database needs no higher limit to connect.
 \end{params}
 \begin{lstlisting}[style=shell]
 medorama databases connect omop --kind omop \
@@ -394,12 +403,13 @@ medorama databases connect warehouse --kind views --url sqlite:/data/wh.sqlite \
 medorama databases list [--json]
 \end{lstlisting}
 Lists the connected databases, online ones first: name, kind, engine (\code{SQLite} or
-\code{PostgreSQL}), status (\code{online} or \code{offline}), the persons and recordings it
-holds, and why it is offline.
+\code{PostgreSQL}), status (\code{online} or \code{offline}), its persons and the recordings
+opened (those Medorama keeps: opened or indexed), and why it is offline.
 \begin{params}
 \item[--json] Print JSON: each database with its \code{id}, \code{url} (without a password),
   \code{status}, \code{status\_error}, \code{checked\_at}, \code{version}, \code{persons},
-  \code{patients}, \code{conflicts}, \code{variables}, \code{recordings} and \code{settings}.
+  \code{patients}, \code{conflicts}, \code{variables}, \code{recordings} (opened or indexed),
+  \code{has\_recordings} and \code{settings}.
 \end{params}
 \begin{lstlisting}[style=shell]
 medorama databases list
@@ -411,8 +421,8 @@ medorama databases check [NAME | --all]
 \end{lstlisting}
 Checks a database as the server does every 60 seconds: whether it answers (its SQLite file is
 there and each view answers), and its data's version. A database that answers is marked online;
-when its version changed since it was last read, its variables, persons and recordings are read
-again. One that does not answer is marked offline, with why. It prints \code{NAME: online} or
+when its version changed since it was last read, its persons, their encounters and its catalog
+are read again. One that does not answer is marked offline, with why. It prints \code{NAME: online} or
 \code{NAME: offline (why)}; without a name, or with \opt{-{}-all}, it checks every database and
 prints how many are online and offline.
 \begin{lstlisting}[style=shell]
@@ -424,12 +434,42 @@ medorama databases check --all
 \begin{lstlisting}[style=signature]
 medorama databases refresh NAME
 \end{lstlisting}
-Checks the database, then reads again everything Medorama keeps of it, whatever its version: its
-variables, its persons (linked again) and its recordings. It prints the persons, the patients and
-the identity conflicts. A database that does not answer is an error. Audited (\code{refresh}).
-Run it after the database's owner corrected an identity conflict.
+Checks the database, then reads again what Medorama keeps of it, whatever its version: its
+catalog (the names and units of its variables), its persons (linked again) and their encounters.
+No recording is read, and the counts are dropped. It prints the persons, the patients and the
+identity conflicts. A database that does not answer is an error. Audited (\code{refresh}). Run it
+after the database's owner corrected an identity conflict.
 \begin{lstlisting}[style=shell]
 medorama databases refresh demo
+\end{lstlisting}
+
+\apientry{medorama databases count}{Count a database's variables}
+\begin{lstlisting}[style=signature]
+medorama databases count NAME
+\end{lstlisting}
+Counts how many entries and persons hold each of the database's variables (\ui{Count now} in the
+Databases tab): one grouped query over its entries, which takes a while on a large database.
+The counts are kept until the catalog is read again (a new version, \cmd{databases refresh}),
+and \cmd{databases variables} then shows them. It prints \code{NAME: N variable(s) counted}. A
+database that does not answer is an error. Audited (\code{count}).
+\begin{lstlisting}[style=shell]
+medorama databases count demo_omop
+\end{lstlisting}
+
+\apientry{medorama databases index}{Read and index every recording of a database}
+\begin{lstlisting}[style=signature]
+medorama databases index NAME
+\end{lstlisting}
+Reads every recording the database lists (at most its \code{max\_rows}), checks their files
+(present, inside \code{data\_roots}, not in the workspace, readable), keeps them, and queues the
+new or changed ones for indexing (\ui{Index all recordings} in the Databases tab). Connecting
+reads none: otherwise a patient's recordings are read, and indexed, when the patient is opened
+(\cref{sec:connecting-kept}). It prints the recordings read (new, changed, missing, removed) and
+how many were queued; \code{medorama serve} (or \cmd{medorama work}) indexes them. A database that
+does not answer is an error. Audited (\code{index\_all}).
+\begin{lstlisting}[style=shell]
+medorama databases index demo
+medorama work
 \end{lstlisting}
 
 \apientry{medorama databases variables}{What a database holds}
@@ -437,10 +477,13 @@ medorama databases refresh demo
 medorama databases variables NAME [--json]
 \end{lstlisting}
 Lists the database's variables, as last read: one line each with its category, name, unit, the
-entries and persons that have it, and its vocabulary and code.
+entries and persons that have it, and its vocabulary and code. The entries and persons are
+\code{-} until \cmd{databases count} counted them (a last line then names that command), and a
+count from 1 to 10 is shown as \code{< 11}.
 \begin{params}
 \item[--json] Print JSON: each variable's \code{category}, \code{name}, \code{vocabulary},
-  \code{code}, \code{unit}, \code{entries}, \code{persons} and \code{numeric}.
+  \code{code}, \code{unit}, \code{entries}, \code{persons} (texts, or \code{null} when not
+  counted) and \code{numeric}.
 \end{params}
 \begin{lstlisting}[style=shell]
 medorama databases variables demo_omop
@@ -570,7 +613,8 @@ medorama list --q "has:icu database:demo"
 \begin{lstlisting}[style=signature]
 medorama recordings [--q WORDS] [--limit N] [--json]
 \end{lstlisting}
-Lists the recordings of the connected recording databases, latest first: one line each with its
+Lists the recordings Medorama keeps of the connected recording databases (those opened or
+indexed: \cref{sec:connecting-kept}), latest first: one line each with its
 number (\cref{sec:recordings-numbers}), status, database, start time, name and format; then how
 many of the total are shown.
 \begin{params}
@@ -588,7 +632,7 @@ medorama recordings --q demo --limit 20
 \begin{lstlisting}[style=signature]
 medorama check
 \end{lstlisting}
-Re-checks every recording, as the server does every \code{check\_interval\_s}: whether its files
+Re-checks every recording kept, as the server does every \code{check\_interval\_s}: whether its files
 are missing, are back, or changed, and whether its index is still in its database's index store.
 It prints the counts (\code{1204 checked: 2 missing, 0 back, 3 changed, 0 indexes lost}). It has no options.
 \begin{lstlisting}[style=shell]
@@ -918,7 +962,7 @@ without serving. The options override the settings file, which overrides the def
 \item[--keys-on-stdin] Read the index stores and their keys on the standard input, one line of
   JSON each (\cref{sec:formats-reference-writing}). Medorama starts the viewer it runs with it; a
   key is never given on the command line.
-\item[-V, --version] Print the program's name and version (\code{vitalstream-py 0.2.1}), then
+\item[-V, --version] Print the program's name and version (\code{vitalstream-py 0.3.0}), then
   exit.
 \end{params}
 \begin{lstlisting}[style=shell]

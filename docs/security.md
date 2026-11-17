@@ -6,7 +6,7 @@ describes what Medorama protects, against whom, how, and what it leaves to the d
 institution. Each control names the code that implements it and the test that checks it, so
 that every claim can be verified rather than taken on trust.
 
-It describes Medorama 0.2.1 (a pre-release). Medorama is research software, not a medical device,
+It describes Medorama 0.3.0 (a pre-release). Medorama is research software, not a medical device,
 and it holds no certification. To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 
 A plain-language explanation of how identifiers are hidden is
@@ -54,8 +54,8 @@ no scripts or fonts from other sites.
   pseudonyms, keyed hashes of identifiers, and wrapped keys: no identifier, name or value read
   from a database.
 - **An encrypted workspace, one key per database and per cohort.** What Medorama generates from
-  a database (its persons as linked, its variables, its recordings' state, the numbers of actions'
-  results) and each cohort's members are SQLite files encrypted with SQLCipher (AES-256), each
+  a database (its persons as linked and their encounters, the names and units of its variables,
+  the state of the recordings it has opened, the numbers of actions' results) and each cohort's members are SQLite files encrypted with SQLCipher (AES-256), each
   owner with its own data key. The data keys are kept only wrapped (AES-256-GCM) by a master key
   that lives outside the workspace. Removing a database destroys its key first
   (crypto-shredding), then its files, then every cohort row it contributed to.
@@ -159,10 +159,10 @@ is specified in [administration.md](administration.md) and [api.md](api.md).
 
 | Asset | Examples | Classification | Where it lives |
 |---|---|---|---|
-| Direct identifiers | Names, MRNs, dates of birth, patient IDs | **PHI** | The connected databases (read only); as linked, in each database's `persons.sqlite` in the workspace (encrypted with its key) |
+| Direct identifiers | Names, MRNs, dates of birth, patient IDs; encounters' dates | **PHI** | The connected databases (read only); as linked, with each person's encounters (key, start, end, intensive care), in each database's `persons.sqlite` in the workspace (encrypted with its key) |
 | Clinical data | Results, vital signs, medications, conditions, notes, with their real dates | **PHI** (dates and free text identify; HIPAA counts them) | The connected databases, read at each request; not copied |
 | Files | Recordings, ECGs, DICOM studies, PDFs, pictures, videos | **PHI** (headers, file names, burned-in text) | Where the connected databases say (read only) |
-| What Medorama generates | Each database's persons summary, variables, recordings' state, the numbers of actions' results; cohorts' members and their provenance | **PHI** or sensitive (dated, linkable) | The workspace: one SQLite file each, encrypted (SQLCipher, AES-256) with its owner's data key |
+| What Medorama generates | Each database's catalog (the names and units of its variables, their counts once a manager counts them), the state of the recordings it has opened, the numbers of actions' results; cohorts' members and their provenance | **PHI** or sensitive (dated, linkable) | The workspace: one SQLite file each, encrypted (SQLCipher, AES-256) with its owner's data key |
 | Recording indexes | Waveform envelopes, vital-sign series, markers, derived series | Sensitive (dated, linkable) | Each database's index store in the workspace (`db-NNNN/index.sqlite`), encrypted (SQLCipher) with that database's data key; the viewer's own store (`viewer/index.sqlite`) with a key of its own |
 | Plug-ins' output files | The files an action plug-in writes | Sensitive (dated, linkable) | The plug-ins' output folders in the workspace (`db-NNNN/results/<action>/…`): **not encrypted** in this version |
 | Patient index | Keyed hashes (HMAC) of each (issuer, identifier) pair, with the patient number each leads to | Pseudonymous; testable by whoever holds the gate's secret ([17](#17-known-limitations-and-residual-risks)) | The control store (`patient_keys`) |
@@ -440,10 +440,11 @@ Mode is refused (HTTP 403).
 |---|---|---|---|
 | Mode decision | Privacy Mode unless the user has the PHI permission and switched it off | `server.rs` `in_privacy`, `session_user` | `tests/privacy.rs` |
 | Identifiers per database | A database's identity (names, MRNs, dates of birth, patient IDs) only from databases granted `phi`, and only outside Privacy Mode | `patient/identity.rs`; `patient/list.rs` | `tests/databases.rs` (`grants_decide_what_a_user_sees`) |
-| Identifier dictionary | Each connected database's patient IDs (from its persons file) become the patients' pseudonyms; MRNs placeholders; recordings' paths tokens and the folders they lie in `[Folder]`, in every string of an answer (paths inside text too: an error that names a file). Built again whenever a database is connected, refreshed or removed (`data_version.identifiers`) | `gate.rs` `Dict`, `Restricted::json`; `server.rs` `restricted` | `gate.rs` unit tests; `tests/privacy.rs` (`the_dictionary_follows_the_identifiers`) |
+| Identifier dictionary | Each connected database's patient IDs (from its persons file) become the patients' pseudonyms; MRNs placeholders; recordings' paths tokens and the folders they lie in `[Folder]`, in every string of an answer (paths inside text too: an error that names a file). Built again whenever a database is connected, refreshed or removed, or a kept recording's path or label changes or it goes (`data_version.identifiers`); recordings kept for the first time, as patients are opened, are added to the dictionary in use (`data_version.recordings`), before the answer that read them is cleared | `gate.rs` `Dict`, `Restricted::json`; `server.rs` `restricted` | `gate.rs` unit tests; `tests/privacy.rs` (`the_dictionary_follows_the_identifiers`) |
 | Placeholders | Names, dates of birth, staff names and withheld values become fixed text | `gate.rs`, `Restricted::json` | `tests/privacy.rs` |
 | Pseudonyms | Random, stored, check character; never derived from an identifier; visits by their own pseudonyms (`MO-E-…`) | `pseudonyms.rs` | `pseudonyms.rs` unit tests |
 | Dates and ages | Every date moved back by Medorama's offset and the patient's own days; ages above 89 as `90+` | `deid.rs` `Settings`, `answer_with`, `shift_text` | `deid.rs` unit tests; `tests/privacy.rs` (no JSON number is a real time) |
+| Small counts | A variable's entries and persons, once counted (**Count now**), from 1 to 10 shown as "< 11" in the page, the command and the API, to every user | `variables.rs` `shown`, `ShownVariable` | `tests/connected.rs` (`connecting_keeps_the_subjects_their_encounters_and_the_catalog_only`) |
 | Notes | The patient's own names (each part of a compound name: `Smith-Jones`, `O'Brien`) and date of birth replaced; marked; withheld if the administrator chooses | `gate.rs` `Restricted::note`, `name_words` | `tests/privacy.rs` |
 | Errors and jobs | The viewer's error texts replaced by a fixed sentence; the records of a folder it left out named by number; a failed job's error `failed`; plug-ins' output folders for administrators only (and not in Privacy Mode) | `gateway.rs` `private_answer`; `server.rs` `jobs_list` | `tests/privacy.rs` (`around_the_gate`, `the_viewers_errors_in_privacy_mode`) |
 | Searches | Searches of identifiers refused; patients found by pseudonym | `search.rs`, `patient/list.rs` | `tests/privacy.rs` |
@@ -687,7 +688,7 @@ Each entry records the time, the user, the event, its target and a detail.
 | Users and settings | `user_added`, `user_changed` (an administrator's **Sign out** of another user is written in its detail), `user_deleted`, `deid_settings`, `display_changed`, `init`, `keys_rotate`; on the command line `addon_install`, `addon_remove`, `copy_database` |
 | Privacy Mode | `privacy_on`, `privacy_off` |
 | Identifiers | `phi_search` (searches of identifiers and of notes' text), `privacy_search` (searches, filters and cohort criteria made in Privacy Mode, with their text), `patient_view`, `phi_export` (an export by a user with the PHI permission outside Privacy Mode) |
-| Connected databases | `connect`, `check`, `refresh`, `refresh_failed`, `link` (persons linked), `remove` (who, when, its name; no patient data), `view` (a recording opened) |
+| Connected databases | `connect`, `check`, `refresh`, `refresh_failed`, `link` (persons linked), `count` (its variables counted), `index_all` (every recording read for indexing), `remove` (who, when, its name; no patient data), `view` (a recording opened) |
 | Grants | `grant`, `grant_self` (an administrator granting themselves), `revoke` |
 | Cohorts | `cohort_create`, `cohort_change`, `cohort_refresh`, `cohort_delete` (each with what changed), `export` (a cohort's members' data) |
 | Work | `run` |

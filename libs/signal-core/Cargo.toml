@@ -1,6 +1,6 @@
 [package]
 name = "signal-core"
-version = "0.2.1"
+version = "0.3.0"
 description = "Values, Python-compatible number formatting and text helpers shared by Medorama's readers, recording engine and viewers"
 readme = "README.md"
 edition.workspace = true

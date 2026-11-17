@@ -245,7 +245,8 @@ optionally after \code{=} or \code{contains}: \code{dx I21}, \code{dx = I21},
   result. Needs the PHI permission, out of Privacy Mode \\
 \code{has} \emph{category}, or a category's word alone & They have data of that category:
   \code{has ecg}, \code{icu}, \code{holter}, \code{sleep}, \code{eeg}, \code{echo} and so on
-  (any word of a category, \cref{tab:patients-categories}) \\
+  (any word of a category, \cref{tab:patients-categories}), or a recording of that category in
+  a recording database (each database is asked, whether or not its recordings were opened) \\
 \code{diagnosis}, \code{dx}, \code{condition} \emph{text} & A condition's code starts with the
   text, compared without dots and in any case (\code{I21.4}, \code{I214} and \code{i21} find
   \code{I21.4}), or, for a word (three characters or more, with a letter, not shaped like a

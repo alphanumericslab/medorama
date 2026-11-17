@@ -469,6 +469,7 @@ workspace are where `init` put them. Connected databases and recordings are neve
 | `linker 'cc' not found` (Linux) | No C toolchain is installed. Install `build-essential` or `gcc` ([Prerequisites](#prerequisites)), or see [Without administrator rights](#without-administrator-rights). |
 | `linker 'link.exe' not found`, `No CMAKE_CXX_COMPILER could be found` (Windows) | The Build Tools are missing, or lack **Desktop development with C++**. For C++, use a Developer PowerShell. |
 | `exit status: 69`, `You have not agreed to the Xcode license agreements` (macOS) | Run `sudo xcodebuild -license accept`, or `export DEVELOPER_DIR=/Library/Developer/CommandLineTools`. |
+| `Command 'make' not found` while building `openssl-sys` | OpenSSL's build needs `make`. Install it (`sudo dnf install make`, `sudo apt install make`); without administrator rights, build GNU make into your home folder, which needs only a C compiler: unpack `make-4.4.1.tar.gz` from <https://ftp.gnu.org/gnu/make/>, run `./configure --disable-dependency-tracking` and `./build.sh` (neither needs `make`), then `mkdir -p ~/.local/bin && cp make ~/.local/bin/` and `export PATH=$HOME/.local/bin:$PATH`, and build again. |
 | `feature 'edition2024' is required`, `requires rustc 1.88` | Rust is too old. Run `rustup update`; a distribution's packaged Rust is often old. |
 | `cargo: command not found` after installing Rust | Open a new shell, or run `. "$HOME/.cargo/env"`. |
 | `failed to get … from crates.io` | There is no internet access. [Vendor the dependencies](#without-internet-access). |

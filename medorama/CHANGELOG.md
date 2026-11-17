@@ -1,5 +1,48 @@
 # Changelog: medorama
 
+## 0.3.0 (2026-11-17, pre-release)
+
+Medorama keeps of each connected database only what links its patients and names what it holds,
+and reads the rest from the database when it is asked
+([docs/design/connected-databases.md](../docs/design/connected-databases.md)). Connecting a
+database of millions of rows takes minutes where 0.2 took hours. A 0.2 installation updates in
+place: each database is read again at its next check.
+
+- **What is kept of a database** (its workspace folder, encrypted with its key): its persons'
+  identifiers, names, date of birth and sex, linked to patients; their encounters (key, start,
+  end, intensive care); the names and units of its variables; the recordings Medorama has
+  opened, with their indexes. No longer: a summary of each person's data (two grouped queries
+  over every entry at each refresh), each variable's counts, and the list of every recording
+  with its file checked.
+- **Connecting and refreshing** read the persons (however many: `max_rows` bounds criteria,
+  not the subject index), the visits and the catalog. A database without a version query is
+  versioned by a count of its persons and recordings, no longer of its entries.
+- **A `variables` view** (optional, kind `views`: `category, name, vocabulary, code, unit,
+  numeric`) names what a database holds, so that connecting reads no entry for its catalog;
+  without one, one grouped query over the entries, with no counting. The demo's `demo_muse`
+  has one, and the views of a MUSE ECG metadata database in [databases.md](../docs/databases.md)
+  show it.
+- **Count now** (the Databases tab; `medorama databases count NAME`; `POST
+  /api/v1/databases/{id}/count`, who manages the database): how many entries and persons hold
+  each variable, one grouped query. Counts below 11 are shown as "< 11" in the page, the command
+  and the API.
+- **Recordings are read when a patient is opened** (their page, a job, a cohort's selection):
+  their files checked, kept and indexed then. **Index all recordings** (`medorama databases
+  index NAME`; `POST /api/v1/databases/{id}/index`) reads and indexes every recording a database
+  lists, as connecting did; `medorama init --demo` does it for the demo. The Recordings tab
+  lists the recordings opened or indexed. A cohort's `has` asks the database.
+- **The patient list** answers from the persons and encounters kept, online or offline; its
+  **Data** and **Entries** columns are read from the online databases for the page shown, and
+  a filter on a kind of data asks them. Entries show "—" when not read.
+- **Privacy Mode's dictionary** takes recordings first kept without being built again
+  (`data_version.recordings`, control-store migration 2); a recording changed or gone builds it
+  again.
+- `medorama databases variables` shows counts as the page does, and "-" before **Count now**;
+  `medorama databases list` says how many recordings were opened.
+- docs: [connected-databases.md](../docs/design/connected-databases.md) (new), databases.md,
+  administration.md, architecture.md, security.md, protecting-patient-data.md, api.md,
+  user-guide.md, and the manual.
+
 ## 0.2.1 (2026-11-17, pre-release)
 
 - **The ECG viewer reads the rates and formats of GE MUSE files strictly**, in `muse.js` and in
@@ -38,7 +81,8 @@
   longer refused when a terminal adds a carriage return, escape sequences or spaces; a refusal
   shows the answer it read and how to accept without the question (`--accept-license`).
 - **docs/building.md**: building on Linux without administrator rights when Perl lacks
-  `IPC::Cmd` (RHEL and Rocky 8): the module installed into the home folder with `cpanm`.
+  `IPC::Cmd` (RHEL and Rocky 8): the module installed into the home folder with `cpanm`; and
+  without `make`: GNU make built into the home folder (its `build.sh` needs only a C compiler).
 
 ## 0.2.0 (2026-11-15, pre-release)
 

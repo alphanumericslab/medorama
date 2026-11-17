@@ -132,6 +132,8 @@ async fn viewer_behind_the_gateway() {
             ..Default::default()
         };
         let id = medorama::databases::connect(&cfg, &c, &boss, &n, "").unwrap();
+        // its recordings read and indexed (`medorama databases index`): connecting reads none
+        medorama::databases::index_recordings(&cfg, &c, &boss, id).unwrap();
         for u in ["vic", "pat"] {
             let u = users::get_by_name(&c, u).unwrap().unwrap();
             medorama::grants::grant(&c, &boss, u.id, &format!("db:{id}"), "phi").unwrap();

@@ -706,7 +706,8 @@ new key, and is indexed again.
 
 \paragraph{Checking the files.} \ui{Re-check the files} (\ui{Databases} $\rightarrow$
 \ui{Recordings}), \cmd{medorama check}, and the server every \code{check\_interval\_s} seconds
-(default 900; 0 means never) check every recording of the connected databases: whether it is
+(default 900; 0 means never) check every recording Medorama keeps (those opened or indexed:
+\cref{sec:connecting-kept}): whether it is
 still there, whether it changed, and whether its index is still in the store. A missing recording
 is kept, marked missing, and is counted as back when it returns. A changed recording is indexed
 again, and a lost index is made again. The following command runs the check and prints a summary:
@@ -718,8 +719,10 @@ medorama check
 \section{The Recordings subtab}
 \label{sec:recordings-tab}
 
-\ui{Databases} $\rightarrow$ \ui{Recordings} lists the recordings of the recording databases you
-may view (\code{view}; \cref{sec:databases-tab-grants}), newest first, a page at a time. For each
+\ui{Databases} $\rightarrow$ \ui{Recordings} lists the recordings Medorama keeps of the
+recording databases you may view (\code{view}; \cref{sec:databases-tab-grants}): those read when
+a patient was opened (their page, a job, a cohort's selection) or by \ui{Index all recordings}.
+They come newest first, a page at a time. For each
 recording it shows the status, the name (with any error), the kind and format, the start, the
 length, a link to its patient, its database and its path, with the buttons \ui{View} (in
 VitalStream), \ui{Copy path} and \ui{Index now}. The status is \code{new} (never indexed),

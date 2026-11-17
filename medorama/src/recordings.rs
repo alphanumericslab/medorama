@@ -1,7 +1,12 @@
-//! Recordings (docs/design/databases-only.md, "Derived databases"): the recordings each
-//! recording database lists, and what Medorama keeps of them in that database's workspace
-//! folder (`recordings.sqlite`): whether the file is there, its fingerprint (the index key), the
-//! format and times its index found, and the series derived from it.
+//! Recordings (docs/design/connected-databases.md, "Files and indexes"): the recordings a
+//! recording database lists, and what Medorama keeps of those it has opened, in that database's
+//! workspace folder (`recordings.sqlite`): whether the file is there, its fingerprint (the index
+//! key), the format and times its index found, and the series derived from it.
+//!
+//! Connecting reads no recording.  A patient's recordings are read from the database when their
+//! page (or a job, a cohort's selection) asks for them ([`sync_persons`]): only then are their
+//! files checked and kept here, and indexed.  [`sync`] reads every recording a database lists:
+//! it is asked for (`medorama databases index`), never done when connecting.
 //!
 //! A recording is numbered `database × 1,000,000,000 + its number in the database's file`, one
 //! number across Medorama (jobs, the page, the viewer).  Medorama only reads recordings: the
@@ -205,11 +210,13 @@ pub struct SyncReport {
     pub missing: usize,
     pub changed: usize,
     pub removed: usize,
+    /// Rows new to the privacy gate's dictionary, and rows whose path or label it names changed.
+    #[serde(skip)]
+    pub named: usize,
+    #[serde(skip)]
+    pub renamed: usize,
 }
 
-/// Read a recording database's recordings and keep what Medorama needs of them: each file's
-/// presence and fingerprint, its patient.  A file outside `data_roots`, or in the workspace, is
-/// kept missing with the reason.  Recordings the database no longer lists go (their series too).
 /// Why a recording's file is not read (empty: it is): missing, outside `data_roots`, inside the
 /// workspace, or unreadable.
 fn problem_of(cfg: &Config, path: &Path) -> String {
@@ -224,17 +231,43 @@ fn problem_of(cfg: &Config, path: &Path) -> String {
     }
 }
 
+/// Read every recording a database lists and keep what Medorama needs of each: its file's
+/// presence and fingerprint, its patient (`medorama databases index`: asked for, never done
+/// when connecting).  Recordings the database no longer lists go (their series too).
 pub fn sync(cfg: &Config, c: &Connection, s: &Source) -> anyhow::Result<SyncReport> {
-    let mut rep = SyncReport::default();
     if !s.has_recordings() {
-        return Ok(rep);
+        return Ok(SyncReport::default());
     }
-    let zone = s.zone(&cfg.timezone);
-    let listed = s.all_recordings(zone)?;
+    let listed = s.all_recordings(s.zone(&cfg.timezone))?;
+    keep(cfg, c, s, &listed, None)
+}
+
+/// Read these persons' recordings from the database now, and keep what Medorama needs of each
+/// (their files checked): what a patient's page, a job or a cohort's selection reads.  Their
+/// recordings the database no longer lists go.
+pub fn sync_persons(cfg: &Config, c: &Connection, s: &Source, persons: &[String]) -> anyhow::Result<SyncReport> {
+    if persons.is_empty() || !s.has_recordings() {
+        return Ok(SyncReport::default());
+    }
+    let listed = s.recordings(persons, s.zone(&cfg.timezone))?;
+    keep(cfg, c, s, &listed, Some(persons))
+}
+
+/// Keep these recordings, as listed: each file checked, the rows added or updated; the rows the
+/// listing no longer holds (of `persons`; none: of the whole database) removed.  The privacy
+/// gate's dictionary is built again when what it names changed.
+fn keep(
+    cfg: &Config,
+    c: &Connection,
+    s: &Source,
+    listed: &[crate::sources::Recording],
+    persons: Option<&[String]>,
+) -> anyhow::Result<SyncReport> {
+    let mut rep = SyncReport::default();
     let mut w = open(cfg, c, s.id)?;
     let tx = w.transaction()?;
     let t = now();
-    for r in &listed {
+    for r in listed {
         rep.recordings += 1;
         let path = crate::config::real(&s.recording_path(&r.file));
         let problem = problem_of(cfg, &path);
@@ -247,14 +280,22 @@ pub fn sync(cfg: &Config, c: &Connection, s: &Source) -> anyhow::Result<SyncRepo
         } else {
             crate::categories::named(&r.category).unwrap_or("icu").to_string()
         };
-        let before: Option<(String, bool)> = tx
-            .query_row("SELECT fingerprint, present FROM recordings WHERE recording_key = ?1", [&r.key], |x| {
-                Ok((x.get(0)?, x.get::<_, i64>(1)? != 0))
-            })
+        let before: Option<(String, bool, String, String)> = tx
+            .query_row(
+                "SELECT fingerprint, present, path, label FROM recordings WHERE recording_key = ?1",
+                [&r.key],
+                |x| Ok((x.get(0)?, x.get::<_, i64>(1)? != 0, x.get(2)?, x.get(3)?)),
+            )
             .ok();
+        // what the gate's dictionary names (paths, labels): new, or changed
+        match &before {
+            None => rep.named += 1,
+            Some(b) if b.2 != path.to_string_lossy() || b.3 != r.label => rep.renamed += 1,
+            _ => {}
+        }
         match &before {
             None => rep.added += 1,
-            Some((f, _)) if present && *f != fp => rep.changed += 1,
+            Some((f, ..)) if present && *f != fp => rep.changed += 1,
             _ => {}
         }
         if !present && before.as_ref().is_none_or(|b| b.1) {
@@ -299,9 +340,16 @@ pub fn sync(cfg: &Config, c: &Connection, s: &Source) -> anyhow::Result<SyncRepo
     }
     let keys: std::collections::HashSet<&str> = listed.iter().map(|r| r.key.as_str()).collect();
     let gone: Vec<(i64, String)> = {
-        let mut st = tx.prepare("SELECT id, recording_key FROM recordings")?;
-        let v = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
-        v.into_iter().filter(|(_, k): &(i64, String)| !keys.contains(k.as_str())).collect()
+        let v: Vec<(i64, String, String)> = {
+            let mut st = tx.prepare("SELECT id, recording_key, person_key FROM recordings")?;
+            let v = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<Vec<_>, _>>()?;
+            v
+        };
+        let scope: Option<std::collections::HashSet<&str>> = persons.map(|p| p.iter().map(String::as_str).collect());
+        v.into_iter()
+            .filter(|(_, k, p)| !keys.contains(k.as_str()) && scope.as_ref().is_none_or(|s| s.contains(p.as_str())))
+            .map(|(id, k, _)| (id, k))
+            .collect()
     };
     for (id, _) in &gone {
         tx.execute("DELETE FROM series WHERE recording = ?1", [id])?;
@@ -310,6 +358,13 @@ pub fn sync(cfg: &Config, c: &Connection, s: &Source) -> anyhow::Result<SyncRepo
     }
     rep.removed = gone.len();
     tx.commit()?;
+    // recordings only added: the gate's dictionary takes them as they are; a path or a label
+    // changed, or a recording gone: it is built again
+    if rep.renamed + rep.removed > 0 {
+        c.execute("UPDATE data_version SET version = version + 1, identifiers = identifiers + 1", [])?;
+    } else if rep.named > 0 {
+        c.execute("UPDATE data_version SET version = version + 1, recordings = recordings + 1", [])?;
+    }
     // the patients of the recordings' persons, linked now
     let persons: Vec<String> = listed.iter().map(|r| r.person.clone()).filter(|p| !p.is_empty()).collect();
     crate::persons::patients(cfg, c, s, &persons, None)?;
@@ -437,6 +492,14 @@ pub fn get(cfg: &Config, c: &Connection, id: i64) -> anyhow::Result<Option<Recor
     Ok(read(cfg, c, &s, "id = ?1", &[n.to_string()])?.into_iter().next())
 }
 
+/// A database's recordings kept after this one (its number in the database's file), in order
+/// (the privacy gate's dictionary, which takes the new ones).
+pub fn after(cfg: &Config, c: &Connection, s: &Source, n: i64) -> anyhow::Result<Vec<Recording>> {
+    let mut v = read(cfg, c, s, "id > ?1", &[n.to_string()])?;
+    v.sort_by_key(|r| r.id);
+    Ok(v)
+}
+
 /// Several recordings by number, each database's file opened once (a job queue, a check):
 /// by number, those found.
 pub fn get_many(cfg: &Config, c: &Connection, ids: &[i64]) -> anyhow::Result<HashMap<i64, Recording>> {
@@ -464,10 +527,14 @@ pub fn of_database(cfg: &Config, c: &Connection, s: &Source) -> anyhow::Result<V
     read(cfg, c, s, "1 = 1", &[])
 }
 
-/// The recordings of these persons of a database.
+/// The recordings of these persons of a database, read from it now (their files checked and
+/// kept: [`sync_persons`]); a database offline: those kept when it was last read.
 pub fn of_persons(cfg: &Config, c: &Connection, s: &Source, persons: &[String]) -> anyhow::Result<Vec<Recording>> {
     let mut out = vec![];
     for chunk in persons.chunks(500) {
+        if let Err(e) = sync_persons(cfg, c, s, chunk) {
+            eprintln!("medorama: {}: recordings: {e}", s.name);
+        }
         let marks = (1..=chunk.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(", ");
         out.extend(read(cfg, c, s, &format!("person_key IN ({marks})"), chunk)?);
     }
@@ -489,7 +556,8 @@ pub fn of_patient(cfg: &Config, c: &Connection, user: &User, patient: i64) -> an
     Ok(out)
 }
 
-/// How many recordings a database lists.
+/// How many of a database's recordings Medorama keeps (those opened, or indexed by
+/// `medorama databases index`).
 pub fn count(cfg: &Config, c: &Connection, database: i64) -> anyhow::Result<i64> {
     let dir = crate::workspace::database_dir(cfg, database);
     if !dir.join("recordings.sqlite").is_file() {

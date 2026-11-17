@@ -222,12 +222,15 @@ every command) first finishes any removal of a database that a stop or a crash i
 - every connected database is **checked** at start and then every 60 seconds: online or offline,
   and read again when its data changed ([Status, versions and variables](#status-versions-and-variables));
 - **workers** (the `workers` setting) run queued jobs;
-- **automatic indexing** queues new and changed recordings within about 15 seconds;
-- every recording is **checked again** every `check_interval_s` seconds, which finds missing and
-  changed recordings and lost indexes.
+- **automatic indexing** queues new and changed recordings within about 15 seconds (a
+  recording is kept, and so indexed, once its patient is opened, or when **Index all
+  recordings** reads its database: [Files and recordings](#files-and-recordings));
+- every recording kept is **checked again** every `check_interval_s` seconds, which finds missing
+  and changed recordings and lost indexes.
 
-The commands can do the same work without the server: `medorama run index --all` queues indexing
-of every recording, and `medorama work` runs the queue in the terminal until it is empty.
+The commands can do the same work without the server: `medorama databases index NAME` reads
+every recording a database lists, `medorama run index --all` queues indexing of every recording
+kept, and `medorama work` runs the queue in the terminal until it is empty.
 `serve --no-workers` serves the page only, while another process runs `work`.
 
 ## Command reference
@@ -241,18 +244,20 @@ of every recording, and `medorama work` runs the queue in the terminal until it 
 | `--home DIR use` | Makes that home folder the default for later commands. |
 | `serve [--host H] [--port N] [--no-workers] [--db-builder-root DIR]` | Runs the web page, the API and the background work (and db-builder, building databases in `DIR`: [db-builder](#db-builder)). |
 | `databases connect NAME --kind omop\|views\|dbb --url URL …` | Connects a database ([Connect a database](#connect-a-database)). |
-| `databases list [--json]` | Lists the connected databases: kind, engine, status, persons, recordings, and why an offline one does not answer. |
+| `databases list [--json]` | Lists the connected databases: kind, engine, status, persons, the recordings opened, and why an offline one does not answer. |
 | `databases check [NAME\|--all]` | Checks one database (or every one) now: online or offline, and read again when its data changed. |
-| `databases refresh NAME` | Reads again everything Medorama keeps of a database: its variables, persons and recordings. |
-| `databases variables NAME [--json]` | What a database holds: its variables. |
+| `databases refresh NAME` | Reads again what Medorama keeps of a database: its catalog (the names and units of its variables), its persons and their encounters. No recording is read. |
+| `databases count NAME` | Counts how many entries and persons hold each of a database's variables (**Count now**): one pass over its entries. |
+| `databases index NAME` | Reads every recording a database lists, checks its files, and queues the new or changed ones for indexing (**Index all recordings**). |
+| `databases variables NAME [--json]` | What a database holds: its variables, with their counts once counted (`-` before `databases count`; from 1 to 10 shown as `< 11`). |
 | `databases conflicts NAME` | Its identity conflicts ([Identity](#identity)). |
 | `databases grants NAME`, `databases grant NAME USER PERMISSION`, `databases revoke NAME USER PERMISSION` | Who may use a database; grants or revokes `search`, `view`, `phi` or `manage` ([Grants](#grants)). Revoking a permission revokes the stronger ones too. |
 | `databases remove NAME [--yes]` | Removes a database and every trace of it from Medorama ([Removing a database](#removing-a-database)). Without `--yes`, it asks you to type the database's name. |
 | `keys new FILE`, `keys rotate --new-key-file FILE` | Makes a new master key file; wraps every data key and stored password again with a new master key ([Keys](#keys)). |
 | `addons list`, `addons install PROGRAM`, `addons remove NAME` | Manages [add-ons](#add-ons). |
 | `list [--q SEARCH] [--limit N] [--json]` | Lists patients of the connected databases. The search takes pseudonyms, sex, `has:…` and `database:…`, and names, MRNs and dates of birth ([search syntax](user-guide.md#searching)). `--limit` defaults to 100. |
-| `recordings [--q SEARCH] [--limit N] [--json]` | Lists the recordings of the connected databases, with their numbers. `--limit` defaults to 100. |
-| `check` | Checks every recording again now: missing, changed, lost indexes. |
+| `recordings [--q SEARCH] [--limit N] [--json]` | Lists the recordings Medorama keeps of the connected databases (those opened or indexed), with their numbers. `--limit` defaults to 100. |
+| `check` | Checks every recording kept again now: missing, changed, lost indexes. |
 | `actions` | Lists the installed actions. |
 | `run ACTION… --all\|--recording N…\|--patient MO-…\|--cohort N [--force] [--param A.K=V] [--priority N]` | Queues actions: on every recording, on recordings by number, on the recordings of patients (by pseudonym), or on those of a cohort's members. |
 | `work [--workers N]` | Runs the queue in this process until it is empty. |
@@ -380,16 +385,18 @@ sign-in depends on, and how to check that the header cannot be forged.
 
 Every source of data about patients is a **connected database**, which Medorama reads where it
 is, at each request, read-only: an OMOP CDM instance, a research warehouse, a SQLite file made by
-db-builder. Medorama keeps no copy of the data it reads; what it generates from a database
-(its persons as linked, its variables, its recordings' state, the results of actions) goes into
-that database's encrypted folder of the workspace. [databases.md](databases.md) says what a
-database must provide, and how to prepare one.
+db-builder. Medorama keeps no copy of the data it reads. Of each database it keeps only what
+links its patients and names what it holds: its persons as linked and their encounters, the
+names and units of its variables (counted only when asked), and what Medorama did itself (the
+recordings it has opened, their indexes, the results of actions), in that database's encrypted
+folder of the workspace ([databases.md, What Medorama keeps of a database](databases.md#what-medorama-keeps-of-a-database)).
+[databases.md](databases.md) says what a database must provide, and how to prepare one.
 
 | Aspect | Details |
 |---|---|
-| Kinds | `omop`: an OMOP CDM 5.3 or 5.4 database, read through built-in views. `views`: any SQL database, read through views that the site writes (`persons`, `visits`, `entries`, and `recordings` for a database of recordings, and a `version` query). `dbb`: a database made by [db-builder](../db-builder/README.md), whose tables are the views already. |
+| Kinds | `omop`: an OMOP CDM 5.3 or 5.4 database, read through built-in views. `views`: any SQL database, read through views that the site writes (`persons`, `visits`, `entries`, and `recordings` for a database of recordings, a `version` query and an optional `variables` catalog). `dbb`: a database made by [db-builder](../db-builder/README.md), whose tables are the views already. |
 | Database engines | PostgreSQL (on-site, Amazon RDS and Aurora, Azure) and SQLite files. A SQLite file must lie inside `data_roots`, and may not be Medorama's control store or lie inside its workspace. |
-| Access | Read-only, and enforced: PostgreSQL sessions are read-only, and SQLite files are opened read-only. Each query has a time limit (`timeout_s`, 60 seconds by default), and each criterion a row limit (`max_rows`, 1,000,000 by default). |
+| Access | Read-only, and enforced: PostgreSQL sessions are read-only, and SQLite files are opened read-only. Each query has a time limit (`timeout_s`, 60 seconds by default), and each criterion a row limit (`max_rows`, 1,000,000 by default; it also bounds **Index all recordings**, but not the persons and visits read when connecting). |
 | Passwords | A password given to Medorama (in the page, or with `databases connect --password-stdin`) is sealed with the master key and kept in the control store, never in a file and never shown again. Or it is in a file (`--password-file`), or in `$MEDORAMA_SOURCE_PASSWORD_<NAME>`. It is never stored in the URL, and never sent back to the page. |
 | Who connects | Administrators. The administrator who connects a database gets every grant on it. |
 
@@ -409,7 +416,9 @@ medorama databases connect study --kind dbb --url sqlite:/data/study/study.sqlit
 (db-builder, OMOP or views), where it is (a file on this server, chosen with **Choose…**, or a
 PostgreSQL server), its password if any, and its settings. Medorama checks the connection first:
 each view must answer. It then makes the database's data key and workspace folder, reads its
-variables, links its persons and lists its recordings, and shows the database's page.
+catalog (the names and units of its variables), links its persons and keeps their encounters,
+and shows the database's page. It counts no entry and reads no recording: one pass over the
+persons and one over the visits, minutes for millions of persons.
 
 **From the command line**, for example an OMOP database on PostgreSQL, another in a SQLite file,
 and a warehouse through views:
@@ -420,11 +429,13 @@ medorama databases connect omop --kind omop --url "postgres://reader@omop.exampl
 medorama databases connect county --kind omop --url sqlite:/data/county/omop.sqlite --identifier mrn
 medorama databases connect warehouse --kind views --url postgres://… --views warehouse-views.toml --issuer HOSP
 medorama databases check omop        # online or offline; read again if its data changed
-medorama databases refresh omop      # read everything again now
+medorama databases refresh omop      # read its persons, encounters and catalog again now
+medorama databases count omop        # count each variable's entries and persons
 ```
 
 The command prints what it found: the data's version, how many persons were linked to how many
-patients, the variables, the recordings, and the identity conflicts if any.
+patients, the variables, whether its recordings are read when a patient is opened, and the
+identity conflicts if any.
 
 | `databases connect` option | Meaning |
 |---|---|
@@ -433,14 +444,14 @@ patients, the variables, the recordings, and the identity conflicts if any.
 | `--url URL` | `postgres://user@host/db?sslmode=require`, or `sqlite:/path/to/file`. |
 | `--password-file F`, `--password-stdin` | Its password: in a file, or read from standard input and kept sealed by the master key. Without either, `$MEDORAMA_SOURCE_PASSWORD_<NAME>` is used if set. |
 | `--ca-file F` | Certificate authorities (PEM) for its server's certificate. |
-| `--views FILE.toml` | Kind `views`: a TOML file with the SQL of `persons`, `visits`, `entries`, `recordings` and `version` ([databases.md](databases.md)). The views are run as written, in the database's own SQL: Medorama puts them inside its own queries and does not translate them. |
+| `--views FILE.toml` | Kind `views`: a TOML file with the SQL of `persons`, `visits`, `entries`, `recordings`, `stays`, `version` and `variables` ([databases.md](databases.md#canonical-views-reference)). The views are run as written, in the database's own SQL: Medorama puts them inside its own queries and does not translate them. |
 | `--schema S`, `--vocabulary-schema S` | OMOP: the schema of the CDM's tables, and of its vocabulary. Plain names (letters, digits, `_`). |
 | `--identifier mrn\|patient_id\|none` | OMOP: what `person_source_value` holds (by default `mrn`). With `none`, each person is a patient of its own, unique to this database. |
 | `--issuer I` | Who issued its patient IDs ([Identity](#identity)). Empty: the database itself, so that its patient IDs link only its own persons. |
 | `--mrn-authority A` | The authority of its MRNs, for rows that name none. |
 | `--timezone TZ` | The time zone of its times written without an offset (an IANA name; an unknown one is refused). Without it, the `timezone` setting is written into the database's settings when it is connected, and stays fixed from then on. On PostgreSQL, a `timestamp` column (without a time zone) is read in it; a `timestamptz` is an instant. |
 | `--files-root DIR` | The folder that relative recording paths are read from. Without it: a SQLite database's own folder. |
-| `--timeout-s N`, `--max-rows N` | The time limit of each query, and the row limit of each criterion (0: the defaults). |
+| `--timeout-s N`, `--max-rows N` | The time limit of each query, and the row limit of each criterion and of **Index all recordings** (0: the defaults). A large database needs no higher `--max-rows` to connect: its persons and visits are read however many. |
 
 Connecting refuses a database that does not answer, a SQLite file outside `data_roots`, and a
 name already used. If the database answers but reading it fails part way, it stays connected, the
@@ -462,8 +473,9 @@ database.
   an identity conflict: it is listed on the database's page (**Identity conflicts**) and by
   `medorama databases conflicts NAME`, and it is not linked. Correct the database, then refresh
   it. Medorama has no scored matching, merging or splitting of patients.
-- **Linking** reads every person of a database when it is connected or refreshed, and links new
-  persons as searches find them.
+- **Linking** reads every person of a database when it is connected or refreshed (however
+  many), with their encounters (each visit's key, start, end and whether it was in intensive
+  care), and links new persons as searches find them.
 
 ### Status, versions and variables
 
@@ -473,17 +485,25 @@ database.
   was last checked; those who manage the database also see why it did not answer. Offline
   databases are listed after the online ones.
 - **An offline database keeps everything**: its workspace, its variables, its grants, and its
-  patients on the patient list. It is not searched: a cohort search names it as left out, and a
-  patient's page lists it as not available.
+  patients on the patient list, with their encounters (their data show as offline). It is not
+  searched: a cohort search names it as left out, and a patient's page lists it as not
+  available.
 - **Versions.** Each check reads the data's version: OMOP's `cdm_source`, a db-builder
-  database's `meta.version`, a views database's `version` query, or else counts of its persons,
-  entries and recordings. A changed version reads its variables, persons and recordings again.
-  **Refresh** (`medorama databases refresh NAME`) does it on demand.
-- **Variables.** What a database holds (each measurement's name, code, vocabulary and unit, with
-  the numbers of entries and persons; diagnoses, drugs and other categories) is kept in its
-  `variables.sqlite`. The database's page lists them (**Variables**), and so does
-  `medorama databases variables NAME`. A search sends each criterion only to the databases whose
-  variables may hold it.
+  database's `meta.version`, a views database's `version` query, or else counts of its persons
+  and recordings (not of its entries). A changed version reads its persons, their encounters and
+  its catalog again, and drops the counts. **Refresh** (`medorama databases refresh NAME`) does
+  it on demand.
+- **Variables.** What a database holds (each measurement's name, code, vocabulary and unit;
+  diagnoses, drugs and other categories) is its catalog, kept in its `variables.sqlite` with the
+  categories of its recordings. It comes from the database's `variables` view when it has one
+  (no entry read), else from one grouped query over its entries, with no counting. The
+  database's page lists them (**Variables**), and so does `medorama databases variables NAME`. A
+  search sends each criterion only to the databases whose variables may hold it.
+- **Counts.** How many entries and persons hold each variable is counted only when someone who
+  manages the database asks: **Count now** on its page, or `medorama databases count NAME` (one
+  grouped query over its entries, which takes a while on a large database). The counts are kept
+  until the catalog is read again. A count from 1 to 10 is shown as "< 11", in the page, the
+  command and the API.
 
 ### Files and recordings
 
@@ -498,6 +518,17 @@ Files are only read, and they are shown only to users granted `view` on the data
 | ECG | A WFDB header, GE MUSE XML, a DICOM ECG, a JSON ECG, an EDF file, PNG, JPEG or PDF | Attached to the patient's page, shown in the ECG viewer. |
 | Echo, Cath lab, Imaging | DICOM files and series (a folder), videos, pictures, PDF | Attached to the patient's page, shown in the PACS viewer. |
 | Any other | A picture, a PDF, a video or a text file | Attached to the patient's page, shown by the page. |
+
+**When recordings are read.** Connecting reads no recording. A patient's recordings are read
+from the database when their page, a job or a cohort's selection asks for them: their files are
+then checked (present, inside `data_roots`, not in the workspace, readable), fingerprinted and
+kept in the database's `recordings.sqlite`, and those a reader indexes are queued for indexing.
+**Index all recordings** on the database's page (`medorama databases index NAME`, who manages
+it) reads every recording the database lists at once (at most `max_rows`), for a database of
+ICU recordings that should all be indexed ahead of time; `medorama init --demo` does it for the
+demo's databases. The Recordings tab and `medorama recordings` list the recordings kept: those
+opened or indexed. A cohort's `has` asks the database itself. When a database is offline, its
+recordings kept from before are shown.
 
 Every recording has a number across Medorama (the database's id times 1,000,000,000, plus its
 own number), which the page, jobs and `medorama recordings` show. Each recording gets a
@@ -798,9 +829,9 @@ with its owner's data key (SQLCipher, AES-256):
 
 | Path | What it holds |
 |---|---|
-| `db-NNNN/persons.sqlite` | The database's persons as linked: identifiers, names, birth dates, sex, patient numbers and their hashes; identity conflicts; each person's summary for the patient list. |
-| `db-NNNN/variables.sqlite` | Its variables, and the version they were read at. |
-| `db-NNNN/recordings.sqlite` | Each recording's state: path, kind, size, fingerprint, format, start and end, whether it is present; derived series. |
+| `db-NNNN/persons.sqlite` | The database's persons as linked: identifiers, names, birth dates, sex, patient numbers and their hashes; their encounters (key, start, end, intensive care); identity conflicts. |
+| `db-NNNN/variables.sqlite` | Its catalog: each variable's category, name, vocabulary, code, unit and whether it is numeric (its entries and persons once counted); its recordings' categories; the version they were read at. |
+| `db-NNNN/recordings.sqlite` | The recordings Medorama has opened or indexed: path, kind, size, fingerprint, format, start and end, label, category, whether it is present; derived series. |
 | `db-NNNN/results-<action>.sqlite` | The numbers of an action's results, searchable as `<action>.<field>`. |
 | `db-NNNN/results/<action>/r<n>/j<job>/` | An action plug-in's output folder: the files it writes. **Not encrypted.** |
 | `cohorts/c-NNNN.sqlite` | One cohort's members, how each came in, and the databases that put it there. |
@@ -984,7 +1015,7 @@ Set-Content "$startup\medorama.cmd" "@start `"Medorama`" /min `"$exe`" serve"
 **Back up** three things, and keep the third apart from the other two:
 1. **the home folder**: the settings, the control store (if SQLite) and the plug-ins;
 2. **the workspace**: its encrypted files (cohorts' members, results of actions, the databases'
-   persons and variables). The indexes in it can always be rebuilt;
+   persons, encounters and variables). The indexes in it can always be rebuilt;
 3. **the master key**, in a safe place of its own. Without it no backup of the workspace can be
    read; with it, anyone who holds the workspace's backup and the control store's can read them.
 
@@ -1003,8 +1034,12 @@ databases' own backups are their owners'.
 **Update.** Run `git pull`, build again ([building.md](building.md#update-and-uninstall)) and
 restart the server. A newer version brings its control store's changes and applies them at its
 first start. An older version refuses to open a control store that a newer one has updated, so
-back up first. The exception is 0.1.0: 0.2.0 refuses its control store and is set up in a new
-home ([upgrading from 0.1.0](install.md#upgrading-from-010)).
+back up first. From 0.2 to 0.3 nothing is done by hand: the control store's migration clears
+each database's catalog version, so that each database is read again (persons, encounters,
+catalog) at its next check, and each workspace's 0.2 tables are replaced when they are first
+opened (the per-person summary dropped, the catalog made again without counts); the recordings
+0.2 kept stay kept. The exception is 0.1.0: 0.2.0 refuses its control store and is set up in a
+new home ([upgrading from 0.1.0](install.md#upgrading-from-010)).
 
 **Uninstall.** Stop the service, delete the program (`cargo uninstall medorama`, or the copy), and
 delete the home folder, the workspace and the master key if they are no longer needed. The
@@ -1085,7 +1120,8 @@ authority `DEMO`, the registry's views) come from that file, and the encrypted d
 from its key file, so a new demo database needs no change in Medorama. It also adds the demo's
 `actions` folder (the example plug-in **Recording summary**, run with the installer's Python) to
 `actions_dirs`. A demo folder made before that file existed connects as before: `demo` and
-`demo_omop`. `serve` indexes the demo's recordings in the background. Sign in, open **Patient
+`demo_omop`. It reads every recording of the demo's databases (as `medorama databases index`
+does: connecting alone reads none), and `serve` indexes them in the background. Sign in, open **Patient
 Catalog**, and click a patient. Running the installer again without `--demo` removes
 `medorama.demo`, and `init --demo` then has nothing to connect.
 
@@ -1108,6 +1144,7 @@ medorama databases connect demo_north --kind dbb --url sqlite:$D/north/north.sql
 medorama databases connect demo_omop --kind omop --url sqlite:$D/omop/omop.sqlite --mrn-authority DEMO
 medorama databases connect demo_registry --kind views --url sqlite:$D/registry/registry.sqlite --views $D/registry/views.toml --mrn-authority DEMO
 medorama databases connect demo_secure --kind dbb --url sqlite:$D/secure/secure.sqlite --password-stdin < $D/keys/demo_secure.key
+for d in demo demo_north demo_muse; do medorama databases index $d; done   # their recordings now, as init --demo does
 ```
 
 ### Remove the demo

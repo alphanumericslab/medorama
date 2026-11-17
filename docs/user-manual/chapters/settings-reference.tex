@@ -54,8 +54,8 @@ workspace_dir = "PATH"
 \end{lstlisting}
 A path. \textbf{Required}; \cmd{init -{}-workspace} sets it. This is the folder where Medorama
 keeps what it generates (\cref{sec:protecting-workspace}): one folder per connected database,
-\file{db-NNNN/}, with that database's persons as linked, its variables, the state of its
-recordings, their indexes (its index store, \file{index.sqlite}) and the results of the actions
+\file{db-NNNN/}, with that database's persons as linked and their encounters, the names and
+units of its variables, the state of the recordings it has opened, their indexes (its index store, \file{index.sqlite}) and the results of the actions
 run on them; one file per cohort, in \file{cohorts/}; and the index store of the viewer Medorama
 runs, in \file{viewer/}. Every SQLite file of the workspace is encrypted with its owner's data key, and
 its folders and files are readable by Medorama's account only. The output folders that action
@@ -446,10 +446,14 @@ kept sealed by the master key, or read from a password file or from
 \code{files\_root} & every kind & The folder from which a recording's relative \code{file} is
   read. Default: the folder of a SQLite database's file \\
 \code{timeout\_s} & every kind & Each query's time limit, in seconds (PostgreSQL). 0: 60 \\
-\code{max\_rows} & every kind & The rows a criterion may read. 0: 1\,000\,000 \\
-\code{persons}, \code{visits}, \code{entries}, \code{recordings}, \code{version} & \code{views} &
-  The views, as SQL (\cref{sec:connecting-views}); \code{persons} and \code{entries} are
-  required, \code{version} is a query whose one value names the data's version \\
+\code{max\_rows} & every kind & The rows a criterion may read, and the recordings
+  \ui{Index all recordings} reads (not the persons and visits read when connecting). 0:
+  1\,000\,000 \\
+\code{persons}, \code{visits}, \code{entries}, \code{recordings}, \code{stays}, \code{version},
+  \code{variables} & \code{views} & The views, as SQL (\cref{sec:connecting-views}); \code{persons}
+  and \code{entries} are required, \code{version} is a query whose one value names the data's
+  version, \code{variables} the optional catalog (\code{category, name, vocabulary, code, unit,
+  numeric}) \\
 \end{xltabular}
 
 \subsection{Settings kept in the database}

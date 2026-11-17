@@ -283,8 +283,9 @@ async fn health(State(app): State<Shared>) -> Response {
 /// triggers move on every change of what it is built from), the gate's secret.
 pub fn restricted(app: &App, c: &crate::sql::Connection) -> Result<Arc<crate::gate::Restricted>, ApiError> {
     // a control store whose schema lacks the version: a dictionary built for this answer alone
-    let version: Option<i64> = c.query_row("SELECT identifiers FROM data_version", [], |r| r.get(0)).ok();
-    let current = |d: &Arc<crate::gate::Dict>| version.is_some_and(|v| d.version == v);
+    let version: Option<(i64, i64)> =
+        c.query_row("SELECT identifiers, recordings FROM data_version", [], |r| Ok((r.get(0)?, r.get(1)?))).ok();
+    let current = |d: &Arc<crate::gate::Dict>| version.is_some_and(|v| (d.version, d.recordings_version) == v);
     let cached = app.dict.lock().unwrap().clone();
     let dict = match cached {
         Some(d) if current(&d) => d,
@@ -295,8 +296,16 @@ pub fn restricted(app: &App, c: &crate::sql::Connection) -> Result<Arc<crate::ga
             let now = app.dict.lock().unwrap().clone();
             match now {
                 Some(d) if current(&d) => d,
+                // only recordings were kept since: they are added to it
+                Some(d) if version.is_some_and(|v| d.version == v.0) => {
+                    let v = version.map_or(-1, |v| v.1);
+                    let d = Arc::new(d.with_new_recordings(c, &app.cfg, v).map_err(internal)?);
+                    *app.dict.lock().unwrap() = Some(d.clone());
+                    d
+                }
                 _ => {
-                    let d = Arc::new(crate::gate::Dict::build(c, &app.cfg, version.unwrap_or(-1)).map_err(internal)?);
+                    let (iv, rv) = version.unwrap_or((-1, -1));
+                    let d = Arc::new(crate::gate::Dict::build(c, &app.cfg, iv, rv).map_err(internal)?);
                     if version.is_some() {
                         *app.dict.lock().unwrap() = Some(d.clone());
                     }
@@ -1606,6 +1615,31 @@ async fn database_refresh(State(app): State<Shared>, Auth(u): Auth, UrlPath(id):
     .await
 }
 
+/// Count a database's variables (who manages it): one pass over its entries (**Count now**).
+async fn database_count(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
+    blocking(move || {
+        let c = app.db.get().map_err(internal)?;
+        require_manage(&c, &u, id)?;
+        let n = crate::databases::count_variables(&app.cfg, &c, &u, id).map_err(bad)?;
+        ok(json!({ "counted": n }))
+    })
+    .await
+}
+
+/// Read every recording a database lists, check its files, and queue the new or changed ones
+/// for indexing (who manages it: **Index all recordings**).
+async fn database_index(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
+    blocking(move || {
+        let c = app.db.get().map_err(internal)?;
+        require_manage(&c, &u, id)?;
+        let r = crate::databases::index_recordings(&app.cfg, &c, &u, id).map_err(bad)?;
+        let queued = crate::jobs::queue_auto_index(&c, &app.cfg).map_err(internal)?;
+        ok(json!({ "recordings": r.recordings, "added": r.added, "changed": r.changed, "missing": r.missing,
+                   "removed": r.removed, "queued": queued }))
+    })
+    .await
+}
+
 /// Remove a database and every trace of it (who manages it): its key destroyed, its workspace
 /// folder, cohort rows and links removed.  The database itself is not touched.
 async fn database_remove(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
@@ -1621,14 +1655,18 @@ async fn database_remove(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): 
     .await
 }
 
-/// What a database holds (who may search it): its variables, kept per data version.
+/// What a database holds (who may search it): its variables, kept per data version, with their
+/// counts once counted (small ones as "< 11"), and when they were counted.
 async fn database_variables(State(app): State<Shared>, Auth(u): Auth, UrlPath(id): UrlPath<i64>) -> ApiResult {
     blocking(move || {
         let c = app.db.get().map_err(internal)?;
         if !crate::grants::can(&c, &u, &format!("db:{id}"), "search").map_err(internal)? {
             return Err(not_found());
         }
-        ok(json!({ "items": crate::variables::of(&app.cfg, &c, id).map_err(bad)? }))
+        let items: Vec<crate::variables::ShownVariable> =
+            crate::variables::of(&app.cfg, &c, id).map_err(bad)?.into_iter().map(Into::into).collect();
+        let counted_at = crate::variables::counted_at(&app.cfg, &c, id).map_err(bad)?;
+        ok(json!({ "items": items, "counted_at": counted_at }))
     })
     .await
 }
@@ -2113,6 +2151,8 @@ pub fn router(app: Shared) -> Router {
         .route("/databases/{id}", axum::routing::delete(database_remove))
         .route("/databases/{id}/check", post(database_check))
         .route("/databases/{id}/refresh", post(database_refresh))
+        .route("/databases/{id}/count", post(database_count))
+        .route("/databases/{id}/index", post(database_index))
         .route("/databases/{id}/variables", get(database_variables))
         .route("/databases/{id}/conflicts", get(database_conflicts))
         .route("/databases/{id}/grants", get(database_grants).post(database_grant).delete(database_revoke))

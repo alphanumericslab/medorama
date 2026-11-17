@@ -222,7 +222,8 @@ This glossary defines the terms used in this manual, in alphabetical order. A te
   \file{gaps.csv}, \file{vitals.csv} and \file{events.csv}) that says how the records fit together
   in time. \Cref{chap:formats-reference}.
 \item[Workspace] The folder (\code{workspace\_dir}) where Medorama keeps what it generates: one
-  folder per connected database (its persons as linked, its variables, its recordings' state,
-  the results of actions) and one file per cohort, every SQLite file encrypted with its owner's
+  folder per connected database (its persons as linked and their encounters, the names and
+  units of its variables, the recordings it has opened, the results of actions;
+  \cref{sec:connecting-kept}) and one file per cohort, every SQLite file encrypted with its owner's
   \textit{data key}. \Cref{sec:administration-workspace}.
 \end{description}

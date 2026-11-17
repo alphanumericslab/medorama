@@ -69,13 +69,7 @@ pub fn present(c: &Connection, cfg: &Config, user: &User) -> anyhow::Result<Vec<
         for v in crate::variables::of(cfg, c, db).unwrap_or_default() {
             have.insert(v.category);
         }
-        if let Some(s) = crate::sources::get(c, db)? {
-            if crate::recordings::count(cfg, c, db).unwrap_or(0) > 0 {
-                for r in crate::recordings::of_database(cfg, c, &s)? {
-                    have.insert(r.category);
-                }
-            }
-        }
+        have.extend(crate::variables::recording_categories(cfg, c, db).unwrap_or_default());
     }
     let mut out = vec!["enc"];
     out.extend(categories::journey_keys().filter(|k| have.contains(*k)));

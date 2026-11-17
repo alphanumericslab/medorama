@@ -6,6 +6,11 @@ design note of how data reach Medorama: it connects databases and imports nothin
 imports, the catalog's copies of patient data and the results folder. It is written for
 contributors and reviewers, and for site engineers who prepare databases for Medorama.
 
+**Since 0.3.0**, what Medorama keeps of each database is narrower than this page says: its
+subjects and their encounters, the names and units of its variables, and the recordings it has
+opened. [connected-databases.md](connected-databases.md) is the design of that, and replaces this
+page's workspace, variables and connecting sections where they differ.
+
 The guide for data managers is [databases.md](../databases.md); the design of reading connected
 databases (views, OMOP, the patient index, searching) is [sources.md](sources.md); db-builder's
 schema is [db-builder/docs/schema.md](../../db-builder/docs/schema.md).

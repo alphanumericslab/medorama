@@ -860,7 +860,8 @@ the demo's OMOP database (\cref{chap:quickstart}).
 \item \textbf{Change it} with db-builder at any time: \cmd{add} and \cmd{recordings} add or
   replace sources, \cmd{remove-source} takes them out. Each write changes the database's version;
   Medorama checks every connected database at start and every 60 seconds, and reads its
-  variables, persons and recordings again when the version changed. \ui{Refresh} on the
+  persons, their encounters and its catalog again when the version changed (its recordings are
+  read when their patients are opened). \ui{Refresh} on the
   database's page, or \cmd{medorama databases refresh NAME}, does it at once.
 \end{itemize}
 

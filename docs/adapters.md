@@ -83,9 +83,9 @@ that runs with Medorama's rights.
    viewer it runs, so the next one sees the add-on too. **Admin** › **Add-ons** then lists it.
 
 4. **Read the recording databases again.** A recording that no installed reader reads is not
-   indexed. Once the add-on is
-   installed and Medorama restarted, **Refresh** on the database's page (or
-   `medorama databases refresh NAME`) reads its recordings again, and the workers index them.
+   indexed. Once the add-on is installed and Medorama restarted, **Index all recordings** on the
+   database's page (or `medorama databases index NAME`) reads its recordings again, and the
+   workers index them; otherwise each is indexed when its patient is next opened.
    The recording database itself is not changed: it names the files, as before.
 
 **The viewers on their own** (without Medorama): copy the program into their adapter folder
@@ -99,7 +99,7 @@ in step 1, and restart the viewer.
 | `install`: describe fails, "cannot be opened", "permission denied" | The system blocks the program. Repeat step 1 (`xattr` on macOS, `Unblock-File` on Windows), or run `chmod 755`. |
 | `install`: another protocol version | The add-on was built for another Medorama version. Ask for the release that matches yours. |
 | `addons list` shows it, but `.Stp` files are still refused | The server was not restarted (step 3), or it runs as another account whose `adapters_dir` is elsewhere: run `medorama addons list` as that account. |
-| A recording database's `.Stp` recordings are still not indexed | Its recordings were read before the add-on was installed. Refresh the database (step 4). |
+| A recording database's `.Stp` recordings are still not indexed | Its recordings were read before the add-on was installed. Index all its recordings (step 4). |
 
 ## How the programs use adapters
 

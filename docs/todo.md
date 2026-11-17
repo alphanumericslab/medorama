@@ -696,7 +696,7 @@ These items address what grows fastest in the measurements on 50,000 patients in
 ### S4 The Patient Catalog's text search in SQL
 
 **Why.** The Patient Catalog reads each database's `persons.sqlite` (its persons and their
-summaries), and a text search matches every field of every patient in memory (`patient/list.rs`).
+encounters), and a text search matches every field of every patient in memory (`patient/list.rs`).
 It grows with the number of patients of every database a user may view.
 
 **Design.** A search table in each database's `persons.sqlite` (`person_key`, `field`, `value`,

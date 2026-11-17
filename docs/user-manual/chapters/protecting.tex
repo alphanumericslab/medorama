@@ -342,8 +342,10 @@ patient IDs and visits become pseudonyms, file names become tokens, staff names 
 \code{[Staff Name]}, and files that the gate cannot de-identify are refused.
 
 \paragraph{For reviewers.} Placeholders, the identifier dictionary and notes are in
-\file{gate.rs} (\code{Dict}, built from each database's persons and recordings as kept in the
-workspace; \code{Restricted::json}, \code{Restricted::note}); dates, ages and the settings in \file{deid.rs} (\code{FIELDS},
+\file{gate.rs} (\code{Dict}, built from each database's persons and the recordings it keeps
+in the workspace; recordings first kept as patients are opened are added to it by
+\code{Dict::with\_new\_recordings} when \code{data\_version.recordings} moves, before the answer
+that read them is cleared; \code{Restricted::json}, \code{Restricted::note}); dates, ages and the settings in \file{deid.rs} (\code{FIELDS},
 \code{Settings}, \code{answer\_with}, \code{shift\_text}); pseudonyms in \file{pseudonyms.rs}.
 Each module has unit tests, and \file{medorama/tests/privacy.rs} tests them end to end.
 
@@ -634,13 +636,15 @@ index of their recordings, the results of actions, and the members of cohorts) i
 \bottomrule
 \endfoot
 \file{db-NNNN/persons.sqlite} & The database's persons as linked: their identifiers\phimark,
-  names\phimark, birth dates\phimark, sex and patient numbers; their identity conflicts; a summary
-  of each person for the patient list \\
+  names\phimark, birth dates\phimark, sex and patient numbers; their encounters (each visit's
+  key, start and end, and whether it was in intensive care); their identity conflicts. Nothing of
+  their data \\
 \file{db-NNNN/variables.sqlite} & What the database holds: each variable's category, name,
-  vocabulary, code, unit, and its numbers of entries and persons \\
-\file{db-NNNN/recordings.sqlite} & Each recording of a recording database: its file's
-  path\phimark, format, start and end, size, fingerprint, whether it is present, and its derived
-  series \\
+  vocabulary, code, unit and whether it is numeric; its numbers of entries and persons only once
+  counted (\ui{Count now}, shown as ``< 11'' from 1 to 10); its recordings' categories \\
+\file{db-NNNN/recordings.sqlite} & The recordings Medorama has opened (or indexed when asked) of
+  a recording database: each file's path\phimark, format, start and end, size, fingerprint,
+  whether it is present, and its derived series. Not a list of every file the database names \\
 \file{db-NNNN/results-<action>.sqlite} & The numbers of an action's results, searchable as
   measurements \\
 \file{db-NNNN/index.sqlite} & The index store: the indexes of the database's recordings (waveform

@@ -120,8 +120,8 @@ author ([building.md, License terms](building.md#license-terms)).
 `~/.local/share/medorama`, or `%LOCALAPPDATA%\medorama` on Windows) with the settings, the
 *control store* (Medorama's own database: users, grants, the audit log, the list of databases; no
 patient data) and the *master key*, and a *workspace*: the folder where Medorama keeps what it
-generates from each database (its patients as linked, its variables, the indexes of its
-recordings) and the cohorts. Each database's files and each cohort's are encrypted with a key of
+holds of each database (its patients as linked and their encounters, the names and units of its
+variables, the recordings opened and their indexes) and the cohorts. Each database's files and each cohort's are encrypted with a key of
 their own, the indexes included (the files that action plug-ins write are not: keep the
 workspace on an encrypted disk).
 
@@ -146,10 +146,13 @@ workspace on an encrypted disk).
    ```
 
    An OMOP database, or any SQL database through views, is connected the same way
-   ([administration](administration.md#connected-databases)).
+   ([administration](administration.md#connected-databases)). Connecting reads the persons, their
+   visits and the names of what the database holds; a patient's data and recordings are read
+   when the patient is opened ([what Medorama keeps](databases.md#what-medorama-keeps-of-a-database)).
 
 3. Start the server. It serves the web page and the API, checks the databases every minute, and
-   indexes the recordings in the background:
+   indexes the recordings in the background (with `--demo`, every recording of the demo; for
+   your own databases, those opened, or all of them after `medorama databases index NAME`):
 
    ```bash
    medorama serve

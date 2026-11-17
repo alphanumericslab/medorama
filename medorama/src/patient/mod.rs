@@ -27,7 +27,7 @@ use crate::sql::{params, Connection, OptionalExtension};
 use crate::users::User;
 use serde::Serialize;
 use sha2::Digest;
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 mod detail;

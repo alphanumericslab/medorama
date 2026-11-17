@@ -359,6 +359,8 @@ PIDX77214_ecg.dat 16 200/mV 16 0 0 0 0 I\nPIDX77214_ecg.dat 16 200/mV 16 0 0 0 0
         ..Default::default()
     };
     let id = medorama::databases::connect(&cfg, &c, &boss, &n, "").unwrap();
+    // its recordings read and indexed (`medorama databases index`): connecting reads none
+    medorama::databases::index_recordings(&cfg, &c, &boss, id).unwrap();
     // the reader may see the hospital's data (never its identifiers: no PHI permission)
     let reader = medorama::users::get_by_name(&c, "reader").unwrap().unwrap();
     medorama::grants::grant(&c, &boss, reader.id, &format!("db:{id}"), "view").unwrap();
@@ -842,6 +844,8 @@ async fn around_the_gate() {
         f.id,
     )
     .unwrap();
+    let boss = medorama::users::get_by_name(&f.db.get().unwrap(), "boss").unwrap().unwrap();
+    medorama::databases::index_recordings(&f.cfg, &f.db.get().unwrap(), &boss, f.id).unwrap();
     // a job that failed on a recording, its error naming the path (as the engine's errors do)
     let rid = rec_of(&f, "Zyxwortha");
     let path = medorama::recordings::get(&f.cfg, &f.db.get().unwrap(), rid).unwrap().unwrap().path;
@@ -989,6 +993,7 @@ async fn the_viewers_errors_in_privacy_mode() {
     f.dbb.exec("UPDATE meta SET value = 'v2' WHERE key = 'version'");
     let boss = medorama::users::get_by_name(&f.db.get().unwrap(), "boss").unwrap().unwrap();
     medorama::databases::refresh(&f.cfg, &f.db.get().unwrap(), &boss, f.id).unwrap();
+    medorama::databases::index_recordings(&f.cfg, &f.db.get().unwrap(), &boss, f.id).unwrap();
     let id = rec_of(&f, "Zyxwortha");
     // the recording goes away after it was listed
     std::fs::remove_dir_all(&pf).unwrap();

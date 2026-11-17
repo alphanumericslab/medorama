@@ -189,8 +189,15 @@ enum DatabasesCmd {
         #[arg(long)]
         all: bool,
     },
-    /// Read everything Medorama keeps of a database again: variables, persons, recordings
+    /// Read what Medorama keeps of a database again: its catalog (variables' names and units),
+    /// its persons and their encounters
     Refresh { name: String },
+    /// Count a database's variables: how many entries and persons hold each (one pass over its
+    /// entries; counts below 11 are shown as "< 11")
+    Count { name: String },
+    /// Read every recording a database lists, check its files and index the new or changed ones
+    /// (connecting reads none: a patient's recordings are read when they are opened)
+    Index { name: String },
     /// Remove a database and every trace of it: its key destroyed, its workspace folder, cohort
     /// rows and links removed (the database itself is not touched)
     Remove {
@@ -517,7 +524,17 @@ fn init(home: &Path, a: InitArgs) -> anyhow::Result<()> {
                         ..Default::default()
                     };
                     match medorama::databases::connect(&cfg, &c, &admin, &n, &key) {
-                        Ok(_) => println!("Connected the demo database {} (invented patients)", d.name),
+                        Ok(id) => {
+                            // the demo shows every recording indexed: its few are read now, as
+                            // `medorama databases index` reads a database's (connecting reads none)
+                            let r = medorama::databases::index_recordings(&cfg, &c, &admin, id);
+                            let n = r.as_ref().map(|r| r.recordings).unwrap_or(0);
+                            println!(
+                                "Connected the demo database {} (invented patients){}",
+                                d.name,
+                                if n > 0 { format!("; {n} recording(s) to index") } else { String::new() }
+                            );
+                        }
                         Err(e) => println!("The demo database {} was not connected ({e:#})", d.name),
                     }
                 }
@@ -696,8 +713,8 @@ fn databases_cmd(cfg: &Config, db: &Db, me: &User, cmd: DatabasesCmd) -> anyhow:
                 let g = |k: &str| t.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
                 (settings.persons, settings.visits, settings.entries, settings.recordings, settings.version) =
                     (g("persons"), g("visits"), g("entries"), g("recordings"), g("version"));
-                // optional: the stays (ICU and bed stays) within visits
-                settings.stays = g("stays");
+                // optional: the stays (ICU and bed stays) within visits; the catalog of variables
+                (settings.stays, settings.variables) = (g("stays"), g("variables"));
             }
             let password = if password_stdin {
                 let mut line = String::new();
@@ -718,12 +735,12 @@ fn databases_cmd(cfg: &Config, db: &Db, me: &User, cmd: DatabasesCmd) -> anyhow:
             let d = medorama::databases::get(&c, id)?.ok_or_else(|| anyhow::anyhow!("not connected"))?;
             let (persons, patients, conflicts) = medorama::persons::counts(cfg, &c, id)?;
             println!(
-                "Connected {} ({}): version {}; {persons} person(s) linked to {patients} patient(s); {} variable(s); {} recording(s){}",
+                "Connected {} ({}): version {}; {persons} person(s) linked to {patients} patient(s); {} variable(s){}{}",
                 d.source.name,
                 d.source.kind,
                 if d.data_version.is_empty() { "-" } else { &d.data_version },
                 medorama::variables::of(cfg, &c, id)?.len(),
-                recordings::count(cfg, &c, id)?,
+                if d.source.has_recordings() { "; recordings are read when a patient is opened" } else { "" },
                 if conflicts > 0 { format!("; {conflicts} identity conflict(s): medorama databases conflicts {}", d.source.name) } else { String::new() }
             );
         }
@@ -736,7 +753,7 @@ fn databases_cmd(cfg: &Config, db: &Db, me: &User, cmd: DatabasesCmd) -> anyhow:
             } else {
                 for d in v {
                     println!(
-                        "{:<16} {:<6} {:<8} {:<10} {} person(s), {} recording(s){}",
+                        "{:<16} {:<6} {:<8} {:<10} {} person(s), {} recording(s) opened{}",
                         d.name,
                         d.kind,
                         d.engine,
@@ -770,6 +787,20 @@ fn databases_cmd(cfg: &Config, db: &Db, me: &User, cmd: DatabasesCmd) -> anyhow:
             let (persons, patients, conflicts) = medorama::persons::counts(cfg, &c, s.id)?;
             println!("{}: {persons} person(s), {patients} patient(s), {conflicts} conflict(s)", s.name);
         }
+        DatabasesCmd::Count { name } => {
+            let s = named(&name)?;
+            let n = medorama::databases::count_variables(cfg, &c, me, s.id)?;
+            println!("{}: {n} variable(s) counted (medorama databases variables {})", s.name, s.name);
+        }
+        DatabasesCmd::Index { name } => {
+            let s = named(&name)?;
+            let r = medorama::databases::index_recordings(cfg, &c, me, s.id)?;
+            let queued = medorama::jobs::queue_auto_index(&c, cfg)?;
+            println!(
+                "{}: {} recording(s) read ({} new, {} changed, {} missing, {} removed); {queued} queued for indexing (medorama serve indexes them)",
+                s.name, r.recordings, r.added, r.changed, r.missing, r.removed
+            );
+        }
         DatabasesCmd::Remove { name, yes } => {
             let s = named(&name)?;
             if !yes {
@@ -790,20 +821,30 @@ fn databases_cmd(cfg: &Config, db: &Db, me: &User, cmd: DatabasesCmd) -> anyhow:
         }
         DatabasesCmd::Variables { name, json } => {
             let s = named(&name)?;
-            let v = medorama::variables::of(cfg, &c, s.id)?;
+            let v: Vec<medorama::variables::ShownVariable> =
+                medorama::variables::of(cfg, &c, s.id)?.into_iter().map(Into::into).collect();
             if json {
                 print_json(&v);
             } else {
-                for x in v {
+                let counted = v.iter().any(|x| x.entries.is_some());
+                for x in &v {
+                    let n = |c: &Option<String>| c.clone().unwrap_or_else(|| "-".into());
                     println!(
                         "{:<6} {:<40} {:<10} {:>8} entries, {:>6} persons{}",
-                        x.category,
-                        x.name,
-                        x.unit,
-                        x.entries,
-                        x.persons,
-                        if x.code.is_empty() { String::new() } else { format!("  {} {}", x.vocabulary, x.code) }
+                        x.variable.category,
+                        x.variable.name,
+                        x.variable.unit,
+                        n(&x.entries),
+                        n(&x.persons),
+                        if x.variable.code.is_empty() {
+                            String::new()
+                        } else {
+                            format!("  {} {}", x.variable.vocabulary, x.variable.code)
+                        }
                     );
+                }
+                if !counted && !v.is_empty() {
+                    println!("(not counted: medorama databases count {})", s.name);
                 }
             }
         }

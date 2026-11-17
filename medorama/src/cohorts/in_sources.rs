@@ -31,29 +31,8 @@ pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &crate::sources::Source) -
         "has" => {
             let cat = categories::named(&k.category).ok_or_else(|| anyhow::anyhow!("no category {:?}", k.category))?;
             let why = format!("has {}", categories::label(cat));
-            let mut keys = match cat {
-                "icu" => s.visit_persons(true)?,
-                "enc" => s.visit_persons(false)?,
-                // vital signs and lab results are told apart by their names: read the rows
-                "lab" | "vit" => {
-                    let rows = s.find(&Find { categories: vec![cat.into()], ..Default::default() }, zone)?;
-                    rows.into_iter().map(|e| e.person).collect()
-                }
-                _ => {
-                    s.find_persons(&Find { categories: vec![cat.into()], notes: cat == "note", ..Default::default() })?
-                }
-            };
-            // … and the persons with a recording of that category, in a recording database
-            if s.has_recordings() {
-                keys.extend(
-                    crate::recordings::of_database(cx.cfg, c, s)?
-                        .into_iter()
-                        .filter(|r| r.category == cat && r.present)
-                        .map(|r| r.person_key),
-                );
-            }
-            keys.sort();
-            keys.dedup();
+            // visits, entries, and the recordings the database lists of that category
+            let keys = s.persons_with(cat, zone)?;
             found.extend(keys.into_iter().map(|p| (p, why.clone())));
         }
         "encounter" => {

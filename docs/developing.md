@@ -52,13 +52,13 @@ Each part is a program of its own, in its own folder:
 | `medorama/src/server.rs` | The routes, the `guard` and `privacy` middleware, and the file responses. | Rust |
 | `medorama/src/signin.rs` | Sign-in: the only code that knows how users sign in ([sign-in.md](sign-in.md)). | Rust |
 | `medorama/src/gate.rs`, `deid.rs`, `dicom.rs`, `pseudonyms.rs` | The privacy gate and the de-identifiers it uses ([protecting-patient-data.md](protecting-patient-data.md)). | Rust |
-| `medorama/src/databases.rs` | The connected databases: connecting, the status checks, reading a new version again (`refresh`), and removing a database with every trace (`remove`, `resume_removals`). | Rust |
+| `medorama/src/databases.rs` | The connected databases: connecting, the status checks, reading a new version again (`refresh`), counting the variables and reading every recording on request (`count_variables`, `index_recordings`), and removing a database with every trace (`remove`, `resume_removals`). | Rust |
 | `medorama/src/sources/` | Reading a connected database: the canonical views (`mod.rs`: `views` and `dbb` databases, the pools, the filters pushed down) and OMOP's (`omop.rs`). | Rust |
 | `medorama/src/workspace.rs` | The workspace: a data key per database, cohort and derived database, wrapped by the master key (`keys`); the encrypted SQLite files of `db-NNNN/` and `cohorts/`; `keys rotate`. | Rust |
 | `medorama/src/grants.rs` | Who may `search`, `view`, `phi` or `manage` each database, and `view`, `edit` or `manage` each cohort. | Rust |
-| `medorama/src/persons.rs` | The patient index: each database's persons in its `persons.sqlite`, linked to patients by exact (issuer, identifier) pairs, kept as keyed hashes in `patient_keys`; conflicts; the per-person summaries of the Patient Catalog. | Rust |
-| `medorama/src/variables.rs` | What each database holds (`variables.sqlite`), kept per data version, read by the search planner and the criteria. | Rust |
-| `medorama/src/recordings.rs`, `derived.rs` | The recordings of recording databases (`recordings.sqlite`: presence, fingerprints, index metadata), numbered `database × 1,000,000,000 + n`; the series derived from them and the results of actions (`results-<action>.sqlite`). | Rust |
+| `medorama/src/persons.rs` | The patient index (the subject index): each database's persons in its `persons.sqlite`, linked to patients by exact (issuer, identifier) pairs, kept as keyed hashes in `patient_keys`; conflicts; their encounters, from which the Patient Catalog answers. | Rust |
+| `medorama/src/variables.rs` | What each database holds (`variables.sqlite`: names and units from its `variables` view or one grouped query; counts only when asked, small ones shown as "< 11"), kept per data version, read by the search planner and the criteria. | Rust |
+| `medorama/src/recordings.rs`, `derived.rs` | The recordings Medorama has opened of recording databases (`recordings.sqlite`: presence, fingerprints, index metadata; `sync_persons` when a patient is opened, `sync` for all on request), numbered `database × 1,000,000,000 + n`; the series derived from them and the results of actions (`results-<action>.sqlite`). | Rust |
 | `medorama/src/schema/` | The control store's schema: `sqlite/001_schema.sql` and `postgres/001_schema.sql` (the same tables), which `db.rs` applies. | SQL |
 | `db-builder/` | db-builder: tables, known exports (GE MUSE, CLIF, formats declared in TOML) and folders of recordings made into one open SQLite database ([db-builder/README.md](../db-builder/README.md), [its schema](../db-builder/docs/schema.md)). It does not depend on Medorama. | Rust |
 | `medorama/web/` | The page: `index.html`, `style.css` and `js/` (ES modules, no build step). | JavaScript |
@@ -113,8 +113,9 @@ tokens (`gate::file_token`).
 
 **Background work.** `serve` checks every database at start and every 60 seconds
 (`databases::check`): a SQLite file present and each view answering gives `online`, else
-`offline`. A changed data version reads the database's variables, persons and recordings again
-(`databases::refresh`). Indexing and plug-in actions are jobs (`jobs.rs`), run by worker threads
+`offline`. A changed data version reads the database's persons, their encounters and its catalog
+again (`databases::refresh`); no recording is read
+([design/connected-databases.md](design/connected-databases.md)). Indexing and plug-in actions are jobs (`jobs.rs`), run by worker threads
 that `serve` starts (or by `medorama work`). A plug-in is a program that Medorama starts with the
 job's description; it can be cancelled and has a time limit (`actions.rs`). A removal that a
 crash interrupted is finished when the server or any command starts (`resume_removals`).

@@ -94,8 +94,9 @@ as one set of patients (`p.id IN (…)`), and every patient's latest encounter i
 rather than with an index probe per patient. The same set forms were slower on SQLite with many
 users, because each builds a temporary table: the filtered page took 0.36 s and the plain page
 0.72 s. The "has none" filter (`!lab`) was a probe on both databases, because PostgreSQL cannot
-hash a `NOT IN` over 500,000 rows (it took 27 s). (In this design the list is read from each
-database's per-person summaries in the workspace, which are SQLite files.)
+hash a `NOT IN` over 500,000 rows (it took 27 s). (Since 0.3 the list is read from each
+database's persons and encounters in the workspace, which are SQLite files, and a filter on a
+kind of data asks each online database.)
 
 **Memory-mapped reads on SQLite.** Every SQLite connection reads the file memory-mapped
 (`mmap_size`). With its own 2 MB page cache instead, each connection copies pages over and over,
@@ -296,12 +297,14 @@ others' are within 40 MB.
 
 | Part | Grows with | Why it holds up |
 |---|---|---|
-| Patient Catalog (browsing, filters, a cohort's members) | The number of patients of the databases the user may view. | The list is read from the per-person summaries Medorama keeps of each database (`persons.sqlite` in the workspace), not from the databases themselves, so it also answers while a database is offline. |
-| Patient Catalog (text search) | Every patient's summary. | The search matches every field of every patient in memory. Moving it into SQL is planned ([S4](todo.md#s4-the-patient-catalogs-text-search-in-sql)). |
+| Patient Catalog (browsing, a cohort's members) | The number of patients of the databases the user may view; for the page shown (50 rows), those patients' entries and recordings in each online database. | The list is read from the persons and encounters Medorama keeps of each database (`persons.sqlite` in the workspace), so it also answers while a database is offline. Its **Data** and **Entries** columns are one grouped query per online database, over the page's persons only. |
+| Patient Catalog (filters on a kind of data) | The persons with data of that kind in each online database. | Each online database is asked which persons have it (`has`), as a cohort's `has` criterion is. |
+| Patient Catalog (text search) | Every patient's identity and encounters. | The search matches every field of every patient in memory. Moving it into SQL is planned ([S4](todo.md#s4-the-patient-catalogs-text-search-in-sql)). |
 | A patient's page | That patient's data in each database. | It is read from each database the user may view, by the patient's person keys there. |
 | Cohort criteria | The rows a criterion reads in each database searched (`max_rows`). | A criterion goes only to the databases whose variables may hold it, and its filters run in the connected database. Criteria are combined as sets of patient numbers. A threshold reads only the values that may pass, per unit (with the threshold converted), and tests them in Medorama. |
 | A cohort's data | The members' data in each database. | Read from the connected databases, as a patient's page is. |
 | A connected database | Its own indexes; the rows a criterion reads (`max_rows`). | The filters run in the connected database, and a page's reads are kept for 30 seconds. |
+| Connecting, refreshing a database | Its persons and visits. | One pass over its persons and one over its visits, however many; its catalog from its `variables` view or one grouped query without counting; no recording file is read. Minutes for millions of persons. Counting its variables (**Count now**) and reading all its recordings (**Index all recordings**) are done only when a manager asks. |
 | Several servers | | Not in this version: the workspace is one server's folder ([design/databases-only.md](design/databases-only.md)). |
 
 ## Repeating the measurement

@@ -92,8 +92,8 @@ responsibility; Medorama checks what it can and says what it finds.
   the site's views (\cref{sec:connecting-views}).
 \item \textbf{A version} that changes when the data do: OMOP's \code{cdm\_source}, a db-builder
   database's \code{meta.version}, or a views database's \code{version} query. Without one,
-  Medorama counts the persons, entries and recordings instead, and notices only changes that
-  change a count (\cref{sec:connecting-status}).
+  Medorama counts the persons and recordings instead, and notices only changes that change a
+  count: a change of entries alone is not noticed (\cref{sec:connecting-status}).
 \item \textbf{Encryption and backups} of the database are its owner's (PostgreSQL's storage
   encryption, an encrypted disk). Medorama encrypts only its own workspace.
 \item \textbf{Recordings} (a recording database): each file listed with its patient, its start
@@ -164,11 +164,14 @@ without its password, how its password is found, and its settings
 \item keeps its row, makes its data key (wrapped by the master key) and its workspace folder
   (\file{<workspace>/db-NNNN/}), and grants every permission on it to the administrator who
   connected it (\cref{sec:databases-tab-grants});
-\item reads its variables, links its persons to patients (\cref{sec:connecting-identity}) and,
-  for a recording database, reads its recordings (\cref{chap:recordings}).
+\item reads its catalog (the names and units of its variables), links its persons to patients
+  (\cref{sec:connecting-identity}) and keeps their encounters. It counts no entry and reads no
+  recording: a patient's recordings are read when the patient is opened
+  (\cref{sec:connecting-kept}).
 \end{enumerate}
-Connecting (\code{connect}), linking (\code{link}), refreshing (\code{refresh}) and removing
-(\code{remove}) are written to the audit log. If reading the database fails after it was kept,
+Connecting (\code{connect}), linking (\code{link}), refreshing (\code{refresh}), counting
+(\code{count}), indexing every recording (\code{index\_all}) and removing (\code{remove}) are
+written to the audit log. If reading the database fails after it was kept,
 it stays connected, and \ui{Refresh} (or \cmd{medorama databases refresh}) reads it again.
 
 \begin{itemize}
@@ -210,7 +213,8 @@ it stays connected, and \ui{Refresh} (or \cmd{medorama databases refresh}) reads
 \opt{-{}-ca-file} & (None) & Certificate authorities (PEM) for the server's certificate, besides
   the system's \\
 \opt{-{}-views} & (None) & For the kind \code{views}, a TOML file with the views
-  (\code{persons}, \code{visits}, \code{entries}, \code{recordings}, \code{version}) \\
+  (\code{persons}, \code{visits}, \code{entries}, \code{recordings}, \code{stays},
+  \code{version}, \code{variables}) \\
 \opt{-{}-schema} & The default schema & OMOP: the schema of the CDM's tables, a plain name
   (letters, digits, \code{\_}) \\
 \opt{-{}-vocabulary-schema} & The CDM's & OMOP: the schema of the vocabulary (\code{concept}),
@@ -234,9 +238,89 @@ it stays connected, and \ui{Refresh} (or \cmd{medorama databases refresh}) reads
   \code{file} is read (\cref{sec:connecting-views}) \\
 \opt{-{}-timeout-s} & 60 & Each query's time limit, in seconds (PostgreSQL only; SQLite files are
   local and have none) \\
-\opt{-{}-max-rows} & 1{,}000{,}000 & The number of rows a criterion may read, and of persons,
-  visits or recordings a refresh reads \\
+\opt{-{}-max-rows} & 1{,}000{,}000 & The number of rows a criterion may read, and of recordings
+  that \ui{Index all recordings} reads. Connecting and refreshing read every person and visit,
+  however many \\
 \end{xltabular}
+
+\section{What Medorama keeps of a database}
+\label{sec:connecting-kept}
+
+Medorama links a database's persons to patients and names what the database holds; everything
+else is read from the database when it is asked for. Of each connected database it keeps, in its
+workspace folder (\file{<workspace>/db-NNNN/}), encrypted with the database's own data key, only
+what \cref{tab:connecting-kept} lists. No entry, no count of anyone's data and no list of the
+database's files is kept.
+
+\begin{table}[htbp]
+\caption{What Medorama keeps of a connected database.}
+\label{tab:connecting-kept}
+\begin{tabularx}{\linewidth}{@{}P{3.6cm}L@{}}
+\toprule
+{\tabhead File} & {\tabhead What it holds} \\
+\midrule
+\file{persons.sqlite} & The subject index: each person's identifiers and their issuers, names,
+  date of birth and sex, the patient number they are linked to and the keyed hashes of their
+  pairs (\cref{sec:connecting-identity}); their encounters (each visit's key, start, end, and
+  whether it was in intensive care); identity conflicts \\
+\file{variables.sqlite} & The catalog: each variable's category, name, vocabulary, code, unit
+  and whether it has numbers; how many entries and persons hold it, only once counted
+  (\ui{Count now}); the categories of its recordings; the version they were read at \\
+\file{recordings.sqlite} & The recordings Medorama has opened, or indexed when asked: each
+  file's path, kind, size, fingerprint, format, times, label, category, whether it is present
+  and why not; derived series \\
+\file{index.sqlite} & Their indexes (\cref{chap:recordings}) \\
+\file{results-<action>.sqlite}, \file{results/} & What actions made of them
+  (\cref{chap:actions}) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\Cref{tab:connecting-reads} lists what is read from the database, and when.
+
+\begin{xltabular}{\linewidth}{@{}P{4.2cm}L@{}}
+\caption{What Medorama reads from a connected database, and when.}
+\label{tab:connecting-reads}\\
+\toprule
+\tabhead When & \tabhead What is read \\
+\midrule
+\endfirsthead
+\toprule
+\tabhead When & \tabhead What is read \\
+\midrule
+\endhead
+\bottomrule
+\endfoot
+Connecting, a new version, \ui{Refresh} & Every person (however many: \code{max\_rows} bounds
+  criteria, not this), every visit, the catalog (its \code{variables} view, else one grouped
+  query over its entries, with no counting), and the categories of its recordings
+  (\code{SELECT DISTINCT category}). No recording file is read \\
+Every check (each minute) & Whether each view answers; the version (without a version query, a
+  count of its persons and recordings) \\
+The Patient Catalog & For the page shown, what each online database holds of those patients
+  (the \ui{Data} and \ui{Entries} columns); a filter on a kind of data asks each online database
+  (\cref{chap:patients}) \\
+A patient's page, a job, a cohort's selection & Their entries, visits, stays and recordings.
+  Their recordings' files are checked then (present, inside \code{data\_roots}, not in the
+  workspace, readable), kept, and queued for indexing \\
+A cohort, a search & The criteria, sent to each database that may hold them; a \code{has}
+  criterion asks the database too (\cref{chap:cohorts}) \\
+\ui{Count now} (\cmd{medorama databases count NAME}) & One grouped count over the entries: how
+  many entries and persons hold each variable, kept until the catalog is read again. A count
+  from 1 to 10 is shown as ``< 11'', in the page, the command and the API \\
+\ui{Index all recordings} (\cmd{medorama databases index NAME}) & Every recording it lists (at
+  most \code{max\_rows}): their files checked, and the new or changed ones queued for indexing.
+  For a database of ICU recordings that should all be indexed ahead of time;
+  \cmd{medorama init -{}-demo} does it for the demo's databases \\
+\end{xltabular}
+
+An offline database's patients stay listed, with their encounters; their data show as offline,
+and the recordings kept from before are shown. Connecting a database of millions of persons is
+one pass over its persons and one over its visits, plus the catalog: minutes.
+\ui{Count now} and \ui{Index all recordings} are for those who manage the database
+(\cref{sec:databases-tab-page}). A 0.2 workspace is updated in place: its per-person summary
+is dropped, its catalog made again without counts, and each database is read again at its next
+check (\cref{sec:installation-update}).
 
 \section{Connecting in the page}
 \label{sec:connecting-page}
@@ -247,7 +331,8 @@ asks for the following:
 \item the \ui{Name};
 \item the \ui{Kind}: \ui{A db-builder database (a SQLite file)}, \ui{OMOP CDM 5.3 or 5.4}, or
   \ui{Any layout, through SQL views}, which opens \ui{SQL views (any layout)} with the boxes
-  \ui{persons}, \ui{visits}, \ui{entries}, \ui{recordings} and \ui{version};
+  \ui{persons}, \ui{visits}, \ui{entries}, \ui{recordings} and \ui{version} (a \code{variables}
+  view is given on the command line, in the \opt{-{}-views} file);
 \item \ui{Where}: \ui{A file on this server}, with its \ui{File on this server} (typed, or picked
   with \ui{Choose\ldots}, which lists the SQLite files, \file{.sqlite}, \file{.sqlite3} and
   \file{.db}, inside \code{data\_roots}), or \ui{A PostgreSQL server}, with its \ui{Server} (a URL
@@ -278,15 +363,16 @@ medorama databases connect omop --kind omop \
     --schema cdm --vocabulary-schema vocab --mrn-authority HOSP --timezone America/New_York
 medorama databases connect county --kind omop --url sqlite:/data/county/omop.sqlite \
     --identifier mrn --mrn-authority COUNTY
-medorama databases list              # name, kind, engine, status, persons, recordings
+medorama databases list              # name, kind, engine, status, persons, recordings opened
 medorama databases check omop        # online or offline, and why
 \end{lstlisting}
 \cmd{databases connect} answers with what it read:
 \code{Connected study (dbb): version \dots; 120 person(s) linked to 118 patient(s); 85 variable(s);
-40 recording(s)}, followed by the number of identity conflicts, if any, and the command that
-lists them. The other commands of a connected database (\cmd{databases refresh},
-\cmd{variables}, \cmd{conflicts}, \cmd{grants}, \cmd{grant}, \cmd{revoke}, \cmd{remove}) are
-described in \cref{chap:cli}.
+recordings are read when a patient is opened} (the last part for a recording database), followed
+by the number of identity conflicts, if any, and the command that lists them. The other commands
+of a connected database (\cmd{databases refresh}, \cmd{count}, \cmd{index}, \cmd{variables},
+\cmd{conflicts}, \cmd{grants}, \cmd{grant}, \cmd{revoke}, \cmd{remove}) are described in
+\cref{chap:cli}.
 
 \section{Connecting an OMOP database}
 \label{sec:connecting-omop}
@@ -376,7 +462,7 @@ translates nothing in it (PostgreSQL's \code{?} operators, \code{E''} strings, d
 comments are fine). A view must be a single \code{SELECT} statement without a trailing
 semicolon. Each view's columns are named by its first query: in a \code{UNION ALL}, the later
 parts need no names. \code{persons} and \code{entries} are required; \code{visits},
-\code{recordings} and \code{version} are optional. A database with a \code{recordings} view is a
+\code{recordings}, \code{stays}, \code{version} and \code{variables} are optional. A database with a \code{recordings} view is a
 recording database (\cref{chap:recordings}).
 
 The views are given in a TOML file (\opt{-{}-views}), or in the boxes of \ui{SQL views (any
@@ -448,9 +534,23 @@ kind \code{views} gives its own.
   draws the time spent in intensive care rather than the whole visit (a db-builder database's
   bed stays and OMOP's \code{visit\_detail} without a view) & No \\
 \code{version} & One value that changes when the data do (a load time, a count) & No \\
+\code{variables} & \code{category}, \code{name}, \code{vocabulary}, \code{code}, \code{unit},
+  \code{numeric}: one row per variable the database holds, its catalog (below) & No \\
 \bottomrule
 \end{tabularx}
 \end{table}
+
+\paragraph{The catalog view.} The optional \code{variables} view names what the database holds,
+one row per variable, so that connecting and refreshing read no entry for the catalog (what the
+cohort builder completes and the planner sends criteria by). Its \code{category}, \code{name},
+\code{vocabulary}, \code{code} and \code{unit} are as the \code{entries} view gives them, and
+\code{numeric} is 1 when the variable's entries have numeric values (\code{value\_num}), else
+0. Without it, Medorama reads the names and units with one grouped query over \code{entries}
+(\code{GROUP BY category, name, vocabulary, code, unit}), with no counting. A database whose
+variables are its columns (a table of measurements) writes it as a list of constants. A variable
+named there but absent from \code{entries} is offered and finds nobody; a variable of
+\code{entries} not named there is not offered, and the planner does not send a criterion on it
+to this database: keep the two in step.
 
 Each column has a \emph{privacy class}, which decides what the gate does with it
 (\cref{tab:connecting-columns}).
@@ -510,6 +610,7 @@ Each column has a \emph{privacy class}, which decides what the gate does with it
 \code{format}, \code{label}, \code{size}, \code{fingerprint} & What the database says of the
   file. Medorama finds a recording's kind, size and fingerprint from the file itself, and its
   format and times from its index (\cref{chap:recordings}) & Clinical \\
+\code{numeric} (variables) & 1 when a variable's entries have numbers, otherwise 0 & Clinical \\
 \end{xltabular}
 
 \subsection{Performance}
@@ -525,8 +626,13 @@ Medorama asks the views only for what it needs:
   database can apply itself: the category, the name (exact, or containing a word), a code's
   prefix, a text, and whether there is a number. Medorama itself tests values in other units,
   \code{latest}, dates and stays.
-\item The patient list is read from the database's workspace files, not from the database
+\item The patient list is read from the database's workspace files (its persons and their
+  encounters); for the page shown, each online database is asked, in one grouped query over
+  those persons' entries and recordings, for the \ui{Data} and \ui{Entries} columns
   (\cref{chap:patients}).
+\item Connecting and refreshing read the \code{persons} and \code{visits} views whole, once
+  each, the \code{variables} view (or one grouped query over \code{entries}), and one
+  \code{SELECT DISTINCT category} over \code{recordings} (\cref{sec:connecting-kept}).
 \end{itemize}
 Index the underlying tables on the person, the time, and the name or code by which entries are
 searched. A criterion that would read more than \code{max\_rows} rows is refused, with a message
@@ -549,7 +655,7 @@ a database names its columns otherwise:
 medorama databases connect muse --kind views \
     --url sqlite:/data/ecg/ecg_metadata.sqlite \
     --views muse-views.toml --mrn-authority HOSP \
-    --timezone America/New_York --max-rows 5000000
+    --timezone America/New_York
 \end{lstlisting}
 \begin{itemize}
 \item \code{persons}: one person per MUSE patient ID, read as the MRN, with the names, date of
@@ -560,13 +666,18 @@ medorama databases connect muse --kind views \
   cohorts search (\code{muse.QTc > 450 ms});
 \item \code{recordings}: each ECG's XML file, as its entry's file, opened in the ECG viewer with
   its median beats (\cref{sec:ecg-viewer-median});
-\item \code{version}: the tables merged into it, and when the last was.
+\item \code{version}: the tables merged into it, and when the last was;
+\item \code{variables}: its catalog, as constants: \code{12-lead ECG} and the measurements
+  above, each with its unit, so that connecting reads no ECG for it.
 \end{itemize}
 Indexes on \code{ecg(patient\_id)} and \code{ecg(acquisition\_datetime)} keep each patient's
-page to an index search; create them once on the file if it lacks them. A database
-of millions of ECGs has more recordings than the default \code{max\_rows} lets a refresh read:
-raise it, as above; connecting it, and each refresh, read every recording's file, so the first
-connection takes a while. The demo's \code{demo\_muse} is one (\cref{sec:quickstart-demo}).
+page to an index search; create them once on the file if it lacks them. Connecting a database of
+millions of ECGs reads its persons (one \code{GROUP BY patient\_id}, over the index), its
+\code{variables} view (no ECG read) and the categories of its recordings (one scan): minutes. No
+XML file is read until a patient is opened, and then only that patient's few; a criterion such
+as \code{muse.QTc > 450 ms} reads one column of the \code{entries} view. Its files are ECGs,
+opened in the ECG viewer and never indexed, so \ui{Index all recordings} is not needed. The
+demo's \code{demo\_muse} is one (\cref{sec:quickstart-demo}).
 
 \section{Identity: the patient index}
 \label{sec:connecting-identity}
@@ -639,22 +750,31 @@ dot in the \ui{Databases} tab); one that does not is \emph{offline} (a grey dot,
 is for alarms), with when it was last checked and, for those who manage it, the error. Offline
 databases are listed after the online ones. An offline database keeps everything Medorama keeps
 of it: its workspace folder, its variables, its grants, and its patients in the Patient Catalog
-(read from its workspace). It is not searched, and its data are not shown on patients' pages,
+(read from its workspace, with their encounters; their data show as offline). It is not searched, and its data are not shown on patients' pages,
 until it answers again.
 
 \paragraph{Versions.} A database's \emph{data version} is its version query's answer (OMOP's
 \code{cdm\_source}, a db-builder database's \code{meta.version}, a views database's
-\code{version}), else a count of its persons, entries and recordings
-(\code{count:<persons>:<entries>:<recordings>}). When a check finds a new version, Medorama reads
-the database's variables, persons and recordings again. \ui{Refresh} (\cmd{medorama databases
-refresh NAME}), for those who manage it, does so on demand.
+\code{version}), else a count of its persons and recordings
+(\code{count:<persons>:<recordings>}; its entries are not counted, which on a large database
+would read them all at every check). When a check finds a new version, Medorama reads the
+database's persons, their encounters and its catalog again, and drops the counts. \ui{Refresh}
+(\cmd{medorama databases refresh NAME}), for those who manage it, does so on demand. No
+recording is read then.
 
 \paragraph{Variables.} What each database holds is read when it is connected, and again at each
 new version, into its \file{variables.sqlite}: each variable's category, name, vocabulary, code
-and unit, the numbers of its entries and persons, and whether it has numbers. The Cohort tab
-completes names from them (offline databases included), the planner sends a criterion only to the
-databases whose variables may hold it, and the database's page lists them (\ui{Variables};
-\cmd{medorama databases variables NAME}).
+and unit, and whether it has numbers, from its \code{variables} view or one grouped query over
+its entries (\cref{sec:connecting-views}). The Cohort tab completes names from them (offline
+databases included), the planner sends a criterion only to the databases whose variables may hold
+it, and the database's page lists them (\ui{Variables}; \cmd{medorama databases variables NAME}).
+
+\paragraph{Counts.} How many entries and persons hold each variable is counted only when someone
+who manages the database asks: \ui{Count now} on its page, \cmd{medorama databases count NAME},
+or \code{POST /api/v1/databases/\{id\}/count}. It is one grouped query over the entries, which
+takes a while on a large database. The counts are kept until the catalog is read again; before,
+they show as ``---'' (``-'' on the command line, \code{null} in the API). A count from 1 to 10 is
+shown as ``< 11'' everywhere.
 
 \section{Not supported yet}
 \label{sec:connecting-not-yet}

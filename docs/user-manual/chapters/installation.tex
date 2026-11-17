@@ -703,7 +703,10 @@ make help                                 # every check
 \opt{--demo}, \cmd{medorama init -{}-demo} has nothing to connect; a Medorama that connected the
 demo keeps it. Restart the programs. Medorama updates its control store when it starts, and an
 older version refuses a control store a newer one has updated: back it up first
-(\cref{sec:administration-backups}). From 0.1.0 to 0.2.0 there is no update in place
+(\cref{sec:administration-backups}). From 0.2 to 0.3 the update is made in place, with nothing
+to do by hand: the control store's migration has each database read again at its next check,
+and each workspace's 0.2 tables are replaced when they are first opened
+(\cref{sec:connecting-kept}). From 0.1.0 to 0.2.0 there is no update in place
 (\cref{sec:installation-upgrade}).
 
 \paragraph{Uninstall.} Delete the clone (the programs, \file{.venv/} and the builds are inside

@@ -51,8 +51,9 @@ connected databases.}{fig:architecture-glance}
   new endpoint cannot forget the rule.
 \item \textbf{Databases only, read in place.} Medorama imports nothing. Data reach it only as
   connected databases, which it reads read-only and never writes; tables and folders become such a
-  database through db-builder, a separate tool. What Medorama generates (the persons it linked,
-  variables, recordings' lists, results, cohorts) goes into its workspace, one folder per
+  database through db-builder, a separate tool. What Medorama keeps (the persons it linked and
+  their encounters, the names and units of the variables, the recordings it has opened, results,
+  cohorts) goes into its workspace, one folder per
   database, each encrypted with that database's own key.
 \item \textbf{Identity is the databases'.} Each database names its patients by an identifier
   unique within its issuer; Medorama joins databases on exact (issuer, identifier) pairs only,
@@ -206,8 +207,8 @@ Recordings, ECGs, images, documents & Their own folders, inside \code{data\_root
 Users, sessions, grants, settings, the list of databases, cohort definitions, wrapped keys,
   patients' numbers and pseudonyms, keyed hashes of identifiers, jobs, the audit log & The
   control store & Medorama \\
-Each database's persons as linked, variables, recordings' list, actions' results; cohorts'
-  members & The workspace, encrypted & Medorama \\
+Each database's persons as linked and their encounters, catalog of variables, the recordings
+  opened, actions' results; cohorts' members & The workspace, encrypted & Medorama \\
 Waveform indexes & Each recording database's index store in the workspace
   (\file{db-NNNN/index.sqlite}), encrypted with its key & The engine, the viewers, adapters \\
 Output folders of plug-in actions & The workspace (\file{db-NNNN/results/}) & Plug-ins, through
@@ -407,8 +408,11 @@ SQL database, through SQL views that the site writes) and \code{dbb} (a SQLite d
 db-builder, whose tables are the views), on PostgreSQL or as SQLite files
 (\cref{sec:connecting-kinds}). An administrator connects one on the \ui{Databases} tab or with
 \cmd{medorama databases connect}. Medorama checks that each view answers, reads its version, makes
-its data key and workspace folder, grants it to that administrator, reads its variables, and
-links its persons (\file{databases.rs}). It is read in place at each request, read-only, through
+its data key and workspace folder, grants it to that administrator, reads its catalog (the
+names and units of its variables), and links its persons, keeping their encounters
+(\file{databases.rs}). That is all it keeps of the database, besides what it does itself (the
+recordings it has opened, their indexes, results): a patient's data and recordings are read
+when the patient is opened (\cref{sec:connecting-kept}). It is read in place at each request, read-only, through
 the views of canonical columns: persons, visits, entries, and recordings for a recording database
 (\file{medorama/src/sources/}). Each database is checked when the server starts, every minute and
 on demand: online or offline; a changed version is read again (\cref{sec:connecting-status}).

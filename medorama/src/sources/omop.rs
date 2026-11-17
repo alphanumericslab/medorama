@@ -218,5 +218,5 @@ pub fn views(st: &Settings, d: Dialect) -> Views {
         text("source_release_date"),
         text("cdm_release_date")
     );
-    Views { persons, visits, entries, recordings: String::new(), stays, version }
+    Views { persons, visits, entries, recordings: String::new(), stays, version, variables: String::new() }
 }

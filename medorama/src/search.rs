@@ -118,10 +118,11 @@ impl Doc {
 /// A Privacy Mode gate built here, for callers that have none at hand (the server keeps one with
 /// its dictionary cached: `server::restricted`).
 pub fn build_gate(c: &Connection, cfg: &crate::config::Config) -> anyhow::Result<Restricted> {
-    let version: i64 = c.query_row("SELECT version FROM data_version", [], |r| r.get(0))?;
+    let (version, recordings): (i64, i64) =
+        c.query_row("SELECT identifiers, recordings FROM data_version", [], |r| Ok((r.get(0)?, r.get(1)?)))?;
     Ok(Restricted {
         settings: crate::deid::load(c)?,
-        dict: std::sync::Arc::new(crate::gate::Dict::build(c, cfg, version)?),
+        dict: std::sync::Arc::new(crate::gate::Dict::build(c, cfg, version, recordings)?),
         secret: crate::gate::secret(c)?,
     })
 }

@@ -52,9 +52,9 @@ identifiers leaves through the **privacy gate**, which replaces identifiers and 
    exports, the waveform viewer's answers) passes the privacy gate, and the server's last layer
    refuses any answer the gate did not clear, so a new endpoint cannot forget the rule.
 4. **Databases are only read.** No part of Medorama writes into a connected database or a data
-   folder. What Medorama generates (each database's persons as linked, its variables, its
-   recordings' state, results, cohorts) goes to its workspace, encrypted per database; removing
-   a database leaves no trace of it.
+   folder. What Medorama keeps (each database's persons as linked and their encounters, the
+   names and units of its variables, the recordings it has opened, results, cohorts) goes to its
+   workspace, encrypted per database; removing a database leaves no trace of it.
 5. **Identity is the databases'.** Databases are joined on exact (issuer, identifier) pairs, and
    on nothing else: no matching by names, no merges.
 6. **The server decides, the page draws.** What a user may see, and how data are searched, is
@@ -83,7 +83,7 @@ identifiers leaves through the **privacy gate**, which replaces identifiers and 
 | **Add-ons (adapters)** | Outside this repository | Any | Programs in the adapter folder, run as child processes; for example stp-adapter for BedMasterEx `.Stp` files (private, available to institutions under agreement) |
 | **Plug-in actions** | An administrator's `actions_dirs` | Any | Programs run as child processes by the job queue ([actions.md](actions.md)) |
 | **Control store** | Medorama's home folder, or a PostgreSQL server | SQLite or PostgreSQL | Medorama's own data: users, sessions, grants, audit log, settings, the list of connected databases, patient numbers, pseudonyms and keyed hashes of identifiers, cohort definitions, wrapped keys, the job queue. No identifiers. |
-| **Workspace** | `workspace_dir` | SQLite (SQLCipher), files | One folder per connected database (its persons as linked, variables, recordings, results), encrypted with its own key, its recordings' waveform indexes among them (`index.sqlite`); one file per cohort; the viewer's own index store |
+| **Workspace** | `workspace_dir` | SQLite (SQLCipher), files | One folder per connected database (its persons as linked and their encounters, its catalog of variables, the recordings opened, results), encrypted with its own key, its recordings' waveform indexes among them (`index.sqlite`); one file per cohort; the viewer's own index store |
 | **Connected databases** | The institution's servers, or SQLite files inside `data_roots` | SQL | OMOP, any SQL database through views, db-builder databases; and the recording files they name, read where they lie |
 
 The viewers are programs of their own. Each is useful alone and never depends on Medorama;
@@ -123,7 +123,7 @@ another host; it sends nothing else anywhere.
 | Connected databases | The institution's database servers, or SQLite files inside `data_roots` | Their owners (db-builder for its databases); Medorama only reads, through read-only sessions |
 | Recordings, ECGs, images, documents | Their own folders, inside `data_roots`, as the recording databases name them | Nobody: only read |
 | Users, sessions, grants, audit log, the databases' list and status, patient numbers, pseudonyms, keyed hashes, cohort definitions, wrapped keys, jobs | The control store | Medorama |
-| Each database's persons as linked (identifiers), variables, recordings' state, derived series, results of actions | `<workspace>/db-NNNN/`, SQLite encrypted with the database's key | Medorama |
+| Each database's persons as linked (identifiers) and their encounters, catalog of variables, the recordings opened (their state), derived series, results of actions | `<workspace>/db-NNNN/`, SQLite encrypted with the database's key | Medorama |
 | Cohort members and their provenance | `<workspace>/cohorts/c-NNNN.sqlite`, encrypted with the cohort's key | Medorama |
 | Waveform indexes | Each recording database's index store, `<workspace>/db-NNNN/index.sqlite`, encrypted with the database's key; what the viewer indexes itself, `<workspace>/viewer/index.sqlite`, with a key of its own (index format 3) | The engine (adapters write their index files into a private temporary folder, which the engine packs into the store), the viewer |
 | Files written by action plug-ins | `<workspace>/db-NNNN/results/<action>/r<n>/j<job>/` (not encrypted) | Plug-ins, through the job queue |
@@ -307,19 +307,24 @@ kinds:
 | Kind | What | Read through |
 |---|---|---|
 | `omop` | An OMOP CDM 5.3 or 5.4 database (PostgreSQL or SQLite) | Views built into Medorama ([sources/omop.rs](../medorama/src/sources/omop.rs)) |
-| `views` | Any SQL database | SQL views the site writes: `persons`, `visits`, `entries`, `recordings`, `version` |
+| `views` | Any SQL database | SQL views the site writes: `persons`, `visits`, `entries`, `recordings`, `stays`, `version`, `variables` |
 | `dbb` | A SQLite database built by db-builder from tables, known exports and folders of recordings | Its tables, which have the canonical columns ([db-builder/docs/schema.md](../db-builder/docs/schema.md)) |
 
 Connecting checks each view, makes the database's data key and workspace folder, grants the
-database to the admin, reads its **variables** (what it holds), **links its persons** (exact
-(issuer, identifier) pairs, so that a person in several databases is one patient with one
-pseudonym; a person whose pairs name two patients is a conflict, listed and not linked) and lists
-its **recordings**. Each database is then checked every minute (a green dot online, grey
-offline); a new data version reads it again. Cohort criteria go to the databases the user ticked
-and is granted, that are online and whose variables may hold them; each member records the
-databases that put it there. The patient page reads every granted database live. Removing a
-database destroys its key, its workspace folder and every cohort member it contributed to. The
-design is in [design/databases-only.md](design/databases-only.md) and
+database to the admin, reads its **catalog** (the names and units of its variables, from its
+`variables` view or one grouped query, uncounted), and **links its persons** (exact (issuer,
+identifier) pairs, so that a person in several databases is one patient with one pseudonym; a
+person whose pairs name two patients is a conflict, listed and not linked) with their
+**encounters**. That is all Medorama keeps of it, besides what it does itself: no entry, no count
+of anyone's data, no list of files. Each database is then checked every minute (a green dot
+online, grey offline); a new data version reads it again. Cohort criteria go to the databases
+the user ticked and is granted, that are online and whose variables may hold them; each member
+records the databases that put it there. The patient page reads every granted database live,
+and the patient list reads the online databases for the page shown. A patient's recordings are
+read when the patient is opened, and then checked, kept and indexed. Removing a database
+destroys its key, its workspace folder and every cohort member it contributed to. The design is
+in [design/databases-only.md](design/databases-only.md),
+[design/connected-databases.md](design/connected-databases.md) and
 [design/sources.md](design/sources.md).
 
 ### Building a database with db-builder
@@ -334,8 +339,10 @@ recording. It writes only its output database.
 
 A recording (a WFDB record, an EDF file, a folder of records, or a licensed format read by an
 add-on) is listed by its recording database and read where it lies, inside `data_roots`; it is
-never copied. Each recording is numbered `database × 1,000,000,000 + n` across Medorama.
-Background workers index it: the engine, or the add-on, reads the recording once and writes an
+never copied. Medorama reads a recording from the database when its patient is opened (their
+page, a job, a cohort's selection), or with every other one when a manager asks (**Index all
+recordings**), and keeps it then. Each recording is numbered `database × 1,000,000,000 + n`
+across Medorama. Background workers index it: the engine, or the add-on, reads the recording once and writes an
 **index** (channels, pieces, envelopes, vital signs, events) in the shared format of
 [index-format.md](../viewers/vitalstream/docs/index-format.md), into its database's index
 store (`<workspace>/db-NNNN/index.sqlite`, encrypted with the database's key; index format 3).
@@ -451,11 +458,11 @@ The modules of the Medorama server (`medorama/src/`). A guide for contributors i
 | `grants.rs` | Grants on databases (`search`, `view`, `phi`, `manage`) and cohorts (`view`, `edit`, `manage`) |
 | `gate.rs`, `deid.rs`, `dicom.rs`, `pseudonyms.rs` | The privacy gate: identifier dictionary and placeholders; dates, ages, WFDB, MUSE and EDF headers; DICOM; pseudonyms |
 | `gateway.rs`, `viewer.rs` | The VitalStream gateway; the viewer's supervisor |
-| `databases.rs` | Connecting a database, its status checks, refreshing, removing it with every trace |
+| `databases.rs` | Connecting a database, its status checks, refreshing, counting its variables and indexing all its recordings on request, removing it with every trace |
 | `sources/` | Reading connected databases: settings, read-only pools, the canonical views, OMOP's views |
-| `persons.rs` | The patient index: (issuer, identifier) pairs, keyed hashes, conflicts; each database's `persons.sqlite` |
-| `variables.rs` | What each database holds (`variables.sqlite`), for the planner and the Cohort tab |
-| `recordings.rs`, `derived.rs`, `categories.rs` | Recordings of recording databases (`recordings.sqlite`, numbers, the index sweep); derived series and results databases of actions; categories |
+| `persons.rs` | The patient index (the subject index): (issuer, identifier) pairs, keyed hashes, conflicts, encounters; each database's `persons.sqlite` |
+| `variables.rs` | What each database holds (`variables.sqlite`: names and units, counts when asked), for the planner and the Cohort tab |
+| `recordings.rs`, `derived.rs`, `categories.rs` | Recordings of recording databases (`recordings.sqlite`: those opened or indexed, numbers, the index sweep); derived series and results databases of actions; categories |
 | `workspace.rs` | The workspace: data keys, the master key, SQLCipher files, the index stores (`index_store`, `viewer_store`), shredding, rotation |
 | `patient/`, `cohorts/`, `expr.rs`, `search.rs` | The patient pages; cohorts (criteria, the planner, members and provenance, exports); criteria written as text; the search syntax |
 | `jobs.rs`, `actions.rs`, `addons.rs` | The job queue, plug-in actions, installed adapters |
@@ -470,8 +477,9 @@ db-builder's modules are in `db-builder/src/` (`add.rs`, `tables.rs`, `parquet_r
 
 Built: everything above, except the toolbox and its results format. Connecting databases only
 (with the encrypted workspace, grants, the exact patient index and removal without trace) was
-built in November 2026 ([design/databases-only.md](design/databases-only.md)), and so was index
-format 3: the waveform indexes in each database's workspace folder, encrypted with its key
+built in November 2026 ([design/databases-only.md](design/databases-only.md)), keeping of each
+database only its subject index and catalog in 0.3 ([design/connected-databases.md](design/connected-databases.md)),
+and so was index format 3: the waveform indexes in each database's workspace folder, encrypted with its key
 ([performance.md, Index format 3](performance.md#index-format-3)). Not built yet, and the next
 work: access limited to a cohort's patients. Later: built-in key managers; FHIR and other SQL engines;
 the toolbox and the engine's streaming reader; viewing recordings while they are being recorded;

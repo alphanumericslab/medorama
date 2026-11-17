@@ -1,10 +1,11 @@
-//! The connected databases (docs/design/databases-only.md): connecting one, its status,
+//! The connected databases (docs/design/connected-databases.md): connecting one, its status,
 //! refreshing what Medorama keeps of it, and removing it with every trace of it.
 //!
 //! Connecting checks the database, makes its data key and its workspace folder, grants it to
-//! the admin who connected it, reads its variables and links its persons.  A check (at start,
-//! every minute) marks it online or offline; a changed data
-//! version reads its variables again and links its persons again.  Removing it is six steps
+//! the admin who connected it, reads its catalog (the names and units of its variables) and its
+//! subject index (its persons, linked, and their encounters): one pass over its persons and one
+//! over its visits; no entry is counted and no file is read.  A check (at start, every minute)
+//! marks it online or offline; a changed data version reads its catalog and subjects again.  Removing it is six steps
 //! (`remove`), each one repeatable, so that a removal a crash interrupts finishes when Medorama
 //! starts again ([`resume_removals`]).
 
@@ -66,7 +67,8 @@ pub fn online(c: &Connection, of: &[i64]) -> anyhow::Result<Vec<i64>> {
 }
 
 /// The version a database says its data are at: its version query's answer, else a count of
-/// what it holds (so that a change is still noticed).
+/// its persons and recordings (so that a change is still noticed; its entries are not counted,
+/// which on a large database would read them all at every check).
 fn version_of(s: &Source, said: &str) -> anyhow::Result<String> {
     if !said.is_empty() {
         return Ok(said.to_string());
@@ -81,7 +83,7 @@ fn version_of(s: &Source, said: &str) -> anyhow::Result<String> {
             .map_err(|e| anyhow::anyhow!("{}: {e}", s.name))
     };
     let recordings = if s.has_recordings() { count(&v.recordings)? } else { 0 };
-    Ok(format!("count:{}:{}:{recordings}", count(&v.persons)?, count(&v.entries)?))
+    Ok(format!("count:{}:{recordings}", count(&v.persons)?))
 }
 
 /// Connect a database (admins): checked first (each view must answer), then kept with its data
@@ -141,18 +143,18 @@ pub fn connect(cfg: &Config, c: &Connection, user: &User, n: &NewSource, passwor
     Ok(id)
 }
 
-/// Read again what Medorama keeps of a database: its variables, its persons, its recordings.
+/// Read again what Medorama keeps of a database: its catalog, its subjects and their encounters.
+/// Its recordings are read when a patient is opened (recordings.rs), never here.
 fn refresh_content(cfg: &Config, c: &Connection, s: &Source, version: &str, user: Option<&User>) -> anyhow::Result<()> {
     crate::variables::read(cfg, c, s, version)?;
     crate::persons::sync(cfg, c, s, user)?;
-    crate::recordings::sync(cfg, c, s)?;
     // what the privacy gate's dictionary is built from changed: it is built again
     c.execute("UPDATE data_version SET version = version + 1, identifiers = identifiers + 1", [])?;
     Ok(())
 }
 
 /// Check a database now: online or offline, and its data version.  A changed version reads its
-/// variables, persons and recordings again.  Returns whether it is online.
+/// catalog and subjects again.  Returns whether it is online.
 pub fn check(cfg: &Config, c: &Connection, id: i64) -> anyhow::Result<bool> {
     let Some(d) = get(c, id)? else { anyhow::bail!("no database {id}") };
     let s = d.source;
@@ -215,7 +217,7 @@ pub fn check_all(cfg: &Config, c: &Connection) -> anyhow::Result<(usize, usize)>
     Ok((on, off))
 }
 
-/// Refresh a database on demand (who manages it): checked, and everything kept read again.
+/// Refresh a database on demand (who manages it): checked, and its catalog and subjects read again.
 pub fn refresh(cfg: &Config, c: &Connection, user: &User, id: i64) -> anyhow::Result<()> {
     crate::grants::require(c, user, &format!("db:{id}"), "manage")?;
     let Some(d) = get(c, id)? else { anyhow::bail!("no database {id}") };
@@ -227,6 +229,43 @@ pub fn refresh(cfg: &Config, c: &Connection, user: &User, id: i64) -> anyhow::Re
     refresh_content(cfg, c, &d.source, &version, Some(user))?;
     audit(c, Some(user), "refresh", &d.source.name, "");
     Ok(())
+}
+
+/// Count a database's variables (who manages it): how many entries and persons hold each, one
+/// grouped query over its entries (the Databases tab's **Count now**; never done when connecting).
+pub fn count_variables(cfg: &Config, c: &Connection, user: &User, id: i64) -> anyhow::Result<usize> {
+    crate::grants::require(c, user, &format!("db:{id}"), "manage")?;
+    let Some(d) = get(c, id)? else { anyhow::bail!("no database {id}") };
+    if d.status != "online" {
+        anyhow::bail!("{} is offline", d.source.name);
+    }
+    let n = crate::variables::count(cfg, c, &d.source)?;
+    audit(c, Some(user), "count", &d.source.name, &format!("{n} variables counted"));
+    Ok(n)
+}
+
+/// Read every recording a database lists, check their files and queue the new or changed ones
+/// for indexing (who manages it; `medorama databases index`): what connecting no longer does.
+pub fn index_recordings(
+    cfg: &Config,
+    c: &Connection,
+    user: &User,
+    id: i64,
+) -> anyhow::Result<crate::recordings::SyncReport> {
+    crate::grants::require(c, user, &format!("db:{id}"), "manage")?;
+    let Some(d) = get(c, id)? else { anyhow::bail!("no database {id}") };
+    if d.status != "online" {
+        anyhow::bail!("{} is offline", d.source.name);
+    }
+    let rep = crate::recordings::sync(cfg, c, &d.source)?;
+    audit(
+        c,
+        Some(user),
+        "index_all",
+        &d.source.name,
+        &format!("{} recordings read, {} missing", rep.recordings, rep.missing),
+    );
+    Ok(rep)
 }
 
 /// Remove a database (who manages it) and every trace of it (docs/design/databases-only.md,
@@ -307,7 +346,10 @@ pub struct Shown {
     pub status_error: String,
     pub checked_at: Option<f64>,
     pub version: String,
+    /// The recordings Medorama keeps of it (those opened or indexed).
     pub recordings: i64,
+    /// Whether it lists recordings (a recording database).
+    pub has_recordings: bool,
     /// The user's strongest permission on it, if any.
     pub permission: Option<&'static str>,
     pub persons: Option<i64>,
@@ -349,6 +391,7 @@ pub fn shown(cfg: &Config, c: &Connection, user: &User) -> anyhow::Result<Vec<Sh
             checked_at: d.checked_at,
             version: d.data_version.clone(),
             recordings: if permission.is_some() { crate::recordings::count(cfg, c, s.id).unwrap_or(0) } else { 0 },
+            has_recordings: permission.is_some() && !s.views().recordings.trim().is_empty(),
             permission,
             persons,
             patients,

@@ -112,6 +112,7 @@ demo](../docs/administration.md#the-demo) says how to install it and what to try
 | `omop` | An OMOP CDM database | `omop/omop.sqlite` |
 | `views` | A SQL database connected through canonical views | `registry/` |
 | `muse-db` | A MUSE ECG archive and its ECG metadata database, connected through views: median beats with onsets, a 250 Hz ECG and one without its sampling rate | `muse/` |
+| `catalog` | A catalog view: what demo_muse holds, named without reading its entries | `muse/views.toml` |
 | `encrypted` | An encrypted db-builder database, its key in a file | `secure/, keys/` |
 | `actions` | The example action plug-in, for the Actions tab | `actions/` |
 | `cohorts` | Enough patients and values for cohort criteria (creatinine, lactate, troponin, ICU, sex, age) | `databases/labs.csv` |
