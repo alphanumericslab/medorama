@@ -85,7 +85,8 @@ class LicenseAccept(unittest.TestCase):
         self.assertEqual(self.run_piped().returncode, 1)
 
     def test_in_a_terminal_only_y_or_yes_goes_on(self):
-        for answer, accepted in (('y', True), ('Yes', True), ('YES', True), ('n', False), ('', False), ('sure', False)):
+        for answer, accepted in (('y', True), ('Yes', True), ('YES', True), (' yes ', True), ('yes\r', True),
+                                 ('\x1b[200~yes\x1b[201~', True), ('n', False), ('', False), ('sure', False)):
             out, code = self.run_terminal(answer)
             self.assertEqual((code, 'CONTINUES' in out, self.record.exists()), (0, True, True) if accepted else (1, False, False), answer)
             if accepted:

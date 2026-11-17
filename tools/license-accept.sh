@@ -27,9 +27,13 @@ accept_license() {
   elif [ -t 0 ]; then
     printf 'Do you accept these terms? Type y or yes to continue [no]: '
     read -r answer || answer=
-    case "$(printf %s "$answer" | tr '[:upper:]' '[:lower:]')" in
+    # letters only, in any locale: a terminal's stray carriage return, escape sequences (a
+    # bracketed paste) or spaces around the answer do not refuse it
+    case "$(printf %s "$answer" | LC_ALL=C tr -cd 'A-Za-z' | LC_ALL=C tr 'A-Z' 'a-z')" in
       y|yes) how=prompt ;;
-      *) echo "Nothing was installed: the license terms were not accepted."; exit 1 ;;
+      *) echo "Nothing was installed: the license terms were not accepted (the answer read: $(printf %q "$answer"))."
+         echo "To accept them without the question, use --accept-license, or MEDORAMA_ACCEPT_LICENSE=yes."
+         exit 1 ;;
     esac
   else
     echo "Nothing was installed: there is no terminal to ask whether you accept the license terms."

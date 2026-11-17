@@ -31,6 +31,12 @@
   one without its sampling rate) and the ECG metadata database of them, connected through its
   views. Every MUSE file of the demo now holds its median beats with the P, QRS and T onsets, and
   names a known cart (MAC55, 12SL 241).
+- **CI runs only on a push** (and `release.yml` on a version tag), or by hand: no weekly
+  schedule and no runs for pull requests; fuzzing and the check of newly published advisories
+  run when `medorama.yml` or `rust.yml` is run by hand.
+- **The installers' license question** reads only the letters of the answer, so `yes` is no
+  longer refused when a terminal adds a carriage return, escape sequences or spaces; a refusal
+  shows the answer it read and how to accept without the question (`--accept-license`).
 
 ## 0.2.0 (2026-11-15, pre-release)
 
