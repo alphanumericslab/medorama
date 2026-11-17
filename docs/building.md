@@ -465,7 +465,7 @@ workspace are where `init` put them. Connected databases and recordings are neve
 | Message | Cause and remedy |
 |---|---|
 | `command not found: medorama` | The program is in `.venv/bin`. Run `source .venv/bin/activate`, call `.venv/bin/medorama`, or run `cargo install --path medorama --locked`. |
-| `perl: command not found`, `Can't locate … .pm in @INC` while building `openssl-sys` | Perl, or one of its standard modules, is missing; OpenSSL's build needs it. Install `perl` ([Prerequisites](#prerequisites)); on Windows, Strawberry Perl, in a new PowerShell window. |
+| `perl: command not found`, `Can't locate … .pm in @INC` while building `openssl-sys` | Perl, or one of its standard modules, is missing; OpenSSL's build needs it. Install `perl` ([Prerequisites](#prerequisites)); on Windows, Strawberry Perl, in a new PowerShell window. On Linux without administrator rights (RHEL and Rocky 8 lack `IPC::Cmd`), install the module into your home folder: `curl -L https://cpanmin.us \| perl - -l ~/perl5 App::cpanminus local::lib`, `eval "$(perl -I ~/perl5/lib/perl5 -Mlocal::lib)"`, `cpanm IPC::Cmd`, then build again in that shell. |
 | `linker 'cc' not found` (Linux) | No C toolchain is installed. Install `build-essential` or `gcc` ([Prerequisites](#prerequisites)), or see [Without administrator rights](#without-administrator-rights). |
 | `linker 'link.exe' not found`, `No CMAKE_CXX_COMPILER could be found` (Windows) | The Build Tools are missing, or lack **Desktop development with C++**. For C++, use a Developer PowerShell. |
 | `exit status: 69`, `You have not agreed to the Xcode license agreements` (macOS) | Run `sudo xcodebuild -license accept`, or `export DEVELOPER_DIR=/Library/Developer/CommandLineTools`. |

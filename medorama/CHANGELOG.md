@@ -37,6 +37,8 @@
 - **The installers' license question** reads only the letters of the answer, so `yes` is no
   longer refused when a terminal adds a carriage return, escape sequences or spaces; a refusal
   shows the answer it read and how to accept without the question (`--accept-license`).
+- **docs/building.md**: building on Linux without administrator rights when Perl lacks
+  `IPC::Cmd` (RHEL and Rocky 8): the module installed into the home folder with `cpanm`.
 
 ## 0.2.0 (2026-11-15, pre-release)
 
