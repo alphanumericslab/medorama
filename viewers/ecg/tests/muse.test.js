@@ -15,6 +15,8 @@ test('same as the Python reader', () => {
   const e = MUSE.read(bytes);
   assert.deepStrictEqual(e.meta, golden.meta);
   assert.strictEqual(e.fs, golden.fs);
+  assert.deepStrictEqual(e.median.marks, golden.median.marks);
+  assert.deepStrictEqual(e.median.leads.map((l) => l.samples), golden.median.leads.map((l) => l.samples));
   assert.deepStrictEqual(e.leads.map((l) => l.name), golden.leads.map((l) => l.name));
   e.leads.forEach((l, j) => {
     const g = golden.leads[j].samples;
@@ -55,12 +57,79 @@ test('damaged XML: refused at once, never a long search', () => {
   assert.strictEqual(x.children[2].text, 't<y>');
 });
 
-test('the rate as the Python reader reads it: a base that is not positive is 500 Hz, an exponent beyond ±6 refused', () => {
+test('the rate: a base that is not a rate is unknown, and the strip is shown by sample number', () => {
   const rate = (base, exp) => MUSE.decode(bytes).replaceAll('<SampleBase>500</SampleBase>', `<SampleBase>${base}</SampleBase>`)
     .replaceAll('<SampleExponent>0</SampleExponent>', `<SampleExponent>${exp}</SampleExponent>`);
-  assert.strictEqual(MUSE.read(rate('250', '1')).fs, 2500);
-  for (const base of ['nan', 'inf', '-500', '0', '']) assert.strictEqual(MUSE.read(rate(base, '0')).fs, 500, base);
-  for (const exp of ['7', '-7', '3000000']) assert.throws(() => MUSE.read(rate('500', exp)), /SampleExponent/);
+  const e = MUSE.read(rate('250', '1'));
+  assert.strictEqual(e.fs, 2500);
+  assert.ok(e.meta.notes.some((n) => n.includes('SAMPLE_EXPONENT_NOT_0')));
+  for (const [base, exp] of [['nan', '0'], ['inf', '0'], ['-500', '0'], ['0', '0'], ['', '0'], ['500', '7'], ['500', '-7'], ['500', '3000000'], ['500', '0.5']]) {
+    const u = MUSE.read(rate(base, exp));
+    assert.strictEqual(u.fs, null, `${base} ${exp}`);
+    assert.strictEqual(u.rateUnknown, true);
+    assert.ok(u.meta.notes.some((n) => n.includes('BAD_SAMPLE_BASE')));
+    assert.deepStrictEqual(u.median.marks, []);            // no rate, no marks
+  }
+  const rec = ECG.readJson(MUSE.read(rate('', '')));
+  assert.strictEqual(rec.rateUnknown, true);
+  assert.strictEqual(rec.leads[0].fs, null);
+  const Paper = require('../paper.js');
+  const d = Paper.draw(rec, { layout: '3x4', twelve: ECG.twelveLead(rec), highpass: true, notch: 60 });
+  assert.ok(d.samples);
+  assert.match(d.svg, /100 samples per 5 mm \(rate unknown\)/);
+  assert.ok((d.svg.match(/class="trace" d="[^"]*"/)[0].match(/L/g) || []).length > 3500);   // every lead drawn (12 quarter strips and the rhythm: about 4000)
+  assert.match(d.svg, /class="axis"[^>]*>500</);
+  assert.doesNotMatch(d.svg, /high-pass|notch| Hz/);        // no filter, no rate
+  const hit = d.snap(d.left + 10, 20);                       // 10 mm into lead I: sample 200
+  assert.ok(hit && hit.lead === 'I' && Math.abs(hit.n - 200) <= 20);
+});
+
+/** A MUSE file of `fs` Hz: a 10 s rhythm strip and a 1.2 s median beat, the onsets at 500 Hz. */
+function made({ fs = 250, device = 'MAC 8', program = '250', qtrggr = 124, upb = '4.88', rhythmN = 10 * fs } = {}) {
+  const b64 = (n) => Buffer.from(new Int16Array(Array.from({ length: n }, (_, i) => Math.round(200 * Math.sin(i / 7)))).buffer).toString('base64');
+  const wave = (kind, n) => `<Waveform><WaveformType>${kind}</WaveformType><SampleBase>${fs}</SampleBase><SampleExponent>0</SampleExponent>`
+    + ['I', 'II', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6'].map((l) => `<LeadData><LeadSampleCountTotal>${n}</LeadSampleCountTotal>`
+      + `<LeadAmplitudeUnitsPerBit>${upb}</LeadAmplitudeUnitsPerBit><LeadAmplitudeUnits>MICROVOLTS</LeadAmplitudeUnits>`
+      + `<LeadID>${l}</LeadID><WaveFormData>${b64(n)}</WaveFormData></LeadData>`).join('') + '</Waveform>';
+  return `<RestingECG><TestDemographics><AcquisitionDevice>${device}</AcquisitionDevice><AnalysisSoftwareVersion>${program}</AnalysisSoftwareVersion></TestDemographics>`
+    + '<RestingECGMeasurements><QRSDuration>92</QRSDuration><POnset>230</POnset><QOnset>300</QOnset><QOffset>346</QOffset><TOffset>500</TOffset>'
+    + '<ECGSampleBase>500</ECGSampleBase></RestingECGMeasurements>'
+    + `<QRSTimesTypes><GlobalRR>200</GlobalRR><QTRGGR>${qtrggr}</QTRGGR></QRSTimesTypes>`
+    + `${wave('Median', Math.round(1.2 * fs))}${wave('Rhythm', rhythmN)}</RestingECG>`;
+}
+
+test('a 250 Hz format with its onsets at 500 Hz: known, the marks on the median beat at its own rate, RR in 4 ms', () => {
+  const e = MUSE.read(made());
+  assert.strictEqual(e.fs, 250);
+  assert.deepStrictEqual(e.meta.notes, []);
+  assert.deepStrictEqual(e.meta.fields.find((f) => f[0] === 'Recording'), ['Recording', 'MAC 8 · 12SL 250 · 250 Hz · known format']);
+  assert.deepStrictEqual(e.median.marks, [{ name: 'P', sample: 115 }, { name: 'QRS', sample: 150 }, { name: 'QRS end', sample: 173 }, { name: 'T end', sample: 250 }]);
+  assert.deepStrictEqual(e.meta.measurements.find((m) => m.name === 'RR'), { name: 'RR', value: 800, unit: 'ms' });
+  assert.strictEqual(e.median.leads.length, 12);
+  // the median beats on paper: 3 × 4, the marks dotted, named under the last row
+  const Paper = require('../paper.js');
+  const rec = ECG.readJson(e);
+  const d = Paper.drawMedian(rec, { speed: 25, gain: 10 });
+  for (const l of ECG.STANDARD) assert.ok(d.svg.includes(`>${l}</text>`), l);
+  assert.match(d.svg, /class="mark" d="M/);
+  assert.match(d.svg, /class="markname"[^>]*>QRS</);
+  assert.match(d.svg, /Median beats {3}25 mm\/s {3}10 mm\/mV {3}250 Hz/);
+  const hit = d.snap(d.left + 1, 20);
+  assert.ok(hit && hit.lead === 'I' && hit.t >= 0);
+  // the same cart at 500 Hz is not a known format; a wrong QTRGGR is reported, not used
+  assert.ok(MUSE.read(made({ fs: 500 })).meta.notes.some((n) => n.includes('NEW_FORMAT')));
+  const q = MUSE.read(made({ qtrggr: 248 }));
+  assert.strictEqual(q.fs, 250);
+  assert.ok(q.meta.notes.some((n) => n.includes('QTRGGR_CONTRADICTS_FS')));
+});
+
+test('what does not fit is reported: a short strip; a file without an amplitude scale or of other samples is refused', () => {
+  const short = MUSE.read(made({ rhythmN: 1 }));
+  assert.ok(short.meta.notes.some((n) => n.includes('RHYTHM_NOT_10_S')));
+  assert.ok(short.meta.notes.some((n) => n.includes('NEW_FORMAT')));
+  assert.throws(() => MUSE.read(made({ upb: '' })), /amplitude scale/);
+  assert.throws(() => MUSE.read(made().replace('<LeadSampleCountTotal>', '<LeadSampleSize>1</LeadSampleSize><LeadSampleCountTotal>')), /16-bit/);
+  assert.strictEqual(MUSE.FORMATS.length, 30);
 });
 
 test('edited, not confirmed; not MUSE', () => {

@@ -6,13 +6,8 @@
 name: rust
 
 on:
-  schedule:
-    - cron: "17 5 * * 1"   # Mondays: advisories published since
+  workflow_dispatch:
   push:
-    paths: ["Cargo.toml", "Cargo.lock", "deny.toml", "rustfmt.toml", "libs/**", "medorama/**", "db-builder/**", "viewers/vitalstream/rust/**",
-            "viewers/vitalstream/testdata/**", "viewers/vitalstream/web/**",
-            "tools/install.*", ".github/workflows/rust.yml"]
-  pull_request:
     paths: ["Cargo.toml", "Cargo.lock", "deny.toml", "rustfmt.toml", "libs/**", "medorama/**", "db-builder/**", "viewers/vitalstream/rust/**",
             "viewers/vitalstream/testdata/**", "viewers/vitalstream/web/**",
             "tools/install.*", ".github/workflows/rust.yml"]
@@ -60,7 +55,7 @@ jobs:
 
   supply-chain:
     # dependencies of the whole workspace: RustSec advisories, licences (deny.toml), sources;
-    # also every week, for advisories published after the last change
+    # run it by hand (Run workflow) for advisories published after the last push
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

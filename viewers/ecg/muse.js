@@ -1,8 +1,12 @@
 // GE MUSE resting ECG XML for the ECG viewer: the same reading as the Python reader
 // (python/muse, muse_reader_py.read_muse), giving the viewer's JSON form (ecg.js readJson).
-// What is read: the rhythm strip (8 recorded leads, the other four derived), its rate and scale;
-// the test's details; the measurements; the computer's statements (Marquette 12SL) and the
-// confirmed or edited ones.  The patient's identity and the order are never read.
+// What is read: the rhythm strip (8 recorded leads, the other four derived), its rate and scale,
+// and the median beats with the P, QRS and T onsets marked; the test's details; the
+// measurements; the computer's statements (Marquette 12SL) and the confirmed or edited ones.
+// The rate is the rhythm strip's SampleBase, else unknown (the strip is then shown by sample
+// number, never at a guessed rate); each file is checked against a list of known GE formats,
+// and what does not fit is reported.
+// The patient's identity and the order are never read.
 // No dependencies (its own small XML parser); its reader is added to readers.js when the page has it.
 // A classic script, and a CommonJS module for tests.
 
@@ -134,29 +138,79 @@
     return out;
   }
 
-  /** The leads of a waveform section, in µV, with the four derived ones when missing. */
-  function leads(w) {
-    // the rate: SampleBase × 10^SampleExponent; a base that is not a positive number is 500 Hz,
-    // an exponent beyond ±6 is refused (as the Python reader reads it)
-    const b = number(text(w, 'SampleBase'));
-    const base = b > 0 ? b : 500;
-    const exp = number(text(w, 'SampleExponent')) || 0;
-    if (Math.abs(exp) > 6) throw new Error(`not a sampling rate: SampleExponent ${exp}`);
-    const fs = base * 10 ** exp;
+  // ---------------------------------------------------------------- formats and rates
+  // The known GE formats: (cart, 12SL program) -> the rates and lengths they record with (the
+  // same table as FORMATS of the Python reader).
+  // [device, program, fs, median fs, rhythm samples, median samples, measurement rate]
+  const FORMATS = [
+    ['CASE', '12SL 20.1', 500, 500, 5000, 600, 500], ['CASE', '12SL V15C', 500, 500, 5000, 600, 500],
+    ['CASE', '12SL V19', 500, 500, 5000, 600, 500], ['CASE', '12SL V21', 500, 500, 5000, 600, 500],
+    ['CSYS', '237', 500, 500, 5000, 600, 500], ['CSYS', '239', 500, 500, 5000, 600, 500],
+    ['D3K', '241', 500, 500, 5000, 600, 500], ['Datam', 'NO SERIAL', 500, 500, 5000, 600, 500],
+    ['MAC 8', '250', 250, 250, 2500, 300, 500], ['MAC V', '243', 500, 500, 5000, 600, 500],
+    ['MAC2K', '241', 500, 500, 5000, 600, 500], ['MAC35', '241', 500, 500, 5000, 600, 500],
+    ['MAC5', '245', 500, 500, 5000, 600, 500],
+    ['MAC55', '237', 500, 500, 5000, 600, 500], ['MAC55', '239', 500, 500, 5000, 600, 500],
+    ['MAC55', '239', 250, 250, 2500, 300, 500], ['MAC55', '241', 500, 500, 5000, 600, 500],
+    ['MAC55', '241 HD', 500, 500, 5000, 600, 500],
+    ['MAC5K', '229', 250, 250, 2500, 300, 500], ['MAC5K', '231', 250, 250, 2500, 300, 500],
+    ['MAC5K', '231', 500, 500, 5000, 600, 500], ['MAC5K', '233', 250, 250, 2500, 300, 500],
+    ['MAC5K', '233', 500, 500, 5000, 600, 500], ['MAC5K', '235', 250, 250, 2500, 300, 500],
+    ['MAC5K', '235', 500, 500, 5000, 600, 500], ['MAC5K', '237', 250, 250, 2500, 300, 500],
+    ['MAC5K', '237', 500, 500, 5000, 600, 500], ['MAC5K', '239', 500, 500, 5000, 600, 500],
+    ['MAC80', '239', 500, 500, 5000, 600, 500], ['MV360', '243', 500, 500, 5000, 600, 500],
+  ];
+  // what a check found, as the viewer says it
+  const CHECKS = {
+    BAD_SAMPLE_BASE: 'the sampling rate is not given (SampleBase): shown by sample number',
+    NEW_FORMAT: 'a cart, 12SL program, rate or length not seen before',
+    SAMPLE_EXPONENT_NOT_0: 'a SampleExponent other than 0',
+    MEDIAN_RATE_DIFFERS: 'the median beats are not at the rhythm strip\'s rate',
+    LEAD_LENGTHS_DIFFER: 'the leads have different lengths',
+    RHYTHM_NOT_10_S: 'the rhythm strip is not 10 s long',
+    'MEDIAN_NOT_1.2_S': 'the median beats are not 1.2 s long',
+    MULTIPLE_RHYTHM: 'more than one rhythm strip (the first is shown)',
+    MEASUREMENT_RATE_UNKNOWN: 'the rate of the P, QRS and T onsets is unknown: they are not marked',
+    ONSETS_CONTRADICT_BASE: 'the onsets do not give the QRS duration at their rate',
+    QTRGGR_CONTRADICTS_FS: 'the QRS trigger (QTRGGR) is not at 496 ms at this rate',
+  };
+  const RR_SCALE = { 500: 1, 250: 4 };   // ms per unit of GlobalRR, by fs
+  const TRIGGER_MS = 496;                // QTRGGR = TRIGGER_MS × fs / 1000
+  const ONSETS = [['POnset', 'P'], ['POffset', 'P end'], ['QOnset', 'QRS'], ['QOffset', 'QRS end'], ['TOffset', 'T end']];
+
+  /** base × 10^exponent in Hz, or null when that is not a rate (a missing exponent is 0). */
+  function rate(base, exponent) {
+    const b = number(base);
+    const e = /\S/.test(exponent) ? number(exponent) : 0;
+    if (!(b > 0) || e === null || !Number.isInteger(e) || Math.abs(e) > 6) return null;
+    return b * 10 ** e;
+  }
+
+  /** The samples of a waveform section: { rate (Hz, or null), raw: Map lead -> µV[] }. */
+  function waveform(w) {
     const got = new Map();
     for (const ld of findAll(w, 'LeadData')) {
+      const id = text(ld, 'LeadID');
+      const size = number(text(ld, 'LeadSampleSize'));
+      if (size !== null && size !== 2) throw new Error(`lead ${id}: samples of ${size} bytes (MUSE's are 16-bit)`);
+      const k = number(text(ld, 'LeadAmplitudeUnitsPerBit'));
+      if (!(k > 0)) throw new Error(`lead ${id}: no amplitude scale (LeadAmplitudeUnitsPerBit)`);
       const raw = base64(text(ld, 'WaveFormData'));
       let n = raw.length >> 1;
       const count = number(text(ld, 'LeadSampleCountTotal'));
       if (Number.isInteger(count) && count > 0 && count < n) n = count;
       const dv = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
-      const k = number(text(ld, 'LeadAmplitudeUnitsPerBit')) || 1;
       const scale = k * (text(ld, 'LeadAmplitudeUnits').toUpperCase() === 'MILLIVOLTS' ? 1000 : 1);
       const v = new Array(n);
       for (let i = 0; i < n; i++) v[i] = r3(dv.getInt16(2 * i, true) * scale);
-      got.set(text(ld, 'LeadID'), v);
+      got.set(id, v);
     }
-    // III, aVR, aVL, aVF from I and II (Einthoven, Goldberger), as carts derive them
+    return { rate: rate(text(w, 'SampleBase'), text(w, 'SampleExponent')), exponent: number(text(w, 'SampleExponent')) || 0, raw: got };
+  }
+
+  /** The leads of a waveform, in µV, with III, aVR, aVL, aVF derived from I and II when missing (Einthoven, Goldberger), as carts derive them. */
+  function leads(raw) {
+    const got = new Map(raw);
     if (got.has('I') && got.has('II')) {
       const a = got.get('I');
       const b = got.get('II');
@@ -168,7 +222,73 @@
       if (!got.has('aVF')) got.set('aVF', make((x, y) => y - x / 2));
     }
     const order = [...STANDARD.filter((l) => got.has(l)), ...[...got.keys()].filter((l) => !STANDARD.includes(l))];
-    return { fs, leads: order.map((l) => ({ name: l, units: 'uV', samples: got.get(l) })) };
+    return order.map((l) => ({ name: l, units: 'uV', samples: got.get(l) }));
+  }
+
+  /** The longest lead's length, and whether the leads differ in length. */
+  const lengths = (raw) => {
+    const ns = [...raw.values()].map((v) => v.length);
+    return { n: ns.length ? Math.max(...ns) : 0, differ: new Set(ns).size > 1 };
+  };
+
+  /** Do the onsets of a measurement section give its QRS duration at rate r (within a sample and 1 ms)? null when not all given. */
+  function qrsFits(m, r) {
+    const [a, b, d] = ['QOnset', 'QOffset', 'QRSDuration'].map((k) => number(text(m, k)));
+    if (a === null || b === null || d === null || !r) return null;
+    return Math.abs(((b - a) * 1000) / r - d) <= 1000 / r + 1;
+  }
+
+  /**
+   * The rates of a file and what does not fit the known formats: fs from the rhythm strip's SampleBase (else null: the
+   * strip is shown by sample number), the median beats' rate, the rate of the onsets (the
+   * measurements' ECGSampleBase, else the original set's, else the one rate at which they give
+   * the QRS duration, else the known format's), and the checks' codes.
+   */
+  function sampling(doc, rhythms, rw, mw) {
+    const test = find(doc, 'TestDemographics');
+    const device = text(test, 'AcquisitionDevice');
+    const program = text(test, 'AnalysisSoftwareVersion');
+    const rows = FORMATS.filter((f) => f[0] === device && f[1] === program);
+    const warnings = [];
+    const warn = (c) => { if (!warnings.includes(c)) warnings.push(c); };
+    if (rhythms > 1) warn('MULTIPLE_RHYTHM');
+    const fs = rw.rate;
+    if (fs === null) warn('BAD_SAMPLE_BASE');
+    const r = lengths(rw.raw);
+    const m = mw ? lengths(mw.raw) : { n: null, differ: false };
+    const mfs = mw ? mw.rate : null;
+    if (rw.exponent || (mw && mw.exponent)) warn('SAMPLE_EXPONENT_NOT_0');
+    if (r.differ || m.differ) warn('LEAD_LENGTHS_DIFFER');
+    if (fs && mfs && mfs !== fs) warn('MEDIAN_RATE_DIFFERS');
+    if (fs && r.n !== 10 * fs) warn('RHYTHM_NOT_10_S');
+    if (mfs && m.n !== Math.round(1.2 * mfs)) warn('MEDIAN_NOT_1.2_S');
+    let format = 'unreadable';
+    if (fs !== null) {
+      format = rows.some((f) => f[2] === fs && f[3] === mfs && f[4] === r.n && f[5] === m.n) ? 'known' : 'new';
+      if (format === 'new') warn('NEW_FORMAT');
+    }
+    const qtrggr = number(text(find(doc, 'QRSTimesTypes'), 'QTRGGR'));
+    if (fs && qtrggr !== null && qtrggr !== (TRIGGER_MS * fs) / 1000) warn('QTRGGR_CONTRADICTS_FS');
+    // the rate of the onsets (final measurements)
+    const fin = find(doc, 'RestingECGMeasurements');
+    const orig = find(doc, 'OriginalRestingECGMeasurements');
+    const stored = (x) => rate(text(x, 'ECGSampleBase'), text(x, 'ECGSampleExponent'));
+    const asOriginal = ['QOnset', 'QOffset'].every((k) => { const f = number(text(fin, k)); return f !== null && f === number(text(orig, k)); });
+    const fits = [250, 500, 1000].filter((x) => qrsFits(fin, x));
+    const known = [...new Set(rows.filter((f) => fs === null || f[2] === fs).map((f) => f[6]))];
+    const edited = number(text(fin, 'QRSDuration')) !== number(text(orig, 'QRSDuration'));
+    let mrate = stored(fin);
+    if (mrate) {
+      if (qrsFits(fin, mrate) === false && !(edited && asOriginal && qrsFits(orig, stored(orig)))) warn('ONSETS_CONTRADICT_BASE');
+    } else if (asOriginal && stored(orig) && qrsFits(orig, stored(orig))) mrate = stored(orig);
+    else if (fits.length === 1) [mrate] = fits;
+    else if (known.length === 1) [mrate] = known;
+    else {
+      mrate = null;
+      if (ONSETS.some(([k]) => number(text(fin, k)) !== null)) warn('MEASUREMENT_RATE_UNKNOWN');
+    }
+    const rr = number(text(find(doc, 'QRSTimesTypes'), 'GlobalRR'));
+    return { device, program, fs, mfs, rhythmSamples: r.n, medianSamples: m.n, mrate, format, warnings, rrMs: rr !== null && RR_SCALE[fs] ? rr * RR_SCALE[fs] : null };
   }
 
   function filters(w) {
@@ -181,21 +301,36 @@
     return parts.join(', ');
   }
 
+  /** The recording as the report prints it: "MAC5K · 12SL 237 · 250 Hz · known format". */
+  function recording(sm) {
+    const what = { known: 'known format', new: 'new format', unreadable: 'rate unknown' }[sm.format];
+    return [sm.device, sm.program ? `12SL ${sm.program}` : '', sm.fs ? `${sm.fs} Hz` : '', what].filter(Boolean).join(' · ');
+  }
+
   /** A MUSE XML file (its bytes, or its text) in the ECG viewer's JSON form. */
   function read(data) {
     const doc = parseXml(typeof data === 'string' ? data : decode(data));
     if (doc.tag !== 'RestingECG') throw new Error(`not a MUSE resting ECG (root element ${doc.tag})`);
     const test = find(doc, 'TestDemographics');
     const pat = find(doc, 'PatientDemographics');
-    const rhythm = findAll(doc, 'Waveform').find((w) => text(w, 'WaveformType').toLowerCase() === 'rhythm');
+    const waves = findAll(doc, 'Waveform');
+    const kind = (w) => text(w, 'WaveformType').toLowerCase();
+    const rhythms = waves.filter((w) => kind(w) === 'rhythm');
+    const rhythm = rhythms[0];
     if (!rhythm) throw new Error('no rhythm waveform in this MUSE file');
-    const { fs, leads: ls } = leads(rhythm);
+    const medianW = waves.find((w) => kind(w) === 'median');
+    const rw = waveform(rhythm);
+    const mw = medianW ? waveform(medianW) : null;
+    const sm = sampling(doc, rhythms.length, rw, mw);
+    const fs = sm.fs;
+    const ls = leads(rw.raw);
     const age = text(pat, 'PatientAge');
     const ageUnits = text(pat, 'AgeUnits').toLowerCase();
     const gender = text(pat, 'Gender');
     const fields = [
       ['Acquired', join(date(text(test, 'AcquisitionDate')), text(test, 'AcquisitionTime'))],
       ['Device', join(text(test, 'AcquisitionDevice'), text(test, 'AcquisitionSoftwareVersion'))],
+      ['Recording', recording(sm)],
       ['Site', text(test, 'SiteName')],
       ['Location', text(test, 'LocationName')],
       ['Reason', text(test, 'TestReason') || text(find(doc, 'Order'), 'TestReason')],
@@ -211,6 +346,12 @@
       const v = number(text(meas, tag));
       if (v !== null && !seen.has(name)) { seen.add(name); measurements.push({ name, value: v, unit }); }
     }
+    const bp = [['SystolicBP', 'Systolic BP'], ['DiastolicBP', 'Diastolic BP']];
+    for (const [tag, name] of bp) {
+      const v = number(text(meas, tag));
+      if (v !== null) measurements.push({ name, value: v, unit: 'mmHg' });
+    }
+    if (sm.rrMs !== null) measurements.push({ name: 'RR', value: sm.rrMs, unit: 'ms' });
     const statements = [];
     const original = find(doc, 'OriginalDiagnosis');
     const current = find(doc, 'Diagnosis');
@@ -227,7 +368,22 @@
         statements.push({ source: 'edited', time: edited, lines: c });
       }
     }
-    return { name: 'MUSE ECG', fs, leads: ls, meta: { fields, measurements, statements, notes: [] } };
+    const notes = sm.warnings.map((c) => `Check: ${CHECKS[c] || c} (${c})`);
+    const out = { name: 'MUSE ECG', fs, leads: ls, meta: { fields, measurements, statements, notes } };
+    if (fs === null) out.rateUnknown = true;
+    if (mw && mw.raw.size) {
+      // the onsets and offsets on the median beat, in its samples: at the onsets' rate in the file
+      const marks = [];
+      if (mw.rate && sm.mrate) {
+        for (const [tag, name] of ONSETS) {
+          const v = number(text(meas, tag));
+          if (v !== null) marks.push({ name, sample: r3((v * mw.rate) / sm.mrate) });
+        }
+      }
+      out.median = { fs: mw.rate, leads: leads(mw.raw), marks };
+      if (mw.rate === null) out.median.rateUnknown = true;
+    }
+    return out;
   }
 
   /** Whether the bytes look like a MUSE resting ECG (its root element near the start, in any of the encodings of decode). */
@@ -249,7 +405,7 @@
     });
   }
 
-  const api = { read, isMuse, parseXml, decode, encodingOf, base64 };
+  const api = { read, isMuse, parseXml, decode, encodingOf, base64, rate, FORMATS, CHECKS };
   if (node) module.exports = api;
   else root.MUSE = api;
 })(typeof self !== 'undefined' ? self : this);

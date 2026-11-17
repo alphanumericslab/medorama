@@ -32,6 +32,8 @@ def one_line(x):
 
 def write_wfdb(ecg, out_dir, name):
     """A WFDB record of the ECG: `name`.hea and `name`.dat in `out_dir`."""
+    if ecg['fs'] is None:
+        raise ValueError('the sampling rate is not given (SampleBase): no WFDB record is written')
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     leads = ecg['leads']

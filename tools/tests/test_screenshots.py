@@ -35,10 +35,10 @@ def demo_answers(folder="/demo"):
         for i, p in enumerate(shots.demo_patients())
     ]
     files = {"demo": "demo.sqlite", "demo_north": "north/north.sqlite", "demo_omop": "omop/omop.sqlite",
-             "demo_registry": "registry/registry.sqlite", "demo_secure": "secure/secure.sqlite"}
+             "demo_registry": "registry/registry.sqlite", "demo_muse": "muse/ecg_metadata.sqlite", "demo_secure": "secure/secure.sqlite"}
     return {
         "databases": {"items": [
-            {"name": n, "kind": "omop" if n == "demo_omop" else "views" if n == "demo_registry" else "dbb", "permission": "manage",
+            {"name": n, "kind": "omop" if n == "demo_omop" else "views" if n in ("demo_registry", "demo_muse") else "dbb", "permission": "manage",
              "url": f"sqlite:{folder}/{f}"} for n, f in files.items()
         ]},
         "patients?limit=1": {"total": len(patients), "items": patients[:1]},

@@ -44,7 +44,15 @@
     <TAxis>40</TAxis>
     <QRSCount>2</QRSCount>
     <QTcFrederica>410</QTcFrederica>
+    <POnset>85</POnset>
+    <POffset>125</POffset>
+    <QOnset>160</QOnset>
+    <QOffset>206</QOffset>
+    <TOffset>365</TOffset>
+    <ECGSampleBase>500</ECGSampleBase>
+    <ECGSampleExponent>0</ECGSampleExponent>
   </RestingECGMeasurements>
+  <QRSTimesTypes><GlobalRR>1000</GlobalRR><QTRGGR>248</QTRGGR></QRSTimesTypes>
   <OriginalDiagnosis>
     <DiagnosisStatement><StmtText>Sinus rhythm</StmtText></DiagnosisStatement>
     <DiagnosisStatement><StmtText>with </StmtText></DiagnosisStatement>

@@ -28,6 +28,7 @@ the settings are summarized in [administration.md](administration.md).
   - [What Medorama reads](#what-medorama-reads)
 - [Connect any SQL database through views](#connect-any-sql-database-through-views)
   - [Canonical views reference](#canonical-views-reference)
+  - [A MUSE ECG metadata database](#a-muse-ecg-metadata-database)
 - [Files: recordings, ECGs and images](#files-recordings-ecgs-and-images)
 - [Check the result](#check-the-result)
 - [Checklist](#checklist)
@@ -573,6 +574,50 @@ JSON are refused with "columns of type … are not read (cast them in the query)
 Other engines (SQL Server, Oracle, Snowflake, BigQuery) are not read directly yet. A PostgreSQL
 foreign-data wrapper can reach them in the meantime, and Medorama connects to that PostgreSQL
 database.
+
+### A MUSE ECG metadata database
+
+An ECG metadata database made from a GE MUSE export's XML files is a SQLite file with a table
+`ecg`, one row per distinct XML file (by its MD5), and a table `additions`, one row per batch
+merged into it. Medorama connects it as it is, through views; nothing is converted or copied.
+The views read these columns of `ecg`:
+
+| Columns | What they hold |
+|---|---|
+| `md5` | The file's MD5: the row's key. |
+| `patient_id`, `last_name`, `first_name`, `birth_date`, `sex` (`female`, `male`) | The patient as the file gives it. |
+| `acquisition_datetime` | The acquisition time (ISO 8601, local time). |
+| `ventricular_rate_bpm`, `atrial_rate_bpm`, `pr_interval_ms`, `qrs_duration_ms`, `qt_interval_ms`, `qtc_ms`, `qtc_fridericia_ms`, `global_rr_ms`, `p_axis_deg`, `r_axis_deg`, `t_axis_deg`, `systolic_bp_mmhg`, `diastolic_bp_mmhg` | The final (overread) measurements, in their units. |
+| `diagnosis_text`, `original_diagnosis_text` | The confirmed statements, and the computer's. |
+| `source_file` | The XML file's path, inside a data root. |
+
+and `additions.added_at`, the time of each batch. The views are the demo's `muse/views.toml`
+(written by [tools/make-demo-data.py](../tools/make-demo-data.py)); copy it, and change the
+column names if a database names them otherwise:
+
+```bash
+medorama databases connect muse --kind views --url sqlite:/data/ecg/ecg_metadata.sqlite \
+    --views muse-views.toml --mrn-authority HOSP --timezone America/New_York \
+    --max-rows 5000000
+```
+
+| View | What it gives |
+|---|---|
+| `persons` | One person per MUSE patient ID, read as the MRN (of the `--mrn-authority`); the names, date of birth and sex of the person's latest ECG. |
+| `entries` | Per ECG, an `ecg` entry named `12-lead ECG`, its text the confirmed statements (else the computer's); and one `ecg` entry per measurement of the final (overread) set: Vent. rate, Atrial rate, PR, QRS, QT, QTc, QTcF, RR, the P, R and T axes and the blood pressure, in their units, for cohorts (`muse.QTc > 450 ms`). |
+| `recordings` | Per ECG, its XML file, keyed as the ECG entry's file: the patient's page shows it with the entry, and it opens in the ECG viewer with its median beats ([viewers/ecg](../viewers/ecg/README.md#muse-xml)). |
+| `version` | The number of tables merged into it, and when the last was. |
+
+- **Its indexes.** Indexes on `ecg(patient_id)` and `ecg(acquisition_datetime)` keep each
+  patient's page to an index search. Create them once on the file, if it lacks them:
+  `CREATE INDEX IF NOT EXISTS ecg_patient ON ecg (patient_id); CREATE INDEX IF NOT EXISTS
+  ecg_time ON ecg (acquisition_datetime); ANALYZE;`
+- **Its size.** A database of millions of ECGs has more recordings than the default
+  `--max-rows` (1,000,000) lets a refresh read; raise it as above. Connecting and each refresh
+  read every recording's file to note its presence and fingerprint, so the first connection of
+  such a database takes a while.
+- **The demo** holds one: `demo_muse` (`muse/ecg_metadata.sqlite`, with the same views in
+  `muse/views.toml`).
 
 ## Files: recordings, ECGs and images
 

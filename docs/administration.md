@@ -1013,8 +1013,8 @@ connected databases and the recordings are not touched.
 ## The demo
 
 The demo is a set of invented patients for trying Medorama, showing what it does and teaching
-it: about 40 patients in five databases, as three hospitals and a research registry would hold
-them, with enough data for every feature.
+it: about 40 patients in six databases, as three hospitals, a research registry and an ECG
+archive would hold them, with enough data for every feature.
 
 | Database | Kind | What it holds |
 |---|---|---|
@@ -1022,6 +1022,7 @@ them, with enough data for every feature.
 | `demo_north` | `dbb` | A second hospital: some of the same patients by the same MRN authority (`DEMO`), one of them with its MRN in lower case (linked ignoring case), one identity conflict (one patient's MRN with another's patient ID), patient IDs written `PT_123` that its rules file makes `PT123`, and ECG files whose folder is moved after the database is built and repointed with `db-builder rewrite`. |
 | `demo_omop` | `omop` | A third hospital's OMOP CDM database: some of the demo's patients by MRN, and patients of its own. |
 | `demo_registry` | `views` | A heart-failure registry's own tables, connected through canonical SQL views ([databases.md](databases.md#connect-any-sql-database-through-views)): scores, NT-proBNP, LVEF, notes; some of the demo's patients by MRN, two of its own by study ID. |
+| `demo_muse` | `views` | An ECG archive: older MUSE XML files (2019 to 2022) of eight of the demo's patients, and an ECG metadata database of them (one row per file by MD5), connected through its views as it is ([databases.md](databases.md#a-muse-ecg-metadata-database)), the MUSE patient ID read as the MRN of the authority `DEMO`. The MUSE files carry their median beats with the P, QRS and T onsets; one is a 250 Hz ECG (a MAC5K with 12SL 237), and one gives no sampling rate. |
 | `demo_secure` | `dbb` | A transplant clinic's db-builder database, encrypted with SQLCipher; its key, a demo key published with the demo, is `keys/demo_secure.key` in the demo's folder. |
 
 Everyone in the demo is invented: pseudo names (such as Jane Doe), MRNs starting with `SYN`,

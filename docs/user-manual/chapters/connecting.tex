@@ -532,6 +532,42 @@ Index the underlying tables on the person, the time, and the name or code by whi
 searched. A criterion that would read more than \code{max\_rows} rows is refused, with a message
 that asks to narrow it (a date range, a database).
 
+\subsection{A MUSE ECG metadata database}
+\label{sec:connecting-muse}
+
+An ECG metadata database made from a GE MUSE export's XML files is a SQLite file with a table
+\code{ecg}, one row per distinct XML file (by its MD5), and a table \code{additions}, one row per
+batch merged into it. The views read, of \code{ecg}: \code{md5}; the patient
+(\code{patient\_id}, \code{last\_name}, \code{first\_name}, \code{birth\_date}, \code{sex});
+\code{acquisition\_datetime}; the final measurements (\code{ventricular\_rate\_bpm},
+\code{pr\_interval\_ms}, \code{qtc\_ms} and the others, in their units); the confirmed and the
+computer's statements (\code{diagnosis\_text}, \code{original\_diagnosis\_text}); and the file's
+path (\code{source\_file}). Medorama connects it as it is, through the demo's views
+(\file{muse/views.toml}, written by \file{tools/make-demo-data.py}), copied and adapted if
+a database names its columns otherwise:
+\begin{lstlisting}[style=shell]
+medorama databases connect muse --kind views \
+    --url sqlite:/data/ecg/ecg_metadata.sqlite \
+    --views muse-views.toml --mrn-authority HOSP \
+    --timezone America/New_York --max-rows 5000000
+\end{lstlisting}
+\begin{itemize}
+\item \code{persons}: one person per MUSE patient ID, read as the MRN, with the names, date of
+  birth and sex of their latest ECG;
+\item \code{entries}: per ECG an \code{ecg} entry, \code{12-lead ECG}, its text the confirmed
+  statements (else the computer's); and one \code{ecg} entry per measurement of the final set
+  (Vent. rate, Atrial rate, PR, QRS, QT, QTc, QTcF, RR, the axes, the blood pressure), which
+  cohorts search (\code{muse.QTc > 450 ms});
+\item \code{recordings}: each ECG's XML file, as its entry's file, opened in the ECG viewer with
+  its median beats (\cref{sec:ecg-viewer-median});
+\item \code{version}: the tables merged into it, and when the last was.
+\end{itemize}
+Indexes on \code{ecg(patient\_id)} and \code{ecg(acquisition\_datetime)} keep each patient's
+page to an index search; create them once on the file if it lacks them. A database
+of millions of ECGs has more recordings than the default \code{max\_rows} lets a refresh read:
+raise it, as above; connecting it, and each refresh, read every recording's file, so the first
+connection takes a while. The demo's \code{demo\_muse} is one (\cref{sec:quickstart-demo}).
+
 \section{Identity: the patient index}
 \label{sec:connecting-identity}
 \label{sec:connecting-registry}

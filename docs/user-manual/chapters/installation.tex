@@ -181,7 +181,7 @@ scripts take the same options, written as \opt{-Viewer}, \opt{-NoTools}, \opt{-D
   Rust when \cmd{cargo} is missing. VitalStream's \file{install.ps1} has no \opt{-NoRustup}: it
   never installs Rust, and \opt{-Viewer rs} fails when \cmd{cargo} is missing. \\
 \opt{--demo} (\opt{-Demo}) & \file{install-medorama}, \file{install} & Also make the demo:
-  about 40 invented patients in five databases (db-builder's, an encrypted one, OMOP, SQL views)
+  about 40 invented patients in six databases (db-builder's, an encrypted one, OMOP, two read through SQL views)
   that \cmd{medorama init -{}-demo} connects (\cref{chap:quickstart}). Off by default. \\
 \opt{--no-wfdb} (\opt{-NoWfdb}) & \file{install-medorama}, VitalStream's \file{install} & Build
   without WFDB support, with no wfdb-x code: a WFDB recording is refused, every other format is
@@ -267,10 +267,11 @@ after a demo was made), \cmd{medorama databases connect NAME -{}-kind KIND -{}-u
 \subsection{The demo}
 \label{sec:installation-demo}
 
-The \emph{demo} is five databases of about 40 invented patients, with enough data and files to
+The \emph{demo} is six databases of about 40 invented patients, with enough data and files to
 try every feature: three hospitals' (two made by db-builder, one of them sharing patients by MRN
 and holding an identity conflict, and an OMOP database), a research registry read through SQL
-views, and an encrypted db-builder database (\cref{chap:quickstart}). Its ECGs, CT series and
+views, an ECG archive of MUSE files read through the views of its ECG metadata database, and an
+encrypted db-builder database (\cref{chap:quickstart}). Its ECGs, CT series and
 two of its X-rays are built from the demo library, \file{tools/demo/library}: short pieces of
 real recordings and public images, transformed so that they represent no particular person and
 checked against re-identification by a maintainer-only tool kept outside the repository.
@@ -286,7 +287,7 @@ With \opt{--demo}, the Medorama and development installers also take these steps
   \cmd{db-builder recordings} on its folders of sleep studies and EEGs, by file-name pattern),
   \file{north/north.sqlite} (with \opt{-{}-rules}, then its ECG folder moved and
   \cmd{db-builder rewrite}), and \file{secure/secure.sqlite} (with \opt{-{}-encrypt} and the
-  demo's key). The OMOP and registry databases are SQLite files already.
+  demo's key). The OMOP, registry and ECG archive databases are SQLite files already.
 \item They name that folder in \file{.venv/bin/medorama.demo} (Windows
   \file{.venv\textbackslash Scripts\textbackslash medorama.demo}), next to the programs.
 \end{enumerate}

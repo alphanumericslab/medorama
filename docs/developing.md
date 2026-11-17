@@ -66,7 +66,7 @@ Each part is a program of its own, in its own folder:
 | `viewers/vitalstream/` | The waveform viewer, in three implementations that produce byte-identical indexes, and their shared web page. | Python, Rust, C++ |
 | `viewers/ecg/`, `viewers/pacs/` | The ECG and PACS viewers: static pages with plain scripts, usable on their own. The ECG viewer's readers are registered in `readers.js`. | JavaScript |
 | `viewers/ecg/python/muse/`, `viewers/pacs/python/dicom/` | `muse-py` and `dicom-py`: tools that write tables of ECGs and DICOM studies for db-builder, and serve the viewers on their own. | Python |
-| `tools/make-demo-data.py` | The demo: about 40 invented patients in five databases (db-builder's, an encrypted one, OMOP, SQL views), with recordings, ECGs and images of every kind, built from models and the transformed demo library (`tools/demo/library`). | Python |
+| `tools/make-demo-data.py` | The demo: about 40 invented patients in six databases (db-builder's, an encrypted one, OMOP, two read through SQL views), with recordings, ECGs and images of every kind, built from models and the transformed demo library (`tools/demo/library`). | Python |
 | `tools/bench-viewers.py` | How fast the three VitalStream viewers index and read recordings ([performance.md](performance.md#the-vitalstream-viewers)). | Python |
 
 The server embeds the page and the ECG and PACS viewers when it is built (`include_dir!` in
@@ -244,7 +244,7 @@ de-identifier exists for it, it is refused in Privacy Mode (`gate.rs` `FileKind`
 | `make lint-python` | The Python code: no unused imports or undefined names (`ruff check --select F`, the version CI's `checks.yml` uses: `.venv/bin/pip install ruff==0.17.4`). |
 | `make msrv` | The workspace checked with the oldest Rust it supports, `rust-version` in `Cargo.toml` (1.88; `rustup toolchain install 1.88`), as CI's `msrv` job does. Raise it, and the versions in the README, [building.md](building.md) and the manual, when a dependency needs a newer Rust. |
 | `make coverage` | The share of Medorama's lines that the tests run (`cargo llvm-cov`, with an HTML report in `target/llvm-cov/html`). It fails under 76 %, as CI's `coverage` job does. |
-| `make fuzz` | The parsers fuzzed (`medorama/fuzz/`: WFDB headers, MUSE XML, DICOM, EDF and BDF files with their identifiers and Privacy Mode's copy, what users type), every target that `cargo fuzz list` names, `FUZZ_S` seconds each (60 by default), with the versions of the workspace's `Cargo.lock` (copied into `medorama/fuzz/`). It needs `rustup toolchain install nightly` and `cargo install cargo-fuzz`. CI builds every target on each change and fuzzes each weekly, 5 minutes each. |
+| `make fuzz` | The parsers fuzzed (`medorama/fuzz/`: WFDB headers, MUSE XML, DICOM, EDF and BDF files with their identifiers and Privacy Mode's copy, what users type), every target that `cargo fuzz list` names, `FUZZ_S` seconds each (60 by default), with the versions of the workspace's `Cargo.lock` (copied into `medorama/fuzz/`). It needs `rustup toolchain install nightly` and `cargo install cargo-fuzz`. CI builds every target on each push, and fuzzes each for 5 minutes when `medorama.yml` is run by hand. |
 | `make audit` | The dependencies: RustSec advisories, licenses and sources (`cargo deny`, `deny.toml`). |
 
 **The browser test** (`tests/browser.rs`) drives the page in headless Chrome, on invented

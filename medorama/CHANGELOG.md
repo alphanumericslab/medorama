@@ -1,5 +1,37 @@
 # Changelog: medorama
 
+## 0.2.1 (2026-11-17, pre-release)
+
+- **The ECG viewer reads the rates and formats of GE MUSE files strictly**, in `muse.js` and in
+  the Python reader (`muse_reader_py`), which give the same result:
+  - the sampling rate is the rhythm strip's `SampleBase`, never guessed: a file without a valid
+    one was drawn at 500 Hz; it is now drawn **by sample number** (100 samples per 5 mm, the
+    sample numbers under the paper, calipers in samples, the filters off), and `muse-py wfdb`
+    writes no record of it;
+  - each file is checked against a list of known GE formats (cart and 12SL program, with their
+    rates and lengths; some carts record at 250 Hz): the report's new **Recording** line names
+    the cart, the program, the rate and whether the format is known, and what does not fit is
+    listed under the report with a code for each (a new format, a strip not 10 s long, median
+    beats not 1.2 s long or at another rate, leads of different lengths, onsets whose rate is
+    unknown, a `QTRGGR` that contradicts the rate …);
+  - a lead without an amplitude scale, or of samples other than 16-bit, is refused (it was drawn
+    with a scale of 1);
+  - the blood pressure, and `GlobalRR` as RR in ms (× 4 at 250 Hz), are among the measurements.
+- **Median beats.** A MUSE file's median beats are drawn under the rhythm, on paper of their own
+  at the same speed, gain and scale: the twelve leads 3 × 4, with a calibration pulse on each
+  row, and the P onset and offset, the QRS onset and offset and the T offset of the device's
+  measurements dotted across each beat. The onsets are placed at the measurements' own rate
+  (500 Hz even in the 250 Hz files). The calipers measure on the median beats too.
+- **A MUSE ECG metadata database connects as it is**, through views
+  ([databases.md, A MUSE ECG metadata database](../docs/databases.md#a-muse-ecg-metadata-database)):
+  a SQLite database of a MUSE export's metadata (one row per XML file by MD5), the MUSE
+  patient ID read as the MRN, each ECG an entry with its file, each measurement an entry that
+  cohorts search.
+- **The demo** has a sixth database, `demo_muse`: an ECG archive of MUSE files (one at 250 Hz,
+  one without its sampling rate) and the ECG metadata database of them, connected through its
+  views. Every MUSE file of the demo now holds its median beats with the P, QRS and T onsets, and
+  names a known cart (MAC55, 12SL 241).
+
 ## 0.2.0 (2026-11-15, pre-release)
 
 Medorama now connects databases instead of importing data (OMOP, SQL views, SQLite databases

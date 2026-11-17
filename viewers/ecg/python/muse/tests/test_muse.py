@@ -98,17 +98,71 @@ def _rate(base, exp):
         .replace(b'<SampleExponent>0</SampleExponent>', f'<SampleExponent>{exp}</SampleExponent>'.encode())
 
 
-def test_the_rate_as_muse_js_reads_it():
+def test_the_rate_as_muse_js_reads_it(tmp_path):
     assert b'<SampleBase>500</SampleBase>' in XML.read_bytes() and b'<SampleExponent>0</SampleExponent>' in XML.read_bytes()
     assert read_muse(_rate('250', '1'))['fs'] == 2500
-    for base in ('nan', 'inf', '-500', '0', ''):                 # not a positive number: 500 Hz
-        assert read_muse(_rate(base, '0'))['fs'] == 500, base
-    for exp in ('7', '-7', '3000000', '5000'):                   # refused at once, not a huge number
-        with pytest.raises(ValueError, match='SampleExponent'):
-            read_muse(_rate('500', exp))
+    for base, exp in (('nan', '0'), ('inf', '0'), ('-500', '0'), ('0', '0'), ('', '0'), ('500', '7'), ('500', '-7'),
+                      ('500', '3000000'), ('500', '5000'), ('500', '0.5')):
+        e = read_muse(_rate(base, exp))                     # not a rate: unknown, shown by sample number
+        assert e['fs'] is None and e['rateUnknown'] is True, (base, exp)
+        assert any('BAD_SAMPLE_BASE' in n for n in e['meta']['notes'])
+        assert e['median']['marks'] == []
+        json.dumps(e, allow_nan=False)
+    from muse_reader_py.cli import write_wfdb
+    with pytest.raises(ValueError, match='sampling rate'):
+        write_wfdb(read_muse(_rate('', '')), tmp_path, 'x')
+    assert not list(tmp_path.iterdir())                       # nothing written
     m = read_muse(XML.read_bytes().replace(b'<QTInterval>410</QTInterval>', b'<QTInterval>NaN</QTInterval>'))
     assert 'QT' not in {x['name'] for x in m['meta']['measurements']}
     json.dumps(m, allow_nan=False)
+
+
+def _made(fs=250, device='MAC 8', program='250', qtrggr=124, upb='4.88', rhythm_n=None):
+    """A MUSE file of fs Hz: a 10 s rhythm strip and a 1.2 s median beat, the onsets at 500 Hz
+    (the same as made() in tests/muse.test.js)."""
+    import base64, math, struct
+    rhythm_n = 10 * fs if rhythm_n is None else rhythm_n
+
+    def b64(n):
+        return base64.b64encode(struct.pack(f'<{n}h', *(round(200 * math.sin(i / 7)) for i in range(n)))).decode()
+
+    def wave(kind, n):
+        leads = ''.join(f'<LeadData><LeadSampleCountTotal>{n}</LeadSampleCountTotal><LeadAmplitudeUnitsPerBit>{upb}</LeadAmplitudeUnitsPerBit>'
+                        f'<LeadAmplitudeUnits>MICROVOLTS</LeadAmplitudeUnits><LeadID>{l}</LeadID><WaveFormData>{b64(n)}</WaveFormData></LeadData>'
+                        for l in ('I', 'II', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6'))
+        return f'<Waveform><WaveformType>{kind}</WaveformType><SampleBase>{fs}</SampleBase><SampleExponent>0</SampleExponent>{leads}</Waveform>'
+    return (f'<RestingECG><TestDemographics><AcquisitionDevice>{device}</AcquisitionDevice><AnalysisSoftwareVersion>{program}</AnalysisSoftwareVersion></TestDemographics>'
+            '<RestingECGMeasurements><QRSDuration>92</QRSDuration><POnset>230</POnset><QOnset>300</QOnset><QOffset>346</QOffset><TOffset>500</TOffset>'
+            '<ECGSampleBase>500</ECGSampleBase></RestingECGMeasurements>'
+            f'<QRSTimesTypes><GlobalRR>200</GlobalRR><QTRGGR>{qtrggr}</QTRGGR></QRSTimesTypes>'
+            f'{wave("Median", round(1.2 * fs))}{wave("Rhythm", rhythm_n)}</RestingECG>').encode()
+
+
+def test_a_250_hz_format_with_onsets_at_500_hz():
+    e = read_muse(_made())
+    assert e['fs'] == 250 and e['meta']['notes'] == []
+    assert ['Recording', 'MAC 8 · 12SL 250 · 250 Hz · known format'] in e['meta']['fields']
+    assert e['median']['marks'] == [{'name': 'P', 'sample': 115}, {'name': 'QRS', 'sample': 150},
+                                    {'name': 'QRS end', 'sample': 173}, {'name': 'T end', 'sample': 250}]
+    assert {'name': 'RR', 'value': 800, 'unit': 'ms'} in e['meta']['measurements']
+    assert any('NEW_FORMAT' in n for n in read_muse(_made(fs=500))['meta']['notes'])
+    q = read_muse(_made(qtrggr=248))
+    assert q['fs'] == 250 and any('QTRGGR_CONTRADICTS_FS' in n for n in q['meta']['notes'])
+    short = read_muse(_made(rhythm_n=1))
+    assert any('RHYTHM_NOT_10_S' in n for n in short['meta']['notes'])
+    with pytest.raises(ValueError, match='amplitude scale'):
+        read_muse(_made(upb=''))
+
+
+def test_formats_are_the_viewers():
+    """The table of formats is the same in muse.js."""
+    from muse_reader_py import FORMATS, CHECKS
+    js = (Path(__file__).resolve().parents[3] / 'muse.js').read_text(encoding='utf-8')
+    for f in FORMATS:
+        assert "['%s', '%s', %d, %d, %d, %d, %d]" % f in js, f
+    assert len(FORMATS) == 30 and js.count("', 500, 500, 5000, 600, 500]") + js.count("', 250, 250, 2500, 300, 500]") == 30
+    for code, text in CHECKS.items():
+        assert text.replace("'", "\\'") in js or text in js, code
 
 
 def test_wfdb_header_one_line_per_value(tmp_path):

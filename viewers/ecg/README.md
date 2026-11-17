@@ -40,7 +40,9 @@ you choose inside your browser: they never leave your computer.
   computer's statements (for example Marquette 12SL) and the physician's confirmed or edited
   ones.
 - **Calipers** that snap to the trace and show the interval in milliseconds and the voltage
-  difference in microvolts.
+  difference in microvolts, on the rhythm strips and on the median beats.
+- **Median beats** of a MUSE file, the twelve leads 3 × 4 on paper of their own, with the P, QRS
+  and T onsets and offsets of the device's measurements marked.
 - **Many formats:** WFDB records (single- and multi-segment), GE MUSE XML, DICOM ECGs, EDF,
   EDF+, BDF and BDF+, the viewer's JSON form, and PDF, PNG and JPEG pictures of ECGs
   ([What it reads](#what-it-reads)).
@@ -76,7 +78,7 @@ records…** and select the `examples/` folder.
 |---|---|
 | A WFDB record: the `.hea` header, then its signal files ([below](#wfdb-records)) | Drawn on paper. Signal formats 8, 16, 24, 32, 61, 80, 160 and 212 are read, and the first 10 seconds are shown (no more than the header states). A signal file may be a MATLAB file (`.mat`, the PhysioNet Challenge files and those `wfdb2mat` writes) that matches its header ([docs/wfdb-collection.md](../../docs/wfdb-collection.md#matlab-signal-files)). A skewed signal (`16:3`) is read that many frames later, as the WFDB library reads it. The header's comments (`# QT: 410 ms`, `# Dx: …`) become the report. Where the header leaves a value out, WFDB's own defaults apply: 250 Hz, a gain of 200 adu/mV (also for a gain of 0), millivolts, and the baseline at the ADC zero. (VitalStream, unlike this viewer, reads only what a header states.) |
 | A WFDB multi-segment record: the master header with its segments' headers and signal files | The same. The segments follow each other from the record's start; a null segment, and a lead that a segment does not hold, are gaps. |
-| GE MUSE XML (resting ECG) | Drawn on paper: the rhythm strip, with leads III, aVR, aVL and aVF derived from I and II. The report holds the test's details, the measurements, the Marquette 12SL statements and the confirmed or edited ones. The text's encoding is that of its byte order mark (UTF-8, UTF-16LE or UTF-16BE, whatever the XML declaration says), else UTF-16 when its zero bytes show it (`3C 00` / `00 3C`), else the one its XML declaration names (UTF-8 by default). |
+| GE MUSE XML (resting ECG) | Drawn on paper: the rhythm strip, with leads III, aVR, aVL and aVF derived from I and II, and the median beats on paper of their own with the P, QRS and T onsets marked. The report holds the test's details, the recording (cart, 12SL program, rate, and whether it is a known format), the measurements, the Marquette 12SL statements and the confirmed or edited ones, and the checks a file does not pass ([MUSE XML](#muse-xml)). The text's encoding is that of its byte order mark (UTF-8, UTF-16LE or UTF-16BE, whatever the XML declaration says), else UTF-16 when its zero bytes show it (`3C 00` / `00 3C`), else the one its XML declaration names (UTF-8 by default). |
 | A DICOM ECG (a 12-lead, Holter or other waveform object) | Drawn on paper, with its annotations as the report. A lead is named by its code (MDC, as `2:1` or `131329`, or SCP-ECG, as `5.6.3-9-1`) when there is one, else by its code's meaning or its label, read as a lead's name (`I (Einthoven)`, `aVR, augmented voltage, right`, `Lead V1` are I, aVR and V1), so that a 12-lead ECG is laid out as one. Any other DICOM file is refused, with a pointer to the [PACS viewer](../pacs/README.md). |
 | An EDF, EDF+, BDF or BDF+ file (`.edf`, `.bdf`) | Drawn on paper: the first 10 seconds of the signals at the sampling rate of the first ECG signal (`I` … `V6`, `ECG …`, `EKG …`), or, without one, of the signals at the most common rate. Of an interrupted EDF+D recording, the first uninterrupted part is shown. The annotations within the span shown, and the signals left out, are listed in the report's notes. The rules are those of [docs/edf.md](../../docs/edf.md). |
 | The viewer's [JSON form](#json) | Drawn on paper. |
@@ -148,6 +150,18 @@ named at the paper's foot. The record's samples are never changed: the calipers 
 trace as it is drawn, so a voltage difference between two strips includes the difference of
 their medians.
 
+**The median beats.** A file that holds the device's median beats (GE MUSE) shows them under the
+rhythm, on paper of their own at the same speed, gain and scale: the twelve leads 3 × 4, each
+beat whole (1.2 s), with a calibration pulse on each row. The P onset and offset, the QRS onset
+and offset and the T offset of the device's measurements are dotted across each beat, and named
+under the last row. They are placed at the rate the file gives them, which is not always the
+recording's: the 250 Hz MUSE files give them at 500 Hz.
+
+**A rate the file does not give.** A record whose sampling rate is unknown (a MUSE file without
+a valid `SampleBase`) is never drawn at a guessed rate: its samples are drawn by number, 100 to
+each 5 mm (at 25 mm/s), with the sample numbers under the paper, and the calipers give the
+interval in samples. The filters, which need the rate, are off.
+
 **The report.** Above the paper, the viewer shows what the file says about the ECG:
 - the details: time, device, site, status, age, sex and filters, and a MUSE file's reason for
   the test;
@@ -169,7 +183,7 @@ without a key and the statements, is shown as written.
 | **Layout**, **Speed**, **Gain** | Choose the layout (3 × 4 + rhythm, 6 × 2 + rhythm, 12 × 1), the paper speed and the gain. The choices are remembered. |
 | **High-pass**, **Notch** | Turn on the 0.5 Hz high-pass, and the 50 or 60 Hz notch ([the baseline](#read-an-ecg)). Both are off by default; the choices are remembered. |
 | **−**, **Fit**, **+** | Make the paper smaller, fit it to the window's width, or make it larger. |
-| **Calipers**, then click two points | Each point snaps to the nearest point of the trace. The viewer shows the interval (ms) and the voltage difference (µV) between them. |
+| **Calipers**, then click two points | Each point snaps to the nearest point of the trace, on the rhythm or on the median beats (both points on the same paper). The viewer shows the interval (ms, or samples when the rate is unknown) and the voltage difference (µV) between them. |
 | `Esc` | Clears the calipers. |
 | ‹ ›, `←` `→` | Step through the ECGs of a folder. |
 | ☾ / ☀ | Switches between the light and dark themes. |
@@ -331,6 +345,30 @@ whose header comments carry the report, or to an **ECG database**: one row per f
 MRN, the time, every measurement as a column, the statements and the file, ready to import into
 Medorama, whose cohorts search those columns. Both readers are tested on the same synthetic file
 (`tests/fixtures/`, made by `make_muse.py`) and give the same result.
+
+**Rates and formats.** Both readers apply the same rules:
+
+- **fs** is the rhythm strip's `SampleBase` × 10^`SampleExponent`. When that is not a rate, the
+  rate is unknown: the strip is shown by sample number (above), and `muse-py wfdb` writes no
+  record. It is never guessed.
+- **The format** is the cart (`AcquisitionDevice`) and its 12SL program
+  (`AnalysisSoftwareVersion`), with the rates and lengths it records with, checked against a list of
+  known GE formats (`FORMATS` in both readers); some carts record at 250 Hz (a 2,500-sample strip and a
+  300-sample median beat) and others at 500 Hz. The report's **Recording** line names the cart,
+  the program, the rate and whether the format is known.
+- **The onsets** (`POnset` … `TOffset`) are sample numbers at the measurements' own rate
+  (`ECGSampleBase`), which is 500 Hz even in 250 Hz files; without it, the original
+  measurements' rate, the one rate at which they give the QRS duration, or the known format's.
+- **`QTRGGR`**, the QRS trigger's sample in the median beat (496 ms: 248 at 500 Hz, 124 at
+  250 Hz), follows from the rate: it is checked, never used to find it. `GlobalRR` is shown as
+  **RR** in ms (× 4 at 250 Hz).
+- **Checks.** What does not fit is listed under the report, with these codes: the rate
+  not given (`BAD_SAMPLE_BASE`), a new format (`NEW_FORMAT`), a strip not 10 s or median beats
+  not 1.2 s long, leads of different lengths, median beats at another rate, several rhythm
+  strips, a `SampleExponent` other than 0, onsets whose rate is unknown or that contradict it,
+  and a `QTRGGR` that contradicts the rate. Such a file is still shown.
+- **Refused:** a lead without an amplitude scale (`LeadAmplitudeUnitsPerBit`), or of samples
+  other than 16-bit (`LeadSampleSize`).
 
 ## Opened by another program
 

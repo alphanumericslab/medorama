@@ -33,7 +33,7 @@ The reader can also be used from Python:
 
 ```python
 from muse_reader_py import read_muse, patient_key, acquired
-ecg = read_muse('ECG.xml')   # {name, fs, leads: [{name, units: 'uV', samples}], meta}
+ecg = read_muse('ECG.xml')   # {name, fs, leads: [{name, units: 'uV', samples}], meta, median}
 ```
 
 ## What is read
@@ -41,10 +41,12 @@ ecg = read_muse('ECG.xml')   # {name, fs, leads: [{name, units: 'uV', samples}],
 | Part | Read from |
 |---|---|
 | Encoding | The byte order mark's (UTF-8, UTF-16LE, UTF-16BE), whatever the XML declaration says; else UTF-16 without a mark, or the encoding the declaration names. A declaration of UTF-16 in 8-bit text is read as UTF-8. The same as the ECG viewer reads it. |
-| Leads | The rhythm waveform (`Waveform` of type `Rhythm`): base64 little-endian int16 samples, multiplied by `LeadAmplitudeUnitsPerBit`. Leads III, aVR, aVL and aVF are derived from I and II, as the carts derive them. |
-| Sampling rate | `SampleBase` × 10^`SampleExponent`. A base that is not a positive number is taken as 500 Hz, and an exponent beyond ±6 is refused, as the ECG viewer reads it. Numbers that are not finite (`NaN`) are not read. |
+| Leads | The rhythm waveform (`Waveform` of type `Rhythm`): base64 little-endian int16 samples, multiplied by `LeadAmplitudeUnitsPerBit`. Leads III, aVR, aVL and aVF are derived from I and II, as the carts derive them. A lead without an amplitude scale, or of samples other than 16-bit (`LeadSampleSize`), is refused. |
+| Median beats | The `Median` waveform, read as the leads are (`median`: `fs`, `leads`), with `marks`: the P onset and offset, the QRS onset and offset and the T offset of `RestingECGMeasurements`, as sample numbers of the median beat. They are converted from the measurements' own rate (`ECGSampleBase`, which is 500 Hz even in 250 Hz files; else the original measurements' rate, the one rate at which they give the QRS duration, or the known format's). |
+| Sampling rate | `SampleBase` × 10^`SampleExponent` of the rhythm waveform. When that is not a rate (not a positive number, an exponent that is not a whole number or is beyond ±6), the rate is unknown: `fs` is `None` and `rateUnknown` is `True`, the viewer shows the samples by number, and `wfdb` writes no record. It is never guessed. Numbers that are not finite (`NaN`) are not read. |
+| Format and checks | The cart and 12SL program, with the rates and lengths, against a list of known GE formats (`FORMATS`, the same in the viewer's `muse.js`): the `Recording` detail names them and says whether the format is known. What does not fit is listed in `notes`, with these codes (`BAD_SAMPLE_BASE`, `NEW_FORMAT`, `RHYTHM_NOT_10_S`, `MEDIAN_NOT_1.2_S`, `QTRGGR_CONTRADICTS_FS` …; the viewer's README, MUSE XML). |
 | Details | `TestDemographics`: the acquisition time, device, site, location, reason, status and filters; the patient's age and sex. |
-| Measurements | `RestingECGMeasurements`: the ventricular and atrial rates, PR, QRS, QT, QTc, QTcF, the P, R and T axes, and the QRS count. |
+| Measurements | `RestingECGMeasurements`: the ventricular and atrial rates, PR, QRS, QT, QTc, QTcF, the P, R and T axes, the QRS count and the blood pressure; `GlobalRR` as RR in ms (× 4 at 250 Hz). |
 | Statements | `OriginalDiagnosis` gives the computer's statements (Marquette 12SL, with its version). `Diagnosis` gives the physician's: *confirmed* (with the overreader and the time of the edit) when the status is `CONFIRMED`, and *edited* when it is not confirmed but differs from the computer's. |
 
 **Never in the outputs:** the patient's name, ID and date of birth, the order (accounts,

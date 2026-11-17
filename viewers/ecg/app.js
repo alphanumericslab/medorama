@@ -27,7 +27,7 @@
   const st = {
     rec: null, layout: store.get('layout', '3x4'), speed: store.get('speed', 25), gain: store.get('gain', 10),
     highpass: store.get('highpass', false), notch: store.get('notch', 0),
-    zoom: 0, calipers: false, marks: [], drawn: null, url: null,
+    zoom: 0, calipers: false, marks: [], drawn: null, sheets: [], url: null,
   };
 
   // ---------------------------------------------------------------- theme
@@ -177,10 +177,15 @@
     st.twelve = ECG.twelveLead(rec);
     tools(true);
     $('#layout').disabled = !st.twelve;
-    const dur = Math.max(...rec.leads.map((l) => l.v.length / l.fs));
+    // the filters need the sampling rate: off for a record whose rate is unknown
+    $('#hp').disabled = !!rec.rateUnknown;
+    $('#notch').disabled = !!rec.rateUnknown;
     // a de-identified view: the start moved back as the report's dates are
     const when = rec.start ? ECG.startText(rec.start, +params.get('shift') || 0) : '';
-    $('#info').textContent = [when, `${rec.leads.length} leads`, `${rec.fs} Hz`, `${dur.toFixed(1)} s`].filter(Boolean).join(' · ');
+    const n = Math.max(...rec.leads.map((l) => l.v.length));
+    const span = rec.rateUnknown ? [`${n} samples`, 'sampling rate unknown']
+      : [`${rec.fs} Hz`, `${Math.max(...rec.leads.map((l) => l.v.length / l.fs)).toFixed(1)} s`];
+    $('#info').textContent = [when, `${rec.leads.length} leads`, ...span].filter(Boolean).join(' · ');
     render();
   }
 
@@ -188,11 +193,15 @@
     if (!st.rec) return;
     const d = Paper.draw(st.rec, { layout: st.layout, speed: st.speed, gain: st.gain, twelve: st.twelve, highpass: st.highpass, notch: st.notch });
     st.drawn = d;
+    const compact = document.body.classList.contains('compact');
+    // the device's median beats, on paper of their own under the rhythm (not in a compact view)
+    const med = st.rec.median && !compact ? Paper.drawMedian(st.rec, { speed: st.speed, gain: st.gain }) : null;
+    st.sheets = med ? [d, med] : [d];
     const stage = $('#stage');
-    stage.innerHTML = `${report(st.rec.meta)}<div class="sheetwrap">${d.svg}</div>`;
+    stage.innerHTML = `${report(st.rec.meta)}<div class="sheetwrap">${d.svg}</div>`
+      + (med ? `<h3 class="sheethead">Median beats</h3><div class="sheetwrap">${med.svg}</div>` : '');
     const svg = stage.querySelector('svg');
     // fit the width, or a zoom in px per mm
-    const compact = document.body.classList.contains('compact');
     const pad = compact ? 0 : 40;
     let fit = (stage.clientWidth - pad) / d.width;
     // inside another page: the paper also fits the height left under the report
@@ -201,8 +210,11 @@
       fit = Math.min(fit, (stage.clientHeight - (rep ? rep.offsetHeight : 0)) / d.height);
     }
     const ppm = st.zoom || (pad ? Math.max(2, fit) : fit);
-    svg.setAttribute('width', Math.round(d.width * ppm));
-    svg.setAttribute('height', Math.round(d.height * ppm));
+    // every sheet at the same scale, so that a millimetre is the same on both
+    stage.querySelectorAll('svg.paper').forEach((el, i) => {
+      el.setAttribute('width', Math.round(st.sheets[i].width * ppm));
+      el.setAttribute('height', Math.round(st.sheets[i].height * ppm));
+    });
     $('#zoomv').textContent = st.zoom ? `${Math.round((st.zoom / 3.78) * 100)} %` : 'Fit';
     for (const [id, v] of [['layout', st.layout], ['speed', st.speed], ['gain', st.gain], ['notch', st.notch]]) $(`#${id}`).value = String(v);
     $('#hp').classList.toggle('on', !!st.highpass);
@@ -251,42 +263,48 @@
   }
 
   // ---------------------------------------------------------------- calipers
-  function toMm(ev) {
-    const svg = $('#stage svg');
+  function toMm(ev, svg) {
     const p = svg.createSVGPoint();
     p.x = ev.clientX; p.y = ev.clientY;
     return p.matrixTransform(svg.getScreenCTM().inverse());
   }
+  /** The calipers of each sheet (the rhythm, the median beats): both points on one sheet. */
   function drawCalipers() {
-    const g = $('#stage .calipers');
-    if (!g || !st.drawn) return;
-    const d = st.drawn;
-    let s = '';
-    for (const m of st.marks) s += `<path class="cal" d="M${m.x} 0V${d.height}"/><circle class="caldot" cx="${m.x}" cy="${m.y}" r="0.7"/>`;
-    if (st.marks.length === 2) {
-      const [a, b] = st.marks;
-      // the time between the two points, and the voltage between them (on the traces)
-      const ms = Math.round(Math.abs(b.t - a.t) * 1000);
-      const uv = Math.round((b.v - a.v) * 1000);
-      const y = Math.min(a.y, b.y) - 4;
-      const xm = (a.x + b.x) / 2;
-      s += `<path class="cal" d="M${a.x} ${y}H${b.x}"/>`;
-      const txt = `${ms} ms · ${uv >= 0 ? '+' : '−'}${Math.abs(uv)} µV`;
-      const w = txt.length * 1.75 + 4;
-      s += `<rect class="calbox" x="${xm - w / 2}" y="${y - 6.5}" width="${w}" height="5.4" rx="1.2"/><text class="caltext" x="${xm}" y="${y - 2.6}" text-anchor="middle">${txt}</text>`;
-    }
-    g.innerHTML = s;
+    document.querySelectorAll('#stage .calipers').forEach((g, i) => {
+      const d = st.sheets[i];
+      if (!d) return;
+      const marks = st.marks.filter((m) => m.sheet === i);
+      let s = '';
+      for (const m of marks) s += `<path class="cal" d="M${m.x} 0V${d.height}"/><circle class="caldot" cx="${m.x}" cy="${m.y}" r="0.7"/>`;
+      if (marks.length === 2) {
+        const [a, b] = marks;
+        // the time between the two points (in samples when the rate is unknown), and the
+        // voltage between them (on the traces)
+        const dx = d.samples ? `${Math.abs(b.n - a.n)} samples` : `${Math.round(Math.abs(b.t - a.t) * 1000)} ms`;
+        const uv = Math.round((b.v - a.v) * 1000);
+        const y = Math.min(a.y, b.y) - 4;
+        const xm = (a.x + b.x) / 2;
+        s += `<path class="cal" d="M${a.x} ${y}H${b.x}"/>`;
+        const txt = `${dx} · ${uv >= 0 ? '+' : '−'}${Math.abs(uv)} µV`;
+        const w = txt.length * 1.75 + 4;
+        s += `<rect class="calbox" x="${xm - w / 2}" y="${y - 6.5}" width="${w}" height="5.4" rx="1.2"/><text class="caltext" x="${xm}" y="${y - 2.6}" text-anchor="middle">${txt}</text>`;
+      }
+      g.innerHTML = s;
+    });
   }
 
   // ---------------------------------------------------------------- controls
   $('#stage').addEventListener('click', (ev) => {
-    if (!st.calipers || !st.drawn || !ev.target.closest('svg')) return;
-    const p = toMm(ev);
+    const svg = ev.target.closest('svg.paper');
+    if (!st.calipers || !st.drawn || !svg) return;
+    const sheet = [...document.querySelectorAll('#stage svg.paper')].indexOf(svg);
+    const p = toMm(ev, svg);
     // the point of the trace nearest the click, not the paper under it
-    const hit = st.drawn.snap(p.x, p.y);
+    const hit = st.sheets[sheet]?.snap(p.x, p.y);
     if (!hit) return;
-    if (st.marks.length === 2) st.marks = [];
-    st.marks.push({ x: +hit.x.toFixed(3), y: +hit.y.toFixed(3), t: hit.t, v: hit.v, lead: hit.lead });
+    // two points measure; a third, or a point on the other sheet, starts again
+    if (st.marks.length === 2 || (st.marks.length && st.marks[0].sheet !== sheet)) st.marks = [];
+    st.marks.push({ sheet, x: +hit.x.toFixed(3), y: +hit.y.toFixed(3), t: hit.t, n: hit.n, v: hit.v, lead: hit.lead });
     drawCalipers();
   });
   $('#cal').addEventListener('click', () => {

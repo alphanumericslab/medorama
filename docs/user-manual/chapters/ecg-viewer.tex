@@ -52,8 +52,10 @@ WFDB multi-segment record: the master header with its segments' headers and sign
   same. The segments follow each other from the record's start; a null segment, and a lead that a
   segment does not hold, are gaps. \\
 GE MUSE XML (resting ECG) & Drawn on paper (the rhythm strip, with III, aVR, aVL and aVF
-  derived), with its report: details, measurements, the Marquette 12SL statements and the
-  confirmed or edited ones. \\
+  derived), and its median beats on paper of their own with the P, QRS and T onsets marked
+  (\cref{sec:ecg-viewer-median}), with its report: details, the recording (cart, 12SL program,
+  rate, known format or not), measurements, the Marquette 12SL statements and the confirmed or
+  edited ones, and the checks the file does not pass (\cref{sec:ecg-viewer-muse}). \\
 DICOM ECG (12-lead, Holter or other waveform object) & Drawn on paper, with its annotations as
   the report. Any other DICOM file is refused, with a pointer to the PACS viewer. \\
 EDF, EDF+, BDF, BDF+ (\file{.edf}, \file{.bdf}) & Drawn on paper: the first 10\,s of the ECG
@@ -146,13 +148,31 @@ result; both are tested on the same synthetic file.
 \midrule
 Leads & The rhythm waveform (\code{Waveform} of type \code{Rhythm}): base64 little-endian 16-bit
   integers times \code{LeadAmplitudeUnitsPerBit}. III, aVR, aVL and aVF are derived from I and
-  II, as the carts derive them \\
-Sampling rate & \code{SampleBase} $\times$ 10 to the power \code{SampleExponent}. A base that
-  is not a positive number is taken as 500\,Hz, and an exponent beyond $\pm$6 is refused \\
+  II, as the carts derive them. A lead without an amplitude scale, or of samples other than
+  16-bit (\code{LeadSampleSize}), is refused \\
+Median beats & The \code{Median} waveform, read as the leads are, with the P onset and offset,
+  the QRS onset and offset and the T offset of \code{RestingECGMeasurements} converted to its
+  samples from the measurements' own rate (\code{ECGSampleBase}: 500\,Hz even in 250\,Hz files;
+  else the original measurements' rate, the one rate at which the onsets give the QRS duration,
+  or the known format's) \\
+Sampling rate & \code{SampleBase} $\times$ 10 to the power \code{SampleExponent} of the rhythm
+  waveform. When that is not a rate (not a positive number; an exponent that is not a whole
+  number, or beyond $\pm$6), the rate is unknown: the strip is drawn by sample number
+  (\cref{sec:ecg-viewer-no-rate}), never at a guessed rate \\
+Format and checks & The cart (\code{AcquisitionDevice}) and its 12SL program
+  (\code{AnalysisSoftwareVersion}), with the rates and lengths, against a list of known GE
+  formats: the \ui{Recording} detail names them and says whether the format is known. What does not
+  fit is listed under the report, with these codes: the rate not given
+  (\code{BAD\_SAMPLE\_BASE}), a new format (\code{NEW\_FORMAT}), a strip not 10\,s or median
+  beats not 1.2\,s long, median beats at another rate, leads of different lengths, several
+  rhythm strips, a \code{SampleExponent} other than 0, onsets whose rate is unknown or that
+  contradict it, and a \code{QTRGGR} (the QRS trigger's sample in the median beat, 496\,ms) that
+  contradicts the rate \\
 Details & \code{TestDemographics}: the acquisition time, the device, the site, the location, the
   reason, the status, and the filters; the patient's age and sex \\
 Measurements & \code{RestingECGMeasurements}: the ventricular and atrial rates, PR, QRS, QT, QTc,
-  QTcF, the P, R and T axes, the QRS count \\
+  QTcF, the P, R and T axes, the QRS count, the blood pressure; \code{GlobalRR} as RR in ms
+  ($\times$\,4 at 250\,Hz) \\
 Statements & \code{OriginalDiagnosis} gives the computer's (Marquette 12SL, with its version).
   \code{Diagnosis} gives the physician's: \emph{confirmed} (with the overreader and the time of
   the edit) when the status is \code{CONFIRMED}; \emph{edited} when it is not confirmed but
@@ -163,6 +183,10 @@ Statements & \code{OriginalDiagnosis} gives the computer's (Marquette 12SL, with
 
 The patient's name, ID and date of birth, the order (accounts, admission, physicians' IDs) and
 other identifiers are never read into what the page shows.
+
+Some carts record at 250\,Hz (a 2{,}500-sample strip and a
+300-sample median beat), others at 500\,Hz, and the onsets are always at 500\,Hz. A file of a new
+format is still shown, with its checks.
 
 \subsection{DICOM ECGs}
 \label{sec:ecg-viewer-dicom}
@@ -244,6 +268,8 @@ the ECG record of \cref{sec:readers-ecg-record} written as JSON.
 \code{name} & The ECG's name; default \code{ECG} \\
 \code{start} & The time of the first sample: an ISO 8601 text, or Unix seconds; optional \\
 \code{fs} & The sampling rate, in Hz; it may instead be given per lead \\
+\code{rateUnknown} & \code{true}, with \code{fs} \code{null}, when the file gives no sampling
+  rate: the paper draws the samples by number \\
 \code{leads} & Required: one object per lead \\
 \quad\code{name} & The lead's name (\code{I}, \code{aVR}, \code{V1}, \code{ECG II}, \dots) \\
 \quad\code{units} & \code{mV}, \code{uV} (or \code{$\mu$V}) or \code{V}; other units are taken as
@@ -258,6 +284,12 @@ the ECG record of \cref{sec:readers-ecg-record} written as JSON.
   \code{computer}, \code{confirmed} or \code{edited}; \code{lines} is a list of texts; the others
   are optional \\
 \quad\code{notes} & A list of texts \\
+\code{median} & Optional: the device's median beats \\
+\quad\code{fs} & Their sampling rate (\code{null}, with \code{rateUnknown} \code{true}, when not
+  given) \\
+\quad\code{leads} & One object per lead, as in \code{leads} \\
+\quad\code{marks} & \code{[\{name, sample\}, \dots]}: the onsets and offsets (\code{P},
+  \code{P end}, \code{QRS}, \code{QRS end}, \code{T end}) as sample numbers of the median beat \\
 \end{xltabular}
 
 A record must have at least one lead, a sampling rate for each, and at least one sample;
@@ -412,14 +444,39 @@ Any other record (fewer leads, other names) shows each lead in full, one per row
 \ui{Layout} is grayed out. The paper fits the width of the page; \ui{$-$} and \ui{+} step through
 fixed sizes.
 
+\subsection{Median beats}
+\label{sec:ecg-viewer-median}
+
+A file that holds the device's median beats (GE MUSE) shows them under the rhythm, under the
+heading \ui{Median beats}, on paper of their own at the same speed, gain and scale: the twelve
+leads 3~$\times$~4 (I, aVR, V1, V4; II, aVL, V2, V5; III, aVF, V3, V6), each beat whole
+(1.2\,s), with a calibration pulse on each row. The P onset and offset, the QRS onset and offset
+and the T offset of the device's measurements are dotted across each beat, in blue, and named
+(\code{P}, \code{QRS}, \code{T end}) under the last row; the paper's foot says so. The marks are
+placed at the rate the file gives the onsets, which is not always the recording's: the 250\,Hz
+MUSE files give them at 500\,Hz. A file whose onsets' rate cannot be found shows the beats
+without marks.
+
+\subsection{A rate the file does not give}
+\label{sec:ecg-viewer-no-rate}
+
+A record whose sampling rate is unknown (a MUSE file without a valid \code{SampleBase}) is never
+drawn at a guessed rate. Its samples are drawn by number: 100 samples to each 5\,mm at 25\,mm/s
+(50 at 50\,mm/s), the sample numbers every 25\,mm under the paper, and the foot reads
+\code{100 samples per 5 mm (rate unknown)}. The header gives the number of samples and
+\code{sampling rate unknown} in place of the rate and the duration; \ui{High-pass} and
+\ui{Notch}, which need the rate, are grayed out; and the calipers give the interval in samples.
+
 \subsection{Calipers}
 \label{sec:ecg-viewer-calipers}
 
 \ui{Calipers} turns the calipers on (the button is highlighted) or off. Click two points of the
 paper: each snaps to the nearest sample of a trace, within 40\,ms of the click along the paper.
-The viewer shows the interval between them, in milliseconds, and the voltage difference, in
-microvolts, the second point's minus the first's: \code{412 ms $\cdot$ +150 $\mu$V}. A third click
-starts again; \key{Esc} clears the points, and so does a change of layout, speed or gain.
+The viewer shows the interval between them, in milliseconds (in samples when the rate is
+unknown), and the voltage difference, in microvolts, the second point's minus the first's:
+\code{412 ms $\cdot$ +150 $\mu$V}. The calipers work on the median beats too; both points are on
+the same paper, and a point on the other paper starts again. A third click starts again;
+\key{Esc} clears the points, and so does a change of layout, speed or gain.
 
 \subsection{The report above the paper}
 \label{sec:ecg-viewer-report}

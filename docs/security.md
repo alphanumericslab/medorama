@@ -6,7 +6,7 @@ describes what Medorama protects, against whom, how, and what it leaves to the d
 institution. Each control names the code that implements it and the test that checks it, so
 that every claim can be verified rather than taken on trust.
 
-It describes Medorama 0.2.0 (a pre-release). Medorama is research software, not a medical device,
+It describes Medorama 0.2.1 (a pre-release). Medorama is research software, not a medical device,
 and it holds no certification. To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 
 A plain-language explanation of how identifiers are hidden is
@@ -654,7 +654,7 @@ Every file and every value a connected database returns is treated as untrusted.
   covers WFDB headers, EDF and BDF files, GE MUSE XML, DICOM and what users type (cohort
   expressions, searches, dates, numbers, units). Medorama reads no tables (db-builder does, outside
   Medorama), so there is no table target. CI runs each target
-  for 5 minutes every week (`make fuzz` locally).
+  for 5 minutes when `medorama.yml` is run by hand (`make fuzz` locally).
 - **Paths:** `..` is refused in every served path; files are resolved after symbolic links and
   their real paths checked against the real paths of `data_roots` (a link inside a root that
   leads out of it is outside). An attached folder's symbolic links are neither listed nor sent.
@@ -762,7 +762,7 @@ entry the control store cannot take at once (busy, or failing) is never lost: it
   the license texts of every crate compiled in (`THIRD_PARTY_CRATES.txt`) and wfdb-x's
   (`LICENSE-wfdb-x`).
 - **Dependencies are checked** by `cargo deny` ([`deny.toml`](../deny.toml), for the whole Rust
-  workspace; `make audit`), on every change and every week: any RustSec advisory (vulnerable,
+  workspace; `make audit`), on every push, and by hand for advisories published since: any RustSec advisory (vulnerable,
   unmaintained or yanked crates), any license not on the allowed list, or any crate from
   elsewhere than crates.io fails the build.
 - **The API is described** in [`medorama/openapi.yaml`](../medorama/openapi.yaml) (OpenAPI 3.1):

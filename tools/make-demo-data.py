@@ -45,6 +45,8 @@ Writes, under OUT (README.txt repeats this text; demo.json says what went in):
   omop/       omop.sqlite: a third hospital's OMOP CDM database
   registry/   registry.sqlite: a research registry's own tables, connected through SQL views
               (kind views; its views in demo-databases.json and registry/views.toml)
+  muse/       an ECG archive: MUSE XML files (xml/<year>/) and an ECG metadata database of
+              them (ecg_metadata.sqlite), connected through its views (kind views; muse/views.toml)
   secure/     a db-builder database encrypted with SQLCipher (secure/secure.sqlite); its key
               in keys/demo_secure.key (a demo key, published with the demo: never do this
               with a real database)
@@ -200,6 +202,14 @@ feature('rewrite', 'A moved folder, repointed with db-builder rewrite', 'north/m
 feature('omop', 'An OMOP CDM database', 'omop/omop.sqlite')(lambda out: (Path(out) / 'omop/omop.sqlite').is_file() and _db(out, 'demo_omop') is not None)
 feature('views', 'A SQL database connected through canonical views', 'registry/')(
     lambda out: (_db(out, 'demo_registry') or {}).get('kind') == 'views')
+feature('muse-db', "A MUSE ECG archive and its ECG metadata database, connected through views: median beats with onsets, "
+        'a 250 Hz ECG and one without its sampling rate', 'muse/')(
+    lambda out: (_db(out, 'demo_muse') or {}).get('kind') == 'views' and (Path(out) / 'muse/ecg_metadata.sqlite').is_file()
+    and any(b'<SampleBase>250</SampleBase>' in p.read_bytes() for p in Path(out).glob('muse/xml/*/*.xml'))
+    and any(b'<SampleBase></SampleBase>' in p.read_bytes() for p in Path(out).glob('muse/xml/*/*.xml')))
+feature('ecg-median', 'MUSE ECGs with their median beats and P, QRS and T onsets', 'ecg/*.xml')(
+    lambda out: all(b'<WaveformType>Median</WaveformType>' in p.read_bytes() and b'<QOnset>' in p.read_bytes()
+                    for p in Path(out).glob('ecg/*.xml')))
 feature('encrypted', 'An encrypted db-builder database, its key in a file', 'secure/, keys/')(
     lambda out: (_db(out, 'demo_secure') or {}).get('key_file') and (Path(out) / 'keys/demo_secure.key').is_file())
 feature('actions', 'The example action plug-in, for the Actions tab', 'actions/')(
@@ -982,17 +992,45 @@ def twelve_sl(m, af, st, lvh, prev=None):
 ST_DEPRESSION = {'I': -0.07, 'II': -0.07, 'V4': -0.12, 'V5': -0.16, 'V6': -0.10}
 
 
-def ecg_muse(path, patient, when, leads, measures, computer, confirmed, fs=500):
+def median_beat(leads, fs=500, before=240, n=600):
+    """The median beat of 12 leads (500 Hz): the beats of lead II aligned on their R waves, the
+    median of each sample, `before` samples before the R wave and `n` in all (1.2 s), as the
+    cart's 12SL forms it."""
+    import statistics
+    ii = [float(x) for x in leads[1]]
+    peaks, last = [], -fs
+    top = 0.6 * max(ii)
+    for i in range(1, len(ii) - 1):
+        if ii[i] > top and ii[i] >= ii[i - 1] and ii[i] > ii[i + 1] and i - last > 0.3 * fs:
+            peaks.append(i)
+            last = i
+    wins = [r - before for r in peaks if r - before >= 0 and r - before + n <= len(ii)] or [0]
+    return [[statistics.median(float(v[a + j]) for a in wins) for j in range(n)] for v in leads]
+
+
+def ecg_muse(path, patient, when, leads, measures, computer, confirmed, fs=500, device=('MAC55', '241'), rate_given=True):
     """A GE MUSE resting ECG XML file (ISO-8859-1), as MUSE exports them: the patient (invented)
-    named inside, the eight recorded leads in base64 (4.88 µV per bit), the measurements, the
-    computer's statements (12SL) and the physician's confirmed ones."""
+    named inside, the eight recorded leads in base64 (4.88 µV per bit), the median beat with its
+    P, QRS and T onsets (at 500 Hz, as 12SL gives them), the measurements, the computer's
+    statements (12SL) and the physician's confirmed ones.  `leads` are 10 s at 500 Hz; fs 250
+    writes them at 250 Hz (as the MAC5K carts with 12SL 229-237 record some ECGs: QTRGGR 124,
+    GlobalRR in 4 ms); `rate_given` False leaves SampleBase empty (a rate the viewer must not
+    guess)."""
     import base64
     pid, mrn, last, first, born, sex = patient
     b = datetime.strptime(born, '%Y-%m-%d')
     age = when.year - b.year - ((when.month, when.day) < (b.month, b.day))
-    by = dict(zip(LEADS12, leads))
-    def lead(name):
-        v = [max(-32767, min(32767, round(x * 1000 / 4.88))) for x in by[name]]
+    med = median_beat(leads)
+    step = 500 // fs
+
+    def at_rate(v):
+        v = [float(x) for x in v]
+        return [sum(v[i:i + step]) / step for i in range(0, len(v) - step + 1, step)]
+    by = {name: at_rate(v) for name, v in zip(LEADS12, leads)}
+    med_by = {name: at_rate(v) for name, v in zip(LEADS12, med)}
+
+    def lead(name, src):
+        v = [max(-32767, min(32767, round(float(x) * 1000 / 4.88))) for x in src[name]]
         data = base64.b64encode(struct.pack(f'<{len(v)}h', *v)).decode()
         data = '\n'.join(data[i:i + 76] for i in range(0, len(data), 76))
         return (f'<LeadData><LeadByteCountTotal>{2 * len(v)}</LeadByteCountTotal><LeadSampleCountTotal>{len(v)}</LeadSampleCountTotal>'
@@ -1001,8 +1039,20 @@ def ecg_muse(path, patient, when, leads, measures, computer, confirmed, fs=500):
     tags = {'Vent. rate': 'VentricularRate', 'Atrial rate': 'AtrialRate', 'PR': 'PRInterval', 'QRS': 'QRSDuration',
             'QT': 'QTInterval', 'QTc': 'QTCorrected', 'QTcF': 'QTcFrederica', 'P axis': 'PAxis', 'R axis': 'RAxis', 'T axis': 'TAxis'}
     meas = ''.join(f'<{tags[k]}>{v}</{tags[k]}>' for k, (v, _) in measures.items() if k in tags)
+    # the onsets on the median beat, in 500 Hz samples (the R wave at 240, 12SL's trigger at 248)
+    qrs = measures['QRS'][0]
+    q_on = 240 - round(0.45 * qrs / 2)
+    on = {'QOnset': q_on, 'QOffset': q_on + round(qrs / 2), 'TOffset': q_on + round(measures['QT'][0] / 2)}
+    if 'PR' in measures:
+        on.update(POnset=q_on - round(measures['PR'][0] / 2), POffset=q_on - round(measures['PR'][0] / 2) + 55)
+    meas += ''.join(f'<{k}>{v}</{k}>' for k, v in on.items()) + '<ECGSampleBase>500</ECGSampleBase><ECGSampleExponent>0</ECGSampleExponent>'
+    rr = round(60000 / measures['Vent. rate'][0])
     stmts = lambda ls: ''.join(f'<DiagnosisStatement><StmtFlag>ENDSLINE</StmtFlag><StmtText>{escape(x)}</StmtText></DiagnosisStatement>' for x in ls)
     edit = when + timedelta(hours=20)
+    base = fs if rate_given else ''
+    wave = lambda kind, src: (f'<Waveform><WaveformType>{kind}</WaveformType><SampleBase>{base}</SampleBase><SampleExponent>0</SampleExponent>\n'
+                              f'<HighPassFilter>5</HighPassFilter><LowPassFilter>150</LowPassFilter><ACFilter>60</ACFilter>\n'
+                              + ''.join(lead(k, src) for k in ('I', 'II', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6')) + '</Waveform>\n')
     xml = f"""<?xml version="1.0" encoding="ISO-8859-1"?>
 <!DOCTYPE RestingECG SYSTEM "restecg.dtd">
 <RestingECG>
@@ -1010,19 +1060,18 @@ def ecg_muse(path, patient, when, leads, measures, computer, confirmed, fs=500):
 <PatientDemographics><PatientID>{mrn}</PatientID><PatientAge>{age}</PatientAge><AgeUnits>YEARS</AgeUnits>
 <DateofBirth>{b:%m-%d-%Y}</DateofBirth><Gender>{'FEMALE' if sex == 'F' else 'MALE'}</Gender>
 <PatientLastName>{escape(last.upper())}</PatientLastName><PatientFirstName>{escape(first.upper())}</PatientFirstName></PatientDemographics>
-<TestDemographics><DataType>RESTING</DataType><SiteName>Synthetic Hôpital</SiteName><AcquisitionDevice>MAC5500</AcquisitionDevice>
+<TestDemographics><DataType>RESTING</DataType><SiteName>Synthetic Hôpital</SiteName><AcquisitionDevice>{device[0]}</AcquisitionDevice>
 <Status>CONFIRMED</Status><LocationName>CARDIOLOGY</LocationName><TestReason>Synthetic test, not a patient</TestReason>
 <AcquisitionTime>{when:%H:%M:%S}</AcquisitionTime><AcquisitionDate>{when:%m-%d-%Y}</AcquisitionDate>
-<AnalysisSoftwareVersion>241</AnalysisSoftwareVersion><EditTime>{edit:%H:%M:%S}</EditTime><EditDate>{edit:%m-%d-%Y}</EditDate>
+<AnalysisSoftwareVersion>{device[1]}</AnalysisSoftwareVersion><EditTime>{edit:%H:%M:%S}</EditTime><EditDate>{edit:%m-%d-%Y}</EditDate>
 <OverreaderLastName>RIVERA</OverreaderLastName><OverreaderFirstName>A</OverreaderFirstName></TestDemographics>
 <RestingECGMeasurements>{meas}</RestingECGMeasurements>
 <OriginalDiagnosis>{stmts(computer)}</OriginalDiagnosis>
 <Diagnosis>{stmts(confirmed)}</Diagnosis>
-<Waveform><WaveformType>Rhythm</WaveformType><SampleBase>{fs}</SampleBase><SampleExponent>0</SampleExponent>
-<HighPassFilter>5</HighPassFilter><LowPassFilter>150</LowPassFilter><ACFilter>60</ACFilter>
-{''.join(lead(k) for k in ('I', 'II', 'V1', 'V2', 'V3', 'V4', 'V5', 'V6'))}</Waveform>
-</RestingECG>
+<QRSTimesTypes><GlobalRR>{rr if fs == 500 else round(rr / 4)}</GlobalRR><QTRGGR>{round(0.496 * fs)}</QTRGGR></QRSTimesTypes>
+{wave('Median', med_by)}{wave('Rhythm', by)}</RestingECG>
 """
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(xml.encode('iso-8859-1'))
     return path
 
@@ -2390,6 +2439,100 @@ CREATE TABLE reg_load (loaded_at TEXT);
     return [p for p in hf]
 
 
+# ------------------------------------------------------------------ the MUSE archive (kind views)
+
+# The views of a MUSE ECG metadata database (docs/databases.md, "A MUSE ECG metadata database"):
+# written to muse/views.toml, the file to copy for such a database.
+MUSE_MEASURES = [('vr', 'Vent. rate', 'ventricular_rate_bpm', 'bpm'), ('ar', 'Atrial rate', 'atrial_rate_bpm', 'bpm'),
+                 ('pr', 'PR', 'pr_interval_ms', 'ms'), ('qrs', 'QRS', 'qrs_duration_ms', 'ms'), ('qt', 'QT', 'qt_interval_ms', 'ms'),
+                 ('qtc', 'QTc', 'qtc_ms', 'ms'), ('qtcf', 'QTcF', 'qtc_fridericia_ms', 'ms'), ('rr', 'RR', 'global_rr_ms', 'ms'),
+                 ('pax', 'P axis', 'p_axis_deg', '°'), ('rax', 'R axis', 'r_axis_deg', '°'), ('tax', 'T axis', 't_axis_deg', '°'),
+                 ('sbp', 'Systolic BP', 'systolic_bp_mmhg', 'mmHg'), ('dbp', 'Diastolic BP', 'diastolic_bp_mmhg', 'mmHg')]
+MUSE_VIEWS = {
+    'persons': """SELECT patient_id AS person_key, '' AS patient_id, '' AS patient_id_issuer,
+       patient_id AS mrn, '' AS mrn_authority,
+       COALESCE(last_name, '') AS last_name, COALESCE(first_name, '') AS first_name,
+       COALESCE(birth_date, '') AS birth_date,
+       CASE sex WHEN 'female' THEN 'F' WHEN 'male' THEN 'M' ELSE '' END AS sex,
+       MAX(acquisition_datetime) AS latest
+FROM ecg WHERE patient_id IS NOT NULL AND patient_id <> ''
+GROUP BY patient_id""",
+    'entries': """SELECT 'e' || md5 AS entry_key, patient_id AS person_key, NULL AS visit_key, 'ecg' AS category,
+       acquisition_datetime AS time, NULL AS end_time, '12-lead ECG' AS name, '' AS code,
+       '' AS vocabulary, NULL AS value_num, '' AS value_text, '' AS unit, NULL AS ref_low,
+       NULL AS ref_high, '' AS flag, '' AS author,
+       COALESCE(NULLIF(diagnosis_text, ''), original_diagnosis_text, '') AS text
+FROM ecg WHERE patient_id <> ''
+""" + '\n'.join(f"UNION ALL SELECT 'm' || md5 || ':{k}', patient_id, NULL, 'ecg', acquisition_datetime, NULL, '{n}', '', '', {c}, '', '{u}', "
+                f"NULL, NULL, '', '', '' FROM ecg WHERE patient_id <> '' AND {c} IS NOT NULL" for k, n, c, u in MUSE_MEASURES),
+    'recordings': """SELECT 'e' || md5 || ':file' AS recording_key, patient_id AS person_key, NULL AS visit_key,
+       source_file AS file, 'GE MUSE XML' AS format, acquisition_datetime AS start_time,
+       NULL AS end_time, '' AS label, 'ecg' AS category, NULL AS size, md5 AS fingerprint
+FROM ecg WHERE patient_id <> ''
+  AND source_file IS NOT NULL AND source_file <> ''""",
+    'version': "SELECT COUNT(*) || ' ' || MAX(added_at) FROM additions",
+}
+
+
+def muse_archive(out, pats, lib, seed):
+    """An ECG management system's archive (muse/): older resting ECGs of the main hospital's
+    patients as MUSE XML files (xml/<year>/MUSE_<time>_<n>.xml), with an ECG metadata
+    database of them (ecg_metadata.sqlite: one row per file by MD5, the columns the views read), connected through MUSE_VIEWS, the patient ID read as the MRN.  One ECG is at 250 Hz
+    (a MAC5K with 12SL 237), and one does not give its sampling rate."""
+    import hashlib
+    d = out / 'muse'
+    if d.exists():
+        shutil.rmtree(d)
+    rng = random.Random(seed + 13)
+    people = pats[:8]
+    rows = []
+    for i, p in enumerate(people):
+        for k in range(2):
+            when = t('2019-02-01 08:00') + timedelta(days=rng.randint(0, 4 * 365), hours=rng.randint(0, 9), minutes=rng.randint(0, 59))
+            hr, lvh, af = rng.randint(56, 98), i == 3, i == 6 and k == 1
+            leads = ecg12_any(lib, 100 + 2 * i + k, hr, False, af, lvh)
+            m = ecg_measures(hr, af, lvh)
+            computer = twelve_sl(m, af, False, lvh)
+            device, fs, given = ('MAC55', '241'), 500, True
+            if i == 1 and k == 0:
+                device, fs = ('MAC5K', '237'), 250
+            if i == 4 and k == 1:
+                given = False
+            rel = f'xml/{when:%Y}/MUSE_{when:%Y%m%d_%H%M%S}_{10000 + 2 * i + k}.xml'
+            path = ecg_muse(d / rel, p, when, leads, m, computer, computer, fs=fs, device=device, rate_given=given)
+            g = lambda name: m.get(name, (None, ''))[0]
+            rr = round(60000 / hr) if fs == 500 else round(round(60000 / hr) / 4) * 4
+            rows.append((hashlib.md5(path.read_bytes()).hexdigest(), 'computed from file', rel, p[1], p[2].upper(), p[3].upper(), p[4],
+                         'female' if p[5] == 'F' else 'male', f'{when:%Y-%m-%dT%H:%M:%S}', device[0], device[1], 'CONFIRMED',
+                         fs if given else None, 'waveform' if given else None, 'known' if given else 'unreadable',
+                         '' if given else 'BAD_SAMPLE_BASE', g('Vent. rate'), g('Atrial rate'), g('PR'), g('QRS'), g('QT'), g('QTc'),
+                         g('QTcF'), g('P axis'), g('R axis'), g('T axis'), None, None, rr if given else None,
+                         json.dumps(computer), '\n'.join(computer), json.dumps(computer), '\n'.join(computer),
+                         '2024-05-01T02:00:00', 'muse_2019_2023_ecg_db.csv'))
+    db = sqlite3.connect(d / 'ecg_metadata.sqlite')
+    db.executescript('''
+CREATE TABLE ecg (md5 TEXT PRIMARY KEY, md5_source TEXT, source_file TEXT, patient_id TEXT, last_name TEXT, first_name TEXT,
+  birth_date TEXT, sex TEXT, acquisition_datetime TEXT, acquisition_device TEXT, analysis_software_version TEXT, status TEXT,
+  fs REAL, fs_method TEXT, rate_format TEXT, rate_warnings TEXT, ventricular_rate_bpm REAL, atrial_rate_bpm REAL,
+  pr_interval_ms REAL, qrs_duration_ms REAL, qt_interval_ms REAL, qtc_ms REAL, qtc_fridericia_ms REAL, p_axis_deg REAL,
+  r_axis_deg REAL, t_axis_deg REAL, systolic_bp_mmhg REAL, diastolic_bp_mmhg REAL, global_rr_ms REAL,
+  diagnosis_statements TEXT, diagnosis_text TEXT, original_diagnosis_statements TEXT, original_diagnosis_text TEXT,
+  added_at TEXT, added_from TEXT);
+CREATE INDEX ecg_patient ON ecg (patient_id);
+CREATE INDEX ecg_time ON ecg (acquisition_datetime);
+CREATE TABLE additions (id INTEGER PRIMARY KEY, added_at TEXT, source TEXT, rows_read INTEGER, rows_added INTEGER,
+  rows_duplicate_md5 INTEGER, md5_from_linkage INTEGER, md5_computed INTEGER, rows_excluded INTEGER);
+''')
+    db.executemany(f'INSERT INTO ecg VALUES ({", ".join("?" * len(rows[0]))})', rows)
+    db.execute("INSERT INTO additions VALUES (1, '2024-05-01T02:00:00', 'muse_2019_2023_ecg_db.csv', ?, ?, 0, 0, ?, 0)",
+               (len(rows), len(rows), len(rows)))
+    db.commit()
+    db.close()
+    (d / 'views.toml').write_text("# the views of a MUSE ECG metadata database (docs/databases.md, \"A MUSE ECG metadata database\")\n"
+                                  + ''.join(f"{k} = '''\n{v}'''\n" for k, v in MUSE_VIEWS.items()), encoding='utf-8')
+    return people
+
+
 # ------------------------------------------------------------------ the encrypted database (secure)
 
 def secure(out, pats, seed):
@@ -2444,6 +2587,8 @@ def manifest(out, full, tables):
     if full:
         dbs.append({'name': 'demo_registry', 'kind': 'views', 'file': 'registry/registry.sqlite',
                     'settings': {**REGISTRY_VIEWS, 'mrn_authority': 'DEMO', 'timezone': tz}})
+        dbs.append({'name': 'demo_muse', 'kind': 'views', 'file': 'muse/ecg_metadata.sqlite',
+                    'settings': {**MUSE_VIEWS, 'mrn_authority': 'DEMO', 'timezone': tz}})
         dbs.append({'name': 'demo_secure', 'kind': 'dbb', 'file': 'secure/secure.sqlite', 'key_file': 'keys/demo_secure.key', 'encrypt': True, 'build': [
             ['new', '@secure/secure.sqlite', '--timezone', tz],
             ['add', '@secure/secure.sqlite', '@secure/patients.csv', '@secure/labs.csv', '@secure/notes.csv', '--issuer', 'SECURE', '--mrn-authority', 'DEMO'],
@@ -2626,6 +2771,7 @@ def main():
         north(out, pats, seed)
         extra = omop_extra(pats, encs, stories)
         registry(out, pats, stories, encs, seed)
+        muse_archive(out, pats, lib, seed)
         secure(out, pats, seed)
         copy_action(out)
     write_omop(out / 'omop' / 'omop.sqlite', extra)

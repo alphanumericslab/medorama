@@ -865,6 +865,6 @@ data only, or public data sets kept outside the repository. A privacy check
 (\file{tools/git-hooks/check-files}), run by the pre-commit and pre-merge-commit hooks on what
 git would store, refuses recordings, data files, DICOM and MUSE XML files (recognized by their
 content), notebooks with outputs, real recording names and anything in a \file{sample\_data/}
-folder. CI runs the same check on every commit of each pull request and push, and on every file
-(\file{.github/workflows/checks.yml}), so a commit made without the hooks is still caught before
-it is merged. The rules are in the repository's \file{PRIVACY.md}.
+folder. CI runs the same check on every commit of each push, and on every file
+(\file{.github/workflows/checks.yml}), so a commit made without the hooks is still caught; a
+pull request is checked before it is merged. The rules are in the repository's \file{PRIVACY.md}.

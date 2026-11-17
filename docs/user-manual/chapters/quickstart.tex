@@ -18,7 +18,7 @@ patient data in it only on a server that your institution has approved (\cref{ch
 \section{What the demo holds}
 \label{sec:quickstart-demo}
 
-The \emph{demo} is five databases of about 40 invented patients, for trying Medorama, showing
+The \emph{demo} is six databases of about 40 invented patients, for trying Medorama, showing
 what it does and teaching it, with enough data for every feature. Every person in it is
 invented: \file{tools/make-demo-data.py} invents the names (pseudo names such as Jane Doe), the
 MRNs (\code{SYN\dots}), the patient IDs, the dates of birth and every date (in an invented
@@ -47,6 +47,11 @@ period), and every text; the installer makes its tables and files into databases
   authority \code{DEMO}), with some of the same patients and patients of its own;
 \item \code{demo\_registry}, a heart-failure registry's own tables read through SQL views (kind
   \code{views}), with scores, NT-proBNP and LVEF;
+\item \code{demo\_muse}, an ECG archive (kind \code{views}): older MUSE XML files of eight of the
+  patients, with their median beats and P, QRS and T onsets, and an ECG metadata database of
+  them, read through its views as it is (\cref{chap:databases-tab});
+  one ECG is at 250\,Hz, and one gives no sampling rate (the ECG viewer shows it by sample
+  number);
 \item \code{demo\_secure}, a db-builder database encrypted with SQLCipher, its demo key in
   \file{keys/demo\_secure.key}.
 \end{itemize}
@@ -134,6 +139,7 @@ Connected the demo database demo (invented patients)
 Connected the demo database demo_north (invented patients)
 Connected the demo database demo_omop (invented patients)
 Connected the demo database demo_registry (invented patients)
+Connected the demo database demo_muse (invented patients)
 Connected the demo database demo_secure (invented patients)
 \end{lstlisting}
 Without \opt{-{}-demo}, Medorama starts with no database connected. The other options of
@@ -168,7 +174,7 @@ To sign in:
 \item Type \code{admin} as the \ui{User name}, and the password chosen above.
 \item Click \ui{Sign in}.
 \end{enumerate}
-The page opens on the \ui{Cohorts} tab. The \ui{Databases} tab lists the demo's five databases,
+The page opens on the \ui{Cohorts} tab. The \ui{Databases} tab lists the demo's six databases,
 each with a green dot: online (\cref{chap:databases-tab}). The administrator holds the \emph{PHI permission}, the
 right to see identifiers such as names, medical record numbers (MRNs) and dates of birth. For
 administrators, \emph{Privacy Mode} starts off, so the demo's invented names are visible. For
@@ -321,8 +327,8 @@ manages them (here \code{admin}, who connected them) does it on the \ui{Database
 \begin{enumerate}
 \item Open the database \code{demo}.
 \item Click \ui{Remove\dots}, and type its name, \code{demo}, to confirm.
-\item Do the same for \code{demo\_north}, \code{demo\_omop}, \code{demo\_registry} and
-  \code{demo\_secure}.
+\item Do the same for \code{demo\_north}, \code{demo\_omop}, \code{demo\_registry},
+  \code{demo\_muse} and \code{demo\_secure}.
 \end{enumerate}
 Removing a database leaves no trace of it in Medorama (\cref{sec:administration-removing}): its
 key is destroyed, its workspace folder is deleted, every cohort row it contributed to is deleted,
@@ -333,7 +339,7 @@ touched.
 The same can be done from the command line; each command asks first, unless \opt{-{}-yes} is
 given:
 \begin{lstlisting}[style=shell]
-for d in demo demo_north demo_omop demo_registry demo_secure; do
+for d in demo demo_north demo_omop demo_registry demo_muse demo_secure; do
     medorama databases remove $d
 done
 \end{lstlisting}
@@ -354,6 +360,8 @@ medorama databases connect demo_omop --kind omop --mrn-authority DEMO \
     --url sqlite:$D/omop/omop.sqlite
 medorama databases connect demo_registry --kind views --mrn-authority DEMO \
     --url sqlite:$D/registry/registry.sqlite --views $D/registry/views.toml
+medorama databases connect demo_muse --kind views --mrn-authority DEMO \
+    --url sqlite:$D/muse/ecg_metadata.sqlite --views $D/muse/views.toml
 medorama databases connect demo_secure --kind dbb --password-stdin \
     --url sqlite:$D/secure/secure.sqlite < $D/keys/demo_secure.key
 \end{lstlisting}

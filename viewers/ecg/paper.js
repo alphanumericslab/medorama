@@ -1,6 +1,9 @@
 // An ECG on standard paper, as SVG in millimetres: 1 mm and 5 mm grid, 25 mm/s, 10 mm/mV,
 // a 1 mV calibration pulse at the start of each row.  Layouts: the standard 3 × 4 and 6 × 2, each
 // with a lead II rhythm strip, and 12 × 1; records that are not 12-lead ECGs show every lead in full.
+// A record whose sampling rate is unknown is drawn by sample number (500 samples per 25 mm at
+// 25 mm/s), with the sample numbers under the paper.  The device's median beats (drawMedian) are
+// drawn on paper of their own, 3 × 4, with the P, QRS and T onsets and offsets marked.
 // The baseline: each strip (a lead's segment on the paper) is drawn about its median, and an
 // optional 0.5 Hz high-pass and 50 or 60 Hz notch, both zero-phase (run forward then backward),
 // clean the signal first.  The samples of the record are never changed.
@@ -123,6 +126,47 @@
     return d;
   }
 
+  // the rate a record of unknown rate is drawn at: its samples by number, 500 per 25 mm at 25 mm/s
+  const NOMINAL = 500;
+
+  /**
+   * snap(x, y) of drawn strips (for calipers): the sample nearest (x, y) mm, within ±40 ms along
+   * the paper: { x, y, v (mV, as drawn: about the strip's median, filtered), t (s from the
+   * record's start), n (the sample's number), lead }.
+   */
+  function snapper(placed, speed, gain) {
+    return (x, y) => {
+      let best = null;
+      for (const c of placed) {
+        const { fs } = c;
+        const xEnd = c.x0 + ((c.b - c.a) / fs) * speed;
+        if (x < c.x0 - 0.5 || x > xEnd + 0.5) continue;
+        const n0 = c.a + Math.round(((x - c.x0) / speed) * fs);
+        const w = Math.max(1, Math.round(0.04 * fs));
+        for (let n = Math.max(c.a, n0 - w); n < Math.min(c.b, n0 + w + 1); n++) {
+          const v = c.v[n] - c.off;
+          if (!Number.isFinite(v)) continue;
+          const px = c.x0 + ((n - c.a) / fs) * speed;
+          const py = c.y0 - v * gain;
+          const d2 = (px - x) ** 2 + (py - y) ** 2;
+          if (!best || d2 < best.d2) best = { d2, x: px, y: py, v, t: c.t0 + (n - c.a) / fs, n, lead: c.name };
+        }
+      }
+      return best;
+    };
+  }
+
+  /** The paper: the grid of 1 mm and 5 mm, width × height mm. */
+  function sheet(width, height) {
+    let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" class="paper">`;
+    s += '<defs><pattern id="g5" width="5" height="5" patternUnits="userSpaceOnUse">'
+      + '<path class="minor" d="M1 0V5M2 0V5M3 0V5M4 0V5M0 1H5M0 2H5M0 3H5M0 4H5"/>'
+      + '<path class="major" d="M0 0V5M0 0H5"/></pattern></defs>';
+    s += `<rect class="sheet" width="${width}" height="${height}"/><rect width="${width}" height="${height}" fill="url(#g5)"/>`;
+    s += `<path class="major" d="M${width} 0V${height}M0 ${height}H${width}"/>`;
+    return s;
+  }
+
   /** A calibration pulse (1 mV, 200 ms) ending at x0, on the baseline y0. */
   function pulse(x0, y0, speed, gain) {
     const w = 0.2 * speed;
@@ -135,10 +179,19 @@
    * gain (mm/mV), seconds (the strip's length, default 10), twelve (leads by name, from
    * ECG.twelveLead, or null), median (each strip drawn about its median; true unless false),
    * highpass (true for 0.5 Hz, or a cut-off in Hz; off by default), notch (50 or 60 Hz; off by
-   * default).  Returns { svg, width, height (mm), seconds, toTime(x mm),
-   * snap(x, y) }: `snap` finds the point of a trace nearest a point of the paper (for calipers).
+   * default).  Returns { svg, width, height (mm), seconds, samples (true: drawn by sample
+   * number), toTime(x mm), snap(x, y) }: `snap` finds the point of a trace nearest a point of the
+   * paper (for calipers).  A record of unknown rate (rec.rateUnknown) is drawn by sample number,
+   * without filters (they need the rate).
    */
   function draw(rec, opts) {
+    const bySample = !!rec.rateUnknown;
+    if (bySample) {
+      const as = new Map(rec.leads.map((l) => [l, { ...l, fs: NOMINAL }]));
+      rec = { ...rec, fs: NOMINAL, leads: rec.leads.map((l) => as.get(l)) };
+      const twelve = opts.twelve && Object.fromEntries(Object.entries(opts.twelve).map(([k, l]) => [k, as.get(l) || { ...l, fs: NOMINAL }]));
+      opts = { ...opts, twelve, highpass: false, notch: 0 };
+    }
     const speed = opts.speed || 25;
     const gain = opts.gain || 10;
     const seconds = opts.seconds || Math.min(10, Math.max(...rec.leads.map((l) => l.v.length / l.fs)));
@@ -162,13 +215,9 @@
       rec.leads.forEach((lead) => rows.push([{ lead, name: lead.name, t0: 0, t1: seconds }]));
     }
     const width = Math.ceil((left + stripW + 6) / 5) * 5;
-    const height = Math.ceil((top + rows.length * rowH + 8) / 5) * 5;
-    let s = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" class="paper">`;
-    s += '<defs><pattern id="g5" width="5" height="5" patternUnits="userSpaceOnUse">'
-      + '<path class="minor" d="M1 0V5M2 0V5M3 0V5M4 0V5M0 1H5M0 2H5M0 3H5M0 4H5"/>'
-      + '<path class="major" d="M0 0V5M0 0H5"/></pattern></defs>';
-    s += `<rect class="sheet" width="${width}" height="${height}"/><rect width="${width}" height="${height}" fill="url(#g5)"/>`;
-    s += `<path class="major" d="M${width} 0V${height}M0 ${height}H${width}"/>`;
+    const axisH = bySample ? 5 : 0;      // the sample numbers under the paper
+    const height = Math.ceil((top + rows.length * rowH + 8 + axisH) / 5) * 5;
+    let s = sheet(width, height);
     let paths = '';
     let labels = '';
     const placed = [];
@@ -183,42 +232,94 @@
         const v = samples(lead);
         const off = opts.median === false ? 0 : median(v, a, b);
         paths += trace(v, lead.fs, a, b, x0, y0, speed, gain, off);
-        placed.push({ lead, v, off, name: cell.name, a, b: Math.min(b, v.length), x0, y0 });
+        placed.push({ lead, fs: lead.fs, v, off, name: cell.name, a, b: Math.min(b, v.length), x0, y0, t0: cell.t0 });
         // the lead's name, and a mark where the lead changes
         labels += `<text x="${f2(x0 + 1.2)}" y="${f2(y0 - rowH * 0.42)}">${esc(cell.name)}</text>`;
         if (c > 0) paths += `M${f2(x0)} ${f2(y0 - 2.5)}V${f2(y0 + 2.5)}`;
       });
     });
     s += `<path class="trace" d="${paths}"/>`;
+    if (bySample) {
+      // the sample numbers, every 25 mm, under the last row
+      const y = top + rows.length * rowH + 3.5;
+      const per = (NOMINAL * 25) / speed;
+      for (let x = 0; x <= stripW + 0.01; x += 25) {
+        labels += `<text class="axis" x="${f2(left + x)}" y="${f2(y)}" text-anchor="middle">${Math.round((x / 25) * per)}</text>`;
+      }
+    }
     s += `<g class="labels">${labels}</g>`;
     const hp = opts.highpass === true ? 0.5 : +opts.highpass || 0;
     const filt = [hp ? `${hp} Hz high-pass` : '', +opts.notch ? `${+opts.notch} Hz notch` : ''].filter(Boolean).map((t) => `   ${t}`).join('');
-    s += `<text class="foot" x="${left}" y="${height - 2.2}">${speed} mm/s   ${gain} mm/mV   ${esc(rec.fs)} Hz${esc(filt)}</text>`;
+    const xs = bySample ? `${(NOMINAL * 5) / speed} samples per 5 mm (rate unknown)` : `${speed} mm/s`;
+    s += `<text class="foot" x="${left}" y="${height - 2.2}">${esc(xs)}   ${gain} mm/mV${bySample ? '' : `   ${esc(rec.fs)} Hz`}${esc(filt)}</text>`;
     s += '<g class="calipers"></g></svg>';
-    /** The sample nearest (x, y) mm, within ±40 ms along the paper: { x, y, v (mV, as drawn: about the strip's median, filtered), t (s), lead }. */
-    const snap = (x, y) => {
-      let best = null;
-      for (const c of placed) {
-        const fs = c.lead.fs;
-        const xEnd = c.x0 + ((c.b - c.a) / fs) * speed;
-        if (x < c.x0 - 0.5 || x > xEnd + 0.5) continue;
-        const n0 = c.a + Math.round(((x - c.x0) / speed) * fs);
-        const w = Math.max(1, Math.round(0.04 * fs));
-        for (let n = Math.max(c.a, n0 - w); n < Math.min(c.b, n0 + w + 1); n++) {
-          const v = c.v[n] - c.off;
-          if (!Number.isFinite(v)) continue;
-          const px = c.x0 + ((n - c.a) / fs) * speed;
-          const py = c.y0 - v * gain;
-          const d2 = (px - x) ** 2 + (py - y) ** 2;
-          if (!best || d2 < best.d2) best = { d2, x: px, y: py, v, t: (px - left) / speed, lead: c.name };
-        }
-      }
-      return best;
-    };
-    return { svg: s, width, height, seconds, left, speed, gain, toTime: (x) => (x - left) / speed, snap };
+    const snap = snapper(placed, speed, gain);
+    return { svg: s, width, height, seconds, left, speed, gain, samples: bySample, toTime: (x) => (x - left) / speed, snap };
   }
 
-  const api = { draw, LAYOUTS, filtfilt, highpass, notch, median, highpassFilter, notchFilter };
+  const MEDIAN_ROWS = [['I', 'aVR', 'V1', 'V4'], ['II', 'aVL', 'V2', 'V5'], ['III', 'aVF', 'V3', 'V6']];
+  // the marks named on the paper (the offsets of P and QRS are drawn, not named)
+  const NAMED = new Set(['P', 'QRS', 'T end']);
+
+  /**
+   * Draw the median beats of `rec` (rec.median, see ecg.js) on paper: the twelve leads in 3 × 4
+   * (else every lead, four to a row), each beat whole, at `speed` mm/s and `gain` mm/mV, about
+   * its median, with a calibration pulse on each row and the P, QRS and T onsets and offsets
+   * (rec.median.marks) as dotted lines across each beat.  Returns what draw does.
+   */
+  function drawMedian(rec, opts) {
+    const m = rec.median;
+    const bySample = !m.fs;
+    const fs = m.fs || NOMINAL;
+    const speed = opts.speed || 25;
+    const gain = opts.gain || 10;
+    const byName = new Map(m.leads.map((l) => [l.name, l]));
+    const rows = MEDIAN_ROWS.every((r) => r.every((nm) => byName.has(nm)))
+      ? MEDIAN_ROWS.map((r) => r.map((nm) => byName.get(nm)))
+      : Array.from({ length: Math.ceil(m.leads.length / 4) }, (_, i) => m.leads.slice(4 * i, 4 * i + 4));
+    const n = Math.max(...m.leads.map((l) => l.v.length));
+    const seconds = n / fs;
+    const beatW = seconds * speed;
+    const gap = 5;
+    const left = 14;
+    const top = 6;
+    const rowH = Math.max(3.2 * gain, 22);
+    const cols = Math.max(...rows.map((r) => r.length));
+    const width = Math.ceil((left + cols * (beatW + gap) + 1) / 5) * 5;
+    const height = Math.ceil((top + rows.length * rowH + 13) / 5) * 5;
+    let s = sheet(width, height);
+    let paths = '';
+    let marks = '';
+    let labels = '';
+    const placed = [];
+    rows.forEach((leads, r) => {
+      const y0 = top + r * rowH + rowH * 0.62;
+      paths += pulse(left, y0, speed, gain);
+      leads.forEach((lead, c) => {
+        const x0 = left + c * (beatW + gap);
+        const off = median(lead.v);
+        paths += trace(lead.v, fs, 0, lead.v.length, x0, y0, speed, gain, off);
+        placed.push({ fs, v: lead.v, off, name: lead.name, a: 0, b: lead.v.length, x0, y0, t0: 0 });
+        labels += `<text x="${f2(x0 + 1.2)}" y="${f2(y0 - rowH * 0.42)}">${esc(lead.name)}</text>`;
+        for (const k of m.marks) {
+          const x = x0 + (k.sample / fs) * speed;
+          if (x < x0 || x > x0 + beatW) continue;
+          marks += `M${f2(x)} ${f2(y0 - rowH * 0.34)}V${f2(y0 + rowH * 0.32)}`;
+          if (r === rows.length - 1 && NAMED.has(k.name)) {
+            labels += `<text class="markname" x="${f2(x)}" y="${f2(y0 + rowH * 0.32 + 3.2)}" text-anchor="middle">${esc(k.name)}</text>`;
+          }
+        }
+      });
+    });
+    s += `<path class="mark" d="${marks}"/><path class="trace" d="${paths}"/><g class="labels">${labels}</g>`;
+    const xs = bySample ? `${(NOMINAL * 5) / speed} samples per 5 mm (rate unknown)` : `${speed} mm/s`;
+    const what = m.marks.length ? '   P, QRS and T from the device\'s measurements' : '';
+    s += `<text class="foot" x="${left}" y="${height - 2.2}">Median beats   ${esc(xs)}   ${gain} mm/mV${bySample ? '' : `   ${esc(fs)} Hz`}${esc(what)}</text>`;
+    s += '<g class="calipers"></g></svg>';
+    return { svg: s, width, height, seconds, left, speed, gain, samples: bySample, toTime: (x) => (x - left) / speed, snap: snapper(placed, speed, gain) };
+  }
+
+  const api = { draw, drawMedian, LAYOUTS, NOMINAL, filtfilt, highpass, notch, median, highpassFilter, notchFilter };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.Paper = api;
 })(typeof self !== 'undefined' ? self : this);

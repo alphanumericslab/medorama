@@ -151,7 +151,7 @@ class Made(unittest.TestCase):
         library = (LIBRARY / "manifest.json").is_file()
         self.assertEqual((m["library"], m["invented"], m["examples"], m["dicom"]), (library, not library, False, False))
         dbs = json.loads((self.a / "demo-databases.json").read_text(encoding="utf-8"))["databases"]
-        self.assertEqual([d["name"] for d in dbs], ["demo", "demo_north", "demo_omop", "demo_registry", "demo_secure"])
+        self.assertEqual([d["name"] for d in dbs], ["demo", "demo_north", "demo_omop", "demo_registry", "demo_muse", "demo_secure"])
         for d in dbs:
             for step in d.get("build", []):
                 for arg in step:

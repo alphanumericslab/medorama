@@ -81,8 +81,8 @@ is set.
 
   The pre-commit hook runs it on each commit and the pre-merge-commit hook on each merge (enable
   them with `git config core.hooksPath tools/git-hooks`; the installers do this). CI runs it on
-  every commit of each pull request and push, and on every file (`.github/workflows/checks.yml`),
-  so a commit made without the hooks is still caught before it is merged. `.gitignore` also
+  every commit of each push, and on every file (`.github/workflows/checks.yml`), so a commit
+  made without the hooks is still caught; a pull request is checked before it is merged. `.gitignore` also
   ignores recordings and data files outside the synthetic test data.
 - **Synthetic data only.** Tests, demos and screenshots use synthetic data only:
   `tools/make-demo-data.py` (invented people, with `SYN` MRNs),

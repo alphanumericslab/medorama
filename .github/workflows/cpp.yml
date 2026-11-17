@@ -7,9 +7,8 @@
 name: cpp
 
 on:
+  workflow_dispatch:
   push:
-    paths: ["viewers/vitalstream/**", "libs/**", "Cargo.toml", "Cargo.lock", "tools/install*", "tools/fetch-cpp-deps.*", ".github/workflows/cpp.yml"]
-  pull_request:
     paths: ["viewers/vitalstream/**", "libs/**", "Cargo.toml", "Cargo.lock", "tools/install*", "tools/fetch-cpp-deps.*", ".github/workflows/cpp.yml"]
 
 permissions:

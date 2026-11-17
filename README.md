@@ -4,13 +4,15 @@
 waveforms, imaging and laboratory results across databases.**
 
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
-![Version 0.2.0, pre-release](https://img.shields.io/badge/version-0.2.0%20pre--release-informational)
+![Version 0.2.1, pre-release](https://img.shields.io/badge/version-0.2.1%20pre--release-informational)
 
-**Version 0.2.0 (pre-release, November 2026).** Medorama now connects databases instead of
+**Version 0.2.1 (pre-release, November 2026).** 0.2.1 reads the rates and formats of GE MUSE
+ECGs strictly, shows their median beats, and connects MUSE ECG metadata databases through
+views. Since 0.2.0, Medorama connects databases instead of
 importing data: OMOP, SQL views, or a SQLite database built with the new
 [db-builder](db-builder/README.md). Each database's workspace and indexes are encrypted with that
 database's own key, and access is granted per database. The release also has a full synthetic
-demo of 40 patients in five databases, and the fixes of a senior engineering, clinical and
+demo of 40 patients in six databases, and the fixes of a senior engineering, clinical and
 privacy review. A 0.1.0 installation is set up again rather than updated
 ([upgrading from 0.1.0](docs/install.md#upgrading-from-010)); every change is in the
 [changelog](medorama/CHANGELOG.md).
@@ -159,7 +161,7 @@ standard, and the deploying institution remains responsible for its deployment.
 Medorama and each viewer install from source on Linux, macOS and Windows, in your user account.
 [Install](docs/install.md) gives the commands for each system. On Linux or macOS, with Git,
 Python 3.9 or later, Perl and a C compiler present, these lines install Medorama with the
-[demo](#demo) (about 40 invented patients in five databases) and start it:
+[demo](#demo) (about 40 invented patients in six databases) and start it:
 
 ```bash
 git clone https://github.com/alphanumericslab/medorama.git && cd medorama
@@ -179,7 +181,7 @@ The demo is a complete, invented hospital world for trying, showing and teaching
 of Medorama. The installers' `--demo` option makes it, and `medorama init --demo` connects it.
 
 **What it holds.** About 40 invented patients (pseudo names such as Jane Doe, MRNs starting with
-`SYN`, dates of birth and every date in an invented period), in five databases:
+`SYN`, dates of birth and every date in an invented period), in six databases:
 
 | Database | Kind | What it shows |
 |---|---|---|
@@ -187,6 +189,7 @@ of Medorama. The installers' `--demo` option makes it, and `medorama init --demo
 | `demo_north` | db-builder | A second hospital sharing some patients by MRN (one written in lower case), one identity conflict, rewrite rules and a moved folder |
 | `demo_omop` | OMOP | A third hospital's OMOP CDM database |
 | `demo_registry` | SQL views | A research registry's own tables, read through canonical views |
+| `demo_muse` | SQL views | An ECG archive: older MUSE XML files of eight of the patients, and an ECG metadata database of them, read through its views as it is ([databases.md](docs/databases.md#a-muse-ecg-metadata-database)); one ECG at 250 Hz, one without its sampling rate |
 | `demo_secure` | db-builder, encrypted | A clinic's database encrypted with SQLCipher, its demo key in a file |
 
 **Real-looking, yet no one's.** The ECGs are built from heart-beat templates, and the CT series
@@ -202,11 +205,11 @@ collections' attributions. Everything else, and every identifier and text, is in
 | To try | Do |
 |---|---|
 | Patient search, the Patient Journey, trends | Open **Patient Catalog**, search `Doe` or a pseudonym, open a patient; switch the report to **Trends** |
-| Patients linked across databases | Jane Doe (`demo`, `demo_registry`, `demo_secure`); Eva Lindqvist and Richard Roe (`demo`, `demo_north`, `demo_omop`) |
+| Patients linked across databases | Jane Doe (`demo`, `demo_registry`, `demo_muse`, `demo_secure`); Eva Lindqvist and Richard Roe (`demo`, `demo_north`, `demo_omop`) |
 | Identity conflicts | **Databases** › `demo_north` › **Identity conflicts**, or `medorama databases conflicts demo_north` |
-| Cohorts | **Cohorts**: `demo.creatinine > 1.5 OR has icu`, `female AND age > 70`, `demo.troponin > 100`, `has eeg` |
+| Cohorts | **Cohorts**: `demo.creatinine > 1.5 OR has icu`, `female AND age > 70`, `demo.troponin > 100`, `demo_muse.QRS > 100 ms`, `has eeg` |
 | Privacy Mode | Turn **Privacy Mode** on: names become `[Patient Name]` (in notes too), dates move, the patient over 89 shows as `90+` |
-| Recordings and viewers | A patient's ICU monitoring, Holter, sleep study or EEG opens VitalStream; a 12-lead ECG opens the ECG viewer; CT, radiographs, echo and angiography open PACS |
+| Recordings and viewers | A patient's ICU monitoring, Holter, sleep study or EEG opens VitalStream; a 12-lead ECG opens the ECG viewer (a MUSE ECG with its median beats; Eva Lindqvist's 2019 ECG of `demo_muse`, without its sampling rate, by sample number); CT, radiographs, echo and angiography open PACS |
 | Actions and jobs | **Actions**: run **Index** or the example plug-in **Recording summary** on all recordings; watch **Jobs** |
 | History | Open a few patients, then **History** |
 

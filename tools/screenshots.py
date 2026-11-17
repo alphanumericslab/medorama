@@ -270,7 +270,7 @@ class Browser:
 
 # the names `medorama init --demo` connects the demo's databases by (tools/make-demo-data.py's
 # demo-databases.json; the small demo has the first two)
-DEMO_DATABASES = {"demo", "demo_north", "demo_omop", "demo_registry", "demo_secure"}
+DEMO_DATABASES = {"demo", "demo_north", "demo_omop", "demo_registry", "demo_muse", "demo_secure"}
 
 
 class NotDemo(Exception):

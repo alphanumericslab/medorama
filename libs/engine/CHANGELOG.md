@@ -1,5 +1,9 @@
 # Changelog: recording-engine
 
+## 0.2.1 (2026-11-17, pre-release)
+
+No changes; the version follows Medorama's.
+
 ## 0.2.0 (2026-11-15, pre-release)
 
 - **Review fixes (index content changes within version 3, noted in index-format.md's Versions

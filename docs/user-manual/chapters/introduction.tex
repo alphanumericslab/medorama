@@ -77,11 +77,13 @@ Control store & Medorama's own database, in SQLite or PostgreSQL, with the same 
 \end{tabularx}
 \end{table}
 
-\section{Version 0.2.0}
+\section{Version 0.2.1}
 \label{sec:introduction-version}
 
-This manual describes Medorama 0.2.0, a pre-release of November 2026. Its main changes since
-0.1.0:
+This manual describes Medorama 0.2.1, a pre-release of November 2026. Version 0.2.1 adds to
+0.2.0 the reading of GE MUSE rates and formats, median beats in the ECG viewer, and MUSE ECG
+metadata databases connected through views (\cref{sec:ecg-viewer-median,sec:connecting-muse}).
+The main changes of 0.2.0 since 0.1.0:
 \begin{itemize}
 \item \textbf{Databases only.} Medorama no longer imports data: it connects OMOP databases, SQL
   databases through views, and SQLite databases built with db-builder from tables, exports and
@@ -98,7 +100,7 @@ This manual describes Medorama 0.2.0, a pre-release of November 2026. Its main c
   identifiers (\cref{chap:importing}).
 \item \textbf{Index format 3}, in an encrypted store shared by Medorama and the three
   VitalStream viewers (\cref{chap:recordings}).
-\item \textbf{A full synthetic demo}: about 40 invented patients in five databases
+\item \textbf{A full synthetic demo}: about 40 invented patients in six databases
   (\cref{sec:introduction-demo}).
 \item \textbf{The fixes of a senior review} of privacy, clinical data, signals and images, the
   page, robustness and security; and a health check for service managers
@@ -319,7 +321,7 @@ medorama --version
 \end{lstlisting}
 and what a program prints, when it matters, in a listing of its own:
 \begin{lstlisting}[style=text]
-medorama 0.2.0
+medorama 0.2.1
 \end{lstlisting}
 
 Three kinds of boxes set text apart:
@@ -343,15 +345,15 @@ Commands for Linux and macOS are given first, and their Windows equivalents wher
 The file \file{CITATION.cff} at the root of the repository says how to cite Medorama (or
 VitalStream): Reza Sameni, \emph{Medorama: A unified patient-journey research platform
 linking EHR data, physiological waveforms, imaging and laboratory results across databases},
-version 0.2.0 (a pre-release), released 2026-11-15, license PolyForm Noncommercial 1.0.0,
+version 0.2.1 (a pre-release), released 2026-11-17, license PolyForm Noncommercial 1.0.0,
 \url{https://github.com/alphanumericslab/medorama}. In BibTeX:
 \begin{lstlisting}[style=text]
 @software{sameni_medorama,
   author  = {Sameni, Reza},
   title   = {Medorama: A unified patient-journey research platform linking EHR data,
              physiological waveforms, imaging and laboratory results across databases},
-  version = {0.2.0},
-  date    = {2026-11-15},
+  version = {0.2.1},
+  date    = {2026-11-17},
   license = {PolyForm-Noncommercial-1.0.0},
   url     = {https://github.com/alphanumericslab/medorama}
 }

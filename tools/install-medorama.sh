@@ -6,8 +6,8 @@
 #   tools/install-medorama.sh --viewer py      Medorama + the Python viewer (vitalstream-py)
 #   tools/install-medorama.sh --viewer none    Medorama alone
 # Other options:
-#   --demo         also make the demo: about 40 invented patients in five databases (db-builder's,
-#                  an encrypted one, OMOP, SQL views) with recordings, ECGs and images of every
+#   --demo         also make the demo: about 40 invented patients in six databases (db-builder's,
+#                  an encrypted one, OMOP, two through SQL views) with recordings, ECGs and images of every
 #                  kind, that `medorama init --demo` connects, for trying Medorama (off by
 #                  default; docs/administration.md, "The demo")
 #   --accept-license  accept the license terms without being asked (scripts, CI; or

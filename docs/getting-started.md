@@ -38,9 +38,9 @@ administrator rights or without internet access.
 
 ## Install Medorama with the demo
 
-Medorama imports nothing: it **connects databases** and reads them in place. The *demo* is five
-such databases of about 40 invented patients, as three hospitals and a research registry would
-have them:
+Medorama imports nothing: it **connects databases** and reads them in place. The *demo* is six
+such databases of about 40 invented patients, as three hospitals, a research registry and an ECG
+archive would have them:
 - `demo`, made with **db-builder** (the tool that turns tables, exports and folders of
   recordings into a database to connect): 40 patients with visits, ICU stays, laboratory
   results, vital signs, medications, transfusions, life support, procedures, diagnoses,
@@ -50,6 +50,8 @@ have them:
   (by MRN) and has one identity conflict;
 - `demo_omop`, a third hospital's OMOP database;
 - `demo_registry`, a research registry read through SQL views;
+- `demo_muse`, an ECG archive of MUSE XML files, read through the views of its ECG metadata
+  database;
 - `demo_secure`, an encrypted db-builder database.
 
 Every person in it is invented (pseudo names, `SYN` MRNs, invented dates). Its ECGs, CT series
@@ -266,7 +268,7 @@ password. Then sign in as that user in a private browser window:
 
 ```bash
 medorama user add --role viewer reader
-for d in demo demo_north demo_omop demo_registry demo_secure; do medorama databases grant $d reader view; done
+for d in demo demo_north demo_omop demo_registry demo_muse demo_secure; do medorama databases grant $d reader view; done
 ```
 
 [Protecting patient data](protecting-patient-data.md) explains how the privacy gate works and
@@ -297,9 +299,9 @@ database:
 
 1. Open **Databases**, then **demo**.
 2. Click **Remove…** and type its name to confirm. Do the same for **demo_north**,
-   **demo_omop**, **demo_registry** and **demo_secure**.
+   **demo_omop**, **demo_registry**, **demo_muse** and **demo_secure**.
 
-The command `medorama databases remove NAME`, for each of the five, does the same from a
+The command `medorama databases remove NAME`, for each of the six, does the same from a
 terminal. Removing a database destroys its key, its workspace folder, its rows in
 every cohort and the patients that no other database holds; the databases themselves, and the
 demo's files, stay where the installer wrote them, so they can be connected again later

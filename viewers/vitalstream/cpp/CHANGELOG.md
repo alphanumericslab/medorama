@@ -1,5 +1,9 @@
 # Changelog: vitalstream-cpp
 
+## 0.2.1 (2026-11-17, pre-release)
+
+No changes; the version follows Medorama's.
+
 ## 0.2.0 (2026-11-15, pre-release)
 
 - `viewers/vitalstream/install.sh` and `install.ps1` show the license terms and go on only if

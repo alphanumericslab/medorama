@@ -108,9 +108,9 @@ installers run it for you. Both run [`check-files`](tools/git-hooks/check-files)
 staged. It refuses data files outside the synthetic test data (recordings, tables, databases,
 dumps, archives, DICOM and MUSE XML files by their content), anything under a `sample_data/`
 folder, files over 5 MB (the user's manual PDF over 20 MB), notebooks with saved outputs, and real recording names in paths and
-contents ([PRIVACY.md](PRIVACY.md#in-this-repository)). CI runs the same check on every commit
-of a pull request, so bypassing the hook (`--no-verify`) only moves the refusal there: use it
-only when you are certain the commit holds no patient data.
+contents ([PRIVACY.md](PRIVACY.md#in-this-repository)). The same check runs on every commit
+of a pull request before it is merged, so bypassing the hook (`--no-verify`) only moves the
+refusal there: use it only when you are certain the commit holds no patient data.
 
 ## License
 

@@ -4,8 +4,12 @@
 // (wfdb.js, muse.js, dicom-ecg.js, edf.js), listed in readers.js.
 // No dependencies; a classic script (it works from file://), and a CommonJS module for tests.
 //
-// A record is { name, start (Unix seconds or null), fs (Hz), leads: [{ name, units, v: Float64Array (mV) }],
-// meta }, where meta (all optional) is what the viewer prints above the paper:
+// A record is { name, start (Unix seconds or null), fs (Hz), leads: [{ name, units, fs, v: Float64Array (mV) }],
+// meta, rateUnknown?, median? }, where rateUnknown (true) says the sampling rate is not known: fs
+// is null and the paper shows the samples by number; median (optional) is the device's median
+// beat: { fs (or null), rateUnknown?, leads: [{ name, v (mV) }], marks: [{ name, sample }] }, the
+// marks being the P, QRS and T onsets and offsets in its samples; meta (all optional) is what the
+// viewer prints above the paper:
 //   { fields: [[label, text]], measurements: [{ name, value, unit, lead? }],
 //     statements: [{ source: 'computer' | 'confirmed' | 'edited', program?, by?, time?, lines: [text] }], notes: [text] }
 // Patient identity is never part of it.
@@ -100,30 +104,52 @@
     return 1;
   }
 
-  /** A record the paper can draw, else an Error saying why (no leads, no samples, no rate). */
+  /** A record the paper can draw, else an Error saying why (no leads, no samples, no rate unless it says the rate is unknown). */
   function checked(rec) {
     if (!rec.leads.length) throw new Error('this ECG has no leads');
     for (const l of rec.leads) {
+      if (rec.rateUnknown && l.fs === null) continue;
       if (!(l.fs > 0) || !Number.isFinite(l.fs)) throw new Error(`lead ${l.name}: no sampling rate`);
     }
     if (!rec.leads.some((l) => l.v.some(Number.isFinite))) throw new Error('this ECG has no samples');
     return rec;
   }
 
-  /** The viewer's JSON form: { name, start, leads: [{ name, fs, units, samples }] } (what a MUSE reader can write). */
+  const mv = (l) => { const k = toMv(l.units); return Float64Array.from(l.samples, (x) => (x === null ? NaN : x * k)); };
+
+  /** The median beat of the JSON form (see the record above), checked; null when there is none. */
+  function readMedian(m) {
+    if (!m || !Array.isArray(m.leads) || !m.leads.length) return null;
+    const unknown = m.rateUnknown === true || m.fs === null || m.fs === undefined;
+    if (!unknown && !(m.fs > 0)) return null;
+    return {
+      fs: unknown ? null : +m.fs,
+      rateUnknown: unknown,
+      leads: m.leads.filter((l) => l && Array.isArray(l.samples)).map((l) => ({ name: String(l.name), units: 'mV', v: mv(l) })),
+      marks: (Array.isArray(m.marks) ? m.marks : []).filter((x) => x && Number.isFinite(x.sample)).map((x) => ({ name: String(x.name), sample: +x.sample })),
+    };
+  }
+
+  /**
+   * The viewer's JSON form: { name, start, fs, rateUnknown?, leads: [{ name, fs, units, samples }],
+   * meta, median? } (what a MUSE reader can write).  rateUnknown: true with fs null, when the
+   * file does not give its sampling rate.
+   */
   function readJson(obj) {
     if (!obj || !Array.isArray(obj.leads)) throw new Error('not an ECG in the viewer\'s JSON form (leads missing)');
-    const fs = obj.fs ?? obj.leads[0]?.fs;
-    return checked({
+    const unknown = obj.rateUnknown === true && (obj.fs === null || obj.fs === undefined);
+    const fs = unknown ? null : obj.fs ?? obj.leads[0]?.fs;
+    const rec = {
       name: obj.name || 'ECG',
       start: typeof obj.start === 'number' ? obj.start : obj.start ? Date.parse(obj.start) / 1000 : null,
       fs,
-      leads: obj.leads.map((l) => {
-        const k = toMv(l.units);
-        return { name: l.name, units: 'mV', fs: l.fs ?? fs, v: Float64Array.from(l.samples, (x) => (x === null ? NaN : x * k)) };
-      }),
+      leads: obj.leads.map((l) => ({ name: l.name, units: 'mV', fs: unknown ? null : l.fs ?? fs, v: mv(l) })),
       meta: cleanMeta(obj.meta),
-    });
+    };
+    if (unknown) rec.rateUnknown = true;
+    const median = readMedian(obj.median);
+    if (median) rec.median = median;
+    return checked(rec);
   }
 
   // ---------------------------------------------------------------- leads

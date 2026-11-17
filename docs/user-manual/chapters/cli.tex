@@ -35,7 +35,7 @@ come in any order after the subcommand.
 \item[-h, --help] Prints the usage of the program, or of a subcommand
   (\cmd{medorama databases connect -{}-help}), and exits. \cmd{medorama help} \textit{COMMAND}
   does the same.
-\item[-V, --version] Prints the version (\code{medorama 0.2.0}) and exits.
+\item[-V, --version] Prints the version (\code{medorama 0.2.1}) and exits.
 \item[--home DIR] Medorama's home folder, which holds \file{medorama.toml}, the SQLite control
   store, the master key file (by default) and the folder \file{actions/}. It is accepted by every
   subcommand, before or after it (\cmd{medorama -{}-home DIR serve},
@@ -918,7 +918,7 @@ without serving. The options override the settings file, which overrides the def
 \item[--keys-on-stdin] Read the index stores and their keys on the standard input, one line of
   JSON each (\cref{sec:formats-reference-writing}). Medorama starts the viewer it runs with it; a
   key is never given on the command line.
-\item[-V, --version] Print the program's name and version (\code{vitalstream-py 0.2.0}), then
+\item[-V, --version] Print the program's name and version (\code{vitalstream-py 0.2.1}), then
   exit.
 \end{params}
 \begin{lstlisting}[style=shell]
@@ -981,7 +981,8 @@ muse-py wfdb FILE OUT_DIR [--name NAME]
 \end{lstlisting}
 Writes the ECG as a WFDB record in \textit{OUT\_DIR} (created if needed): a signal file in format
 16, 1000 units per millivolt, and a header whose comments carry the details, the measurements and
-the statements. It prints the header's path.
+the statements. It prints the header's path. A file that gives no sampling rate (no valid
+\code{SampleBase}) is refused, and nothing is written.
 \begin{params}
 \item[--name NAME] The record's name. Default: the file's name without its extension.
 \end{params}
@@ -1277,8 +1278,8 @@ nothing is refused, 1 when something is, 2 on a usage or git error.
 
 The hooks \file{pre-commit} and \file{pre-merge-commit} run it on what a commit or a merge would
 store. The first command above enables them once per clone; the installers do it, and warn if
-the clone already uses other hooks. CI runs the same check on every commit of each pull request
-and push, and on every file (\file{.github/workflows/checks.yml}), so bypassing the hooks
+the clone already uses other hooks. CI runs the same check on every commit of each push, and on
+every file (\file{.github/workflows/checks.yml}), so bypassing the hooks
 (\opt{-{}-no-verify}) only moves the refusal there.
 
 The \file{Makefile} at the root of the repository wraps these tools and the tests

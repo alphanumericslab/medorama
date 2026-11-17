@@ -106,3 +106,11 @@ a.button { display: inline-flex; align-items: center; text-decoration: none; col
   background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 4px 10px; }
 a.button:hover { border-color: var(--muted); }
 body.embedded #server { display: none; }
+
+/* the device's median beats: their own paper under the rhythm, the P, QRS and T onsets dotted */
+.sheethead { margin: 18px 0 8px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+svg.paper .mark { stroke: var(--mark); stroke-width: .25; fill: none; stroke-dasharray: .6 .6; }
+svg.paper .markname { fill: var(--mark); font-size: 2.4px; }
+svg.paper .axis { font-weight: 500; font-size: 2.4px; opacity: .8; }
+:root { --mark: #0072b2; }
+:root[data-theme="dark"] { --mark: #56b4e9; }

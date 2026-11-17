@@ -1,7 +1,7 @@
 """Writes synthetic_muse.xml: a made-up MUSE resting ECG (invented patient, signals and
 statements) for the tests of the MUSE readers (Python, JavaScript).  ISO-8859-1, as MUSE
 writes them, with a non-ASCII site name; the computer's statements in fragments; a confirmed
-diagnosis the physician edited.
+diagnosis the physician edited; the median beat, with its P, QRS and T onsets at 500 Hz.
 
     python3 make_muse.py            # writes synthetic_muse.xml and synthetic_muse.json (golden)
 """
@@ -117,7 +117,15 @@ XML = f"""<?xml version="1.0" encoding="ISO-8859-1"?>
     <TAxis>40</TAxis>
     <QRSCount>2</QRSCount>
     <QTcFrederica>410</QTcFrederica>
+    <POnset>85</POnset>
+    <POffset>125</POffset>
+    <QOnset>160</QOnset>
+    <QOffset>206</QOffset>
+    <TOffset>365</TOffset>
+    <ECGSampleBase>500</ECGSampleBase>
+    <ECGSampleExponent>0</ECGSampleExponent>
   </RestingECGMeasurements>
+  <QRSTimesTypes><GlobalRR>1000</GlobalRR><QTRGGR>248</QTRGGR></QRSTimesTypes>
   <OriginalDiagnosis>
 {stmt('Sinus rhythm')}{stmt('with ', )}{stmt('borderline left axis', 'ENDSLINE')}{stmt('Borderline ECG', 'ENDSLINE')}  </OriginalDiagnosis>
   <Diagnosis>

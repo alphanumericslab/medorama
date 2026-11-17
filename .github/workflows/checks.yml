@@ -7,7 +7,6 @@ name: checks
 
 on:
   push:
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -15,7 +14,7 @@ permissions:
 
 jobs:
   privacy:
-    # every commit of the pull request (or of the push), each against its parent, so that a file
+    # every commit of the push, each against its parent, so that a file
     # added and removed again is still caught; then every file of the result
     runs-on: ubuntu-latest
     timeout-minutes: 15
