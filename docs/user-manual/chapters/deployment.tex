@@ -277,7 +277,9 @@ changes and applies them at its first start; an older version refuses to open a 
 that a newer one has updated (\code{the database has schema version N, newer than this program
 knows}), so back up first. From 0.2 to 0.3 nothing is done by hand: each database is read
 again at its next check (\cref{sec:connecting-kept}). An installer run again without \opt{-{}-demo} leaves
-\cmd{medorama init -{}-demo} nothing to connect; a Medorama that connected the demo keeps it.
+\cmd{medorama init -{}-demo} nothing to connect; a demo installation that connected the demo keeps
+it. A control store made before 0.3.1 is decided, at its first command, a demo installation or a
+site's by what it connects, and refused while it connects both (\cref{sec:administration-demo}).
 
 \section{Uninstalling}
 \label{sec:deployment-uninstall}

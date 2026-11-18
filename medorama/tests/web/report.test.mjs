@@ -9,7 +9,7 @@ core.cfg = { timezone: 'UTC' };
 
 const state = (over = {}) => ({
   entries: [
-    { key: 'labs:3:1704175800', time: 1704175800, category: 'lab', title: 'Lactate <img src=x onerror=alert(1)>', summary: '4.6 mmol/L', encounter: 3 },
+    { key: 'labs:3:1704175800', time: 1704175800, category: 'lab', title: 'Lactate <img src=x onerror=alert(1)>', names: ['Lactate'], encounter: 3 },
     { key: 'item:9', time: 1704262200, category: 'note', title: 'Progress note', snippet: 'improving', encounter: 3 },
   ],
   summary: { encounters: [{ id: 3, encounter_id: 'MO-E-TEST', admit: 1704100000, discharge: 1704500000, admit_unit: 'ICU' }] }, terms: [], counts: [], fuzzy: false, q: '', mode: 'timeline', hidden: new Set(), enc: null,
@@ -61,4 +61,11 @@ test("a stay's hospital day counts calendar days in the catalog's time zone", as
   assert.match(context(sum, 1, admit + 10 * 3600), /^Stay · hospital day 2 · hosp$/);
   core.cfg = { timezone: 'UTC' };
   resetFormats();
+});
+
+test('the report names what was done: no values, no flags (they are the detail\'s)', () => {
+  const el = { innerHTML: '' };
+  renderList(el, state({ entries: [{ key: 'ecg:2:ab', time: 1704175800, category: 'ecg', title: '12-lead ECG', names: ['12-lead ECG', 'QTc'], summary: 'QTc 503 ms', abnormal: 1, encounter: null }] }));
+  assert.match(el.innerHTML, /<b>12-lead ECG<\/b>/);
+  assert.doesNotMatch(el.innerHTML, /503|abnormal/);
 });

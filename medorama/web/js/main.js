@@ -107,6 +107,9 @@ async function start() {
   resetFormats();
   $('#login').classList.add('hidden');
   $('#app').classList.remove('hidden');
+  // a demo installation (invented patients only) says so on every page, and in the tab's title
+  $('#demo-band').classList.toggle('hidden', !st.cfg.demo);
+  if (st.cfg.demo && !document.title.startsWith('Demo')) document.title = `Demo · ${document.title}`;
   const u = st.user;
   const name = u.display_name || u.username;
   $('#btn-user').textContent = name.split(/[\s._-]+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';

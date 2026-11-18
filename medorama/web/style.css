@@ -81,6 +81,8 @@ button:focus-visible, a:focus-visible, summary:focus-visible, [tabindex]:focus-v
 
 /* top bar */
 #app { display: flex; flex-direction: column; height: 100vh; }
+/* a demo installation's band: neutral (red is for alarms), on every page */
+.demoband { flex: none; padding: 4px 18px; font-size: 12px; text-align: center; color: var(--accent); background: var(--accent-soft); border-bottom: 1px solid var(--accent-line); }
 header.top { display: flex; align-items: center; gap: 16px; height: 48px; padding: 0 18px; border-bottom: 1px solid var(--line); flex: none; }
 /* a link counts over the bar's whole height, not only on its text (an invisible extension) */
 header.top > nav { align-self: stretch; }
@@ -305,6 +307,19 @@ table.list .kinds { display: inline-flex; gap: 3px; align-items: center; color: 
 .btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 500; }
 .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 8px; }
 .stats div { background: var(--soft); border-radius: 8px; padding: 8px 11px; }
+/* an ECG's measurements: each value once, its change (neutral: a change is neither good nor bad
+   here) and its trend over the patient's ECGs */
+.ms { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.ms .m { background: var(--soft); border-radius: 8px; padding: 8px 10px 6px; min-width: 0; }
+.ms small { display: block; color: var(--muted); font-size: 11px; }
+.ms .mv { display: flex; align-items: baseline; gap: 3px; } .ms b { font-size: 17px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ms i { font-style: normal; color: var(--muted); font-size: 11px; }
+.ms .chg { margin-left: auto; color: var(--text2); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ms svg { display: block; width: 100%; height: 24px; margin-top: 4px; }
+ul.stm { list-style: none; margin: 0 0 8px; padding: 10px 12px; background: var(--soft); border-radius: 8px; }
+ul.stm li { padding: 2px 0; }
+.tag { display: inline-block; font-size: 10.5px; padding: 0 6px; border-radius: 8px; border: 1px solid var(--accent-line); color: var(--accent); vertical-align: 1px; }
+.gone { color: var(--muted); font-size: 12px; margin: 0 0 14px; } .gone .tag { color: var(--muted); border-color: var(--line); }
 .stats small { display: block; color: var(--muted); font-size: 11px; } .stats b { font-size: 15px; font-weight: 600; } .stats span { font-size: 11.5px; color: var(--muted); }
 table.t { border-collapse: collapse; width: 100%; font-size: 12.5px; }
 table.t th { text-align: left; font-weight: 500; color: var(--faint); font-size: 11.5px; padding: 4px 8px; }

@@ -95,14 +95,14 @@ ends by naming the next step: `medorama databases connect`, then `medorama serve
 
 | `init` option | Default | Meaning |
 |---|---|---|
-| `--home DIR` | See below. | Where Medorama's home folder is. It is remembered for later commands. It is a global option, which every other command accepts too. |
+| `--home DIR` | See below. | Where Medorama's home folder is. It is remembered for later commands (a demo installation's never is). It is a global option, which every other command accepts too. |
 | `--workspace DIR` | Required. | The workspace. |
 | `--admin NAME` | `admin` | The first user's name. |
 | `--timezone TZ` | `America/New_York` | The time zone for times that a database writes without an offset (unless the database's own setting says otherwise), and for display. |
 | `--port N` | 8090 | The port of the web page and the API. |
 | `--password-stdin` | | Reads the password from standard input, for scripts. |
 | `--database-url URL`, `--database-password-file FILE` | SQLite in the home folder | Puts the control store in PostgreSQL ([Put the control store in PostgreSQL](#put-the-control-store-in-postgresql)). |
-| `--demo` | | Connects the demo databases that the installer made with `--demo` ([The demo](#the-demo)). Without that installer option there is nothing to connect, and `init` says so. |
+| `--demo` | | Makes a **demo installation**, for good: it connects the demo databases that the installer made with `--demo`, and only demo databases; it makes four example cohorts; its home is never remembered ([The demo](#the-demo)). Without that installer option there is nothing to connect, and `init` says so. Without `--demo`, `init` makes a site's installation, which never connects a demo database. |
 
 **Which home folder a command uses.** A command uses the first of these that applies:
 1. the `--home DIR` option;
@@ -247,6 +247,7 @@ kept, and `medorama work` runs the queue in the terminal until it is empty.
 | `databases list [--json]` | Lists the connected databases: kind, engine, status, persons, the recordings opened, and why an offline one does not answer. |
 | `databases check [NAME\|--all]` | Checks one database (or every one) now: online or offline, and read again when its data changed. |
 | `databases refresh NAME` | Reads again what Medorama keeps of a database: its catalog (the names and units of its variables), its persons and their encounters. No recording is read. |
+| `databases views NAME --views FILE` | Replaces a connected database's views (kind `views`; an admin who manages it) with those of a TOML file, as `connect --views` takes it: checks them, and reads the database again. Its patients keep their numbers. |
 | `databases count NAME` | Counts how many entries and persons hold each of a database's variables (**Count now**): one pass over its entries. |
 | `databases index NAME` | Reads every recording a database lists, checks its files, and queues the new or changed ones for indexing (**Index all recordings**). |
 | `databases variables NAME [--json]` | What a database holds: its variables, with their counts once counted (`-` before `databases count`; from 1 to 10 shown as `< 11`). |
@@ -396,7 +397,7 @@ folder of the workspace ([databases.md, What Medorama keeps of a database](datab
 |---|---|
 | Kinds | `omop`: an OMOP CDM 5.3 or 5.4 database, read through built-in views. `views`: any SQL database, read through views that the site writes (`persons`, `visits`, `entries`, and `recordings` for a database of recordings, a `version` query and an optional `variables` catalog). `dbb`: a database made by [db-builder](../db-builder/README.md), whose tables are the views already. |
 | Database engines | PostgreSQL (on-site, Amazon RDS and Aurora, Azure) and SQLite files. A SQLite file must lie inside `data_roots`, and may not be Medorama's control store or lie inside its workspace. |
-| Access | Read-only, and enforced: PostgreSQL sessions are read-only, and SQLite files are opened read-only. Each query has a time limit (`timeout_s`, 60 seconds by default), and each criterion a row limit (`max_rows`, 1,000,000 by default; it also bounds **Index all recordings**, but not the persons and visits read when connecting). |
+| Access | Read-only, and enforced: PostgreSQL sessions are read-only, and SQLite files are opened read-only. Each query has a time limit (`timeout_s`, 60 seconds by default), and each criterion a limit on the rows it keeps (`max_rows`, 1,000,000 by default: each row is tested as it is read, so a criterion reads a database of millions of rows; the persons behind `has …` are not bounded; it also bounds **Index all recordings**, but not the persons and visits read when connecting). |
 | Passwords | A password given to Medorama (in the page, or with `databases connect --password-stdin`) is sealed with the master key and kept in the control store, never in a file and never shown again. Or it is in a file (`--password-file`), or in `$MEDORAMA_SOURCE_PASSWORD_<NAME>`. It is never stored in the URL, and never sent back to the page. |
 | Who connects | Administrators. The administrator who connects a database gets every grant on it. |
 
@@ -430,6 +431,7 @@ medorama databases connect county --kind omop --url sqlite:/data/county/omop.sql
 medorama databases connect warehouse --kind views --url postgres://… --views warehouse-views.toml --issuer HOSP
 medorama databases check omop        # online or offline; read again if its data changed
 medorama databases refresh omop      # read its persons, encounters and catalog again now
+medorama databases views warehouse --views warehouse-views.toml   # new views; its patients keep their numbers
 medorama databases count omop        # count each variable's entries and persons
 ```
 
@@ -451,7 +453,7 @@ identity conflicts if any.
 | `--mrn-authority A` | The authority of its MRNs, for rows that name none. |
 | `--timezone TZ` | The time zone of its times written without an offset (an IANA name; an unknown one is refused). Without it, the `timezone` setting is written into the database's settings when it is connected, and stays fixed from then on. On PostgreSQL, a `timestamp` column (without a time zone) is read in it; a `timestamptz` is an instant. |
 | `--files-root DIR` | The folder that relative recording paths are read from. Without it: a SQLite database's own folder. |
-| `--timeout-s N`, `--max-rows N` | The time limit of each query, and the row limit of each criterion and of **Index all recordings** (0: the defaults). A large database needs no higher `--max-rows` to connect: its persons and visits are read however many. |
+| `--timeout-s N`, `--max-rows N` | The time limit of each query, and the limit on the rows each criterion keeps and on **Index all recordings** (0: the defaults). A large database needs no higher `--max-rows` to connect: its persons and visits are read however many. |
 
 Connecting refuses a database that does not answer, a SQLite file outside `data_roots`, and a
 name already used. If the database answers but reading it fails part way, it stays connected, the
@@ -492,7 +494,10 @@ database.
   database's `meta.version`, a views database's `version` query, or else counts of its persons
   and recordings (not of its entries). A changed version reads its persons, their encounters and
   its catalog again, and drops the counts. **Refresh** (`medorama databases refresh NAME`) does
-  it on demand.
+  it on demand. `medorama databases views NAME --views FILE` gives a views database new views
+  (a persons view that leaves out IDs that are not MRNs, say) and reads it again: a person is
+  linked by the same identifier pairs, whatever view gives them, so its patients keep their
+  numbers.
 - **Variables.** What a database holds (each measurement's name, code, vocabulary and unit;
   diagnoses, drugs and other categories) is its catalog, kept in its `variables.sqlite` with the
   categories of its recordings. It comes from the database's `variables` view when it has one
@@ -1071,9 +1076,32 @@ public collections' attributions. Everything else is made from models. `tools/ma
 makes the demo; [tools/README.md](../tools/README.md#the-demos-features) lists which feature each
 part of it demonstrates.
 
-**The demo is off by default.** Medorama starts with no database unless the demo was asked for.
-Use it only where Medorama is tried, demonstrated or taught, never on a server meant for real
-patients (see the deployment checklist in [security.md](security.md)).
+**The demo is off by default, and an installation of its own.** Medorama starts with no database
+unless the demo was asked for. Use it only where Medorama is tried, demonstrated or taught, never
+on a server meant for real patients (see the deployment checklist in [security.md](security.md)).
+An installation is either the demo's or a site's, from `medorama init` on, and never both
+([design/demo.md](design/demo.md)):
+
+- `medorama init --demo` makes a **demo installation**; `medorama init` a **site's
+  installation**. The mode is kept in the control store and never changes.
+- A demo database says so: it holds a table `medorama_demo` (`db-builder new --demo`; the
+  databases `tools/make-demo-data.py` writes itself get it too). A demo installation refuses a
+  database without it, a site's installation a database with it; each refusal says what to do.
+- Every command (and `medorama serve`) checks first that the installation holds no database of
+  the other kind; `medorama databases list` and `remove` stay open, to put it right.
+- A demo installation shows a band on every page, "Demo · every patient here is invented: this
+  installation holds no real patient's data", in neutral colours (red is for alarms); the
+  browser tab's title begins with "Demo"; its cohort exports are named `demo-cohort-…`.
+- `init --demo` is never remembered as the home that commands without `--home` reach: a site's
+  installation on the same computer stays the default. Give the demo its own home, workspace and
+  port.
+
+**Installations made before 0.3.1** have no mode. At the first command, Medorama decides it by
+what the control store connects: demo databases only, the demo's; otherwise a site's. A database
+is a demo database by its marker, or, for a demo made before 0.3.1 (without the marker), by being
+a file of the demo the installer made (under `…/share/medorama/demo/`). A control store that
+connects both is refused until the databases of one kind are removed (`medorama databases remove
+NAME`), the demo's named in the message; the demo is then made as its own installation.
 
 ### Install with the demo
 
@@ -1095,7 +1123,8 @@ With this option, the installer:
 2. writes the demo into `.venv/share/medorama/demo` (on Windows `.venv\share\medorama\demo`)
    and builds its db-builder databases there, as a site would
    (`tools/make-demo-data.py DIR --db-builder .venv/bin/db-builder`: the steps are listed in the
-   demo's `demo-databases.json`): `demo.sqlite` (`db-builder add` with `--issuer DEMO
+   demo's `demo-databases.json`; each made with `db-builder new --demo`, marked a demo
+   database): `demo.sqlite` (`db-builder add` with `--issuer DEMO
    --mrn-authority DEMO`, then `db-builder recordings` on its folders of recordings),
    `north/north.sqlite` (with `--rules north/rules.toml`, then its ECG folder moved and
    `db-builder rewrite --rules north/moved.toml`), and `secure/secure.sqlite` (`db-builder
@@ -1107,11 +1136,18 @@ With this option, the installer:
 The demo needs WFDB support: its ICU and Holter recordings are WFDB records, so the installers
 refuse `--demo` together with `--no-wfdb` ([building.md, Without WFDB](building.md#without-wfdb)).
 
-Then set Medorama up with `--demo`:
+Then set the demo up as its own installation, with `--demo`, its own home, workspace and port:
 
 ```bash
-medorama init --workspace ~/medorama-workspace --demo
-medorama serve
+medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo
+medorama --home ~/medorama-demo serve --port 8095
+```
+
+A site's installation on the same computer is set up apart, and stays the default home:
+
+```bash
+medorama init --workspace ~/medorama-workspace          # a site's installation
+medorama serve                                          # port 8090
 ```
 
 `init --demo` connects every database the demo's `demo-databases.json` lists, as the first
@@ -1121,44 +1157,56 @@ from its key file, so a new demo database needs no change in Medorama. It also a
 `actions` folder (the example plug-in **Recording summary**, run with the installer's Python) to
 `actions_dirs`. A demo folder made before that file existed connects as before: `demo` and
 `demo_omop`. It reads every recording of the demo's databases (as `medorama databases index`
-does: connecting alone reads none), and `serve` indexes them in the background. Sign in, open **Patient
+does: connecting alone reads none), and `serve` indexes them in the background. It makes four
+example cohorts: *ICU stays* (`icu`), *Long QTc* (`demo_muse.QTc > 450 ms`), *Women over 65 with
+an ECG* (`female AND age > 65 AND has ecg`) and *Sepsis* (`dx sepsis`). Sign in, open **Patient
 Catalog**, and click a patient. Running the installer again without `--demo` removes
 `medorama.demo`, and `init --demo` then has nothing to connect.
 
 **What to try.** The patient search and the Patient Journey (Jane Doe, `P900001`, has an ICU
 stay, ECGs as WFDB and MUSE XML, echo, cath, CT and a radiograph, and records in three databases);
 patients linked across databases (Eva Lindqvist and Richard Roe are in `demo`, `demo_north` and
-`demo_omop`); the identity conflict (`medorama databases conflicts demo_north`); cohorts
+`demo_omop`); the identity conflict (`medorama --home ~/medorama-demo databases conflicts
+demo_north`); an ECG of `demo_muse` compared with the patient's previous one (every patient
+there has two ECGs or more; its patients listed by their latest ECG, and a test ECG whose patient
+ID is a word left out by its views); the example cohorts, and others
 (`demo.creatinine > 1.5 OR has icu`, `female AND age > 70`, `has eeg`); Privacy Mode (names in
 notes replaced, dates moved, a patient over 89 shown as `90+`); trends, the Recordings tab, the
 viewers, **Actions** (Index and the example plug-in) and **Jobs**, and **History**.
 
-To connect the demo to a Medorama already set up (or again, after removing it), connect its
-databases yourself, as `demo-databases.json` describes them; their folder must be inside
-`data_roots` when that is set:
+To connect the demo's databases to a demo installation by hand (one made with `init --demo`
+before the installer made the demo, or again after removing them), connect them yourself, as
+`demo-databases.json` describes them; their folder must be inside `data_roots` when that is set.
+A site's installation refuses them:
 
 ```bash
 D=.venv/share/medorama/demo
-medorama databases connect demo --kind dbb --url sqlite:$D/demo.sqlite
-medorama databases connect demo_north --kind dbb --url sqlite:$D/north/north.sqlite
-medorama databases connect demo_omop --kind omop --url sqlite:$D/omop/omop.sqlite --mrn-authority DEMO
-medorama databases connect demo_registry --kind views --url sqlite:$D/registry/registry.sqlite --views $D/registry/views.toml --mrn-authority DEMO
-medorama databases connect demo_secure --kind dbb --url sqlite:$D/secure/secure.sqlite --password-stdin < $D/keys/demo_secure.key
-for d in demo demo_north demo_muse; do medorama databases index $d; done   # their recordings now, as init --demo does
+M="medorama --home ~/medorama-demo"
+$M databases connect demo --kind dbb --url sqlite:$D/demo.sqlite
+$M databases connect demo_north --kind dbb --url sqlite:$D/north/north.sqlite
+$M databases connect demo_omop --kind omop --url sqlite:$D/omop/omop.sqlite --mrn-authority DEMO
+$M databases connect demo_registry --kind views --url sqlite:$D/registry/registry.sqlite --views $D/registry/views.toml --mrn-authority DEMO
+$M databases connect demo_muse --kind views --url sqlite:$D/muse/ecg_metadata.sqlite --views $D/muse/views.toml --mrn-authority DEMO
+$M databases connect demo_secure --kind dbb --url sqlite:$D/secure/secure.sqlite --password-stdin < $D/keys/demo_secure.key
+for d in demo demo_north demo_muse; do $M databases index $d; done   # their recordings now, as init --demo does
 ```
 
 ### Remove the demo
 
-Removing the demo is removing its databases, as for any other database ([Removing a
-database](#removing-a-database)): on each database's page, **Remove…**, or
+A demo installation stays one: it never becomes a site's installation. To be rid of the demo,
+stop its server and delete its home folder and its workspace (`~/medorama-demo` and
+`~/medorama-demo-workspace` above); nothing of it is in a site's installation. The demo's files
+stay where the installer wrote them, for a new demo installation later. Its databases can also be
+removed one by one, as any other database ([Removing a database](#removing-a-database)): on each
+database's page, **Remove…**, or
 
 ```bash
-for d in demo demo_north demo_omop demo_registry demo_secure; do medorama databases remove $d; done
+for d in demo demo_north demo_omop demo_registry demo_muse demo_secure; do medorama --home ~/medorama-demo databases remove $d; done
 ```
 
-Their keys, workspace folders, cohort rows and patients go; the demo's files stay where the
-installer wrote them. Nothing else changes (remove the demo's `actions` folder from
-`actions_dirs` in `medorama.toml` if you no longer want the example plug-in).
+An installation made before 0.3.1 that connects both the demo's databases and real ones is
+refused until the databases of one kind are removed: remove the demo's (the command above,
+without `--home`, in that installation), then make the demo as its own installation.
 
 `tools/make-demo-data.py` can also write the demo into a folder of your own
 (`.venv/bin/python tools/make-demo-data.py ~/medorama-demo --db-builder .venv/bin/db-builder`,

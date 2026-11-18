@@ -108,6 +108,9 @@ pub fn connect(cfg: &Config, c: &Connection, user: &User, n: &NewSource, passwor
     let mut s = n.source(trial);
     let checked = s.check()?;
     let version = version_of(&s, &checked.version)?;
+    // a demo database to a demo installation only, a site's to a site's (installation.rs)
+    n.settings.demo = s.is_demo();
+    crate::installation::admits(c, &name, n.settings.demo)?;
     crate::sources::forget(&s);
     let id = c.insert(
         "INSERT INTO databases (name, kind, url, password_file, ca_file, settings, status, checked_at, data_version,
@@ -229,6 +232,41 @@ pub fn refresh(cfg: &Config, c: &Connection, user: &User, id: i64) -> anyhow::Re
     refresh_content(cfg, c, &d.source, &version, Some(user))?;
     audit(c, Some(user), "refresh", &d.source.name, "");
     Ok(())
+}
+
+/// Replace a connected database's views (kind `views`; an admin who manages it): checked, kept,
+/// and the database read again with them.  Its patients keep their numbers: a person is linked
+/// by the same identifiers, whatever view gives them.
+pub fn set_views(
+    cfg: &Config,
+    c: &Connection,
+    user: &User,
+    id: i64,
+    views: &crate::sources::Settings,
+) -> anyhow::Result<()> {
+    if !user.is_admin() {
+        anyhow::bail!("only admins change a database's views");
+    }
+    crate::grants::require(c, user, &format!("db:{id}"), "manage")?;
+    let Some(d) = get(c, id)? else { anyhow::bail!("no database {id}") };
+    let mut s = d.source;
+    if s.kind != "views" {
+        anyhow::bail!("{} is a database of kind {}: only a database of kind views has views", s.name, s.kind);
+    }
+    let v = views.clone();
+    (s.settings.persons, s.settings.visits, s.settings.entries, s.settings.recordings, s.settings.version) =
+        (v.persons, v.visits, v.entries, v.recordings, v.version);
+    (s.settings.stays, s.settings.variables) = (v.stays, v.variables);
+    crate::sources::forget(&s);
+    let checked = s.check()?;
+    let version = version_of(&s, &checked.version)?;
+    c.execute(
+        "UPDATE databases SET settings = ?1, status = 'online', status_error = '', checked_at = ?2, data_version = ?3
+         WHERE id = ?4",
+        params![serde_json::to_string(&s.settings)?, now(), version, id],
+    )?;
+    audit(c, Some(user), "views", &s.name, "");
+    refresh_content(cfg, c, &s, &version, Some(user))
 }
 
 /// Count a database's variables (who manages it): how many entries and persons hold each, one

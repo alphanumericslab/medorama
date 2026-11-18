@@ -35,7 +35,7 @@ come in any order after the subcommand.
 \item[-h, --help] Prints the usage of the program, or of a subcommand
   (\cmd{medorama databases connect -{}-help}), and exits. \cmd{medorama help} \textit{COMMAND}
   does the same.
-\item[-V, --version] Prints the version (\code{medorama 0.3.0}) and exits.
+\item[-V, --version] Prints the version (\code{medorama 0.3.1}) and exits.
 \item[--home DIR] Medorama's home folder, which holds \file{medorama.toml}, the SQLite control
   store, the master key file (by default) and the folder \file{actions/}. It is accepted by every
   subcommand, before or after it (\cmd{medorama -{}-home DIR serve},
@@ -166,6 +166,7 @@ into a database with \cmd{db-builder} first (\cref{sec:cli-db-builder}), then co
 \multicolumn{2}{@{}l}{\textit{Connected databases}} \\
 \cmd{databases connect} & Connect a database \\
 \cmd{databases list}, \cmd{check}, \cmd{refresh} & The databases, their status, read again \\
+\cmd{databases views} & Replace a database's views, and read it again \\
 \cmd{databases count}, \cmd{index} & Count a database's variables; read and index all its
   recordings \\
 \cmd{databases variables}, \cmd{conflicts} & What a database holds; its identity conflicts \\
@@ -208,9 +209,12 @@ owner only, with \file{medorama.toml} (commented) and a folder \file{actions/}; 
 gives the master key; the control store, in SQLite (\file{medorama.sqlite} in the home folder)
 or in PostgreSQL; and the first user, an admin with the PHI permission. It asks twice for that
 user's password (at least 10 characters; three attempts). The control store is made first and
-the settings file last, so that a failed \cmd{init} leaves nothing half made. \cmd{init} then
-remembers the home folder, so that later commands use it without \opt{-{}-home}, and prints the
-next step: \cmd{medorama databases connect}, then \cmd{medorama serve}.
+the settings file last, so that a failed \cmd{init} leaves nothing half made. The installation
+is a site's, or, with \opt{-{}-demo}, the demo's, for good (\cref{sec:administration-demo}).
+\cmd{init} then remembers the home folder of a site's installation, so that later commands use it
+without \opt{-{}-home}, and prints the next step: \cmd{medorama databases connect}, then
+\cmd{medorama serve}. A demo installation is never remembered: later commands reach it with
+\opt{-{}-home}.
 
 It refuses a home folder that holds a \file{medorama.toml} already, a SQLite file left there by
 an earlier setup, a PostgreSQL database that has users already, an unknown time zone, and a
@@ -234,19 +238,22 @@ apart from the workspace's backups (\cref{sec:protecting-backups}).
   (\code{postgres://user@host/db?sslmode=require}), without its password.
 \item[--database-password-file FILE] The file that holds that database's password; only with
   \opt{-{}-database-url}.
-\item[--demo] Connect the demo that the installer made (\cmd{tools/install-medorama.sh -{}-demo},
-  named in the file \file{medorama.demo} next to the programs), as the first admin's: the
-  db-builder database \code{demo} (kind \code{dbb}) and the OMOP database \code{demo\_omop}
-  (kind \code{omop}, MRN authority \code{DEMO}), invented patients, two of them in both
-  (\cref{chap:quickstart}). It then reads every recording of the demo's databases, as
-  \cmd{medorama databases index} does (connecting alone reads none), and prints how many are to
-  be indexed: \code{serve} indexes them. Without the installer's demo it says so, and connects
-  nothing.
+\item[--demo] Make a demo installation, for good: it connects demo databases (invented
+  patients, each marked by a table \code{medorama\_demo}) only, and never a site's database; a
+  site's installation never connects a demo database. \cmd{init} connects the demo that the
+  installer made (\cmd{tools/install-medorama.sh -{}-demo}, named in the file
+  \file{medorama.demo} next to the programs), as the first admin's: every database its
+  \file{demo-databases.json} lists, six in all (\cref{chap:quickstart}), and adds the demo's
+  example action plug-in and four example cohorts. It then reads every recording of the demo's
+  databases, as \cmd{medorama databases index} does (connecting alone reads none), and prints how
+  many are to be indexed: \code{serve} indexes them. Without the installer's demo it says so,
+  and connects nothing. Give it a home, workspace and port of its own (\opt{-{}-home} before
+  \cmd{init}), apart from a site's installation.
 \end{params}
 \begin{lstlisting}[style=shell]
 medorama init --workspace /data/medorama-workspace
 medorama init --home ~/medorama --workspace /data/medorama-workspace --timezone Europe/Paris
-medorama init --workspace /data/medorama-workspace --demo
+medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo
 medorama init --workspace /data/medorama-workspace \
     --database-url "postgres://medorama@db.example.org/medorama" \
     --database-password-file /etc/medorama/db-password
@@ -384,9 +391,12 @@ message says so: \cmd{databases refresh} reads it again.
 \item[--files-root DIR] The folder from which a recording's relative \code{file} is read.
   Default: the folder of a SQLite database's file.
 \item[--timeout-s N] Each query's time limit, in seconds (PostgreSQL). Default (0): 60.
-\item[--max-rows N] The number of rows a criterion may read, and of recordings that
-  \cmd{databases index} reads. Default (0): 1\,000\,000. Connecting reads every person and visit,
-  however many: a large database needs no higher limit to connect.
+\item[--max-rows N] The number of rows a criterion may keep, and of recordings that
+  \cmd{databases index} reads. Default (0): 1\,000\,000. A criterion reads every row it needs,
+  however many, tests each as it is read and keeps only those that hold
+  (\cref{sec:connecting-kept}); the persons behind \code{has \dots} are not bounded. Connecting
+  reads every person and visit, however many: a large database needs no higher limit to
+  connect.
 \end{params}
 \begin{lstlisting}[style=shell]
 medorama databases connect omop --kind omop \
@@ -441,6 +451,25 @@ identity conflicts. A database that does not answer is an error. Audited (\code{
 after the database's owner corrected an identity conflict.
 \begin{lstlisting}[style=shell]
 medorama databases refresh demo
+\end{lstlisting}
+
+\apientry{medorama databases views}{Replace a database's views}
+\begin{lstlisting}[style=signature]
+medorama databases views NAME --views FILE
+\end{lstlisting}
+Replaces the views of a database of kind \code{views} with those of a TOML file, as
+\cmd{databases connect -{}-views} takes it (\cref{sec:connecting-views}); for an admin who
+manages the database. It checks the new views, then reads the database again: its catalog, its
+persons and their encounters. Its patients keep their numbers: a person is linked by the same
+identifier pairs, whatever view gives them. It prints \code{NAME: new views;} with the persons,
+the patients and the identity conflicts. A database of another kind is an error. Audited
+(\code{views}). A site narrows a view this way (an ECG archive's patient IDs typed at the cart as
+names left out) without connecting the database again.
+\begin{params}
+\item[--views FILE] The TOML file with the views. Required.
+\end{params}
+\begin{lstlisting}[style=shell]
+medorama databases views demo_muse --views muse-views.toml
 \end{lstlisting}
 
 \apientry{medorama databases count}{Count a database's variables}
@@ -879,7 +908,7 @@ their options and the rules for the columns it recognizes are described in \cref
 in brief:
 
 \begin{lstlisting}[style=signature]
-db-builder new OUT.sqlite [--timezone TZ]
+db-builder new OUT.sqlite [--timezone TZ] [--demo]
 db-builder add OUT.sqlite INPUT... [--mapping FILE] [--issuer NAME] [--mrn-authority NAME]
     [--timezone TZ] [--category KEY] [--format KEY] [--formats PATH]... [--day-first]
 db-builder recordings OUT.sqlite FOLDER [--patients TABLE] [--pattern PATTERN] [--issuer NAME] ...
@@ -891,7 +920,9 @@ db-builder formats [--formats PATH]...
 db-builder serve --root DIR [--host HOST] [--port N] [--home DIR] [--secure-cookies]
 db-builder serve --set-password [--user NAME] [--home DIR]
 \end{lstlisting}
-\cmd{recordings} needs \opt{-{}-patients}, \opt{-{}-pattern} or both. \cmd{add} and
+\cmd{new -{}-demo} marks the new database a demo database (invented patients), with a table
+\code{medorama\_demo}: Medorama connects it to a demo installation only, and a site's installation
+refuses it (\cref{sec:administration-demo}). \cmd{recordings} needs \opt{-{}-patients}, \opt{-{}-pattern} or both. \cmd{add} and
 \cmd{recordings} take \opt{-{}-rules FILE} (rewrite rules) and \opt{-{}-dry-run} (say what would be
 added, writing nothing). \cmd{serve} runs db-builder's web interface on its own port (8091), with
 its own sign-in, confined to its root folder (\cref{sec:importing-web}). Every command takes
@@ -962,7 +993,7 @@ without serving. The options override the settings file, which overrides the def
 \item[--keys-on-stdin] Read the index stores and their keys on the standard input, one line of
   JSON each (\cref{sec:formats-reference-writing}). Medorama starts the viewer it runs with it; a
   key is never given on the command line.
-\item[-V, --version] Print the program's name and version (\code{vitalstream-py 0.3.0}), then
+\item[-V, --version] Print the program's name and version (\code{vitalstream-py 0.3.1}), then
   exit.
 \end{params}
 \begin{lstlisting}[style=shell]
@@ -1143,9 +1174,10 @@ option is an error (status 2).
 \item[--demo] Also make the demo, in \file{.venv/share/medorama/demo}: the invented files and
   tables of \cmd{tools/make-demo-data.py}, made into the db-builder database \file{demo.sqlite}
   (\file{patients.csv} and \file{encounters.xlsx} first, then every other table, with
-  \opt{-{}-issuer DEMO -{}-mrn-authority DEMO}), beside the demo's OMOP database. The folder is
-  named in \file{medorama.demo} next to the programs: \cmd{medorama init -{}-demo} then connects
-  both. Off by default.
+  \opt{-{}-issuer DEMO -{}-mrn-authority DEMO}), and its five other databases, each marked as a
+  demo database. The folder is named in \file{medorama.demo} next to the programs:
+  \cmd{medorama init -{}-demo} then makes a demo installation that connects them all. Off by
+  default.
 \item[--no-rustup] Fail rather than install Rust when \cmd{cargo} is missing.
 \item[--no-tools] Leave out \cmd{muse-py} and \cmd{dicom-py}.
 \item[--no-wfdb] Build Medorama and the viewer without WFDB support: no wfdb-x code in them, and

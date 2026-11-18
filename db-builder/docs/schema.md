@@ -34,6 +34,7 @@ their names.
 | `extras` | input cell that is none of the columns above, as it came |
 | `sources` | file or folder added |
 | `row_sources` | (persons and visits) source that names the row |
+| `medorama_demo` | (only in a demo database, made with `new --demo`) one row: "A demo database: every patient in it is invented." Medorama connects such a database to a demo installation only ([docs/design/demo.md](../../docs/design/demo.md)) |
 
 `persons`, `visits` and `entries` have the columns of Medorama's canonical views
 ([docs/databases.md](../../docs/databases.md#canonical-views-reference)), so a reader needs no SQL

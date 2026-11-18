@@ -18,13 +18,14 @@ export function context(summary, encId, t) {
   return parts.join(' · ');
 }
 
-function entryRow(x, terms, selected) {
-  const flag = x.abnormal ? ` <span class="badge">${x.abnormal} abnormal</span>` : '';
-  const sum = x.summary ? ` <span class="muted">· ${mark(x.summary, terms)}</span>` : '';
+// One line per entry: what was done, by name; its values are the detail's (detail.js), shown
+// once.  `when`: its date, where no day heading gives it (by category).
+function entryRow(x, terms, selected, when = '') {
+  const sum = when ? ` <span class="muted">· ${esc(when)}</span>` : '';
   const snip = x.snippet ? `<span class="snip">${mark(x.snippet, terms)}</span>` : '';
   const go = x.attachment ? '<span class="go" title="Opens a viewer or a file">↗</span>' : '<span></span>';
   return `<div class="it${x.key === selected ? ' sel' : ''}" data-key="${esc(x.key)}" tabindex="0" role="button" aria-pressed="${x.key === selected}"><span class="tm">${esc(fmtHM(x.time))}</span><span class="sw ${catClass(x.category)}"></span>
-    <span class="txt"><b>${mark(x.title, terms)}</b>${flag}${sum}${snip}</span>${go}</div>`;
+    <span class="txt"><b>${mark(x.title, terms)}</b>${sum}${snip}</span>${go}</div>`;
 }
 
 /**
@@ -55,7 +56,7 @@ export function renderList(el, st) {
     for (const k of keys) {
       const xs = groups.get(k);
       html += `<div class="day"><b>${esc(st.labels[k] || k)}</b><span>${xs.length}</span></div>`;
-      for (const x of xs) html += entryRow({ ...x, title: x.title, summary: `${fmtShort(x.time)}${x.summary ? ` · ${x.summary}` : ''}` }, st.terms, st.selected);
+      for (const x of xs) html += entryRow(x, st.terms, st.selected, fmtShort(x.time));
     }
   } else {
     let day = null;

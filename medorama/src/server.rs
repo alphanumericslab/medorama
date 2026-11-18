@@ -422,6 +422,8 @@ async fn config(State(app): State<Shared>, Auth(u): Auth) -> ApiResult {
     let path = |p: &std::path::Path| u.is_admin().then(|| p.to_string_lossy().to_string());
     ok(json!({
         "version": env!("CARGO_PKG_VERSION"),
+        // a demo installation (invented patients only): every page says so
+        "demo": app.db.get().ok().is_some_and(|c| crate::installation::is_demo(&c)),
         "viewer_url": c.viewer_url,
         "timezone": c.timezone,
         "auto_index": c.auto_index,
@@ -982,6 +984,8 @@ async fn cohort_export(
                 (n, "text/csv; charset=utf-8", t.into_bytes())
             }
         };
+        // a demo installation's exports say so in their name
+        let name = if crate::installation::is_demo(&c) { format!("demo-{name}") } else { name };
         Ok(cleared(
             ([(header::CONTENT_TYPE, kind.to_string()), (header::CONTENT_DISPOSITION, attachment_name(&name))], body)
                 .into_response(),

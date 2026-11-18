@@ -14,6 +14,8 @@ how data reach it, in [databases.md](../databases.md) and
 - [Layout](#layout)
 - [The journey](#the-journey)
 - [The report and the detail](#the-report-and-the-detail)
+- [Each fact once](#each-fact-once)
+- [An ECG](#an-ecg)
 - [Three ways to the patients](#three-ways-to-the-patients)
 - [Light and dark](#light-and-dark)
 - [Databases](#databases)
@@ -38,16 +40,18 @@ removing it takes it out of all of them.
 
 ## Layout
 
-From left to right, the page shows who the patient is, what happened (as a picture), and what it
-was (as text).
+From left to right, in four columns, the page shows the patient's current status, where and when
+their data are (as a picture), what was done for them (by name), and the one thing done chosen,
+in full. Each fact is shown once on the page ([Each fact once](#each-fact-once)).
 
 | Part | Width | Content |
 |---|---|---|
 | Search line | full | The patients' search. On a patient page, the patient as a chip (✕ closes it) and a search for another one. |
-| Patient bar | full | Name, sex, age and date of birth, patient ID, MRNs (from the databases granted `phi`), the span of the data, the databases, those not answering, and allergies (amber; "not recorded" when no database holds allergies). |
-| Patient column | 320 px | Visits, each with its database (click one to show only it), medications of the latest stay, conditions. |
-| Journey | 330 px | The picture of the patient's data, newest on top. |
-| Report | the rest | The entries (left) and the selected entry's detail (right). |
+| Patient bar | full | Name, sex, age and date of birth, patient ID, MRNs (from the databases granted `phi`), the dates of their first and latest data, the databases, those not answering, and allergies (amber; "not recorded" when no database holds allergies). |
+| 1. Visits | 320 px | The current status: visits, each with its database (click one to show only it), medications of the latest stay, conditions. |
+| 2. Journey | 330 px | The picture of the patient's data, newest on top; a click selects the newest thing done there in column 3. |
+| 3. What was done | the rest, left | One line per thing done, by name (an ECG with its measurements is one line, a laboratory panel one, a day of vital signs one); no values, no flags. |
+| 4. Detail | the rest, right | Everything about the thing done chosen in column 3 or the journey. |
 
 ![The list of patients](../images/screens/patients.png)
 
@@ -92,7 +96,11 @@ open.
 
 - **Three views:** **Timeline** (by day, with the visit, hospital day and unit), **By
   category**, or **Trends** (every measurement as a sparkline). Laboratory results of one moment
-  form one panel; vital signs form one entry a day.
+  form one panel, named by its tests; vital signs form one entry a day; an ECG and its
+  measurements form one entry.
+- **Names only.** A line says what was done (its time, its category's colour, its name), never a
+  value or a flag: values are the detail's, and whether one is abnormal is the database's to say,
+  shown in the detail with the range it is judged by.
 - **Search** covers every text the patient has, notes included: literal (any part of a word, any
   case) or fuzzy for misspelled words. Words are alternatives (`ecg icu`). The search shortens
   the report; it does not change the journey. It reads the patient's own items only, and in
@@ -104,9 +112,9 @@ open.
   if it is still for the patient and the address shown: a slow answer for a patient left behind
   never overwrites the one opened since.
 - **The detail** shows what the entry is: a panel's values with ranges, flags, the previous value
-  and the trend; a note or report; an ECG or image; a recording at a glance (length, gaps,
-  waveforms; for ICU recordings, the main vital signs). Notes written around that time follow,
-  since notes belong to their visit.
+  and the trend; a note or report; an ECG ([below](#an-ecg)) or image; a recording at a glance
+  (length, gaps, waveforms; for ICU recordings, the main vital signs). Notes written around that
+  time follow, since notes belong to their visit.
 
 ![Searching a patient](../images/screens/patient-search.png)
 
@@ -148,6 +156,55 @@ that moment.
 | ECG | PACS: an echo loop | PACS: a CT series |
 |---|---|---|
 | ![The ECG viewer](../images/screens/ecg.png) | ![An echo loop in the PACS viewer](../images/screens/echo.png) | ![A CT series in the PACS viewer](../images/screens/pacs.png) |
+
+## Each fact once
+
+Agreed with the project lead, 2026-11-17 (Medorama 0.3.1): each piece of information appears once
+on a patient's page.
+
+- **A value is the detail's.** Column 3 names what was done; its values (an ECG's QT interval, a
+  panel's potassium) are in column 4 only.
+- **A count is where it belongs:** the number of visits is column 1's, not the patient bar's.
+- **No flags in column 3** for now (abnormal, high): to come back to with laboratory results.
+- **Conditions and medications** are in column 1 as the current status (the latest stay's
+  medications, the conditions) and in column 3 as their history, on their dates: two facts, the
+  status and the record.
+
+The report groups a patient's entries into things done
+([items.rs](../../medorama/src/patient/items.rs), `entry_key`):
+
+| Thing done | Its entries | Its key | Its line's name |
+|---|---|---|---|
+| A laboratory panel | The patient's results at one moment | `labs:<patient>:<time>` | Its tests' names (`Lactate, Sodium, Potassium`; past three, `+N more`) |
+| A day of vital signs | The day's readings (in Medorama's time zone) | `vit:<patient>:<day>` | `Vital signs · N readings` |
+| An ECG | A database's ECG entries at one time: the ECG (with its file and statements) and each measurement | `ecg:<database>:<token>` (the ECG's token) | The ECG's name (`12-lead ECG`) |
+| Anything else | The entry | `live:<database>:<token>` | Its name (a condition with its code) |
+
+An entry's `names` (what it holds) are not shown: the journey's sub-columns find its line by
+them. The journey counts an ECG once, not once more for each of its measurements.
+
+## An ECG
+
+[detail.rs](../../medorama/src/patient/detail.rs) (`ecg_of`), drawn by
+[detail.js](../../medorama/web/js/patient/detail.js).
+
+- **The ECG** is the entry with a file, else the one without a number; the others are its
+  measurements.
+- **Its drawing** first: the ECG viewer's own, of its file.
+- **Its statements**, one a line (an ECG database writes them separated by new lines). Those not
+  in the previous ECG's are marked **new**; the previous ECG's statements this one no longer says
+  follow (**no longer**). Compared as written: a statement reworded is new.
+- **Its measurements**, each once, as a tile: its value and unit; its **change** since the
+  previous ECG (▲ 25, ▼ 3, = unchanged; none when the previous ECG has no such value), in neutral
+  colours, as a change is neither good nor bad here; and its **trend** over the patient's ECGs,
+  this one marked. The previous ECG's date is said once, above the tiles.
+- **The previous ECG** is the patient's latest ECG before this one, from any database; ‹ and ›
+  step from ECG to ECG.
+- In Privacy Mode an ECG's statements are free text, withheld when notes' text is (Admin ›
+  Privacy Mode, *The text of notes and reports*); nothing is then compared.
+
+Everything compared is on the page already (the report reads every entry of the patient at once):
+nothing more is read from the databases for it.
 
 ## Three ways to the patients
 
@@ -226,6 +283,8 @@ withheld, as the administrator chooses. The page cannot show what it is not sent
 
 ## Next
 
+- **Flags in column 3**, once laboratory results say what is abnormal by the database's ranges.
+- **ECG statements compared by meaning** (their codes, where an ECG database gives them).
 - **Tuning on real data:** real 12-lead ECGs and Holter recordings, read by the ECG viewer's
   readers ([readers.md](../readers.md)).
 - **Imaging:** a PACS (DICOMweb) as a source.

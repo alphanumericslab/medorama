@@ -77,6 +77,31 @@ pub struct Monitoring {
     pub recorded: Option<f64>,
 }
 
+/// An ECG's measurement: its value, the change since the patient's previous ECG, and its
+/// values over every ECG of the patient.
+#[derive(Debug, Serialize)]
+pub struct Measure {
+    pub name: String,
+    pub value: f64,
+    pub unit: String,
+    /// This value less the previous ECG's (none: the previous ECG has none).
+    pub change: Option<f64>,
+    /// (time, value) over the patient's ECGs, oldest first.
+    pub series: Vec<(f64, f64)>,
+}
+
+/// An ECG: its measurements, its statements (those new since the previous ECG marked), and
+/// the previous ECG's statements it no longer has.
+#[derive(Debug, Serialize)]
+pub struct Ecg {
+    pub measures: Vec<Measure>,
+    /// (statement, new since the previous ECG); none when its text is withheld.
+    pub statements: Vec<(String, bool)>,
+    pub gone: Vec<String>,
+    /// The previous ECG's time: what each change is since.
+    pub previous: Option<f64>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Detail {
     pub key: String,
@@ -96,6 +121,8 @@ pub struct Detail {
     pub attachment: Option<Attachment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub monitoring: Option<Monitoring>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ecg: Option<Ecg>,
     /// Notes of the same encounter around this moment (or during the stay).
     pub notes: Vec<NoteBrief>,
 }
@@ -224,6 +251,7 @@ pub fn detail(c: &Connection, cfg: &Config, user: &User, id: i64, key: &str) -> 
             text: None,
             attachment,
             monitoring,
+            ecg: None,
             notes,
         });
     }
@@ -250,6 +278,7 @@ pub fn detail(c: &Connection, cfg: &Config, user: &User, id: i64, key: &str) -> 
             text: None,
             attachment: None,
             monitoring: None,
+            ecg: None,
             notes,
         });
     }
@@ -281,6 +310,7 @@ pub fn detail(c: &Connection, cfg: &Config, user: &User, id: i64, key: &str) -> 
         text: None,
         attachment: None,
         monitoring: None,
+        ecg: None,
         notes: vec![],
     };
     if kind == "labs" || kind == "vit" {
@@ -351,6 +381,12 @@ pub fn detail(c: &Connection, cfg: &Config, user: &User, id: i64, key: &str) -> 
                 time: it.time,
             });
         }
+    } else if kind == "ecg" {
+        let head = *group.iter().find(|i| is_ecg_head(i, &group)).unwrap_or(&first);
+        d.title = head.name.clone();
+        d.ecg = Some(ecg_of(items, &group, head, read_notes));
+        let file = group.iter().find_map(|i| i.file).and_then(|rid| data.recordings.iter().find(|r| r.id == rid));
+        d.attachment = file.map(|r| attachment_of(restricted(r.database), id, r));
     } else {
         let (vocab, flag, lo, hi) = (first.vocabulary.clone(), first.flag.clone(), first.ref_low, first.ref_high);
         let mut f = vec![];
@@ -404,4 +440,50 @@ pub fn detail(c: &Connection, cfg: &Config, user: &User, id: i64, key: &str) -> 
         );
     }
     Ok(d)
+}
+
+/// An ECG's statements, one a line, as the session may read them (none: withheld).
+fn statements_of(it: &It, read_notes: bool) -> Option<Vec<String>> {
+    if !read_notes && is_free_text(it) {
+        return None;
+    }
+    Some(it.text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect())
+}
+
+/// An ECG's detail: its measurements against the patient's previous ECG and over all of them,
+/// its statements against the previous ECG's (compared as written).
+fn ecg_of(items: &[It], group: &[&It], head: &It, read_notes: bool) -> Ecg {
+    let ecg_items = || items.iter().filter(|i| i.ecg.is_some());
+    // the previous ECG: the latest ECG entry before this one
+    let previous_key = ecg_items()
+        .filter(|i| i.time.is_some() && i.time < head.time)
+        .max_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal))
+        .and_then(|i| i.ecg.clone());
+    let previous: Vec<&It> = ecg_items().filter(|i| previous_key.is_some() && i.ecg == previous_key).collect();
+    let mut measures = vec![];
+    for it in group.iter().filter(|i| i.num.is_some()) {
+        let same = |o: &&It| o.num.is_some() && o.name.eq_ignore_ascii_case(&it.name) && o.unit == it.unit;
+        let mut series: Vec<(f64, f64)> = ecg_items().filter(same).filter_map(|o| Some((o.time?, o.num?))).collect();
+        series.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let before = previous.iter().copied().find(same).and_then(|o| o.num);
+        let value = it.num.unwrap_or_default();
+        measures.push(Measure {
+            name: it.name.clone(),
+            value,
+            unit: it.unit.clone(),
+            change: before.map(|b| value - b),
+            series: thin(series, it.time, 80),
+        });
+    }
+    let mine = statements_of(head, read_notes);
+    let theirs = previous.iter().find(|i| is_ecg_head(i, &previous)).and_then(|p| statements_of(p, read_notes));
+    let (statements, gone) = match (mine, theirs) {
+        (Some(m), Some(t)) => (
+            m.iter().map(|x| (x.clone(), !t.contains(x))).collect(),
+            t.into_iter().filter(|x| !m.contains(x)).collect(),
+        ),
+        (Some(m), None) => (m.into_iter().map(|x| (x, false)).collect(), vec![]),
+        _ => (vec![], vec![]),
+    };
+    Ecg { measures, statements, gone, previous: previous.first().and_then(|p| p.time) }
 }

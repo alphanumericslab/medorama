@@ -141,9 +141,13 @@ echo 'a long password' | target/debug/medorama init --password-stdin --home $MED
 target/debug/medorama serve --port 8199                 # http://127.0.0.1:8199, sign in as admin
 ```
 
-`medorama databases connect NAME --kind dbb --url sqlite:FILE` connects any other database the
-same way. `init` also makes the new home the default for later commands that run without `--home`
-or `MEDORAMA_HOME`. Run `medorama --home <your home> use` to make your own the default again. The
+This makes a demo installation, which connects demo databases only
+([design/demo.md](design/demo.md)): a database of real data goes into a site's installation, set up
+the same way without `--demo`, where `medorama databases connect NAME --kind dbb --url sqlite:FILE`
+connects it. A demo database for a test is made with `db-builder new --demo`. `init` without
+`--demo` also makes the new home the default for later commands that run without `--home` or
+`MEDORAMA_HOME` (`init --demo` never does). Run `medorama --home <your home> use` to make your own
+the default again. The
 workspace's files are encrypted with keys that the master key (`<home>/master.key`) wraps: delete
 the home and the workspace together.
 

@@ -87,6 +87,9 @@ This glossary defines the terms used in this manual, in alphabetical order. A te
 \item[Date offset] The amount by which Privacy Mode moves a patient's dates back: Medorama's
   offset plus the patient's own number of days (see \textit{spread\_days}). The intervals
   between one patient's events are kept. \Cref{sec:protecting-dates}.
+\item[Demo installation] A Medorama set up with \cmd{medorama init -{}-demo}, for good: it
+  connects demo databases only (invented patients, each marked by a table \code{medorama\_demo}),
+  and a site's installation never connects one (\cref{sec:administration-demo}).
 \item[db-builder] A separate, open tool shipped with Medorama (\cmd{db-builder}) that turns
   tables (CSV, Excel, OpenDocument, Parquet), known exports (GE MUSE, CLIF, formats declared in
   TOML) and folders of recordings into one SQLite database with an open schema, which Medorama

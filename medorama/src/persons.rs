@@ -45,7 +45,9 @@ CREATE TABLE IF NOT EXISTS persons (
     birth_date         TEXT NOT NULL DEFAULT '',
     sex                TEXT NOT NULL DEFAULT '',
     hashes             TEXT NOT NULL DEFAULT '',   -- its pairs' hashes, apart by spaces (patient_keys)
-    linked_at          REAL NOT NULL
+    linked_at          REAL NOT NULL,
+    earliest           REAL,                       -- the first and latest time of their data,
+    latest             REAL                        -- when the persons view gives them
 );
 CREATE INDEX IF NOT EXISTS persons_patient ON persons(patient);
 -- each person's encounters, as the database's visits give them (the patient list's dates)
@@ -70,6 +72,14 @@ pub fn open(cfg: &Config, c: &Connection, database: i64) -> anyhow::Result<rusql
     // (0.2 kept a summary of each person's data: no longer)
     w.execute_batch("DROP TABLE IF EXISTS summary")?;
     w.execute_batch(SCHEMA)?;
+    // (0.3.0 kept no dates of a person's data)
+    let cols: Vec<String> =
+        w.prepare("PRAGMA table_info(persons)")?.query_map([], |r| r.get(1))?.collect::<Result<_, _>>()?;
+    for col in ["earliest", "latest"] {
+        if !cols.iter().any(|c| c == col) {
+            w.execute_batch(&format!("ALTER TABLE persons ADD COLUMN {col} REAL"))?;
+        }
+    }
     Ok(w)
 }
 
@@ -166,13 +176,14 @@ pub fn link(
         }
         w.execute(
             "INSERT INTO persons (person_key, patient, patient_id, patient_id_issuer, mrn, mrn_authority, last_name,
-                                  first_name, birth_date, sex, hashes, linked_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+                                  first_name, birth_date, sex, hashes, linked_at, earliest, latest)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT (person_key) DO UPDATE SET patient = excluded.patient, patient_id = excluded.patient_id,
                 patient_id_issuer = excluded.patient_id_issuer, mrn = excluded.mrn,
                 mrn_authority = excluded.mrn_authority, last_name = excluded.last_name,
                 first_name = excluded.first_name, birth_date = excluded.birth_date, sex = excluded.sex,
-                hashes = excluded.hashes",
+                hashes = excluded.hashes,
+                earliest = COALESCE(excluded.earliest, earliest), latest = COALESCE(excluded.latest, latest)",
             rusqlite::params![
                 p.key,
                 patient,
@@ -185,7 +196,9 @@ pub fn link(
                 p.birth_date,
                 normal_sex(&p.sex),
                 hashes.join(" "),
-                now()
+                now(),
+                p.earliest,
+                p.latest
             ],
         )?;
         rep.linked += 1;
@@ -217,7 +230,7 @@ fn normal_sex(s: &str) -> &'static str {
 /// Link every person of `s`, forget the persons it no longer holds, and read their encounters
 /// (`medorama databases refresh`; connecting): one pass over its persons and one over its visits.
 pub fn sync(cfg: &Config, c: &Connection, s: &Source, user: Option<&User>) -> anyhow::Result<Linked> {
-    let all = s.every_person()?;
+    let all = s.every_person(s.zone(&cfg.timezone))?;
     let mut rep = Linked::default();
     for chunk in all.chunks(2000) {
         let r = link(cfg, c, s, chunk, user)?;
@@ -399,6 +412,9 @@ pub struct Known {
     pub first_name: String,
     pub birth_date: String,
     pub sex: String,
+    /// The first and latest time of their data, when the database's persons view gives them.
+    pub earliest: Option<f64>,
+    pub latest: Option<f64>,
 }
 
 fn known_of(database: i64, r: &rusqlite::Row) -> rusqlite::Result<Known> {
@@ -414,11 +430,13 @@ fn known_of(database: i64, r: &rusqlite::Row) -> rusqlite::Result<Known> {
         first_name: r.get(7)?,
         birth_date: r.get(8)?,
         sex: r.get(9)?,
+        earliest: r.get(10)?,
+        latest: r.get(11)?,
     })
 }
 
-const KNOWN_COLS: &str =
-    "person_key, patient, patient_id, patient_id_issuer, mrn, mrn_authority, last_name, first_name, birth_date, sex";
+const KNOWN_COLS: &str = "person_key, patient, patient_id, patient_id_issuer, mrn, mrn_authority, last_name, \
+                          first_name, birth_date, sex, earliest, latest";
 
 /// Everything the databases (of those given; none: every one) say of a patient's persons.
 pub fn records_of(cfg: &Config, c: &Connection, patient: i64, only: Option<&[i64]>) -> anyhow::Result<Vec<Known>> {

@@ -346,7 +346,8 @@ on; switching it off needs the PHI permission. Audited (\code{privacy\_on},
 GET /api/v1/config
 \end{lstlisting}
 What the page needs to know about the server. Any user.
-\returns{\code{version} (of \md{}), \code{timezone}, \code{viewer\_url} (a viewer running
+\returns{\code{version} (of \md{}), \code{demo} (\code{true} in a demo installation: invented
+patients only; \cref{sec:administration-demo}), \code{timezone}, \code{viewer\_url} (a viewer running
 elsewhere, opened in a new browser tab; empty when \md{} runs its own), \code{auto\_index}
 (whether new and changed recordings are indexed while the server runs), \code{workers} (the
 number of job workers), \code{user} (as \code{GET me}), \code{sign\_in} (\code{password} or
@@ -490,7 +491,11 @@ worst level among them), and its spans (stays, drugs, recordings). Any user.
 \begin{lstlisting}[style=signature]
 GET /api/v1/patients/{id}/report?q=
 \end{lstlisting}
-The entries of the patient's report. With \code{q}, the search in it: counts per category,
+The entries of the patient's report, one per thing done, by name (\cref{sec:patients-report}):
+each with its \code{key}, time, category and title, and its \code{names} (what it holds: a
+panel's tests, a day's vital signs, an ECG's measurements), which the journey's sub-columns find
+it by; no value and no flag. An ECG with its measurements is one entry, keyed
+\code{ecg:<database>:<token>}. With \code{q}, the search in it: counts per category,
 the words found highlighted, the fuzzy matches. Any user. It reads the patient's own items
 only, and in Privacy Mode their text as the session is shown it. A search by a user who sees
 identifiers is audited (\code{phi\_search}), and one in Privacy Mode too
@@ -504,7 +509,13 @@ identifiers is audited (\code{phi\_search}), and one in Privacy Mode too
 GET /api/v1/patients/{id}/detail?key=KEY
 \end{lstlisting}
 The detail of one entry of the report: the rows of a panel, a text, an attachment, the ICU
-overview, the notes around it. Any user.
+overview, the notes around it. The detail of an ECG has \code{ecg}: \code{measures} (each
+\code{\{name, value, unit, change, series\}}: \code{change} since the patient's previous ECG,
+\code{null} when that ECG has no such value; \code{series} the \code{[time, value]} pairs over
+the patient's ECGs), \code{statements} (\code{[text, new]} pairs, \code{new} when the previous
+ECG did not say it; none when the text is withheld in Privacy Mode), \code{gone} (the previous
+ECG's statements this one no longer says) and \code{previous} (that ECG's time, or \code{null};
+\cref{sec:patients-ecg}). Any user.
 \begin{params}
 \item[key] The entry's key, as the report gave it (in Privacy Mode, with its time moved back:
   the server moves it forward again).

@@ -124,7 +124,7 @@ in [databases.md, Canonical views reference](../databases.md#canonical-views-ref
 
 | View | Required | Columns |
 |---|---|---|
-| `persons` | Yes | `person_key`, `patient_id`, `patient_id_issuer`, `mrn`, `mrn_authority`, `last_name`, `first_name`, `birth_date`, `sex` |
+| `persons` | Yes | `person_key`, `patient_id`, `patient_id_issuer`, `mrn`, `mrn_authority`, `last_name`, `first_name`, `birth_date`, `sex`; optional `earliest`, `latest` (the times of the person's first and latest data, 0.3.1) |
 | `visits` | No | `visit_key`, `person_key`, `start_time`, `end_time`, `unit`, `icu` |
 | `entries` | Yes | `entry_key`, `person_key`, `visit_key`, `category`, `time`, `end_time`, `name`, `code`, `vocabulary`, `value_num`, `value_text`, `unit`, `ref_low`, `ref_high`, `flag`, `author`, `text` |
 | `recordings` | No (a recording database) | `recording_key`, `person_key`, `visit_key`, `file`, `format`, `start_time`, `end_time`, `label`, `category`, `size`, `fingerprint` |
@@ -288,8 +288,9 @@ The Patient Catalog lists the patients of the databases the user may view, from 
 ## Limits and failures
 
 - Each PostgreSQL query has a time limit (`timeout_s`, default 60 seconds). A criterion that
-  would read more than `max_rows` rows (default 1,000,000) is refused with a message saying to
-  narrow it.
+  finds more than `max_rows` rows (default 1,000,000) is refused with a message saying to
+  narrow it. Since 0.3.1 each row is tested as it is read and only those that hold count
+  ([connected-databases.md, Criteria over millions of rows](connected-databases.md#criteria-over-millions-of-rows)).
 - A database that fails during a search fails the search, with its name, because a result
   silently missing a database would be wrong. A database already offline is left out and named.
 - Connections are pooled per database; a connection the server closed is replaced, and a

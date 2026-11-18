@@ -135,7 +135,9 @@ Privacy Mode pass through the same gate, and their file names end in `-privacy`.
 A **cohort** is a named set of patients, found by criteria in the databases you choose and kept.
 The Cohorts tab searches as you change the criteria and shows why each patient matched. You can
 save all the patients found, or only the ones you tick, as a new cohort, or add them to an
-existing one.
+existing one. Results come a page at a time: after you tick a page (the box above it), **Tick all
+N** ticks every patient found, and **Untick all** unticks them. With none ticked, saving saves all
+the patients found.
 
 ![The Cohorts tab: the databases to search, the criteria, the patients found and the reason each one matched](images/screens/cohorts.png)
 
@@ -224,6 +226,14 @@ on the patient alone (sex, age, `in`) apply among the patients that the searched
 
 **Visits.** A visit without an end time counts as continuing until now.
 
+**Large databases.** Each row a criterion reads is tested as it is read, and only those that hold
+are kept, so a criterion such as `muse.QTc > 450 ms` reads every ECG of a database of millions of
+them. A criterion that more than `max_rows` rows hold (1,000,000 by default) is refused, with a
+message saying to narrow it; the patients behind `has …` are never bounded.
+
+**The ID column** of the patients found shows, with the PHI permission out of Privacy Mode, the
+patient ID, or the MRN when there is no patient ID; otherwise the pseudonym.
+
 ### How a cohort keeps its members
 
 A cohort's page states its **definition** in words: where its members come from (the databases
@@ -276,9 +286,11 @@ permission and the `phi` grant on the database that holds them.
 ### Find a patient
 
 The **Patient Catalog** lists the patients of the databases you may view, the one with the latest
-encounter first: the pseudonym (or, with the PHI permission out of Privacy Mode, the patient ID,
-the name, the MRN and the date of birth of the databases granted to you with `phi`), the sex, the
-age, the number of visits, the latest time, the databases that hold the patient, the kinds of
+data first (the latest encounter, or the latest data a database gives the dates of, such as an
+ECG archive without visits): the pseudonym (or, with the PHI permission out of Privacy Mode, the
+name, the patient ID, the MRN and the date of birth of the databases granted to you with `phi`; the
+**ID** column shows the patient ID only, and a faint dash when there is none, the MRN having its
+own column), the sex, the age, the number of visits, the latest time, the databases that hold the patient, the kinds of
 data (**Data**) and the number of entries (**Entries**). The patients and their encounters are
 kept by Medorama for each database, so a patient of a database that is offline is still listed.
 The **Data** and **Entries** columns are read from the online databases for the page shown only;
@@ -302,16 +314,39 @@ A patient's page shows everything known about the patient on one time line. It i
 open it, from each database you may view that links the patient. A database that does not answer
 is named in the patient bar (*not available*), and the page shows the others.
 
+The page has four columns, from left to right: **1. Visits** (the patient's current status),
+**2. Journey** (where and when their data are), **3. What was done** (by name) and **4. Detail**
+(the one thing done chosen, in full). Each fact is shown once: a value only in the detail, the
+number of visits only in the visits column. Conditions and medications appear twice, as two
+facts: in column 1 as the current status, and in column 3 as their history, on their dates
+([design/patient-page.md, Each fact once](design/patient-page.md#each-fact-once)).
+
 | Part | What it shows |
 |---|---|
-| Patient bar | The name, sex, age and date of birth, the patient ID and the MRNs (identity only from the databases granted to you with `phi`, out of Privacy Mode), the span of the data, the databases that hold the patient, and the allergies ("not recorded" when no database holds allergies). |
-| Patient column | The visits, each with the name of its database (click one to show only that visit), the latest stay's medications, and the conditions. |
-| Journey | Every entry on one time line, the newest on top, with one column per category. ICU stays are drawn as light bars, with their recordings over them: the stays in intensive-care units when the database gives them (db-builder's bed stays, OMOP's `visit_detail`), else the whole intensive-care visit. A result flagged normal (`N`, `WNL`) is shown normal whatever its range says. Abnormal values are amber and critical values orange, a critical mark also outlined when it is wide enough; red is used only for alarms. Months without data are folded. Hover over a mark to see what it is, and click it to open it. A column's name hides or shows that column: click it, or reach it with Tab and press Enter or Space; **Columns…** above the journey lists the columns with a box for each. For a screen reader, the journey is a picture whose text says its span and columns; every mark is also an entry of the report. |
-| Report | The entries, newest first, grouped by day with the visit, the hospital day and the unit. Laboratory results taken at the same moment form one panel, and vital signs form one entry per day (the day in Medorama's time zone). The report can also be grouped by category, or show the trends. |
-| Detail | The selected entry: a panel's values with their ranges, previous values and trend (a critical value also named *critical*); a note; a 12-lead ECG on paper, a picture, a PDF or a video, with **Open in ECG** or **Open in PACS**; a recording's main vital signs over its whole length (click to open VitalStream at that moment); and the notes written around that time. |
+| Patient bar | The name, sex, age and date of birth, the patient ID and the MRNs (identity only from the databases granted to you with `phi`, out of Privacy Mode), the dates of the first and latest data, the databases that hold the patient, and the allergies ("not recorded" when no database holds allergies). |
+| 1. Visits | The current status: the visits, each with the name of its database (click one to show only that visit), the latest stay's medications, and the conditions. |
+| 2. Journey | Every entry on one time line, the newest on top, with one column per category. ICU stays are drawn as light bars, with their recordings over them: the stays in intensive-care units when the database gives them (db-builder's bed stays, OMOP's `visit_detail`), else the whole intensive-care visit. A result flagged normal (`N`, `WNL`) is shown normal whatever its range says. Abnormal values are amber and critical values orange, a critical mark also outlined when it is wide enough; red is used only for alarms. Months without data are folded. Hover over a mark to see what it is, and click it to open it. A column's name hides or shows that column: click it, or reach it with Tab and press Enter or Space; **Columns…** above the journey lists the columns with a box for each. For a screen reader, the journey is a picture whose text says its span and columns; every mark is also a line of **What was done**. |
+| 3. What was done | One line per thing done, newest first, grouped by day with the visit, the hospital day and the unit; each line by name only, with no value and no flag (abnormal, high). Laboratory results taken at the same moment form one line named by their tests (*Lactate, Sodium, Potassium*; past three, the first three and *+N more*); vital signs one line a day, *Vital signs · N readings* (the day in Medorama's time zone); an ECG with its measurements one line (*12-lead ECG*). The list can also be grouped by category, or show the trends. |
+| 4. Detail | Everything about the thing done chosen in column 3 or the journey: a panel's values with their ranges, previous values and trend (a critical value also named *critical*); a note; an ECG ([below](#an-ecg)); a picture, a PDF or a video, with **Open in ECG** or **Open in PACS**; a recording's main vital signs over its whole length (click to open VitalStream at that moment); and the notes written around that time. |
 
-**On a tablet.** In a window narrower than 1100 pixels, the report goes below the patient
-column and the journey, and the page scrolls, so that each keeps room to read.
+**On a tablet.** In a window narrower than 1100 pixels, columns 3 and 4 go below the visits
+and the journey, and the page scrolls, so that each keeps room to read.
+
+#### An ECG
+
+An ECG's detail shows, in order:
+- **Its drawing**, on paper, with **Open in ECG** for layouts, gain and calipers.
+- **Its statements**, one a line. Those that the patient's previous ECG did not say are marked
+  **new**; the previous ECG's statements this one no longer says follow, under **no longer**.
+  Statements are compared as written: one reworded counts as new. In Privacy Mode, when the text
+  of notes is withheld, an ECG's statements are withheld too, and nothing is compared.
+- **Its measurements**, each once, as a tile: its value and unit; its change since the previous
+  ECG (▲ 25, ▼ 3, or = when unchanged; none when the previous ECG has no such value), in neutral
+  colours, since a change is neither good nor bad here; and a small trend line over the patient's
+  ECGs, this one marked. The previous ECG's date is said once, above the tiles.
+
+The previous ECG is the patient's latest ECG before this one, from any database. ‹ and › step
+from one ECG of the patient to the next.
 
 **Recordings and files.** The recordings and files of a patient come from the recording
 databases you may view. A 12-lead ECG, a picture, a PDF, an echo or a cath lab study is shown in
@@ -346,7 +381,7 @@ is not yet shown. [edf.md](edf.md) describes EDF in detail.
 
 ### Search a patient's data
 
-The report's search box looks through every text the patient has: the names of tests, drugs and
+The search box above **What was done** looks through every text the patient has: the names of tests, drugs and
 codes, values, results, notes and reports.
 
 ![The report searched for "creatinine", with the matches highlighted](images/screens/patient-search.png)
@@ -357,7 +392,7 @@ codes, values, results, notes and reports.
 - Any part of a word matches (`lactat`), ignoring case. Quotes keep words together: `"two words"`.
 - `lactate > 4` and `hb<8` find values above or below a number.
 - A word found nowhere is matched to the closest word in the patient's data (`sepsys` finds
-  `sepsis`), and the report says so.
+  `sepsis`), and the list says so.
 - The search does not understand negation: `no signs of sepsis` is found by `sepsis`.
 - Notes are searched and shown for users with the PHI permission out of Privacy Mode. In Privacy
   Mode they are searched and shown unless an administrator withholds them (Admin › Privacy Mode,

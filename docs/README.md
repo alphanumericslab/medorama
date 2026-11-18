@@ -106,8 +106,10 @@ For designers and implementers who want the reasoning behind a part.
 
 | Page | What it covers |
 |---|---|
-| [The patient page](design/patient-page.md) | The patient page and its Patient Journey: layout, report and detail, viewers, and the light and dark themes. |
+| [The patient page](design/patient-page.md) | The patient page and its Patient Journey: its four columns, each fact once, an ECG compared with the previous one, viewers, and the light and dark themes. |
+| [The demo](design/demo.md) | The demo as an installation of its own: a demo installation connects demo databases only (marked by a `medorama_demo` table), a site's never one; what a user sees; installations made before 0.3.1; running both on one computer. |
 | [Databases only](design/databases-only.md) | Why and how Medorama connects databases and imports none: the control store, the encrypted workspace and its keys, grants, the patient index, searching by database, cohorts with provenance, and removing a database with every trace. |
+| [Connected databases](design/connected-databases.md) | What Medorama keeps of a connected database (the subject index, with the dates of each person's data, and the catalog) and what it reads live; criteria over millions of rows; replacing a database's views. |
 | [Sources](design/sources.md) | The control store (SQLite or PostgreSQL), connected databases and their canonical views, OMOP, and cohorts across databases. |
 
 ## Images

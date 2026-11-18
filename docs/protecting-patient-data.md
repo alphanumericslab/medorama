@@ -287,7 +287,8 @@ An administrator who prefers to withhold all free text ticks *The text of notes 
 in Admin › Privacy Mode; notes, reports and every other free text (any entry's text longer than
 40 characters or of several lines, a long written value) then appear as `[Withheld]`, on pages,
 in searches (an entry is then found by its name only) and in exports. A short written value (a
-result written `positive`) is still shown, through the gate.
+result written `positive`) is still shown, through the gate. An ECG's statements are free text too: they
+are then withheld, and not compared with the previous ECG's (no **new**, no **no longer**).
 
 A cohort's text criterion, in Privacy Mode (or on a database the user holds without `phi`),
 finds a patient only when the text as the session is shown it holds the words: a note that

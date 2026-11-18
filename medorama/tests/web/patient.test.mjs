@@ -84,3 +84,29 @@ test("a panel tells critical from abnormal by words, not only by colour", () => 
   assert.match(el.innerHTML, /<span class="badge crit">H · critical<\/span>/);
   assert.match(el.innerHTML, /<td class="v bad">5.5<\/td>/);
 });
+
+test("an ECG's detail: each measurement once, with its change and trend; statements new and no longer said", () => {
+  core.st.user = { privacy: false, phi: true };
+  const el = detailEl();
+  const ecg = {
+    previous: T - 3 * 86400,
+    statements: [['Atrial fibrillation', true], ['Prolonged QT', false]],
+    gone: ['Sinus rhythm'],
+    measures: [
+      { name: 'QTc', value: 503, unit: 'ms', change: 25, series: [[T - 3 * 86400, 478], [T, 503]] },
+      { name: 'QRS', value: 104, unit: 'ms', change: 0, series: [[T - 3 * 86400, 104], [T, 104]] },
+      { name: 'R axis', value: -48, unit: '°', change: null, series: [[T, -48]] },
+    ],
+  };
+  renderDetail(el, detail({ key: 'ecg:2:ab', category: 'ecg', title: '12-lead ECG', ecg }), ctx);
+  const h = el.innerHTML;
+  assert.equal(h.match(/QTc/g).length, 1, 'QTc once');
+  assert.match(h, /<b>503<\/b> <i>ms<\/i><span class="chg">▲ 25<\/span>/);
+  assert.match(h, /<span class="chg" title="Unchanged">=<\/span>/);
+  assert.match(h, /<b>-48<\/b> <i>°<\/i>\s*<\/div>/, 'no previous value: no change');
+  assert.equal((h.match(/<svg/g) || []).length, 2, 'a trend where there are two ECGs or more');
+  assert.match(h, /Atrial fibrillation <span class="tag">new<\/span>/);
+  assert.match(h, /Prolonged QT<\/li>/);
+  assert.match(h, /no longer<\/span> Sinus rhythm/);
+  assert.match(h, /change since the ECG of/);
+});

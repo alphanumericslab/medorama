@@ -6,7 +6,7 @@ describes what Medorama protects, against whom, how, and what it leaves to the d
 institution. Each control names the code that implements it and the test that checks it, so
 that every claim can be verified rather than taken on trust.
 
-It describes Medorama 0.3.0 (a pre-release). Medorama is research software, not a medical device,
+It describes Medorama 0.3.1 (a pre-release). Medorama is research software, not a medical device,
 and it holds no certification. To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 
 A plain-language explanation of how identifiers are hidden is
@@ -190,7 +190,7 @@ is specified in [administration.md](administration.md) and [api.md](api.md).
 | Other users of the host | Local accounts | Owner-only home folder, workspace (folders 0700, files 0600) and master key; the internal viewer requires a password only Medorama knows. In proxy mode, local accounts must be trusted ([17](#17-known-limitations-and-residual-risks)) |
 | Lost or stolen storage, a copied workspace | A disk, a backup | The workspace's SQLite files are encrypted per owner; without the master key (kept apart from them) they cannot be read. The recordings' indexes are in each database's encrypted index store. The control store holds no patient data read from a database, and can itself be encrypted (SQLCipher). Plug-ins' output folders are not encrypted: disk encryption is the deployment's responsibility |
 | A removed database's data, later | A disk image or backup taken after the removal | The data key is destroyed first, then the files: a copy of the disk taken afterwards cannot be read. A backup of the control store and the workspace taken before the removal can, until it expires ([8](#8-data-at-rest)) |
-| A connected database returning crafted data | Values meant to break parsing, the page or the gate | Only the canonical columns are read, as values; at most `max_rows` rows per criterion, each query time-limited; everything shown is escaped and passes the gate |
+| A connected database returning crafted data | Values meant to break parsing, the page or the gate | Only the canonical columns are read, as values; at most `max_rows` rows kept per criterion, each query time-limited; everything shown is escaped and passes the gate |
 | A connected database whose identifiers are wrong | Two patients under one identifier, one patient under two | Exact joins only; a person whose identifiers lead to two patients is a conflict, listed and not linked; nothing is merged. Correct identity is the database owner's duty ([17](#17-known-limitations-and-residual-risks)) |
 | Network between Medorama and its databases | Reads or alters traffic | TLS (rustls) with the server's certificate and name verified; required for any server not on the same host unless the URL says `sslmode=disable` |
 
@@ -887,8 +887,13 @@ subjects' rights in the source databases, retention) remain with the institution
     is named (`patient_id_issuer`, `--issuer`, `--mrn-authority`), and that the database's own
     encryption and backups meet policy ([databases.md](databases.md)).
 16. **No demo with real patients:** install without `--demo` (the default), and set Medorama up
-    without `init --demo`. If the demo's databases (`demo`, `demo_omop`) are connected, remove
-    them before real databases are connected ([administration.md](administration.md#the-demo)).
+    without `init --demo`: a site's installation, which refuses every demo database (marked by a
+    `medorama_demo` table). A demo runs only as an installation of its own (its own home,
+    workspace and port), which refuses real databases. Check that `medorama databases list`
+    names no demo database and that no page shows the band "Demo · every patient here is
+    invented". An installation made before 0.3.1 that connects both kinds is refused until the
+    demo's databases are removed ([administration.md](administration.md#the-demo),
+    [design/demo.md](design/demo.md)).
 
 ## 17. Known limitations and residual risks
 

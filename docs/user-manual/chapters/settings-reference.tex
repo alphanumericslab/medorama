@@ -446,7 +446,8 @@ kept sealed by the master key, or read from a password file or from
 \code{files\_root} & every kind & The folder from which a recording's relative \code{file} is
   read. Default: the folder of a SQLite database's file \\
 \code{timeout\_s} & every kind & Each query's time limit, in seconds (PostgreSQL). 0: 60 \\
-\code{max\_rows} & every kind & The rows a criterion may read, and the recordings
+\code{max\_rows} & every kind & The rows a criterion may keep (it reads as many as it needs,
+  testing each as it is read; the persons behind \code{has \dots} are not bounded), and the recordings
   \ui{Index all recordings} reads (not the persons and visits read when connecting). 0:
   1\,000\,000 \\
 \code{persons}, \code{visits}, \code{entries}, \code{recordings}, \code{stays}, \code{version},

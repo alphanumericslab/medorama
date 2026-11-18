@@ -290,7 +290,8 @@ async function search() {
   }
   if (seq !== co.seq) return;
   co.result = r;
-  co.selected = new Set([...co.selected].filter((id) => r.ids.includes(id)));
+  const all = new Set(r.ids);
+  co.selected = new Set([...co.selected].filter((id) => all.has(id)));
   renderResults();
 }
 
@@ -298,7 +299,7 @@ function patientCells(p) {
   const P = phi();
   const name = (P ? [p.phi?.last_name, p.phi?.first_name].filter(Boolean).join(', ') : '') || p.pseudonym;
   const lbl = Object.fromEntries(co.cats);
-  return `<td class="nm"><a href="${esc(href('patient', [String(p.id)]))}">${esc(name)}</a></td><td class="mono">${esc(P && p.patient_id ? p.patient_id : p.pseudonym)}</td><td>${esc(p.sex)}</td>${ages() ? `<td class="num">${p.age ?? ''}</td>` : ''}
+  return `<td class="nm"><a href="${esc(href('patient', [String(p.id)]))}">${esc(name)}</a></td><td class="mono">${esc((P && (p.patient_id || p.phi?.mrns?.[0]?.[1])) || p.pseudonym)}</td><td>${esc(p.sex)}</td>${ages() ? `<td class="num">${p.age ?? ''}</td>` : ''}
     <td><span class="kinds">${p.kinds.map((k) => `<span class="sw ${catClass(k)}" title="${esc(lbl[k] || k)}"></span>`).join('')}</span></td>`;
 }
 
@@ -310,7 +311,15 @@ function renderResults() {
   const left = (r.left_out || []).map((x) => `${x.name} (${x.why})`);
   $('#co-count').innerHTML = `<b>${n}</b> patient${n === 1 ? '' : 's'} match${n === 1 ? 'es' : ''}${r.excluded_total ? ` · ${r.excluded_total} excluded` : ''}${co.selected.size ? ` · ${co.selected.size} ticked` : ''}<span class="small"> · searched ${esc(searched.join(', ') || 'no database')}${left.length ? ` · left out: ${esc(left.join(', '))}` : ''}</span>`;
   const tick = !co.editing;
-  let h = `<table class="list"><tr>${tick ? '<th><input type="checkbox" id="co-all" title="Tick this page"></th>' : ''}<th>Patient</th><th>ID</th><th>Sex</th>${ages() ? '<th class="num">Age</th>' : ''}<th>Data</th><th>Why</th></tr>`;
+  // the page ticked: every match may be ticked, not page by page
+  const pageTicked = tick && r.items.length > 0 && r.items.every((p) => co.selected.has(p.id));
+  let h = '';
+  if (pageTicked && n > r.items.length) {
+    h += co.selected.size === r.ids.length
+      ? `<div class="notice" role="status">All ${n} patients are ticked. <button class="link" id="co-tick-none">Untick all</button></div>`
+      : `<div class="notice" role="status">The ${r.items.length} patients of this page are ticked. <button class="link" id="co-tick-all">Tick all ${n}</button></div>`;
+  }
+  h += `<table class="list"><tr>${tick ? `<th><input type="checkbox" id="co-all" title="Tick this page"${pageTicked ? ' checked' : ''}></th>` : ''}<th>Patient</th><th>ID</th><th>Sex</th>${ages() ? '<th class="num">Age</th>' : ''}<th>Data</th><th>Why</th></tr>`;
   for (const p of r.items) {
     h += `<tr>${tick ? `<td><input type="checkbox" data-pick="${p.id}"${co.selected.has(p.id) ? ' checked' : ''} aria-label="Tick"></td>` : ''}${patientCells(p)}
       <td class="why">${p.reasons.map((x) => `<span>${esc(x)}</span>`).join('')}</td></tr>`;
@@ -892,6 +901,8 @@ export default {
     $('#co-results').addEventListener('click', (e) => {
       if (e.target.id === 'co-prev') { co.offset = Math.max(0, co.offset - PAGE); search().catch(fail); }
       if (e.target.id === 'co-next') { co.offset += PAGE; search().catch(fail); }
+      if (e.target.id === 'co-tick-all') { co.selected = new Set(co.result.ids); renderResults(); $('#co-tick-none')?.focus(); }
+      if (e.target.id === 'co-tick-none') { co.selected = new Set(); renderResults(); $('#co-all')?.focus(); }
     });
     $('#co-save').addEventListener('click', async (e) => {
       try {

@@ -86,6 +86,10 @@ enum Cmd {
         /// The time zone of local times in the inputs.
         #[arg(long, value_name = "TZ", default_value = db::DEFAULT_TIMEZONE)]
         timezone: String,
+        /// Mark it a demo database (invented patients): Medorama connects it to a demo
+        /// installation only, and a site's installation refuses it.
+        #[arg(long)]
+        demo: bool,
     },
     /// Add tables (CSV, Excel, OpenDocument, Parquet; known exports) or CLIF folders.
     Add {
@@ -272,9 +276,17 @@ fn run() -> anyhow::Result<i32> {
     let how = db::Opening::new(cli.encrypt)?;
     match cli.cmd {
         Cmd::Serve(_) => unreachable!(),
-        Cmd::New { out, timezone } => {
-            db::create(&out, &how, &timezone)?;
-            println!("{}: a new database (schema {}, local times in {timezone})", out.display(), db::SCHEMA);
+        Cmd::New { out, timezone, demo } => {
+            let c = db::create(&out, &how, &timezone)?;
+            if demo {
+                db::mark_demo(&c)?;
+            }
+            println!(
+                "{}: a new {}database (schema {}, local times in {timezone})",
+                out.display(),
+                if demo { "demo " } else { "" },
+                db::SCHEMA
+            );
         }
         Cmd::Add { out, inputs, common, format, formats } => {
             let mut opts = options(&common)?;

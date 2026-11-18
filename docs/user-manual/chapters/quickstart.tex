@@ -6,7 +6,8 @@
 
 This chapter takes a first-time user or an administrator from a fresh clone of the repository
 to a running Medorama with invented patients, and then through a short tour: a patient, a
-cohort, a recording and Privacy Mode. It ends by removing the demo. The whole procedure takes
+cohort, a recording and Privacy Mode. It ends by removing the demo. The demo is an installation
+of its own, with its own home folder, workspace and port, apart from any site's installation. The whole procedure takes
 about fifteen minutes, most of which is the build. Deploying Medorama for other people is the
 subject of \cref{chap:administration} and \cref{chap:deployment}.
 
@@ -65,8 +66,10 @@ re-identification by a maintainer-only tool kept outside the repository, and shi
 
 \begin{note}
 The demo is off by default: Medorama starts with no database connected unless the demo was asked
-for. Install it only where Medorama is tried, demonstrated or taught, never on a server meant
-for real patients.
+for. A Medorama installation is either the demo's or a site's, from \cmd{medorama init} on, and
+never both: a demo installation (\cmd{medorama init -{}-demo}) connects demo databases only, and
+a site's installation refuses them. Every demo database says so: it holds a table
+\code{medorama\_demo}. Install the demo only where Medorama is tried, demonstrated or taught.
 \end{note}
 
 \section{Install with the demo}
@@ -106,64 +109,75 @@ that folder in \file{.venv/bin/medorama.demo}, where \cmd{medorama init -{}-demo
 
 Medorama keeps its settings, its \emph{control store} (its own database of users, grants, the
 audit log and the list of connected databases; no patient data) and its master key in a
-\emph{home folder}, by default \file{\textasciitilde/.local/share/medorama} (on Windows
-\file{\%LOCALAPPDATA\%\textbackslash medorama}). It also needs a \emph{workspace}, the folder
-where it keeps what it generates for each connected database and each cohort, encrypted, and the
-recordings' indexes.
+\emph{home folder} (by default \file{\textasciitilde/.local/share/medorama}, on Windows
+\file{\%LOCALAPPDATA\%\textbackslash medorama}; \opt{-{}-home} names another). It also needs a
+\emph{workspace}, the folder where it keeps what it generates for each connected database and
+each cohort, encrypted, and the recordings' indexes.
 
-The following command sets Medorama up with its workspace, and connects the demo's five
-databases:
+The demo runs as an installation of its own, with its own home and workspace. The following
+command sets a demo installation up in \file{\textasciitilde/medorama-demo}, and connects the
+demo's six databases:
 \begin{lstlisting}[style=shell]
-medorama init --workspace ~/medorama-workspace --demo
+medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo
 \end{lstlisting}
 On Windows, the same command in PowerShell is:
 \begin{lstlisting}[language=PowerShell]
-medorama init --workspace $HOME\medorama-workspace --demo
+medorama --home $HOME\medorama-demo init --workspace $HOME\medorama-demo-workspace --demo
 \end{lstlisting}
+The installation is a demo installation for good: it never becomes a site's.
 
 \cmd{init} asks twice for the password of the first user, \code{admin}, who has the PHI
 permission. The password needs at least 10 characters. \cmd{init} then says where each part is
 and connects the demo's databases as that administrator, who is granted each, with the key of
-the encrypted one from its key file; it also adds the demo's example action plug-in:
+the encrypted one from its key file; it also adds the demo's example action plug-in and four
+example cohorts:
 \begin{lstlisting}[style=text]
-Medorama set up in /home/user/.local/share/medorama
-  settings:      /home/user/.local/share/medorama/medorama.toml
+Medorama set up in /home/user/medorama-demo (a demo installation: invented patients only)
+  settings:      /home/user/medorama-demo/medorama.toml
   control store: ... (no patient data)
-  workspace:     /home/user/medorama-workspace (encrypted per database)
-  indexes:       /home/user/medorama-workspace/index
-  master key:    /home/user/.local/share/medorama/master.key
+  workspace:     /home/user/medorama-demo-workspace (encrypted per database, its indexes too)
+  master key:    /home/user/medorama-demo/master.key
                  (keep it, and keep it apart from the workspace's backups)
   admin:         admin (with PHI permission)
-Later commands use this home without --home (remembered in ...).
+Later commands reach this demo installation with --home /home/user/medorama-demo.
 Connected the demo database demo (invented patients); ... recording(s) to index
 Connected the demo database demo_north (invented patients); ... recording(s) to index
 Connected the demo database demo_omop (invented patients)
 Connected the demo database demo_registry (invented patients)
 Connected the demo database demo_muse (invented patients); ... recording(s) to index
 Connected the demo database demo_secure (invented patients)
+Made the demo cohort ICU stays (icu)
+Made the demo cohort Long QTc (demo_muse.QTc > 450 ms)
+Made the demo cohort Women over 65 with an ECG (female AND age > 65 AND has ecg)
+Made the demo cohort Sepsis (dx sepsis)
 \end{lstlisting}
+A demo installation is never the home that commands without \opt{-{}-home} reach: a site's
+installation on the same computer stays the default. Every later command of this chapter
+therefore takes \opt{-{}-home \textasciitilde/medorama-demo}.
 Connecting a database reads no recording; \opt{-{}-demo} then reads every recording of the
 demo's databases, as \cmd{medorama databases index} does, so that \cmd{serve} indexes them all
-(\cref{sec:connecting-kept}). Without \opt{-{}-demo}, Medorama starts with no database connected. The other options of
+(\cref{sec:connecting-kept}). Without \opt{-{}-demo}, \cmd{init} makes a site's installation,
+which starts with no database connected and is remembered as the default home. The other options of
 \cmd{init} (\opt{-{}-home}, \opt{-{}-timezone}, \opt{-{}-port}, a PostgreSQL
 control store) are described in \cref{chap:administration}.
 
 \section{Serve, and sign in}
 \label{sec:quickstart-serve}
 
-The following command starts the server, which serves the web page and the API and indexes the
+The following command starts the demo's server, on a port of its own (8095; a site's
+installation keeps the default, 8090), which serves the web page and the API and indexes the
 demo's recordings in the background:
 \begin{lstlisting}[style=shell]
-medorama serve
+medorama --home ~/medorama-demo serve --port 8095
 \end{lstlisting}
 \cmd{serve} prints the address of the page, the home, the control store and the viewer it
 runs:
 \begin{lstlisting}[style=text]
-Medorama: open http://127.0.0.1:8090/
-  home: /home/user/.local/share/medorama
+Medorama: open http://127.0.0.1:8095/
+  home: /home/user/medorama-demo
   control store: ...
   viewer: rs (started on first use, in the VitalStream tab)
-  workspace: /home/user/medorama-workspace; indexes: /home/user/medorama-workspace/index
+  workspace: /home/user/medorama-demo-workspace; indexes: /home/user/medorama-demo-workspace/index
   ...
 \end{lstlisting}
 The server listens only on this computer (127.0.0.1) by default. To reach it from another
@@ -172,11 +186,13 @@ computer, use an SSH tunnel or an HTTPS reverse proxy (\cref{chap:deployment}).
 
 To sign in:
 \begin{enumerate}
-\item Open \url{http://127.0.0.1:8090} in a browser on the same computer.
+\item Open \url{http://127.0.0.1:8095} in a browser on the same computer.
 \item Type \code{admin} as the \ui{User name}, and the password chosen above.
 \item Click \ui{Sign in}.
 \end{enumerate}
-The page opens on the \ui{Cohorts} tab. The \ui{Databases} tab lists the demo's six databases,
+The page opens on the \ui{Cohorts} tab. A band across the top of every page says ``Demo
+$\cdot$ every patient here is invented: this installation holds no real patient's data'', in
+neutral colours, and the browser tab's title begins with ``Demo''. The \ui{Databases} tab lists the demo's six databases,
 each with a green dot: online (\cref{chap:databases-tab}). The administrator holds the \emph{PHI permission}, the
 right to see identifiers such as names, medical record numbers (MRNs) and dates of birth. For
 administrators, \emph{Privacy Mode} starts off, so the demo's invented names are visible. For
@@ -202,21 +218,24 @@ databases you may view, with the databases and the kinds of data each one has, a
 such as \ui{Doe, Jane} (patient ID \code{P900001}). The patient's page has the following parts (\cref{chap:patients}):
 \begin{itemize}
 \item The \emph{patient bar} at the top shows the name, sex, age and date of birth, the patient
-  ID and pseudonym, the MRN, the span of the data and any allergies.
-\item The patient column on the left lists the visits, each with the database it comes from,
-  the medications of the latest stay and the conditions.
-\item The \emph{Patient Journey} in the middle draws every item on one time line, newest on
+  ID and pseudonym, the MRN, the dates of the first and latest data, and any allergies.
+\item Column 1, on the left, gives the current status: the visits, each with the database it
+  comes from, the medications of the latest stay and the conditions.
+\item Column 2, the \emph{Patient Journey}, draws every item on one time line, newest on
   top, with one column per clinical category (ICU, Vitals, Labs, ECG, Holter, Sleep and so on).
   Hover over a mark to see what it is, and click it to open it.
-\item On the right, the \emph{report} lists every entry by day, newest first, and the
-  \emph{detail} shows the entry chosen.
+\item Column 3, the \emph{report}, says what was done, by day, newest first: one line per thing
+  done, by name only. Column 4, the \emph{detail}, shows everything about the one chosen, its
+  values included. Each fact is shown once on the page.
 \end{itemize}
 
 Try the following on patient \code{P900001}:
 \begin{enumerate}
-\item Click a \emph{12-lead ECG} entry in the report. The detail shows its measurements, the
-  interpretation and the tracing on paper. Its button \ui{Open in ECG} opens it in the \ui{ECG}
-  tab, with layouts, gain and calipers.
+\item Click a \emph{12-lead ECG} line in the report. The detail shows the tracing on paper,
+  the statements (those new since the patient's previous ECG tagged \ui{new}), and each
+  measurement as a tile with its change since the previous ECG and its trend; \ui{$\langle$} and
+  \ui{$\rangle$} step from ECG to ECG (\cref{sec:patients-ecg}). Its button \ui{Open in ECG}
+  opens it in the \ui{ECG} tab, with layouts, gain and calipers.
 \item Type \code{creatinine} in the report's search box. The report keeps the entries that
   mention it, with the words highlighted.
 \item Click an \emph{ICU monitoring} entry. The detail shows the recording's main vital signs
@@ -236,7 +255,9 @@ angiography run, which open in the \ui{PACS} tab.
 \label{sec:quickstart-cohort}
 
 A \emph{cohort} is a named set of patients, found across the connected databases by criteria
-and kept. To build one:
+and kept. The demo comes with four example cohorts: \emph{ICU stays} (\code{icu}), \emph{Long
+QTc} (\code{demo\_muse.QTc > 450 ms}), \emph{Women over 65 with an ECG} (\code{female AND age > 65
+AND has ecg}) and \emph{Sepsis} (\code{dx sepsis}). To build one of your own:
 \begin{enumerate}
 \item Open \ui{Cohorts}. The page opens on a new cohort, with the criteria builder, one empty
   expression line, and \ui{Search in}: a tick for each database.
@@ -312,7 +333,7 @@ A user without the PHI permission always works this way. To see it for yourself,
 from a second terminal, with the environment activated. The following command adds a user with
 the role \code{viewer} and asks for the new user's password:
 \begin{lstlisting}[style=shell]
-medorama user add reader --role viewer
+medorama --home ~/medorama-demo user add reader --role viewer
 \end{lstlisting}
 Then sign in as \code{reader} in a private browser window. \Cref{chap:protecting} explains how
 the privacy gate works, and what it cannot clean (for example, text burned into images).
@@ -324,54 +345,67 @@ and the viewers in its tabs follow the page (\cref{chap:page}).
 \section{Removing the demo}
 \label{sec:quickstart-remove}
 
-The demo is removed as any database is: by removing its databases. An administrator who
-manages them (here \code{admin}, who connected them) does it on the \ui{Databases} tab:
-\begin{enumerate}
-\item Open the database \code{demo}.
-\item Click \ui{Remove\dots}, and type its name, \code{demo}, to confirm.
-\item Do the same for \code{demo\_north}, \code{demo\_omop}, \code{demo\_registry},
-  \code{demo\_muse} and \code{demo\_secure}.
-\end{enumerate}
-Removing a database leaves no trace of it in Medorama (\cref{sec:administration-removing}): its
-key is destroyed, its workspace folder is deleted, every cohort row it contributed to is deleted,
-and the patients that no database links any more are deleted with their pseudonyms. The
-databases themselves (\file{demo.sqlite}, \file{omop.sqlite} and the others) and the demo's files are not
-touched.
+A demo installation never becomes a site's. To be rid of the demo, stop its server
+(\key{Ctrl}+\key{C}) and delete its home folder and its workspace:
+\begin{lstlisting}[style=shell]
+rm -rf ~/medorama-demo ~/medorama-demo-workspace
+\end{lstlisting}
+The demo's databases themselves (\file{demo.sqlite}, \file{omop.sqlite} and the others, in
+\file{.venv/share/medorama/demo}) and its files are not touched. Real data go into a site's
+installation, set up apart, without \opt{-{}-demo} (\cref{chap:administration}):
+\begin{lstlisting}[style=shell]
+medorama init --workspace ~/medorama-workspace     # a site's installation
+medorama serve                                     # port 8090
+\end{lstlisting}
+A site's installation refuses every demo database, and a demo installation every database that is
+not the demo's; each refusal says what to do.
 
-The same can be done from the command line; each command asks first, unless \opt{-{}-yes} is
-given:
+\paragraph{A Medorama set up before 0.3.1.} A control store made before 0.3.1 has no mode. At its
+first command, Medorama decides it by what it connects: demo databases only, the demo's;
+otherwise a site's. A database is a demo database by its marker, or, for a demo made before 0.3.1,
+by being a file under \file{\dots/share/medorama/demo/}. A store that connects both kinds is
+refused until the databases of one kind are removed, the demo's named in the message. An
+administrator who manages them removes them on the \ui{Databases} tab (\ui{Remove\dots}, then
+type the database's name) or from the command line, each command asking first unless
+\opt{-{}-yes} is given:
 \begin{lstlisting}[style=shell]
 for d in demo demo_north demo_omop demo_registry demo_muse demo_secure; do
     medorama databases remove $d
 done
 \end{lstlisting}
-Each removal is recorded in the audit log (\code{remove}).
+Removing a database leaves no trace of it in Medorama (\cref{sec:administration-removing}): its
+key is destroyed, its workspace folder is deleted, every cohort row it contributed to is deleted,
+and the patients that no database links any more are deleted with their pseudonyms. Each removal
+is recorded in the audit log (\code{remove}). The demo is then made as its own installation
+(\cref{sec:quickstart-init}).
 
-\section{Connecting the demo later}
+\section{Connecting the demo by hand}
 \label{sec:quickstart-later}
 
-To connect the installer's demo to a Medorama set up without \opt{-{}-demo}, or after removing
-it, connect its databases as any other (\cref{sec:connecting-cli}), as its
-\file{demo-databases.json} describes them:
+\cmd{init -{}-demo} connects the databases of the demo the installer made. To connect a demo
+folder of your own, or the demo's databases again after removing them, connect them to a demo
+installation as any other database (\cref{sec:connecting-cli}), as its
+\file{demo-databases.json} describes them; a site's installation refuses them:
 \begin{lstlisting}[style=shell]
-medorama databases connect demo --kind dbb \
-    --url sqlite:$PWD/.venv/share/medorama/demo/demo.sqlite
+H="--home $HOME/medorama-demo"
 D=$PWD/.venv/share/medorama/demo
-medorama databases connect demo_north --kind dbb --url sqlite:$D/north/north.sqlite
-medorama databases connect demo_omop --kind omop --mrn-authority DEMO \
+medorama $H databases connect demo --kind dbb --url sqlite:$D/demo.sqlite
+medorama $H databases connect demo_north --kind dbb --url sqlite:$D/north/north.sqlite
+medorama $H databases connect demo_omop --kind omop --mrn-authority DEMO \
     --url sqlite:$D/omop/omop.sqlite
-medorama databases connect demo_registry --kind views --mrn-authority DEMO \
+medorama $H databases connect demo_registry --kind views --mrn-authority DEMO \
     --url sqlite:$D/registry/registry.sqlite --views $D/registry/views.toml
-medorama databases connect demo_muse --kind views --mrn-authority DEMO \
+medorama $H databases connect demo_muse --kind views --mrn-authority DEMO \
     --url sqlite:$D/muse/ecg_metadata.sqlite --views $D/muse/views.toml
-medorama databases connect demo_secure --kind dbb --password-stdin \
+medorama $H databases connect demo_secure --kind dbb --password-stdin \
     --url sqlite:$D/secure/secure.sqlite < $D/keys/demo_secure.key
-for d in demo demo_north demo_muse; do medorama databases index $d; done
+for d in demo demo_north demo_muse; do medorama $H databases index $d; done
 \end{lstlisting}
 The last line reads the demo's recordings now, as \cmd{init -{}-demo} does; without it, each
 patient's recordings are read, and indexed, when the patient is opened. If \code{data\_roots} is set, the demo's folder must be inside one of them. A demo folder of
 your own is made with \cmd{tools/make-demo-data.py DIR -{}-db-builder .venv/bin/db-builder},
-as the installer does (\cref{sec:installation-demo}).
+as the installer does (\cref{sec:installation-demo}); its databases hold the
+\code{medorama\_demo} table.
 
 \file{tools/make-demo-data.py} needs NumPy and wfdb-x in \file{.venv}. Without the Python viewer
 there, the following command adds them first:
@@ -382,8 +416,8 @@ there, the following command adds them first:
 Type it as one line, without the backslash and the line break.
 
 Running the installer again without \opt{-{}-demo} removes \file{.venv/bin/medorama.demo}, so
-that \cmd{init -{}-demo} has nothing to connect. A Medorama that connected the demo keeps it
-until its databases are removed.
+that \cmd{init -{}-demo} has nothing to connect. A demo installation that connected the demo
+keeps it.
 
 \section{Next}
 \label{sec:quickstart-next}

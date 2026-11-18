@@ -42,7 +42,7 @@ async function load() {
     const kinds = r.kinds.map((k) => esc(labels[k] || k)).join(' · ');
     const dbs = (r.sources || []).map((n) => `<span class="pill">${esc(n)}</span>`).join(' ');
     const to = esc(href('patient', [String(r.id)]));
-    html += `<tr data-href="${to}"><td class="nm"><a href="${to}">${esc(name)}</a></td><td class="mono">${esc(p && r.patient_id ? r.patient_id : r.pseudonym)}</td>${p ? `<td class="mono">${esc(mrn)}</td>` : ''}
+    html += `<tr data-href="${to}"><td class="nm"><a href="${to}">${esc(name)}</a></td><td class="mono">${p ? (r.patient_id ? esc(r.patient_id) : '<span class="faint">—</span>') : esc(r.pseudonym)}</td>${p ? `<td class="mono">${esc(mrn)}</td>` : ''}
       <td>${esc(r.sex)}</td>${ages() ? `<td class="num">${esc(r.age ?? '')}</td>` : ''}${p ? `<td>${esc(r.phi?.birth_date || '')}</td>` : ''}<td class="num">${r.encounters}</td>
       <td>${r.latest ? fmtDate(r.latest) : '<span class="faint">—</span>'}</td><td>${dbs}</td><td><span class="kinds">${kinds}</span></td><td class="num">${r.items ?? '<span class="faint">—</span>'}</td></tr>`;
   }

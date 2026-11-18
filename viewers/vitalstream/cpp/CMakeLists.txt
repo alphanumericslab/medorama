@@ -22,7 +22,7 @@ if(APPLE AND NOT CMAKE_OSX_SYSROOT AND NOT DEFINED ENV{SDKROOT})
     set(CMAKE_OSX_SYSROOT "${_vs_sdk}" CACHE PATH "macOS SDK")
   endif()
 endif()
-project(vitalstream_cpp VERSION 0.3.0 DESCRIPTION "VitalStream (C++)" LANGUAGES C CXX)
+project(vitalstream_cpp VERSION 0.3.1 DESCRIPTION "VitalStream (C++)" LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

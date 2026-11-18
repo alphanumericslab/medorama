@@ -219,10 +219,12 @@ step "Done"
 echo "Installed in .venv/bin: $COMMANDS"
 echo "Next, in each new terminal:  source .venv/bin/activate"
 if [ "$DEMO" = 1 ]; then
-  echo "  medorama init --workspace DIR --demo   (once; docs/administration.md): it connects the demo's databases"
-else
-  echo "  medorama init --workspace DIR    (once; docs/administration.md)"
-  echo "  medorama databases connect NAME --kind KIND --url URL"
+  echo "  The demo is an installation of its own (invented patients only; never a site's databases):"
+  echo "  medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo"
+  echo "  medorama --home ~/medorama-demo serve --port 8095   (http://127.0.0.1:8095)"
+  echo "  A site's installation, apart from it (its own home, workspace and port):"
 fi
+echo "  medorama init --workspace DIR    (once; docs/administration.md)"
+echo "  medorama databases connect NAME --kind KIND --url URL"
 echo "  medorama serve                   (http://127.0.0.1:8090)"
 echo "Licensed formats: medorama addons install PROGRAM   (docs/adapters.md)"

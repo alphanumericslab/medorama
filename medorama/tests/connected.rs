@@ -5,6 +5,7 @@
 
 mod common;
 use common::{wfdb_record, Dbb, Setup};
+use medorama::cohorts::{Criteria, Criterion, Expr};
 
 /// A hospital's database: Ann (one ICU encounter, a lab result, a recording), Bob (a lab result).
 fn hospital(s: &Setup) -> Dbb {
@@ -164,4 +165,46 @@ fn the_patient_list_asks_the_databases_for_what_its_page_shows() {
     let (total, rows) = medorama::patient::list(&c, &s.cfg, &boss, "", &[], 50, 0).unwrap();
     assert_eq!(total, 2);
     assert!(rows.iter().all(|r| r.items.is_none()));
+}
+
+#[test]
+fn a_criterion_reads_more_rows_than_it_keeps() {
+    // every row read and tested, only those that hold kept: `max_rows` (here 1) bounds no read
+    let s = Setup::new();
+    let a = hospital(&s);
+    a.entry("ea0", "a1", "", "lab", "2023-06-01 09:00", "Lactate", Some(9.0), "mmol/L");
+    let n = medorama::sources::NewSource {
+        name: "hospa".into(),
+        kind: "dbb".into(),
+        url: a.url(),
+        settings: medorama::sources::Settings { max_rows: 1, ..Default::default() },
+        ..Default::default()
+    };
+    let c = s.db.get().unwrap();
+    let boss = s.user("boss");
+    let id = medorama::databases::connect(&s.cfg, &c, &boss, &n, "").unwrap();
+    let known = medorama::persons::known(&s.cfg, &c, id, &["a1".into(), "a2".into()]).unwrap();
+    let (ann, bob) = (known["a1"], known["a2"]);
+    let one = |k: Criterion| {
+        let q = Criteria { include: Some(Expr::Leaf(k)), ..Default::default() };
+        let mut found: Vec<i64> =
+            medorama::cohorts::evaluate(&c, &s.cfg, &boss, &q, None).unwrap().into_keys().collect();
+        found.sort();
+        found
+    };
+    let lactate = |cmp: &str, v: f64, latest: bool| Criterion {
+        kind: "measurement".into(),
+        name: "Lactate".into(),
+        cmp: cmp.into(),
+        value: Some(v),
+        latest,
+        ..Default::default()
+    };
+    let mut both = vec![ann, bob];
+    both.sort();
+    assert_eq!(one(lactate(">", 1.0, false)), both, "three rows read");
+    assert_eq!(one(lactate(">", 5.0, false)), [ann], "Ann's earlier 9.0");
+    assert!(one(lactate(">", 5.0, true)).is_empty(), "Ann's latest is 4.5");
+    assert_eq!(one(lactate(">", 4.0, true)), [ann]);
+    assert_eq!(one(Criterion { kind: "has".into(), category: "lab".into(), ..Default::default() }), both);
 }

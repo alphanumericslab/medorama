@@ -9,7 +9,8 @@ This chapter describes how to find a patient and read everything known about the
 written for clinicians, researchers and data managers. The \ui{Patient Catalog} tab lists the
 patients of the databases that the user may view. A click on a patient opens the patient's page,
 which shows on one time line everything those databases hold about the patient: who they are,
-their visits, the Patient Journey, a report of every entry and the detail of the entry chosen.
+their visits, the Patient Journey, what was done for them, and the detail of the one thing
+chosen.
 Medorama reads these data from the connected databases when the page opens, and keeps no copy of
 them; how databases are connected is the subject of \cref{part:data}.
 
@@ -48,21 +49,25 @@ Recording & A file that a recording database names, with its patient and its tim
 \label{sec:patients-catalog}
 
 \screenshot{patients.png}{The Patient Catalog: the patients of the databases the user may view,
-latest encounter first, with the kinds of data each has.}{fig:patients-catalog}
+latest first, with the kinds of data each has.}{fig:patients-catalog}
 
 The list shows the patients of every database that the user is granted \code{view} on
-(\cref{sec:users-privacy-grants}), the one with the latest encounter first, a hundred to a page
+(\cref{sec:users-privacy-grants}), the one with the latest encounter or data first (the dates
+of a person's first and latest data, when a database's persons view gives them, sort a database
+without visits, such as an ECG archive, newest first; \cref{sec:connecting-views}), a hundred to a page
 (\ui{$\langle$ Previous}, \ui{Next $\rangle$}). It is drawn from what Medorama keeps of each
 database's persons and their encounters in the workspace, so it lists the same patients whether
 a database is online or offline. Its columns are the following:
 \begin{itemize}
 \item \ui{Patient}: the name\phimark{} for users who may see it, otherwise the pseudonym;
 \item \ui{Patient ID}, \ui{MRN}\phimark{} and \ui{Born}\phimark{} for users who may see
-  identifiers, otherwise \ui{Pseudonym};
+  identifiers, otherwise \ui{Pseudonym}. \ui{Patient ID} shows the patient ID only, and a faint
+  dash for a patient without one: the MRN has its own column;
 \item \ui{Sex}, and \ui{Age} for users with the PHI permission or in Privacy Mode (in Privacy
   Mode, ages above 89 are shown as \code{90+});
 \item \ui{Visits} (their number in every database), \ui{Latest} (the latest time of the
-  patient's encounters, or of their data in an online database), \ui{Databases} (the databases
+  patient's encounters, or of their data: kept from a persons view's \code{latest}, or read
+  from an online database), \ui{Databases} (the databases
   that link the patient), \ui{Data} (the categories of data the patient has) and \ui{Entries}.
 \end{itemize}
 The patients, their identity and their encounters come from the workspace. The \ui{Data} and
@@ -113,26 +118,31 @@ patient again.
 \label{sec:patients-page}
 
 \screenshot{patient.png}{A patient's page: the patient bar, the visits and conditions, the
-Patient Journey, the report and the detail of an ECG.}{fig:patients-page}
+Patient Journey, what was done and the detail of an ECG.}{fig:patients-page}
 
-From left to right, the page shows who the patient is, what happened (as a picture), and what
-it was (as text). It is read from every database that links the patient and that the user may
-view, when the page opens. It has the following parts:
+From left to right, in four columns, the page shows the patient's current status, where and when
+their data are (as a picture), what was done for them (by name), and the one thing done chosen,
+in full. It is read from every database that links the patient and that the user may view, when
+the page opens. Each fact is shown once on the page: a value in the detail only, the number of
+visits in the visits column only. It has the following parts:
 \begin{itemize}
 \item the \textbf{search line}, across the page, which shows the patient as a chip ($\times$
   closes the page and returns to the Patient Catalog) and searches for another patient, with
   suggestions as you type (\key{$\uparrow$} \key{$\downarrow$} to choose, \key{Enter} to open,
   \key{Esc} to close);
 \item the \textbf{patient bar}, across the page (\cref{sec:patients-bar});
-\item the \textbf{patient column}, on the left: visits, medications, conditions
-  (\cref{sec:patients-column});
-\item the \textbf{Patient Journey}, in the middle (\cref{sec:patients-journey});
-\item the \textbf{report} and the \textbf{detail}, on the right (\cref{sec:patients-report},
-  \cref{sec:patients-detail}).
+\item column 1, the \textbf{patient column} (320 pixels wide): the current status, that is
+  the visits, the medications of the latest stay and the conditions (\cref{sec:patients-column});
+\item column 2, the \textbf{Patient Journey} (330 pixels wide; \cref{sec:patients-journey});
+\item column 3, \textbf{what was done}, the report: one line per thing done, by name only
+  (\cref{sec:patients-report});
+\item column 4, the \textbf{detail}: everything about the thing done chosen in column 3 or the
+  journey (\cref{sec:patients-detail}).
 \end{itemize}
-In a window narrower than 1100 pixels (a tablet), the report goes below the patient column and
-the journey, and the page scrolls: the journey keeps at least 320 pixels of height and the
-report at least 420.
+Conditions and medications appear twice, as two facts: in column 1 as the current status, and
+in column 3 as their history, on their dates. In a window narrower than 1100 pixels (a tablet),
+the report goes below the patient column and the journey, and the page scrolls: the journey
+keeps at least 320 pixels of height and the report at least 420.
 
 The page's address holds the entry chosen, the visit shown, and the report's search and mode,
 so that the browser's Back and Forward buttons, reloading and sharing the address keep them.
@@ -149,7 +159,8 @@ The patient bar shows the following:
   Mode, ages above 89 are shown as \code{90+});
 \item the patient ID and the pseudonym (in Privacy Mode, the pseudonym alone);
 \item the MRNs\phimark, with their issuing authority;
-\item the span of the data, from first to last, and the number of visits;
+\item the dates of the patient's first and latest data (the number of visits is the patient
+  column's);
 \item the databases that link the patient;
 \item the allergies, in amber with a warning triangle (\ui{$\blacktriangle$}). The bar says ``No allergy recorded'' when a
   database holds allergies but none for the patient, and ``Allergies: not recorded'' when no
@@ -298,7 +309,7 @@ A Labs entry that is a vital sign, by its LOINC code or by its name (such as \co
 \item \textbf{Hover} over a mark to see what it is: the category, the test, how many items,
   whether they are abnormal or critical, and when.
 \item \textbf{Click} a mark to open its entry in the report and the detail. For a cell, this is
-  the newest entry of that column in that time. A click on an visit's band shows only that
+  the newest thing done of that column in that time. An ECG with its measurements counts once. A click on an visit's band shows only that
   visit.
 \item \textbf{Click a column's name} to hide that category from the journey and the report. Its
   name is then struck through, and a second click shows it again. The names are buttons:
@@ -316,19 +327,24 @@ A Labs entry that is a vital sign, by its LOINC code or by its name (such as \co
 \section{The report}
 \label{sec:patients-report}
 
-The report lists the patient's entries, newest first, in one of three modes:
+The report, column 3 of the page, says what was done for the patient: one line per thing done,
+newest first, in one of three modes:
 \begin{description}
-\item[\ui{Timeline}] The entries by day, under each day's date. The laboratory results taken at
-  one moment form one panel, and the vital signs form one entry per day (the day in Medorama's
-  time zone).
+\item[\ui{Timeline}] The lines by day, under each day's date. The laboratory results taken at
+  one moment form one panel, the vital signs one line per day (the day in Medorama's time zone),
+  and an ECG with its measurements one line.
 \item[\ui{By category}] The entries grouped by category, in the journey's order.
 \item[\ui{Trends}] Every measurement as a small chart (a sparkline), with its number of values,
   its last value and whether it is abnormal or critical. A click opens the entry of that value.
   A series is kept per name and unit: values in mg/dL and in mmol/L are two lines, not one.
 \end{description}
-Each entry shows its time, its category's color, its title, the number of abnormal values, a
-summary, and an arrow when it opens a viewer or a file. A click (or \key{Enter}) chooses the
-entry: the detail shows it, and the journey marks it.
+Each line shows its time, its category's color, its name, and an arrow when it opens a viewer
+or a file: never a value or a flag (abnormal, high). The values are the detail's, and whether one
+is abnormal is shown there, with the range it is judged by. A laboratory panel is named by its
+tests (\code{Lactate, Sodium, Potassium}; past three, the first three and \code{+N more}), a day
+of vital signs by its number of readings (\code{Vital signs $\cdot$ 24 readings}), an ECG by its name
+(\code{12-lead ECG}), and a condition with its code. A click (or \key{Enter}) chooses the line:
+the detail shows it, and the journey marks it.
 
 \subsection{Searching a patient}
 \label{sec:patients-search}
@@ -390,6 +406,7 @@ Below the heading, the detail shows, depending on the entry:
   \ui{Flag}, \ui{Author}; in Privacy Mode the author is \code{[Staff Name]}), and its text (a
   note, a report);
 \item \textbf{a visit}: its database and unit, as \ui{Visit} or \ui{Intensive-care stay};
+\item \textbf{an ECG} (\cref{sec:patients-ecg});
 \item \textbf{a recording's file} that a viewer shows (an ECG, an echo loop, an image, a DICOM
   study, a PDF):
   \begin{itemize}
@@ -406,6 +423,28 @@ Below the heading, the detail shows, depending on the entry:
 \item \textbf{the notes written around that time} in the same visit. The first one is open and
   the others open with a click; a second click opens the note as the entry.
 \end{itemize}
+
+\subsection{An ECG}
+\label{sec:patients-ecg}
+
+An ECG is one thing done: a database's ECG entries at one time, that is the ECG (with its file
+and its statements) and each of its measurements. Its detail shows, in this order:
+\begin{itemize}
+\item \textbf{its drawing}, by the ECG viewer, of its file;
+\item \textbf{its statements}, one a line. Those that the patient's previous ECG did not say are
+  tagged \ui{new}, and the previous ECG's statements that this one no longer says follow on one
+  line, tagged \ui{no longer}. They are compared as written: a statement reworded is new;
+\item \textbf{its measurements}, each once, as a tile: its value and unit; its change since the
+  previous ECG (\ui{$\blacktriangle$\,25}, \ui{$\blacktriangledown$\,3}, or \ui{=} unchanged; none when the previous ECG has
+  no such value), in neutral colours, as a change is neither good nor bad here; and a small chart
+  of its trend over the patient's ECGs, this one marked. The date of the previous ECG is said
+  once, above the tiles (``change since the ECG of \dots''), or ``the first ECG of this patient''.
+\end{itemize}
+The previous ECG is the patient's latest ECG before this one, from any database; \ui{$\langle$}
+and \ui{$\rangle$} step from ECG to ECG. An ECG's statements are free text: in Privacy Mode,
+when an administrator withholds the text of notes, they are withheld too
+(\cref{sec:protecting-notes}), and nothing is then compared.
+Everything compared is on the page already: nothing more is read from the databases for it.
 
 \section{Recordings on the page}
 \label{sec:patients-recordings}

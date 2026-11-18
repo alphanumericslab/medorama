@@ -606,9 +606,10 @@ S0004,E0010,2024-03-05 22:30,Polysomnography,sleep,sleep/S0004_psg_20240305.edf
 ```
 
 `tools/make-demo-data.py` writes a complete synthetic set of such tables and files; the
-installers' `--demo` option builds it into a db-builder database with `--issuer DEMO
---mrn-authority DEMO`, and Medorama connects it as `demo`
-([administration.md](administration.md)).
+installers' `--demo` option builds it into a db-builder database made with `db-builder new
+--demo` (marked a demo database) and added to with `--issuer DEMO --mrn-authority DEMO`, and a
+demo installation (`medorama init --demo`) connects it as `demo`
+([administration.md, The demo](administration.md#the-demo)).
 
 ## Building and connecting
 

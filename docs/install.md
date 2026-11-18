@@ -37,15 +37,17 @@ computer, even on the website.
 
 The installer builds Medorama, db-builder, one VitalStream waveform viewer (here the Rust
 viewer, built with the same tools as Medorama) and the database tools into a `.venv` folder inside the
-clone. `--demo` also makes two small databases of invented patients for trying it; leave it out
-for a Medorama that starts with no database, ready for real data. The first build takes a few
+clone. `--demo` also makes the demo, six databases of invented patients, for trying it; leave it
+out for a Medorama that starts with no database, ready for real data. The first build takes a few
 minutes: it compiles SQLCipher and OpenSSL, which needs a C compiler and Perl.
 
 Medorama imports nothing: it connects databases and reads them in place. After the installation
 come three steps:
 1. `medorama init --workspace DIR` (once) sets Medorama up: its settings, its control store, its
    master key, the first administrator, and the workspace where it keeps what it generates,
-   encrypted. With `--demo`, it also connects the demo's databases.
+   encrypted. With `--demo`, it makes a *demo installation* instead, which connects the demo's
+   databases and only demo databases; run it with its own `--home`, workspace and port, apart
+   from a site's installation ([design/demo.md](design/demo.md)).
 2. `medorama databases connect …` (or, in the page, Databases › **Connect a database**) connects
    each database: an OMOP database, any SQL database through views, or a SQLite file made by
    **db-builder** from tables, exports (GE MUSE, CLIF) and folders of recordings
@@ -61,8 +63,8 @@ sudo apt install git python3 python3-venv build-essential perl   # once: Git, Py
 git clone https://github.com/alphanumericslab/medorama.git && cd medorama
 tools/install-medorama.sh --viewer rs --demo                 # Medorama, db-builder, the Rust viewer and the demo
 source .venv/bin/activate                                    # in every new terminal
-medorama init --workspace ~/medorama-workspace --demo        # once: asks for the admin password; connects the demo
-medorama serve                                               # then open http://127.0.0.1:8090 and sign in as admin
+medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo   # once: asks for the admin password; a demo installation
+medorama --home ~/medorama-demo serve --port 8095            # then open http://127.0.0.1:8095 and sign in as admin
 ```
 
 ### macOS
@@ -72,8 +74,8 @@ xcode-select --install                                       # once: Git, Python
 git clone https://github.com/alphanumericslab/medorama.git && cd medorama
 tools/install-medorama.sh --viewer rs --demo
 source .venv/bin/activate                                    # in every new terminal
-medorama init --workspace ~/medorama-workspace --demo
-medorama serve                                               # then open http://127.0.0.1:8090
+medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo
+medorama --home ~/medorama-demo serve --port 8095            # then open http://127.0.0.1:8095
 ```
 
 ### Windows 10 and 11
@@ -94,8 +96,8 @@ Then:
 git clone https://github.com/alphanumericslab/medorama.git; cd medorama
 powershell -ExecutionPolicy Bypass -File tools\install-medorama.ps1 -Viewer rs -Demo
 .venv\Scripts\Activate.ps1                                   # in every new PowerShell window
-medorama init --workspace $HOME\medorama-workspace --demo
-medorama serve                                               # then open http://127.0.0.1:8090
+medorama --home $HOME\medorama-demo init --workspace $HOME\medorama-demo-workspace --demo
+medorama --home $HOME\medorama-demo serve --port 8095        # then open http://127.0.0.1:8095
 ```
 
 If PowerShell answers "running scripts is disabled on this system" for `Activate.ps1`, run
@@ -103,10 +105,13 @@ If PowerShell answers "running scripts is disabled on this system" for `Activate
 
 ### Your own databases
 
-Without `--demo`, Medorama starts with no database. Connect one as an administrator, from the
-page (Databases › **Connect a database**) or from the command line, for example:
+Real databases go into a site's installation, set up without `--demo`; a demo installation
+refuses them, and a site's installation refuses the demo's. It starts with no database. Set it
+up, then connect one as an administrator, from the page (Databases › **Connect a database**) or
+from the command line, for example:
 
 ```bash
+medorama init --workspace ~/medorama-workspace              # once: a site's installation, the default home
 medorama databases connect omop --kind omop --url "postgres://reader@omop.example.org/cdm?sslmode=require" \
     --password-file ~/.omop-password --mrn-authority HOSP
 db-builder add ~/study.sqlite patients.csv labs.xlsx --issuer HOSP --mrn-authority HOSP   # tables made into a database
@@ -121,7 +126,7 @@ option, and [databases.md](databases.md) what a database must provide.
 | Linux and macOS | Windows | Effect |
 |---|---|---|
 | `--viewer cpp` (the default), `rs`, `py`, `none` | `-Viewer` | The waveform viewer to build with Medorama. The C++ viewer also needs a C++20 compiler (`g++` on Linux; the Command Line Tools on macOS; the Build Tools above on Windows). |
-| `--demo` | `-Demo` | Makes the demo's databases of invented patients, which `medorama init --demo` connects ([Get started](getting-started.md) tours them and shows how to remove them). |
+| `--demo` | `-Demo` | Makes the demo's databases of invented patients, which `medorama init --demo` connects in a demo installation of its own ([Get started](getting-started.md) tours them and shows how to remove them). |
 | `--no-tools` | `-NoTools` | Leaves out the database tools `muse-py` and `dicom-py`. |
 | `--no-wfdb` | `-NoWfdb` | Builds without WFDB support, with no wfdb-x code ([Without WFDB](building.md#without-wfdb)); not with the demo. |
 | `--accept-license` | `-AcceptLicense` | Accepts the license terms without asking (scripts, CI). |

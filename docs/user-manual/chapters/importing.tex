@@ -91,10 +91,12 @@ db-builder} builds it on its own (\file{target/release/db-builder}).
 \toprule
 {\tabhead Command} & {\tabhead What it does} \\
 \midrule
-\cmd{db-builder new OUT [-{}-timezone TZ]} & Makes an empty database. \opt{-{}-timezone}
+\cmd{db-builder new OUT [-{}-timezone TZ] [-{}-demo]} & Makes an empty database. \opt{-{}-timezone}
   (default \code{America/New\_York}) is the time zone of the local times in the inputs; a
-  database has one. \cmd{add} and \cmd{recordings} make the database too when it does not exist
-  yet. \\
+  database has one. \opt{-{}-demo} marks it a demo database (invented patients, a table
+  \code{medorama\_demo}): only a demo installation of Medorama connects it
+  (\cref{sec:administration-demo}). \cmd{add} and \cmd{recordings} make the database too when it
+  does not exist yet. \\
 \cmd{db-builder add OUT INPUT...} & Adds tables, known exports and CLIF folders
   (\cref{sec:importing-cli}). \\
 \cmd{db-builder recordings OUT FOLDER} & Adds a folder of recordings, with their patients from a
@@ -840,12 +842,15 @@ P900004,E9100010,2024-03-05 22:30,Polysomnography,sleep,../sleep/P900004_psg_202
 installers' \opt{-{}-demo} option then builds them into \file{<demo>/demo.sqlite}, as a site
 would:
 \begin{lstlisting}[style=shell]
-db-builder new demo/demo.sqlite --timezone America/New_York
+db-builder new demo/demo.sqlite --timezone America/New_York --demo
 db-builder add demo/demo.sqlite demo/databases/patients.csv demo/databases/encounters.xlsx \
     demo/databases/*.csv --issuer DEMO --mrn-authority DEMO
 \end{lstlisting}
-\cmd{medorama init -{}-workspace DIR -{}-demo} then connects it as the database \code{demo}, beside
-the demo's OMOP database (\cref{chap:quickstart}).
+Its \opt{-{}-demo} marks it a demo database (invented patients), with a table
+\code{medorama\_demo}: only a demo installation connects it, and a site's refuses it
+(\cref{sec:administration-demo}). \cmd{medorama init -{}-workspace DIR -{}-demo} then makes a
+demo installation and connects it as the database \code{demo}, with the demo's other
+databases (\cref{chap:quickstart}).
 
 \section{After a build}
 \label{sec:importing-after}

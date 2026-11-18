@@ -19,8 +19,6 @@ pub(super) struct It {
     pub(super) text: String,
     pub(super) unit: String,
     pub(super) level: u8,
-    /// Below its range (else above, when abnormal).
-    pub(super) flag_low: bool,
     pub(super) author: String,
     pub(super) service: String,
     /// Its file: the recording (its number) whose key is the entry's followed by `:file`.
@@ -33,6 +31,9 @@ pub(super) struct It {
     /// Its calendar day in Medorama's time zone (days since 1970-01-01 there): a day's vital
     /// signs are one report entry, the day the page shows.
     pub(super) day: Option<i64>,
+    /// The ECG it belongs to (`ecg:<database>:<token>`): an ECG and its measurements, read from
+    /// one database at one time, are one report entry ([`group_ecgs`]).
+    pub(super) ecg: Option<String>,
 }
 
 /// Where an entry comes from, and its token (its key never leaves the server).
@@ -172,8 +173,6 @@ pub(super) fn load(cfg: &Config, c: &Connection, user: &User, patient: i64) -> a
                 patient,
                 encounter: visit_of.get(&e.visit).copied(),
                 level: level(&e.flag, e.value_num, e.ref_low, e.ref_high),
-                flag_low: e.flag.trim().to_lowercase().starts_with('l')
-                    || matches!((e.value_num, e.ref_low), (Some(v), Some(l)) if v < l),
                 category: e.category.clone(),
                 name: e.name,
                 code: e.code,
@@ -191,6 +190,7 @@ pub(super) fn load(cfg: &Config, c: &Connection, user: &User, patient: i64) -> a
                 vocabulary: e.vocabulary,
                 live: Some(Live { connection: db, source: s.name.clone(), token: token(&secret, db, &e.key) }),
                 day: e.time.map(|t| day_in(t, shown)),
+                ecg: None,
             };
             d.attached.extend(it.file);
             if e.category == "allergy" {
@@ -204,10 +204,46 @@ pub(super) fn load(cfg: &Config, c: &Connection, user: &User, patient: i64) -> a
             d.recordings.push(r);
         }
     }
+    group_ecgs(&mut d.items);
     d.items.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
     d.visits.sort_by(|a, b| b.admit.partial_cmp(&a.admit).unwrap_or(std::cmp::Ordering::Equal));
     d.recordings.sort_by(|a, b| a.t_start.partial_cmp(&b.t_start).unwrap_or(std::cmp::Ordering::Equal));
     Ok(d)
+}
+
+/// Each ECG with its measurements, as one: a database's ECG entries at one time (an ECG
+/// database gives the ECG, with its file and statements, and each measurement as an entry of
+/// its own) are named by the ECG's token, the entry with a file else without a number.
+fn group_ecgs(items: &mut [It]) {
+    let mut at: BTreeMap<(i64, u64), Vec<usize>> = BTreeMap::new();
+    for (n, it) in items.iter().enumerate() {
+        if let (true, Some(t), Some(l)) = (it.category == "ecg", it.time, &it.live) {
+            at.entry((l.connection, t.to_bits())).or_default().push(n);
+        }
+    }
+    for ((db, _), ns) in at {
+        let head = ns
+            .iter()
+            .copied()
+            .find(|n| items[*n].file.is_some())
+            .or_else(|| ns.iter().copied().find(|n| items[*n].num.is_none()))
+            .unwrap_or(ns[0]);
+        let token = items[head].live.as_ref().map(|l| l.token.clone()).unwrap_or_default();
+        for n in ns {
+            items[n].ecg = Some(format!("ecg:{db}:{token}"));
+        }
+    }
+}
+
+/// Whether an item is the ECG itself, of the ECG entry it belongs to (not one of its
+/// measurements): the entry with a file, else without a number.
+pub(super) fn is_ecg_head(it: &It, group: &[&It]) -> bool {
+    let head = group
+        .iter()
+        .find(|i| i.file.is_some())
+        .or_else(|| group.iter().find(|i| i.num.is_none()))
+        .or_else(|| group.first());
+    head.is_some_and(|h| h.id == it.id)
 }
 
 /// The calendar day of `t` (Unix seconds) in `zone`, as days since 1970-01-01.
@@ -242,6 +278,7 @@ pub(super) fn entry_key(it: &It) -> String {
         ("vit", _) if it.time.is_some() => {
             format!("vit:{p}:{}", it.day.unwrap_or_else(|| (it.time.unwrap_or(0.0) / 86400.0).floor() as i64))
         }
+        _ if it.ecg.is_some() => it.ecg.clone().unwrap_or_default(),
         (_, Some(l)) => format!("live:{}:{}", l.connection, l.token),
         _ => format!("item:{}", it.id),
     }

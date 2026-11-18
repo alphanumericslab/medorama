@@ -192,6 +192,14 @@ enum DatabasesCmd {
     /// Read what Medorama keeps of a database again: its catalog (variables' names and units),
     /// its persons and their encounters
     Refresh { name: String },
+    /// Replace a database's views (kind views) with those of a TOML file, and read it again: its
+    /// patients keep their numbers
+    Views {
+        name: String,
+        /// the TOML file with the views, as `connect --views` takes it
+        #[arg(long)]
+        views: PathBuf,
+    },
     /// Count a database's variables: how many entries and persons hold each (one pass over its
     /// entries; counts below 11 are shown as "< 11")
     Count { name: String },
@@ -271,8 +279,9 @@ struct InitArgs {
     /// the file holding that database's password
     #[arg(long, requires = "database_url")]
     database_password_file: Option<PathBuf>,
-    /// connect the demo's databases the installer made (tools/install-medorama.sh --demo), and
-    /// add its example action plug-in
+    /// a demo installation, for good: it connects the demo's databases the installer made
+    /// (tools/install-medorama.sh --demo) and adds its example action plug-in and cohorts; it
+    /// never connects a site's database, and a site's installation never a demo one
     #[arg(long)]
     demo: bool,
 }
@@ -452,7 +461,10 @@ fn init(home: &Path, a: InitArgs) -> anyhow::Result<()> {
             anyhow::bail!("this database holds a control store already (it has users): choose an empty database");
         }
         users::add(&c, &a.admin, "", Role::Admin, true, &pw)?;
-        audit(&c, Some(&User::local()), "init", &cfg.workspace_dir.to_string_lossy(), "");
+        // the demo's installation or a site's, for good: never both (installation.rs)
+        let mode = if a.demo { medorama::installation::Mode::Demo } else { medorama::installation::Mode::Real };
+        medorama::installation::set(&c, mode)?;
+        audit(&c, Some(&User::local()), "init", &cfg.workspace_dir.to_string_lossy(), if a.demo { "demo" } else { "" });
         Ok(db.describe())
     })();
     let shown = match made {
@@ -480,7 +492,11 @@ fn init(home: &Path, a: InitArgs) -> anyhow::Result<()> {
         }
     }
     std::fs::write(home.join(CONFIG_NAME), cfg.to_toml())?;
-    println!("Medorama set up in {}", home.display());
+    println!(
+        "Medorama set up in {}{}",
+        home.display(),
+        if a.demo { " (a demo installation: invented patients only)" } else { "" }
+    );
     println!("  settings:      {}", home.join(CONFIG_NAME).display());
     println!("  control store: {shown} (no patient data)");
     println!("  workspace:     {} (encrypted per database, its indexes too)", cfg.workspace_dir.display());
@@ -488,9 +504,15 @@ fn init(home: &Path, a: InitArgs) -> anyhow::Result<()> {
         println!("  master key:    {} (keep it, and keep it apart from the workspace's backups)", f.display());
     }
     println!("  admin:         {} (with PHI permission)", a.admin);
-    match medorama::config::remember_home(home) {
-        Ok(p) => println!("Later commands use this home without --home (remembered in {}).", p.display()),
-        Err(e) => println!("Could not remember this home ({e}): pass --home {} to later commands.", home.display()),
+    // a demo installation is never the home later commands use by default: a site's
+    // installation on the same computer stays the one commands without --home reach
+    if a.demo {
+        println!("Later commands reach this demo installation with --home {}.", home.display());
+    } else {
+        match medorama::config::remember_home(home) {
+            Ok(p) => println!("Later commands use this home without --home (remembered in {}).", p.display()),
+            Err(e) => println!("Could not remember this home ({e}): pass --home {} to later commands.", home.display()),
+        }
     }
     if a.demo {
         match demo_folder() {
@@ -538,12 +560,44 @@ fn init(home: &Path, a: InitArgs) -> anyhow::Result<()> {
                         Err(e) => println!("The demo database {} was not connected ({e:#})", d.name),
                     }
                 }
+                demo_cohorts(&cfg, &c, &admin);
             }
             None => println!("No demo: make it with tools/install-medorama.sh --demo"),
         }
     }
-    println!("Next: medorama databases connect NAME --kind KIND --url URL, then medorama serve");
+    if a.demo {
+        println!("Next: medorama --home {} serve (a port apart from a site's installation: --port)", home.display());
+    } else {
+        println!("Next: medorama databases connect NAME --kind KIND --url URL, then medorama serve");
+    }
     Ok(())
+}
+
+/// The demo's example cohorts, made from its databases as a user would make them; a user makes
+/// more by their own criteria, as anywhere.
+const DEMO_COHORTS: &[(&str, &str)] = &[
+    ("ICU stays", "icu"),
+    ("Long QTc", "demo_muse.QTc > 450 ms"),
+    ("Women over 65 with an ECG", "female AND age > 65 AND has ecg"),
+    ("Sepsis", "dx sepsis"),
+];
+
+fn demo_cohorts(cfg: &Config, c: &medorama::sql::Connection, admin: &User) {
+    for (name, text) in DEMO_COHORTS {
+        let made = medorama::cohorts::parse_text(c, cfg, admin, text).and_then(|e| {
+            let n = medorama::cohorts::NewCohort {
+                name: (*name).into(),
+                description: format!("An example of the demo: {text}"),
+                criteria: medorama::cohorts::Criteria { include: Some(e), ..Default::default() },
+                ..Default::default()
+            };
+            medorama::cohorts::create(c, cfg, admin, &n)
+        });
+        match made {
+            Ok(_) => println!("Made the demo cohort {name} ({text})"),
+            Err(e) => println!("The demo cohort {name} was not made ({e:#})"),
+        }
+    }
 }
 
 /// The demo the installer made (tools/install-medorama.sh --demo): the folder named in
@@ -706,15 +760,7 @@ fn databases_cmd(cfg: &Config, db: &Db, me: &User, cmd: DatabasesCmd) -> anyhow:
                 ..Default::default()
             };
             if let Some(f) = views {
-                let t: toml::Table = std::fs::read_to_string(&f)
-                    .map_err(|e| anyhow::anyhow!("{}: {e}", f.display()))?
-                    .parse()
-                    .map_err(|e| anyhow::anyhow!("{}: {e}", f.display()))?;
-                let g = |k: &str| t.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
-                (settings.persons, settings.visits, settings.entries, settings.recordings, settings.version) =
-                    (g("persons"), g("visits"), g("entries"), g("recordings"), g("version"));
-                // optional: the stays (ICU and bed stays) within visits; the catalog of variables
-                (settings.stays, settings.variables) = (g("stays"), g("variables"));
+                read_views(&f, &mut settings)?;
             }
             let password = if password_stdin {
                 let mut line = String::new();
@@ -786,6 +832,14 @@ fn databases_cmd(cfg: &Config, db: &Db, me: &User, cmd: DatabasesCmd) -> anyhow:
             medorama::databases::refresh(cfg, &c, me, s.id)?;
             let (persons, patients, conflicts) = medorama::persons::counts(cfg, &c, s.id)?;
             println!("{}: {persons} person(s), {patients} patient(s), {conflicts} conflict(s)", s.name);
+        }
+        DatabasesCmd::Views { name, views } => {
+            let s = named(&name)?;
+            let mut settings = sources::Settings::default();
+            read_views(&views, &mut settings)?;
+            medorama::databases::set_views(cfg, &c, me, s.id, &settings)?;
+            let (persons, patients, conflicts) = medorama::persons::counts(cfg, &c, s.id)?;
+            println!("{}: new views; {persons} person(s), {patients} patient(s), {conflicts} conflict(s)", s.name);
         }
         DatabasesCmd::Count { name } => {
             let s = named(&name)?;
@@ -908,6 +962,21 @@ fn keys_cmd(cfg: &Config, db: &Db, me: &User, cmd: KeysCmd) -> anyhow::Result<()
             println!("Now point master_key_file (or MEDORAMA_MASTER_KEY, master_key_command) at the new key, and keep the old one until no backup needs it.");
         }
     }
+    Ok(())
+}
+
+/// A views file (TOML: persons, visits, entries, recordings, version; optional stays and
+/// variables) into a database's settings.
+fn read_views(f: &Path, settings: &mut medorama::sources::Settings) -> anyhow::Result<()> {
+    let t: toml::Table = std::fs::read_to_string(f)
+        .map_err(|e| anyhow::anyhow!("{}: {e}", f.display()))?
+        .parse()
+        .map_err(|e| anyhow::anyhow!("{}: {e}", f.display()))?;
+    let g = |k: &str| t.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    (settings.persons, settings.visits, settings.entries, settings.recordings, settings.version) =
+        (g("persons"), g("visits"), g("entries"), g("recordings"), g("version"));
+    // optional: the stays (ICU and bed stays) within visits; the catalog of variables
+    (settings.stays, settings.variables) = (g("stays"), g("variables"));
     Ok(())
 }
 
@@ -1067,6 +1136,12 @@ fn run(home: &Path, cmd: Cmd) -> anyhow::Result<()> {
         let p = medorama::config::remember_home(&cfg.home)?;
         println!("Later commands use the home {} (remembered in {}).", cfg.home.display(), p.display());
         return Ok(());
+    }
+    // a demo installation holds demo databases only, a site's none (installation.rs): checked
+    // before anything is read; listing and removing the databases stay open, to put it right
+    let fixing = matches!(&cmd, Cmd::Databases(DatabasesCmd::List { .. } | DatabasesCmd::Remove { .. }));
+    if !fixing {
+        medorama::installation::settle(&*db.get()?)?;
     }
     let me = User::local();
     let zone = tz(&cfg.timezone);

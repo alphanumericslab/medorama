@@ -77,6 +77,10 @@ pub struct Settings {
     /// and units are read from the entries.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub variables: String,
+    /// A demo database (invented patients): it holds the marker table (installation.rs), read
+    /// when it is connected.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub demo: bool,
 }
 
 fn is_zero(x: &u64) -> bool {
@@ -656,6 +660,11 @@ pub struct Person {
     pub first_name: String,
     pub birth_date: String,
     pub sex: String,
+    /// The first and the latest time of their data, when the persons view gives them (its
+    /// optional `earliest` and `latest` columns): the patient list's dates for a database
+    /// without visits.
+    pub earliest: Option<f64>,
+    pub latest: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -747,6 +756,8 @@ impl Source {
                     first_name: t(6)?,
                     birth_date: t(7)?,
                     sex: t(8)?,
+                    earliest: None,
+                    latest: None,
                 })
             })?;
         Ok(rows.into_iter().map(|p| self.with_issuers(p)).collect())
@@ -953,24 +964,41 @@ impl Source {
 
     /// The entries a criterion's filters find (at most `max_rows`, else an error).
     pub fn find(&self, f: &Find, zone: chrono_tz::Tz) -> anyhow::Result<Vec<Entry>> {
-        let (sql, args) = self.find_sql(f);
         let max = self.settings.max_rows();
+        let mut out = vec![];
+        self.find_each(f, zone, |e| {
+            if out.len() >= max {
+                anyhow::bail!(
+                    "{}: the criterion finds more than {max} rows: narrow it (a date range, a database)",
+                    self.name
+                );
+            }
+            out.push(e);
+            Ok(())
+        })?;
+        Ok(out)
+    }
+
+    /// Each entry a criterion's filters find, handed to `each` as it is read: nothing is kept
+    /// here, so a criterion over millions of rows (`QTc > 450` over every ECG) keeps only the
+    /// rows it tests true.
+    pub fn find_each(
+        &self,
+        f: &Find,
+        zone: chrono_tz::Tz,
+        mut each: impl FnMut(Entry) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        let (sql, args) = self.find_sql(f);
         let db = self.db()?;
-        let mut st = db
-            .prepare_native(&format!("{sql} LIMIT {}", max + 1))
-            .map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?;
-        let rows: Vec<Entry> = st
-            .query_map(args, |r| entry_of(r, zone))
-            .map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?
-            .collect::<Result<_, _>>()
-            .map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?;
-        if rows.len() > max {
-            anyhow::bail!(
-                "{}: the criterion reads more than {max} rows: narrow it (a date range, a database)",
-                self.name
-            );
+        let mut st = db.prepare_native(&sql).map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?;
+        let mut rows = st.query(args).map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?;
+        while let Some(r) = rows.next().map_err(|e| anyhow::anyhow!("{}: {e}", self.name))? {
+            let e = entry_of(&r, zone).map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?;
+            if f.categories.is_empty() || f.categories.contains(&e.category) {
+                each(e)?;
+            }
         }
-        Ok(rows.into_iter().filter(|e| f.categories.is_empty() || f.categories.contains(&e.category)).collect())
+        Ok(())
     }
 
     /// The persons who have entries the filters find (at most `max_rows`, else an error).
@@ -1038,48 +1066,78 @@ impl Source {
             .collect())
     }
 
+    /// The person keys a query answers (none bounded by `max_rows`: they are at most the
+    /// database's persons, which the subject index holds every one of).
     fn keys_of(&self, sql: &str, args: Vec<Value>) -> anyhow::Result<Vec<String>> {
-        let max = self.settings.max_rows();
         let db = self.db()?;
-        let mut st = db
-            .prepare_native(&format!("{sql} LIMIT {}", max + 1))
-            .map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?;
+        let mut st = db.prepare_native(sql).map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?;
         let keys: Vec<String> = st
             .query_map(args, |r| Ok(text_of(&r.get::<_, Value>(0)?)))
             .map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?
             .collect::<Result<_, _>>()
             .map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?;
-        if keys.len() > max {
-            anyhow::bail!("{}: the criterion finds more than {max} persons: narrow it", self.name);
-        }
         Ok(keys)
     }
 
     /// Every person (with their sex and birth date), at most `max_rows`.
     pub fn all_persons(&self) -> anyhow::Result<Vec<Person>> {
         let max = self.settings.max_rows();
-        let rows = self.persons_limited(Some(max + 1))?;
+        let rows = self.persons_limited(Some(max + 1), None)?;
         if rows.len() > max {
             anyhow::bail!("{}: more than {max} persons: narrow the criteria", self.name);
         }
         Ok(rows)
     }
 
-    /// Every person, however many: the subject index (persons.rs), which no criterion bounds.
-    pub fn every_person(&self) -> anyhow::Result<Vec<Person>> {
-        self.persons_limited(None)
+    /// Every person, however many, with the dates of their data when the view gives them: the
+    /// subject index (persons.rs), which no criterion bounds.
+    pub fn every_person(&self, zone: chrono_tz::Tz) -> anyhow::Result<Vec<Person>> {
+        self.persons_limited(None, Some(zone))
     }
 
-    fn persons_limited(&self, limit: Option<usize>) -> anyhow::Result<Vec<Person>> {
+    /// Whether the database is a demo database: it holds the marker table (installation.rs),
+    /// or, made before 0.3.1 without it, it is a file of the demo the installer made.
+    pub fn is_demo(&self) -> bool {
+        let marked = self
+            .db()
+            .and_then(|db| {
+                db.query_row_native(&format!("SELECT COUNT(*) FROM {}", crate::installation::MARKER), [], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .map_err(anyhow::Error::from)
+            })
+            .is_ok();
+        marked || self.url.replace('\\', "/").contains("/share/medorama/demo/")
+    }
+
+    /// Whether the persons view has this optional column.
+    fn persons_have(&self, db: &crate::sql::Connection, col: &str) -> bool {
+        let v = self.views().persons;
+        db.prepare_native(&format!("SELECT {col} FROM ({v}) p LIMIT 0")).is_ok()
+    }
+
+    fn persons_limited(&self, limit: Option<usize>, dates: Option<chrono_tz::Tz>) -> anyhow::Result<Vec<Person>> {
         let v = self.views().persons;
         let db = self.db()?;
         let limit = limit.map(|n| format!(" LIMIT {n}")).unwrap_or_default();
-        let mut st = db.prepare_native(&format!("SELECT {PERSON_COLS} FROM ({v}) p{limit}"))?;
+        // the optional dates, each read when the view has it
+        let opt = |col: &'static str| -> &'static str {
+            if dates.is_some() && self.persons_have(&db, col) {
+                col
+            } else {
+                "NULL"
+            }
+        };
+        let (first, last) = (opt("earliest"), opt("latest"));
+        let zone = dates.unwrap_or(chrono_tz::UTC);
+        let mut st = db.prepare_native(&format!("SELECT {PERSON_COLS}, {first}, {last} FROM ({v}) p{limit}"))?;
         let rows: Vec<Person> = st
             .query_map([], |r| {
                 let t =
                     |i: usize| -> crate::sql::Result<String> { Ok(text_of(&r.get::<_, Value>(i)?).trim().to_string()) };
                 Ok(Person {
+                    earliest: time_of(&r.get::<_, Value>(9)?, zone),
+                    latest: time_of(&r.get::<_, Value>(10)?, zone),
                     key: t(0)?,
                     patient_id: t(1)?,
                     patient_id_issuer: t(2)?,
@@ -1269,11 +1327,15 @@ impl Source {
         let mut keys = match category {
             "icu" => self.visit_persons(true)?,
             "enc" => self.visit_persons(false)?,
-            "lab" | "vit" => self
-                .find(&Find { categories: vec![category.into()], ..Default::default() }, zone)?
-                .into_iter()
-                .map(|e| e.person)
-                .collect(),
+            "lab" | "vit" => {
+                // (lab results and vital signs are told apart by name: each row read, none kept)
+                let mut keys = std::collections::HashSet::new();
+                self.find_each(&Find { categories: vec![category.into()], ..Default::default() }, zone, |e| {
+                    keys.insert(e.person);
+                    Ok(())
+                })?;
+                keys.into_iter().collect()
+            }
             _ => self.find_persons(&Find {
                 categories: vec![category.into()],
                 notes: category == "note",

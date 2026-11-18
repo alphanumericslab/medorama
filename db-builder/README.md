@@ -57,11 +57,15 @@ command's errors go to the standard error, with exit status 2.
 
 ```bash
 db-builder new study.sqlite --timezone Europe/Paris
+db-builder new demo.sqlite --demo                 # a demo database: invented patients only
 ```
 
 Makes an empty database. `--timezone` (default `America/New_York`) is the time zone of the local
-times in the inputs; a database has one. `add` and `recordings` make the database too when it does
-not exist yet.
+times in the inputs; a database has one. `--demo` marks it a demo database (a table
+`medorama_demo`, [docs/schema.md](docs/schema.md#tables)): Medorama connects it to a demo
+installation only, and a site's installation refuses it
+([docs/design/demo.md](../docs/design/demo.md)). Use it only for invented patients. `add` and
+`recordings` make the database too when it does not exist yet, unmarked.
 
 ### add
 

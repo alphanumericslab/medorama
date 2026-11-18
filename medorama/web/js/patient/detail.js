@@ -92,12 +92,14 @@ export function renderDetail(el, d, ctx) {
     h += rowsTable(d, ctx.terms);
   }
   if (d.monitoring) h += monitoring(d, ctx);
+  if (d.ecg) h += ecg(d);
   if (d.fields.length) h += `<dl class="fields">${d.fields.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${mark(v, ctx.terms)}</dd>`).join('')}</dl>`;
   // free text may still name the patient: in Privacy Mode it is marked, as files are
   const warn = privacy.on && d.category === 'note' ? '<p class="idnote"><span class="idwarn" role="img" aria-label="May show identifiers">▲</span> Free text: it may name the patient (the de-identified view cannot remove names from it).</p>' : '';
   if (d.text) h += `${warn}<p class="notetext">${mark(d.text, ctx.terms)}</p>`;
   else if (d.category === 'note' && !phi()) h += '<p class="muted">The text of notes is shown to users with the PHI permission.</p>';
-  if (d.attachment) h += attachment(d.attachment);
+  // an ECG's drawing comes first (ecg()), any other file after its fields
+  if (d.attachment && !d.ecg) h += attachment(d.attachment);
   h += notesList(d.notes, ctx.terms);
   el.innerHTML = h;
   el.scrollTop = 0;
@@ -114,6 +116,35 @@ export function renderDetail(el, d, ctx) {
       else go(v.href);
     });
   }
+}
+
+/** A change, signed and with its arrow, in the measurement's unit (none: no previous value). */
+function fmtChange(c) {
+  if (c === null || c === undefined) return '';
+  const r = Math.round(c * 10) / 10;
+  if (r === 0) return '<span class="chg" title="Unchanged">=</span>';
+  return `<span class="chg">${r > 0 ? '▲' : '▼'} ${esc(String(Math.abs(r)))}</span>`;
+}
+
+/**
+ * An ECG: its drawing, its statements (those new since the previous ECG marked, and the
+ * previous ECG's no longer said), its measurements: each value once, with its change since the
+ * previous ECG and its trend over the patient's ECGs (this one marked).
+ */
+function ecg(d) {
+  const e = d.ecg;
+  let h = d.attachment ? attachment(d.attachment) : '';
+  if (e.statements.length) {
+    h += `<div class="label">Statements${e.previous ? ' <span>new: since the previous ECG</span>' : ''}</div><ul class="stm">${e.statements.map(([t, isNew]) => `<li>${esc(t)}${isNew ? ' <span class="tag">new</span>' : ''}</li>`).join('')}</ul>`;
+    if (e.gone.length) h += `<div class="gone"><span class="tag">no longer</span> ${e.gone.map(esc).join(' · ')}</div>`;
+  }
+  if (e.measures.length) {
+    const since = e.previous ? `change since the ECG of ${fmtDate(e.previous)} ${fmtHM(e.previous)}` : 'the first ECG of this patient';
+    h += `<div class="label">Measurements <span>${esc(since)}</span></div><div class="ms">${e.measures.map((m) => `<div class="m"><small>${esc(m.name)}</small>
+      <div class="mv"><b>${esc(fmtV(m.value))}</b> <i>${esc(m.unit)}</i>${fmtChange(m.change)}</div>
+      ${m.series.length > 1 ? spark(m.series, null, null, { w: 150, h: 24, stroke: color('c-ecg'), mark: [d.time, m.value] }) : ''}</div>`).join('')}</div>`;
+  }
+  return h;
 }
 
 function monitoring(d, ctx) {

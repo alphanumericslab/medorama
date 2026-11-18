@@ -78,9 +78,12 @@ connect it. To try it on invented patients first, follow
    ```
 
 `medorama --help` lists every command, and `medorama COMMAND --help` describes one. With the
-installer's `--demo` option (Windows: `-Demo`), `init --demo` connects the demo's two databases,
-`demo` and `demo_omop`; removing them (`medorama databases remove demo`) removes the demo
-([the demo](../docs/administration.md#the-demo)).
+installer's `--demo` option (Windows: `-Demo`), `init --demo` makes a demo installation that
+connects the demo's six databases; it never becomes a site's installation, so give it its own home,
+workspace and port (`medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace
+--demo`, then `medorama --home ~/medorama-demo serve --port 8095`), and delete its home and
+workspace to be rid of it ([the demo](../docs/administration.md#the-demo),
+[design/demo.md](../docs/design/demo.md)).
 
 **Without WFDB support.** The installer's `--no-wfdb` option (Windows: `-NoWfdb`), or
 `cargo build --release --locked -p medorama --no-default-features` (the Cargo feature `wfdb` left

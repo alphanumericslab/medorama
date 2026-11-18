@@ -77,14 +77,20 @@ Control store & Medorama's own database, in SQLite or PostgreSQL, with the same 
 \end{tabularx}
 \end{table}
 
-\section{Version 0.3.0}
+\section{Version 0.3.1}
 \label{sec:introduction-version}
 
-This manual describes Medorama 0.3.0, a pre-release of November 2026. Version 0.3.0 keeps of
-each connected database only its subjects (their identities and encounters) and the names and
+This manual describes Medorama 0.3.1, a pre-release of November 2026. Since 0.3.0, Medorama keeps
+of each connected database only its subjects (their identities and encounters) and the names and
 units of its variables, and reads everything else from the database when it is asked: connecting
 a database of millions of rows takes minutes, its recordings are read when a patient is opened,
-and its variables are counted when asked (\cref{sec:connecting-kept}). 0.2.1 added the reading
+and its variables are counted when asked (\cref{sec:connecting-kept}). 0.3.1 adds a patient's
+page of four columns that shows each fact once, with each ECG compared with the patient's
+previous one (\cref{sec:patients-page,sec:patients-ecg}); the demo as an installation of its own
+(\cref{sec:administration-demo}); criteria that read databases of millions of rows, keeping only
+the rows that hold (\cref{sec:connecting-performance}); the dates of a person's first and latest
+data, kept in the subject index (\cref{sec:connecting-views}); and \cmd{medorama databases views},
+which replaces a connected database's views (\cref{chap:cli}). 0.2.1 added the reading
 of GE MUSE rates and formats, median beats in the ECG viewer, and MUSE ECG metadata databases
 connected through views (\cref{sec:ecg-viewer-median,sec:connecting-muse}). The main changes of
 0.2.0 since 0.1.0:
@@ -238,16 +244,17 @@ Every picture, value, signal and patient of this manual is synthetic. They come 
 sources, neither of which holds any patient data:
 
 \begin{itemize}
-\item \textbf{The demo}, made by \file{tools/make-demo-data.py}: six invented patients
-  (\code{P900001} to \code{P900006}, with the MRNs \code{SYN0000001} to \code{SYN0000006})
-  with their visits and bed stays, laboratory results, vital signs, medications,
-  diagnoses, microbiology, allergies and notes; short ICU recordings, a 24-hour Holter, an
-  overnight EDF+ sleep study, 12-lead ECGs (WFDB, GE MUSE XML, DICOM, PDF and PNG), chest X-rays and CT series, echo loops
-  and reports, a coronary angiography run; and another hospital's OMOP database that holds
-  earlier stays and results of two of them, and two patients of its own. The installers make it
-  when asked (\opt{--demo}): the tables and files become a database with db-builder, and
-  \cmd{medorama init -{}-demo} connects it with the OMOP database (\cref{chap:quickstart}). It
-  is off by default.
+\item \textbf{The demo}, made by \file{tools/make-demo-data.py}: about 40 invented patients
+  (MRNs \code{SYN0000001} and on) in six databases (the main hospital's db-builder database, another
+  hospital's, an OMOP database, a registry and a GE MUSE ECG archive connected through views,
+  and an encrypted transplant clinic's), with their visits and bed stays, laboratory results,
+  vital signs, medications, diagnoses, microbiology, allergies and notes; short ICU recordings,
+  a 24-hour Holter, an overnight EDF+ sleep study, 12-lead ECGs (WFDB, GE MUSE XML, DICOM, PDF
+  and PNG), chest X-rays and CT series, echo loops and reports, a coronary angiography run.
+  Every demo database is marked as invented. The installers make it when asked (\opt{--demo}),
+  and \cmd{medorama init -{}-demo} makes a demo installation, apart from any site's, that
+  connects its databases and makes its example cohorts (\cref{chap:quickstart}). It is off by
+  default.
 \item \textbf{The viewers' examples}: \file{viewers/ecg/examples/} (a WFDB record, a GE MUSE
   XML file, a DICOM ECG, a PDF and a PNG printout) and \file{viewers/pacs/examples/} (an echo
   loop, a coronary angiography run, a chest X-ray), written by
@@ -325,7 +332,7 @@ medorama --version
 \end{lstlisting}
 and what a program prints, when it matters, in a listing of its own:
 \begin{lstlisting}[style=text]
-medorama 0.3.0
+medorama 0.3.1
 \end{lstlisting}
 
 Three kinds of boxes set text apart:
@@ -349,14 +356,14 @@ Commands for Linux and macOS are given first, and their Windows equivalents wher
 The file \file{CITATION.cff} at the root of the repository says how to cite Medorama (or
 VitalStream): Reza Sameni, \emph{Medorama: A unified patient-journey research platform
 linking EHR data, physiological waveforms, imaging and laboratory results across databases},
-version 0.3.0 (a pre-release), released 2026-11-17, license PolyForm Noncommercial 1.0.0,
+version 0.3.1 (a pre-release), released 2026-11-17, license PolyForm Noncommercial 1.0.0,
 \url{https://github.com/alphanumericslab/medorama}. In BibTeX:
 \begin{lstlisting}[style=text]
 @software{sameni_medorama,
   author  = {Sameni, Reza},
   title   = {Medorama: A unified patient-journey research platform linking EHR data,
              physiological waveforms, imaging and laboratory results across databases},
-  version = {0.3.0},
+  version = {0.3.1},
   date    = {2026-11-17},
   license = {PolyForm-Noncommercial-1.0.0},
   url     = {https://github.com/alphanumericslab/medorama}

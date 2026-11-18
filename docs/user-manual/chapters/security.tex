@@ -267,7 +267,7 @@ Lost or stolen storage & A disk, a backup & The workspace encrypted (SQLCipher) 
   wrapped by a master key kept apart; the control store optionally encrypted (SQLite); full-disk
   encryption (for the plug-ins' output folders) and encrypted backups are the deployment's responsibility \\
 A connected database returning crafted data & Values meant to break parsing, the page or the
-  gate & Only the canonical columns are read, as values; at most \code{max\_rows} rows per
+  gate & Only the canonical columns are read, as values; at most \code{max\_rows} rows kept per
   criterion, each query time-limited; everything shown is escaped and passes the gate \\
 Network between Medorama and its databases & Reads or alters traffic & TLS (rustls) with the
   server's certificate and name verified; required for any server not on the same host unless
@@ -810,7 +810,8 @@ Every file and table is treated as untrusted.
 \item \textbf{DICOM sequences} nested more than 32 deep are refused (the rewrite would otherwise
   recurse without bound on a crafted file).
 \item \textbf{Connected databases' answers} are read as values of the canonical columns only,
-  at most \code{max\_rows} rows per criterion and within \code{timeout\_s}; a SQLite database file
+  at most \code{max\_rows} rows kept per criterion (each row tested as it is read) and within
+  \code{timeout\_s}; a SQLite database file
   must lie inside \code{data\_roots}, and is refused inside the workspace or when it is the
   control store itself (\file{sources/mod.rs}, \code{checked\_url}).
 \item \textbf{Tables and folders} are read by db-builder, a separate program run by the site, not
@@ -1086,10 +1087,12 @@ Go through this list before real data come in. How to carry out each step is des
   (\cref{sec:connecting-requirements}); an account that can only read, on the views' tables only;
   the network path allowed from Medorama's host only; TLS; a time limit and a row limit suited to
   the database (\opt{-{}-timeout-s}, \opt{-{}-max-rows}); its own encryption and backups.
-\item \textbf{No demo with real patients:} install without \opt{-{}-demo} (the default), so that
-  \cmd{init} connects no database. If Medorama has the demo's databases connected (\code{demo} and
-  \code{demo\_omop}), an administrator removes them before real data arrive; their invented
-  patients then leave Medorama.
+\item \textbf{No demo with real patients:} set the site's installation up without
+  \opt{-{}-demo}, so that \cmd{init} connects no database and the installation is a site's for
+  good: it refuses every demo database (each marked by a table \code{medorama\_demo}), and a demo
+  installation refuses every other (\cref{sec:administration-demo}). Run the demo, if at all, as
+  its own installation, with its own home, workspace and port. A control store made before 0.3.1
+  that connects both kinds is refused until an administrator removes the databases of one kind.
 \end{enumerate}
 
 \section{Known limitations and residual risks}

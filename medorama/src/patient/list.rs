@@ -93,6 +93,15 @@ fn gather(cfg: &Config, c: &Connection, user: &User) -> anyhow::Result<HashMap<i
                     }
                 }
             }
+            // the dates of their data the database gives (a database without visits: an ECG
+            // database's latest ECG)
+            if let Some(t) = k.latest {
+                let t = match (&offsets, deidentified.contains(&s.id)) {
+                    (Some(o), true) => o.shift(Some(k.patient), t),
+                    _ => t,
+                };
+                g.row.latest = Some(g.row.latest.map_or(t, |a| a.max(t)));
+            }
             if !g.row.sources.contains(&s.name) {
                 g.row.sources.push(s.name.clone());
             }

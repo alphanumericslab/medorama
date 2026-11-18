@@ -238,9 +238,10 @@ it stays connected, and \ui{Refresh} (or \cmd{medorama databases refresh}) reads
   \code{file} is read (\cref{sec:connecting-views}) \\
 \opt{-{}-timeout-s} & 60 & Each query's time limit, in seconds (PostgreSQL only; SQLite files are
   local and have none) \\
-\opt{-{}-max-rows} & 1{,}000{,}000 & The number of rows a criterion may read, and of recordings
-  that \ui{Index all recordings} reads. Connecting and refreshing read every person and visit,
-  however many \\
+\opt{-{}-max-rows} & 1{,}000{,}000 & The number of rows a criterion may keep (it reads as many
+  as it needs, \cref{sec:connecting-performance}), and of recordings that \ui{Index all
+  recordings} reads. The persons behind \code{has \dots} are not bounded. Connecting and
+  refreshing read every person and visit, however many \\
 \end{xltabular}
 
 \section{What Medorama keeps of a database}
@@ -261,7 +262,8 @@ database's files is kept.
 \midrule
 \file{persons.sqlite} & The subject index: each person's identifiers and their issuers, names,
   date of birth and sex, the patient number they are linked to and the keyed hashes of their
-  pairs (\cref{sec:connecting-identity}); their encounters (each visit's key, start, end, and
+  pairs (\cref{sec:connecting-identity}); the dates of their first and latest data, when the
+  \code{persons} view gives them (\code{earliest}, \code{latest}); their encounters (each visit's key, start, end, and
   whether it was in intensive care); identity conflicts \\
 \file{variables.sqlite} & The catalog: each variable's category, name, vocabulary, code, unit
   and whether it has numbers; how many entries and persons hold it, only once counted
@@ -291,8 +293,8 @@ database's files is kept.
 \endhead
 \bottomrule
 \endfoot
-Connecting, a new version, \ui{Refresh} & Every person (however many: \code{max\_rows} bounds
-  criteria, not this), every visit, the catalog (its \code{variables} view, else one grouped
+Connecting, a new version, \ui{Refresh}, \cmd{databases views} & Every person (however many:
+  \code{max\_rows} bounds what a criterion keeps, not this), every visit, the catalog (its \code{variables} view, else one grouped
   query over its entries, with no counting), and the categories of its recordings
   (\code{SELECT DISTINCT category}). No recording file is read \\
 Every check (each minute) & Whether each view answers; the version (without a version query, a
@@ -517,8 +519,8 @@ kind \code{views} gives its own.
 {\tabhead View} & {\tabhead Columns, in this order} & {\tabhead Required} \\
 \midrule
 \code{persons} & \code{person\_key}, \code{patient\_id}, \code{patient\_id\_issuer}, \code{mrn},
-  \code{mrn\_authority}, \code{last\_name}, \code{first\_name}, \code{birth\_date}, \code{sex} &
-  Yes \\
+  \code{mrn\_authority}, \code{last\_name}, \code{first\_name}, \code{birth\_date}, \code{sex};
+  optionally \code{earliest}, \code{latest} (below) & Yes \\
 \code{visits} & \code{visit\_key}, \code{person\_key}, \code{start\_time}, \code{end\_time},
   \code{unit}, \code{icu} & No \\
 \code{entries} & \code{entry\_key}, \code{person\_key}, \code{visit\_key}, \code{category},
@@ -551,6 +553,18 @@ variables are its columns (a table of measurements) writes it as a list of const
 named there but absent from \code{entries} is offered and finds nobody; a variable of
 \code{entries} not named there is not offered, and the planner does not send a criterion on it
 to this database: keep the two in step.
+
+\paragraph{The dates of a person's data.} A \code{persons} view may give two optional columns,
+\code{earliest} and \code{latest}: the times of the person's first and latest data (an ECG
+database's \code{MIN} and \code{MAX} of its acquisition times). They are kept with the person in
+the subject index (the encrypted \file{persons.sqlite}), and the Patient Catalog is sorted by the
+latest, with the encounters' (\cref{sec:patients-catalog}): a database without visits lists its
+patients newest first. Without them, its patients have no date to sort by.
+
+\paragraph{Replacing the views.} \cmd{medorama databases views NAME -{}-views FILE}
+(\cref{chap:cli}; an admin who manages the database) replaces the views of a database of kind
+\code{views}, checks them and reads the database again. Its patients keep their numbers: a
+person is linked by the same identifier pairs, whatever view gives them.
 
 Each column has a \emph{privacy class}, which decides what the gate does with it
 (\cref{tab:connecting-columns}).
@@ -625,7 +639,9 @@ Medorama asks the views only for what it needs:
   (\cref{sec:connecting-status}), as one query over \code{entries}, with the filters that the
   database can apply itself: the category, the name (exact, or containing a word), a code's
   prefix, a text, and whether there is a number. Medorama itself tests values in other units,
-  \code{latest}, dates and stays.
+  \code{latest}, dates and stays. Each row is tested as it is read, and only the rows that hold
+  are kept: \code{QTc > 450 ms} reads every QTc of a database of millions of ECGs and keeps
+  those over 450; \code{latest} keeps each person's latest value only.
 \item The patient list is read from the database's workspace files (its persons and their
   encounters); for the page shown, each online database is asked, in one grouped query over
   those persons' entries and recordings, for the \ui{Data} and \ui{Entries} columns
@@ -635,8 +651,10 @@ Medorama asks the views only for what it needs:
   \code{SELECT DISTINCT category} over \code{recordings} (\cref{sec:connecting-kept}).
 \end{itemize}
 Index the underlying tables on the person, the time, and the name or code by which entries are
-searched. A criterion that would read more than \code{max\_rows} rows is refused, with a message
-that asks to narrow it (a date range, a database).
+searched. \code{max\_rows} bounds the rows a criterion keeps, not those it reads: a criterion
+that would keep more is refused, with a message that asks to narrow it (a date range, a
+database). The persons behind \code{has \dots} are never bounded: they are at most the
+database's persons, all of whom the subject index holds.
 
 \subsection{A MUSE ECG metadata database}
 \label{sec:connecting-muse}
@@ -659,7 +677,8 @@ medorama databases connect muse --kind views \
 \end{lstlisting}
 \begin{itemize}
 \item \code{persons}: one person per MUSE patient ID, read as the MRN, with the names, date of
-  birth and sex of their latest ECG;
+  birth and sex, and the times of their first and latest ECG (\code{earliest}, \code{latest});
+  only the patient IDs of the site's MRNs' form are read (below);
 \item \code{entries}: per ECG an \code{ecg} entry, \code{12-lead ECG}, its text the confirmed
   statements (else the computer's); and one \code{ecg} entry per measurement of the final set
   (Vent. rate, Atrial rate, PR, QRS, QT, QTc, QTcF, RR, the axes, the blood pressure), which
@@ -670,6 +689,24 @@ medorama databases connect muse --kind views \
 \item \code{variables}: its catalog, as constants: \code{12-lead ECG} and the measurements
   above, each with its unit, so that connecting reads no ECG for it.
 \end{itemize}
+The \code{persons} view, as a site with digit-only MRNs writes it:
+\begin{lstlisting}[language=SQL]
+SELECT patient_id AS person_key, '' AS patient_id, '' AS patient_id_issuer,
+       patient_id AS mrn, '' AS mrn_authority,
+       COALESCE(last_name, '') AS last_name, COALESCE(first_name, '') AS first_name,
+       COALESCE(birth_date, '') AS birth_date,
+       CASE sex WHEN 'female' THEN 'F' WHEN 'male' THEN 'M' ELSE '' END AS sex,
+       (SELECT MIN(e.acquisition_datetime) FROM ecg e
+        WHERE e.patient_id = ecg.patient_id) AS earliest,
+       MAX(acquisition_datetime) AS latest
+FROM ecg WHERE patient_id NOT GLOB '*[^0-9]*'
+GROUP BY patient_id
+\end{lstlisting}
+A patient ID typed at the cart as a name or as \code{test} links no patient, so each view keeps
+only the patient IDs of the site's MRNs' form, with the same \code{WHERE} (the demo's keep
+\code{patient\_id GLOB 'SYN[0-9]*'}); the others are left out. A site changes the views of a
+database already connected with \cmd{medorama databases views} (\cref{sec:connecting-views}).
+
 Indexes on \code{ecg(patient\_id)} and \code{ecg(acquisition\_datetime)} keep each patient's
 page to an index search; create them once on the file if it lacks them. Connecting a database of
 millions of ECGs reads its persons (one \code{GROUP BY patient\_id}, over the index), its

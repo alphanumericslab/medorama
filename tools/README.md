@@ -52,8 +52,11 @@ demo](../docs/administration.md#the-demo) says how to install it and what to try
   are the library's. The library may be published, so a demo made with it can be shown in
   published screenshots; one made with `--examples` or `--dicom` cannot.
 - **Its databases** (`demo-databases.json` lists them, with the db-builder steps that build them;
-  `medorama init --demo` connects every one it lists, with its key when it has one, so a new demo
-  database needs no change in Medorama):
+  `medorama init --demo` makes a demo installation and connects every one it lists, with its key
+  when it has one, so a new demo database needs no change in Medorama). Each is marked a demo
+  database: the db-builder ones are made with `db-builder new --demo`, and the OMOP, registry and
+  MUSE databases it writes itself get the `medorama_demo` table, so that only a demo installation
+  connects them ([docs/design/demo.md](../docs/design/demo.md)):
 
   | Name | Kind | What it shows |
   |---|---|---|
@@ -98,7 +101,6 @@ demo](../docs/administration.md#the-demo) says how to install it and what to try
 | `eeg-bdf` | Routine EEGs as BDF+ (24-bit) | `eeglab/` |
 | `recordings-pattern` | Folders of recordings added by a file-name pattern (db-builder recordings) | `sleeplab/, eeglab/` |
 | `ecg-formats` | 12-lead ECGs as WFDB, MUSE XML, DICOM, PDF and PNG | `ecg/` |
-| `ecg-median` | MUSE ECGs with their median beats and P, QRS and T onsets | `ecg/*.xml` |
 | `echo` | Echo loops (DICOM cine, PNG frames) and structured reports | `echo/` |
 | `ct` | CT series | `imaging/ct_*` |
 | `xray` | Chest radiographs | `imaging/cxr_*` |
@@ -113,6 +115,11 @@ demo](../docs/administration.md#the-demo) says how to install it and what to try
 | `views` | A SQL database connected through canonical views | `registry/` |
 | `muse-db` | A MUSE ECG archive and its ECG metadata database, connected through views: median beats with onsets, a 250 Hz ECG and one without its sampling rate | `muse/` |
 | `catalog` | A catalog view: what demo_muse holds, named without reading its entries | `muse/views.toml` |
+| `demo-marked` | Every demo database marked as invented: only a demo installation connects it | `demo-databases.json` |
+| `person-dates` | Each MUSE patient's first and latest ECG, from the persons view (the list's dates without visits) | `muse/views.toml` |
+| `muse-ids` | A test ECG whose patient ID is a word, left out by the views | `muse/ecg_metadata.sqlite` |
+| `ecg-compare` | Patients with two ECGs or more: each ECG compared with the previous one | `muse/ecg_metadata.sqlite` |
+| `ecg-median` | MUSE ECGs with their median beats and P, QRS and T onsets | `ecg/*.xml` |
 | `encrypted` | An encrypted db-builder database, its key in a file | `secure/, keys/` |
 | `actions` | The example action plug-in, for the Actions tab | `actions/` |
 | `cohorts` | Enough patients and values for cohort criteria (creatinine, lactate, troponin, ICU, sex, age) | `databases/labs.csv` |
@@ -156,8 +163,12 @@ such a Medorama and take the screenshots:
 3. Index its recordings and start the server:
 
    ```bash
-   medorama run index --all && medorama work && medorama serve
+   H=/path/to/demo-home
+   medorama --home $H run index --all && medorama --home $H work && medorama --home $H serve
    ```
+
+   (`init --demo` is never remembered as the default home, so every command names it with
+   `--home`.)
 
 4. In another terminal, take the screenshots:
 

@@ -89,29 +89,45 @@ pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &crate::sources::Source) -
                 numeric: true,
                 ..Default::default()
             };
-            let mut rows: Vec<crate::sources::Entry> =
-                s.find(&f, zone)?.into_iter().filter(|e| in_range(e.time)).collect();
-            rows.extend(result_entries(cx, s, k, exact)?.into_iter().filter(|e| in_range(e.time)));
-            if dates.per_patient() {
-                // each patient's own bounds: their persons linked first
-                let keys: Vec<String> = rows.iter().map(|e| e.person.clone()).collect();
-                let linked = crate::persons::patients(cx.cfg, c, s, &keys, Some(user))?;
-                rows.retain(|e| linked.get(&e.person).is_some_and(|p| dates.holds(*p, e.time)));
-            }
-            let units: Vec<String> = rows.iter().map(|e| e.unit.clone()).collect();
-            one_unit(k, &units)?;
+            // each row tested as it is read, only those that hold kept (a criterion over every ECG
+            // reads millions); the units and the values left out are counted over the dates as
+            // read, before each patient's own dates (Privacy Mode) are tested
+            let per_patient = dates.per_patient();
+            let mut units: HashSet<String> = HashSet::new();
             let mut skipped = Skipped::default();
-            for e in rows {
-                let Some(v) = e.value_num else { continue };
-                if !skipped.compares(k, &e.unit) {
-                    continue;
+            // (person, time, why); one per person when the dates are everyone's
+            let mut held: Vec<(String, Option<f64>, String)> = vec![];
+            let mut seen: HashSet<String> = HashSet::new();
+            {
+                let mut test = |e: crate::sources::Entry| -> anyhow::Result<()> {
+                    if !in_range(e.time) {
+                        return Ok(());
+                    }
+                    units.insert(e.unit.trim().to_string());
+                    let Some(v) = e.value_num else { return Ok(()) };
+                    if !skipped.compares(k, &e.unit) || (has_value_test(k) && !test_value(k, v, &e.unit)?) {
+                        return Ok(());
+                    }
+                    if !per_patient && !seen.insert(e.person.clone()) {
+                        return Ok(());
+                    }
+                    let why = format!("{} {} {}{}", e.name, fmt_num(v), e.unit, on(e.time)).replace("  ", " ");
+                    held.push((e.person, e.time, why));
+                    Ok(())
+                };
+                s.find_each(&f, zone, &mut test)?;
+                for e in result_entries(cx, s, k, exact)? {
+                    test(e)?;
                 }
-                if has_value_test(k) && !test_value(k, v, &e.unit)? {
-                    continue;
-                }
-                found
-                    .push((e.person, format!("{} {} {}{}", e.name, fmt_num(v), e.unit, on(e.time)).replace("  ", " ")));
             }
+            one_unit(k, &units.into_iter().collect::<Vec<_>>())?;
+            if per_patient {
+                // each patient's own bounds: their persons linked first
+                let keys: Vec<String> = held.iter().map(|x| x.0.clone()).collect();
+                let linked = crate::persons::patients(cx.cfg, c, s, &keys, Some(user))?;
+                held.retain(|(p, t, _)| linked.get(p).is_some_and(|q| dates.holds(*q, *t)));
+            }
+            found.extend(held.into_iter().map(|(p, _, why)| (p, why)));
             skipped.done(k, cx)?;
         }
         "medication" => {
@@ -225,15 +241,42 @@ pub(super) fn source_measurement_rows(
     let dates = Dates::of(c, k, czone)?;
     let (from, to) = dates.wide();
     let f = Find { name: Some(k.name.trim().to_string()), numeric: true, ..Default::default() };
-    let mut found = s.find(&f, zone)?;
-    found.extend(result_entries(cx, s, k, true)?);
-    let rows: Vec<crate::sources::Entry> = found
-        .into_iter()
-        .filter(|e| {
-            from.is_none_or(|f| e.time.is_some_and(|t| t >= f)) && to.is_none_or(|x| e.time.is_some_and(|t| t < x))
-        })
-        .filter(|e| e.value_num.is_some())
-        .collect();
+    // each row taken as it is read: when the dates are everyone's, only each person's latest
+    // value is kept (the first read, of the same time), not the millions read
+    let per_patient = dates.per_patient();
+    let mut rows: Vec<crate::sources::Entry> = vec![];
+    let mut latest: HashMap<String, (usize, crate::sources::Entry)> = HashMap::new();
+    let mut n = 0usize;
+    {
+        let mut take = |e: crate::sources::Entry| -> anyhow::Result<()> {
+            let t = e.time;
+            if e.value_num.is_none()
+                || !from.is_none_or(|f| t.is_some_and(|t| t >= f))
+                || !to.is_none_or(|x| t.is_some_and(|t| t < x))
+            {
+                return Ok(());
+            }
+            n += 1;
+            if per_patient {
+                rows.push(e);
+            } else if latest
+                .get(&e.person)
+                .is_none_or(|(_, x)| t.unwrap_or(f64::NEG_INFINITY) > x.time.unwrap_or(f64::NEG_INFINITY))
+            {
+                latest.insert(e.person.clone(), (n, e));
+            }
+            Ok(())
+        };
+        s.find_each(&f, zone, &mut take)?;
+        for e in result_entries(cx, s, k, true)? {
+            take(e)?;
+        }
+    }
+    if !per_patient {
+        let mut kept: Vec<(usize, crate::sources::Entry)> = latest.into_values().collect();
+        kept.sort_by_key(|x| x.0);
+        rows = kept.into_iter().map(|x| x.1).collect();
+    }
     if rows.is_empty() {
         return Ok(vec![]);
     }

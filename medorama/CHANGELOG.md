@@ -1,5 +1,46 @@
 # Changelog: medorama
 
+## 0.3.1 (2026-11-17, pre-release)
+
+A patient's page names what was done and shows each fact once; the demo is an installation of its
+own; criteria read databases of millions of rows. A 0.3.0 installation updates in place.
+
+- **A patient's page, four columns** ([docs/design/patient-page.md](../docs/design/patient-page.md)):
+  visits (the current status), the journey, **what was done** (one line per thing done, by name:
+  no values, no flags), and the **detail** (everything about the one chosen). Each fact is shown
+  once: a value in the detail only; the number of visits in the visits column only (the patient
+  bar shows the dates of the first and latest data).
+- **An ECG is one entry** with its measurements (a database's ECG entries at one time; key
+  `ecg:<database>:<token>`), counted once in the journey. Its detail: its drawing; its
+  statements, those new since the patient's previous ECG marked and the previous ECG's no longer
+  said listed; each measurement once, as a tile with its change since the previous ECG and its
+  trend over the patient's ECGs. A laboratory panel's line is named by its tests.
+- **Criteria over millions of rows:** each row is tested as it is read and only those that hold
+  are kept (`QTc > 450 ms` over every ECG; `latest` keeps each person's latest value). `max_rows`
+  bounds the rows a criterion keeps, no longer those it reads; the persons behind `has …` are not
+  bounded.
+- **Tick all** the matches of a cohort search (after ticking a page), and untick all.
+- **The dates of a person's data:** a persons view's optional `earliest` and `latest` columns are
+  kept in the subject index (the encrypted `persons.sqlite`, two columns added in place), and the
+  patient list is sorted by them: a database without visits (an ECG archive) lists its patients
+  newest first. The demo's `demo_muse` gives them.
+- **`medorama databases views NAME --views FILE`** replaces a connected database's views (kind
+  `views`, an admin who manages it) and reads it again; its patients keep their numbers.
+- **The ID column** of the Patient Catalog shows the patient ID only (a dash without one, the
+  MRN being in its own column); a cohort's lists show the MRN when there is no patient ID.
+- **The demo is an installation of its own** ([docs/design/demo.md](../docs/design/demo.md)):
+  `medorama init --demo` makes a demo installation, `medorama init` a site's, for good. A demo
+  installation connects demo databases only (marked by a `medorama_demo` table: db-builder's
+  `new --demo`, tools/make-demo-data.py), a site's never one; every command checks first. A demo
+  installation shows a band on every page, names its exports `demo-…`, comes with four example
+  cohorts, and is never the home commands reach without `--home`. A control store from before
+  0.3.1 is decided by what it connects, and refused while it connects both.
+- **The demo:** `demo_muse` gives each patient's first and latest ECG, leaves out a test ECG
+  whose patient ID is a word (its views read MRNs of its form only), and every patient has two
+  ECGs to compare; every demo database is marked.
+- **API:** `GET config` says `demo`; a report entry has `names` in place of `summary` and
+  `abnormal`; a detail of an ECG has `ecg` (`measures`, `statements`, `gone`, `previous`).
+
 ## 0.3.0 (2026-11-17, pre-release)
 
 Medorama keeps of each connected database only what links its patients and names what it holds,

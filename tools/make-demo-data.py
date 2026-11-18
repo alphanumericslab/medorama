@@ -125,6 +125,32 @@ def fmt(d):
 FEATURES = {}
 
 
+def demo_marker(db):
+    """Mark a database the demo makes as a demo database (invented patients): Medorama connects
+    it to a demo installation only, and a site's installation refuses it (its
+    src/installation.rs; db-builder's `new --demo` marks its databases so)."""
+    db.executescript("CREATE TABLE medorama_demo (note TEXT NOT NULL);"
+                     "INSERT INTO medorama_demo VALUES ('A demo database: every patient in it is invented.');")
+
+
+def _marked(out, d):
+    """Whether a demo database (not encrypted) holds the demo's marker; one not built: not checked."""
+    f = Path(out) / d['file']
+    if not f.exists():
+        return 'build' in d
+    with sqlite3.connect(f) as db:
+        return db.execute("SELECT COUNT(*) FROM sqlite_master WHERE name = 'medorama_demo'").fetchone()[0] == 1
+
+
+def _muse_rows(out, where):
+    """The demo MUSE database's ECGs that hold this condition (SQL)."""
+    f = Path(out) / 'muse/ecg_metadata.sqlite'
+    if not f.exists():
+        return 0
+    with sqlite3.connect(f) as db:
+        return db.execute(f'SELECT COUNT(*) FROM ecg WHERE {where}').fetchone()[0]
+
+
 def feature(key, title, where):
     """Registers the check of a feature: a function of the demo folder, true when the demo holds it."""
     def wrap(check):
@@ -210,6 +236,14 @@ feature('muse-db', "A MUSE ECG archive and its ECG metadata database, connected 
 feature('catalog', 'A catalog view: what demo_muse holds, named without reading its entries', 'muse/views.toml')(
     lambda out: 'variables' in (_db(out, 'demo_muse') or {}).get('settings', {})
     and 'variables =' in (Path(out) / 'muse/views.toml').read_text(encoding='utf-8'))
+feature('demo-marked', 'Every demo database marked as invented: only a demo installation connects it', 'demo-databases.json')(
+    lambda out: all(_marked(out, d) for d in _manifest(out)['databases'] if not d.get('encrypt')))
+feature('person-dates', "Each MUSE patient's first and latest ECG, from the persons view (the list's dates without visits)", 'muse/views.toml')(
+    lambda out: 'AS earliest' in (Path(out) / 'muse/views.toml').read_text(encoding='utf-8'))
+feature('muse-ids', 'A test ECG whose patient ID is a word, left out by the views', 'muse/ecg_metadata.sqlite')(
+    lambda out: _muse_rows(out, "patient_id = 'test'") == 1 and "GLOB 'SYN[0-9]*'" in (Path(out) / 'muse/views.toml').read_text(encoding='utf-8'))
+feature('ecg-compare', 'Patients with two ECGs or more: each ECG compared with the previous one', 'muse/ecg_metadata.sqlite')(
+    lambda out: _muse_rows(out, "patient_id IN (SELECT patient_id FROM ecg GROUP BY patient_id HAVING COUNT(*) > 1)") >= 4)
 feature('ecg-median', 'MUSE ECGs with their median beats and P, QRS and T onsets', 'ecg/*.xml')(
     lambda out: all(b'<WaveformType>Median</WaveformType>' in p.read_bytes() and b'<QOnset>' in p.read_bytes()
                     for p in Path(out).glob('ecg/*.xml')))
@@ -1803,6 +1837,7 @@ def write_omop(path, extra=()):
     if path.exists():
         path.unlink()
     db = sqlite3.connect(path)
+    demo_marker(db)
     db.executescript(OMOP_TABLES)
     db.executemany('INSERT INTO concept VALUES (?, ?, ?, ?)', OMOP_CONCEPTS)
     # person_id, sex concept, born, MRN (person_source_value)
@@ -2405,6 +2440,7 @@ def registry(out, pats, stories, encs, seed):
     hf = [p for p in pats if any(stories.get(e[0]) in ('hf', 'hypertension', 'nstemi', 'nstemi_sepsis') for e in encs if e[1] == p[0])][:5]
     people = [(p[1], '', p[4], p[5]) for p in hf] + [('', 'HF-0101', '1957-07-07', 'M'), ('', 'HF-0102', '1948-02-19', 'F')]
     db = sqlite3.connect(path)
+    demo_marker(db)
     db.executescript('''
 CREATE TABLE reg_patient (id INTEGER PRIMARY KEY, study_id TEXT, mrn TEXT, birth_date TEXT, sex TEXT);
 CREATE TABLE reg_visit (id INTEGER PRIMARY KEY, patient_id INTEGER, started TEXT, ended TEXT, site TEXT);
@@ -2451,27 +2487,31 @@ MUSE_MEASURES = [('vr', 'Vent. rate', 'ventricular_rate_bpm', 'bpm'), ('ar', 'At
                  ('qtc', 'QTc', 'qtc_ms', 'ms'), ('qtcf', 'QTcF', 'qtc_fridericia_ms', 'ms'), ('rr', 'RR', 'global_rr_ms', 'ms'),
                  ('pax', 'P axis', 'p_axis_deg', '°'), ('rax', 'R axis', 'r_axis_deg', '°'), ('tax', 'T axis', 't_axis_deg', '°'),
                  ('sbp', 'Systolic BP', 'systolic_bp_mmhg', 'mmHg'), ('dbp', 'Diastolic BP', 'diastolic_bp_mmhg', 'mmHg')]
+# the MRNs the views read: a patient ID typed at the cart that is not one (a name, "test") is
+# left out (a site writes its own MRNs' form: digits only, `patient_id NOT GLOB '*[^0-9]*'`)
+MUSE_MRN = "patient_id GLOB 'SYN[0-9]*'"
 MUSE_VIEWS = {
-    'persons': """SELECT patient_id AS person_key, '' AS patient_id, '' AS patient_id_issuer,
+    'persons': f"""SELECT patient_id AS person_key, '' AS patient_id, '' AS patient_id_issuer,
        patient_id AS mrn, '' AS mrn_authority,
        COALESCE(last_name, '') AS last_name, COALESCE(first_name, '') AS first_name,
        COALESCE(birth_date, '') AS birth_date,
        CASE sex WHEN 'female' THEN 'F' WHEN 'male' THEN 'M' ELSE '' END AS sex,
+       (SELECT MIN(e.acquisition_datetime) FROM ecg e WHERE e.patient_id = ecg.patient_id) AS earliest,
        MAX(acquisition_datetime) AS latest
-FROM ecg WHERE patient_id IS NOT NULL AND patient_id <> ''
+FROM ecg WHERE {MUSE_MRN}
 GROUP BY patient_id""",
-    'entries': """SELECT 'e' || md5 AS entry_key, patient_id AS person_key, NULL AS visit_key, 'ecg' AS category,
+    'entries': f"""SELECT 'e' || md5 AS entry_key, patient_id AS person_key, NULL AS visit_key, 'ecg' AS category,
        acquisition_datetime AS time, NULL AS end_time, '12-lead ECG' AS name, '' AS code,
        '' AS vocabulary, NULL AS value_num, '' AS value_text, '' AS unit, NULL AS ref_low,
        NULL AS ref_high, '' AS flag, '' AS author,
        COALESCE(NULLIF(diagnosis_text, ''), original_diagnosis_text, '') AS text
-FROM ecg WHERE patient_id <> ''
+FROM ecg WHERE {MUSE_MRN}
 """ + '\n'.join(f"UNION ALL SELECT 'm' || md5 || ':{k}', patient_id, NULL, 'ecg', acquisition_datetime, NULL, '{n}', '', '', {c}, '', '{u}', "
-                f"NULL, NULL, '', '', '' FROM ecg WHERE patient_id <> '' AND {c} IS NOT NULL" for k, n, c, u in MUSE_MEASURES),
-    'recordings': """SELECT 'e' || md5 || ':file' AS recording_key, patient_id AS person_key, NULL AS visit_key,
+                f"NULL, NULL, '', '', '' FROM ecg WHERE {MUSE_MRN} AND {c} IS NOT NULL" for k, n, c, u in MUSE_MEASURES),
+    'recordings': f"""SELECT 'e' || md5 || ':file' AS recording_key, patient_id AS person_key, NULL AS visit_key,
        source_file AS file, 'GE MUSE XML' AS format, acquisition_datetime AS start_time,
        NULL AS end_time, '' AS label, 'ecg' AS category, NULL AS size, md5 AS fingerprint
-FROM ecg WHERE patient_id <> ''
+FROM ecg WHERE {MUSE_MRN}
   AND source_file IS NOT NULL AND source_file <> ''""",
     'version': "SELECT COUNT(*) || ' ' || MAX(added_at) FROM additions",
     # the catalog, as constants: connecting reads no entry for it (docs/design/connected-databases.md)
@@ -2515,7 +2555,11 @@ def muse_archive(out, pats, lib, seed):
                          g('QTcF'), g('P axis'), g('R axis'), g('T axis'), None, None, rr if given else None,
                          json.dumps(computer), '\n'.join(computer), json.dumps(computer), '\n'.join(computer),
                          '2024-05-01T02:00:00', 'muse_2019_2023_ecg_db.csv'))
+    # a cart's test ECG, its patient ID typed as a word: in the database, left out by the views
+    rows.append((hashlib.md5(b'cart test').hexdigest(), 'computed from file', '', 'test', 'TEST', 'TEST', None, None,
+                 '2023-01-09T07:30:00') + rows[0][9:])
     db = sqlite3.connect(d / 'ecg_metadata.sqlite')
+    demo_marker(db)
     db.executescript('''
 CREATE TABLE ecg (md5 TEXT PRIMARY KEY, md5_source TEXT, source_file TEXT, patient_id TEXT, last_name TEXT, first_name TEXT,
   birth_date TEXT, sex TEXT, acquisition_datetime TEXT, acquisition_device TEXT, analysis_software_version TEXT, status TEXT,
@@ -2574,7 +2618,7 @@ def manifest(out, full, tables):
     db-builder steps that build it ('@' + a path relative to OUT)."""
     tz = 'America/New_York'
     dbs = [{'name': 'demo', 'kind': 'dbb', 'file': 'demo.sqlite', 'build': [
-        ['new', '@demo.sqlite', '--timezone', tz],
+        ['new', '@demo.sqlite', '--timezone', tz, '--demo'],
         # the patients and their encounters first: every other table names them
         ['add', '@demo.sqlite', '@databases/patients.csv', '@databases/encounters.xlsx', *[f'@databases/{x}' for x in tables],
          '--issuer', 'DEMO', '--mrn-authority', 'DEMO'],
@@ -2583,7 +2627,7 @@ def manifest(out, full, tables):
         dbs[0]['build'] += [['recordings', '@demo.sqlite', '@sleeplab', '--pattern', '{patient}_*.edf', '--issuer', 'DEMO', '--category', 'sleep'],
                             ['recordings', '@demo.sqlite', '@eeglab', '--pattern', '{patient}_*.bdf', '--issuer', 'DEMO', '--category', 'eeg']]
         dbs.append({'name': 'demo_north', 'kind': 'dbb', 'file': 'north/north.sqlite', 'build': [
-            ['new', '@north/north.sqlite', '--timezone', tz],
+            ['new', '@north/north.sqlite', '--timezone', tz, '--demo'],
             ['add', '@north/north.sqlite', '@north/patients.csv', '@north/encounters.csv', '@north/labs.csv', '@north/notes.csv',
              '@north/ecg_index.csv', '--issuer', 'NORTH', '--mrn-authority', 'DEMO', '--rules', '@north/rules.toml'],
             ['move', '@north/archive', '@north/files'],
@@ -2596,7 +2640,7 @@ def manifest(out, full, tables):
         dbs.append({'name': 'demo_muse', 'kind': 'views', 'file': 'muse/ecg_metadata.sqlite',
                     'settings': {**MUSE_VIEWS, 'mrn_authority': 'DEMO', 'timezone': tz}})
         dbs.append({'name': 'demo_secure', 'kind': 'dbb', 'file': 'secure/secure.sqlite', 'key_file': 'keys/demo_secure.key', 'encrypt': True, 'build': [
-            ['new', '@secure/secure.sqlite', '--timezone', tz],
+            ['new', '@secure/secure.sqlite', '--timezone', tz, '--demo'],
             ['add', '@secure/secure.sqlite', '@secure/patients.csv', '@secure/labs.csv', '@secure/notes.csv', '--issuer', 'SECURE', '--mrn-authority', 'DEMO'],
         ]})
     m = {'made_by': 'tools/make-demo-data.py', 'databases': dbs}

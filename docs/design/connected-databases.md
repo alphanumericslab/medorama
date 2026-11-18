@@ -18,6 +18,8 @@ for contributors and reviewers, and for site engineers who connect large databas
 - [What is read when](#what-is-read-when)
 - [The patient list](#the-patient-list)
 - [Privacy Mode's dictionary](#privacy-modes-dictionary)
+- [Criteria over millions of rows](#criteria-over-millions-of-rows)
+- [Replacing a database's views](#replacing-a-databases-views)
 - [Refreshing](#refreshing)
 - [Upgrading from 0.2](#upgrading-from-02)
 - [A large ECG database](#a-large-ecg-database)
@@ -29,8 +31,9 @@ Medorama links patients across databases by exact identifiers, and reads their d
 database when they are asked for. Of each connected database it keeps only:
 
 1. **The subject index**: each person's identifiers (patient ID, MRN, their issuers), names,
-   date of birth and sex, linked to a Medorama patient number; and their encounters (key, start,
-   end, intensive care or not).
+   date of birth and sex, linked to a Medorama patient number; the dates of their first and
+   latest data, when the database gives them (0.3.1); and their encounters (key, start, end,
+   intensive care or not).
 2. **The catalog**: the names and units of the variables it holds (what the cohort builder
    completes and the planner sends criteria by), and the categories of its recordings. Counted
    only when asked.
@@ -48,7 +51,9 @@ Agreed with the project lead, 2026-11-17:
 - **Medorama is not an identity resolver.** It joins databases on exact (issuer, identifier)
   pairs; a person whose pairs name two patients is a conflict, listed and never merged.
 - **Kept per database, encrypted with its key:** names, MRN, patient ID, date of birth, sex, and
-  each encounter's key, start and end. Nothing more.
+  each encounter's key, start and end. Nothing more. (0.3.1 adds the dates of a person's first
+  and latest data, when the persons view gives them: the patient list's order for a database
+  without visits.)
 - **The catalog holds names and units.** Counts are read when a manager asks (**Count now**);
   a count below 11 is shown as "< 11".
 - **Files are read when a patient is opened.** A recording is indexed when first opened, and its
@@ -106,6 +111,12 @@ hashes of the identifier pairs (`patient_keys`), never an identifier.
 person of the database (its `persons` view, however many: the `max_rows` bound is for criteria)
 and link each to a patient by the hashes of their pairs, as in 0.2. Then every visit (its
 `visits` view) is kept as an encounter. Nothing is read of the entries.
+
+**The dates of a person's data** (0.3.1): a persons view may give two optional columns,
+`earliest` and `latest`, the times of the person's first and latest data (an ECG database's
+`MIN` and `MAX` of its acquisition times). They are kept with the person, and the patient list
+is sorted by the latest (with the encounters'), so that a database without visits lists its
+patients newest first; without them, its patients have no date to sort by.
 
 What the index answers without the database: who is a patient, in which databases, their
 identity (with the `phi` grant), their pseudonym and age, their encounters' count and latest
@@ -184,6 +195,24 @@ keeps. Recordings are now kept as patients are opened, so:
 - The gate is applied after an answer is made, so the recordings an answer read are in the
   dictionary that clears it.
 
+## Criteria over millions of rows
+
+A criterion's filters run in the database; its values, units and dates are tested in Medorama
+(units convert, Privacy Mode's dates move per patient). Since 0.3.1 each row is tested as it is
+read and only the rows that hold are kept ([`Source::find_each`](../../medorama/src/sources/mod.rs)):
+`QTc > 450 ms` reads every QTc of a database of millions of ECGs and keeps those over 450; `latest`
+keeps each person's latest value only. `max_rows` bounds the rows a criterion keeps, not those it
+reads; the persons behind `has ecg` are never bounded (they are at most the database's persons,
+whom the subject index holds every one of).
+
+## Replacing a database's views
+
+`medorama databases views NAME --views FILE` (kind `views`; an admin who manages it) replaces a
+connected database's views, checks them, and reads the database again. Its patients keep their
+numbers: a person is linked by the same identifier pairs, whatever view gives them. A site
+narrows a view this way (an ECG archive's patient IDs typed at the cart as names left out)
+without connecting the database again.
+
 ## Refreshing
 
 - A version query (`version` view; OMOP's `cdm_source`; a db-builder database's
@@ -209,7 +238,7 @@ fingerprinted every file: hours. In 0.3:
 
 | Step | What runs |
 |---|---|
-| Subjects | Its `persons` view, a `GROUP BY patient_id` (an index on `ecg(patient_id)`) |
+| Subjects | Its `persons` view, a `GROUP BY patient_id` (an index on `ecg(patient_id)`), with each patient's first and latest ECG |
 | Encounters | None: it has no visits |
 | Catalog | Its `variables` view: 14 constant rows, no entry read |
 | Recordings' categories | `SELECT DISTINCT category` over its `recordings` view: one scan |

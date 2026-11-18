@@ -1,5 +1,11 @@
 # Changelog: db-builder
 
+## 0.3.1 (2026-11-17, pre-release)
+
+- `db-builder new --demo` marks a new database a demo database (invented patients): a
+  `medorama_demo` table, by which Medorama connects it to a demo installation only, and a site's
+  installation refuses it.
+
 ## 0.3.0 (2026-11-17, pre-release)
 
 No changes; the version follows Medorama's.

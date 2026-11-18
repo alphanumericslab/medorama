@@ -62,6 +62,7 @@ pub mod expr;
 pub mod gate;
 pub mod gateway;
 pub mod grants;
+pub mod installation;
 pub mod jobs;
 pub mod patient;
 pub mod persons;

@@ -109,9 +109,56 @@ proxy will name that person, with \opt{-{}-admin} (\cref{sec:sign-in-accounts}).
 (\opt{-{}-admin}, \opt{-{}-timezone}, \opt{-{}-port},
 \opt{-{}-password-stdin}, \opt{-{}-database-url}, \opt{-{}-database-password-file},
 \opt{-{}-demo}) are listed in \cref{chap:cli}. Medorama starts with no database connected:
-connect one next (\cref{sec:administration-connecting}). \opt{-{}-demo} connects the demo's
-databases the installer made (\cref{chap:quickstart}); never install the demo where real
-patients are.
+connect one next (\cref{sec:administration-connecting}). \opt{-{}-demo} makes a demo
+installation instead, which connects the demo's databases the installer made
+(\cref{sec:administration-demo}).
+
+\subsection{The demo installation}
+\label{sec:administration-demo}
+
+A Medorama installation is either the demo's or a site's, from \cmd{medorama init} on, and never
+both: no demo patient is linked to a real one, counted in a real cohort, named in a real
+installation's Privacy Mode dictionary, or exported from it.
+\begin{itemize}
+\item \cmd{medorama init -{}-demo} makes a demo installation, \cmd{medorama init} a site's. The
+  mode is kept in the control store and never changes: a demo installation never becomes a
+  site's.
+\item \textbf{A demo database says so}: it holds a table \code{medorama\_demo} (one row: ``A demo
+  database: every patient in it is invented.''), read the same way in SQLite, SQLCipher and
+  PostgreSQL. \cmd{db-builder new -{}-demo} writes it, and \file{tools/make-demo-data.py} gives it
+  to every database of the demo.
+\item \textbf{Connecting} reads the marker: a demo installation refuses a database without it,
+  a site's installation a database with it. Each refusal says what to do.
+\item \textbf{Every command} (and \cmd{medorama serve}) checks first that the installation holds
+  no database of the other kind; listing and removing databases stay open, to put it right.
+\item \cmd{init -{}-demo} connects the demo's databases, adds its example action plug-in, and
+  makes four example cohorts: \emph{ICU stays} (\code{icu}), \emph{Long QTc}
+  (\code{demo\_muse.QTc > 450 ms}), \emph{Women over 65 with an ECG} (\code{female AND age > 65
+  AND has ecg}) and \emph{Sepsis} (\code{dx sepsis}).
+\item \textbf{What a user sees}: a band on every page, ``Demo $\cdot$ every patient here is
+  invented: this installation holds no real patient's data'', in neutral colours; the browser
+  tab's title begins with ``Demo''; a cohort's exports are named \file{demo-cohort-\dots}; and
+  \cmd{init -{}-demo} prints ``a demo installation: invented patients only''. The API's
+  \code{GET config} says \code{demo} (\cref{chap:http-api}).
+\item \textbf{Never the default home.} \cmd{init -{}-demo} is never remembered as the home that
+  commands without \opt{-{}-home} reach (\cref{sec:administration-which}): a site's installation
+  on the same computer stays the default.
+\end{itemize}
+The demo runs as its own installation, with its own home, workspace and port:
+\begin{lstlisting}[style=shell]
+medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo
+medorama --home ~/medorama-demo serve --port 8095
+medorama init --workspace ~/medorama-workspace          # a site's installation, apart
+medorama serve                                          # port 8090
+\end{lstlisting}
+To be rid of the demo, stop its server and delete its home and its workspace.
+
+\paragraph{A control store made before 0.3.1} has no mode. At its first command, Medorama decides
+it by what it connects: demo databases only, the demo's; otherwise a site's. A database is a demo
+database by its marker, or, for a demo made before 0.3.1 (without the marker), by being a file
+of the demo the installer made (\file{\dots/share/medorama/demo/}). A store that connects both
+is refused until the databases of one kind are removed (\cmd{medorama databases remove NAME}),
+the demo's named in the message; the demo is then made as its own installation.
 
 \subsection{Which home a command uses}
 \label{sec:administration-which}
@@ -434,6 +481,8 @@ in full.
   (\cref{chap:connecting}) \\
 \cmd{databases list [-{}-json]}, \cmd{check [NAME|-{}-all]}, \cmd{refresh NAME} & The connected
   databases and their status; check one now; read its persons, encounters and catalog again \\
+\cmd{databases views NAME -{}-views FILE} & Replace the views of a database of kind
+  \code{views}, check them and read it again; its patients keep their numbers \\
 \cmd{databases count NAME}, \cmd{index NAME} & Count its variables' entries and persons (\ui{Count
   now}); read and index every recording it lists (\ui{Index all recordings}) \\
 \cmd{databases variables NAME [-{}-json]}, \cmd{conflicts NAME} & What a database holds; its
@@ -500,7 +549,7 @@ administrator who connected it (every permission), reads its catalog (the names 
 its variables), and links its persons, keeping their encounters
 (\cref{sec:administration-identity}). It counts no entry and reads no recording: one pass over
 the persons and one over the visits, minutes for millions of persons, whatever
-\opt{-{}-max-rows} (which bounds criteria). What Medorama keeps of a database, and what it reads
+\opt{-{}-max-rows} (which bounds the rows a criterion keeps). What Medorama keeps of a database, and what it reads
 when, is in \cref{sec:connecting-kept}. A password given on the page or with
 \opt{-{}-password-stdin} is kept wrapped by the master key in the control store, never in a file
 and never shown; \opt{-{}-password-file} or \code{\$MEDORAMA\_SOURCE\_PASSWORD\_<NAME>} give it
@@ -642,8 +691,10 @@ the viewer Medorama runs is first told to forget the database's index store; the
 \end{enumerate}
 Each step can be repeated: a removal that a crash interrupted is finished when the server or any
 command starts. The database itself is never touched. The audit log keeps its entries; they name
-patients by number, and the numbers lead nowhere once the links are gone. The demo is removed in
-the same way: by removing its databases. The details are in \cref{sec:protecting-removal}.
+patients by number, and the numbers lead nowhere once the links are gone. The demo is removed
+by deleting its installation's home and workspace (\cref{sec:administration-demo}); only a
+control store made before 0.3.1 that connects both kinds has its demo databases removed this way.
+The details are in \cref{sec:protecting-removal}.
 
 \section{One patient across databases}
 \label{sec:administration-identity}

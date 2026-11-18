@@ -145,13 +145,16 @@ meaning, in words, appears beside it (or the error; \cref{sec:cohorts-errors}). 
 results, the tab says ``\emph{N} patients match'', with the number excluded, the number
 ticked, and the databases searched and left out (\cref{sec:cohorts-search-in}). Values that
 could not be compared (\cref{sec:cohorts-units}) are reported above the table. The table lists
-the patients found, a hundred to a page, with \ui{Patient}, \ui{ID}, \ui{Sex}, \ui{Age},
+the patients found, a hundred to a page, with \ui{Patient}, \ui{ID} (the patient ID, else the
+MRN, for users who may see identifiers; otherwise the pseudonym), \ui{Sex}, \ui{Age},
 \ui{Data} (the colors of their categories), and \ui{Why}: up to three reasons for each patient
 (``QTc 482 ms on 2024-01-03'', ``has ICU'', ``no Holter''). A click on a patient's name opens the patient's page. Below the table, a fold
 lists the patients excluded, with \ui{Excluded for}.
 
 \paragraph{Saving.} The boxes at the start of the rows tick patients, and the box in the header
-ticks the whole page. Below the criteria, two choices save the result:
+ticks the whole page. When more patients match than the page shows, ticking the page offers
+\ui{Tick all \emph{N}}, which ticks every match, and then \ui{Untick all}. With nothing ticked,
+saving saves all the matches. Below the criteria, two choices save the result:
 \begin{itemize}
 \item \ui{Save all \emph{N} as a new cohort} (or \ui{Save the \emph{K} ticked as a new cohort}),
   after a name is typed in the field \ui{New cohort's name};
@@ -605,7 +608,8 @@ The cohort's page exports the cohort as files to download (\cref{tab:cohorts-exp
 Privacy Mode, the label reads \ui{Export (Privacy Mode)}, and the exports pass the privacy gate.
 They have the same columns, with identifiers as placeholders, patients named by their
 pseudonyms, dates moved back and ages above 89 as \code{90+}, and their file names end in
-\code{-privacy}.
+\code{-privacy}. A demo installation's exports are named \file{demo-cohort-\dots}
+(\cref{sec:administration-demo}).
 
 \begin{table}[htbp]
 \caption{A cohort's exports.}

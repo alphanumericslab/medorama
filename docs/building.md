@@ -65,7 +65,7 @@ rights, except on some systems for the compiler ([Prerequisites](#prerequisites)
 | `--no-rustup` (`-NoRustup`) | `install-medorama.sh` and `.ps1`, `install.sh` and `.ps1`, VitalStream's `install.sh` | Fails instead of installing Rust when `cargo` is missing. VitalStream's `install.ps1` has no `-NoRustup`: it never installs Rust, and `-Viewer rs` fails when `cargo` is missing. |
 | `--root DIR` (`-Root`) | VitalStream's `install` | The viewer's root folder, fixed in the program: the viewer never opens anything outside it. The default is `~`, the home folder of whoever runs the viewer; `/` allows the whole file system. Medorama's installer gives its viewer the whole file system, because Medorama's own rules decide what each user may open. |
 | `--no-password` (`-NoPassword`) | VitalStream's `install` | Builds the viewer without password support: no password can be set, and the viewer refuses to run where one is required, as under Medorama. By default the viewer is built with password support, and a password is optional. |
-| `--demo` (`-Demo`) | `install-medorama`, `install` | Also makes **the demo**: two databases of invented patients (one made with db-builder, one OMOP database) that `medorama init --demo` connects. It is **off by default** ([administrator's guide, The demo](administration.md#the-demo)). |
+| `--demo` (`-Demo`) | `install-medorama`, `install` | Also makes **the demo**: six databases of invented patients (made with db-builder, OMOP and SQL views, each marked a demo database) that `medorama init --demo` connects, in a demo installation of its own. It is **off by default** ([administrator's guide, The demo](administration.md#the-demo)). |
 | `--no-wfdb` (`-NoWfdb`) | `install-medorama`, VitalStream's `install` | Builds the programs without WFDB support, so that they contain no wfdb-x code: a WFDB recording is refused, and every other format is read ([Without WFDB](#without-wfdb)). `install-medorama` builds both Medorama and its viewer this way, and refuses `--demo` with it, because the demo's recordings are WFDB records. |
 | `--accept-license` (`-AcceptLicense`) | every installer | Accepts the license terms without asking, for scripts and CI (or set `MEDORAMA_ACCEPT_LICENSE=yes`). Without it, the installer first shows the terms ([License terms](#license-terms)) and goes on only if you type `y` or `yes`; without a terminal to ask, it stops and says how to accept. |
 
@@ -450,7 +450,8 @@ since Medorama reads no tables), each `FUZZ_S` seconds; it needs the nightly too
 **Update.** Run `git pull`, then the installer again with the same options (or
 `cargo build --release --locked` and `cmake --build --preset release`). Without `--demo`,
 `medorama init --demo` has nothing to connect afterwards; databases already connected stay
-connected. Restart the programs. Medorama updates its control store when it starts, so back it up
+connected. An installation made before 0.3.1 becomes the demo's or a site's at its first command,
+by what it connects ([administrator's guide, The demo](administration.md#the-demo)). Restart the programs. Medorama updates its control store when it starts, so back it up
 first ([administrator's guide](administration.md#backup-update-uninstall)). From 0.1.0 to 0.2.0
 there is no update in place: [upgrading from 0.1.0](install.md#upgrading-from-010).
 

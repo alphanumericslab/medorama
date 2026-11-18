@@ -287,15 +287,20 @@ With \opt{--demo}, the Medorama and development installers also take these steps
   \cmd{db-builder recordings} on its folders of sleep studies and EEGs, by file-name pattern),
   \file{north/north.sqlite} (with \opt{-{}-rules}, then its ECG folder moved and
   \cmd{db-builder rewrite}), and \file{secure/secure.sqlite} (with \opt{-{}-encrypt} and the
-  demo's key). The OMOP, registry and ECG archive databases are SQLite files already.
+  demo's key), each made with \cmd{db-builder new -{}-demo}. The OMOP, registry and ECG archive
+  databases are SQLite files already. Every one of them holds a table \code{medorama\_demo}, which
+  marks it a demo database: only a demo installation connects it.
 \item They name that folder in \file{.venv/bin/medorama.demo} (Windows
   \file{.venv\textbackslash Scripts\textbackslash medorama.demo}), next to the programs.
 \end{enumerate}
-\cmd{medorama init -{}-demo} then connects every database \file{demo-databases.json} lists,
-with the encrypted one's key from its key file, and adds the demo's example action plug-in
-(\cref{chap:quickstart}). Running the installer again without \opt{--demo}
-removes \file{medorama.demo}, so that \cmd{init -{}-demo} has nothing to connect; a Medorama that
-connected the demo already keeps it until its databases are removed. The demo needs WFDB support:
+\cmd{medorama init -{}-demo} then makes a demo installation, connects every database
+\file{demo-databases.json} lists, with the encrypted one's key from its key file, and adds the
+demo's example action plug-in and cohorts (\cref{chap:quickstart}). Run it with a home of its own
+(\cmd{medorama -{}-home \textasciitilde/medorama-demo init -{}-workspace
+\textasciitilde/medorama-demo-workspace -{}-demo}): a demo installation is never the default home,
+and a site's installation never connects the demo. Running the installer again without
+\opt{--demo} removes \file{medorama.demo}, so that \cmd{init -{}-demo} has nothing to connect; a
+demo installation that connected the demo already keeps it. The demo needs WFDB support:
 its ICU and Holter recordings are WFDB records, so \opt{--demo} and \opt{--no-wfdb} are refused
 together.
 
@@ -651,11 +656,11 @@ then make the demo by hand, as the installer does (\cref{sec:installation-demo})
 WFDBX=4a91916f5282fba44ca3056802fbc7def298af08
 .venv/bin/pip install --no-index --find-links ../wheels numpy \
   "wfdb-x @ file://$PWD/../wheels/$WFDBX.tar.gz#subdirectory=python"
-.venv/bin/python tools/make-demo-data.py ~/medorama-demo --db-builder .venv/bin/db-builder
+.venv/bin/python tools/make-demo-data.py ~/medorama-demo-data --db-builder .venv/bin/db-builder
 \end{lstlisting}
 Then name the folder for \cmd{init -{}-demo}
-(\cmd{echo \textasciitilde/medorama-demo > .venv/bin/medorama.demo}), or connect each database its
-\file{demo-databases.json} lists, as \cref{sec:quickstart-later} shows.
+(\cmd{echo \textasciitilde/medorama-demo-data > .venv/bin/medorama.demo}), or connect each database its
+\file{demo-databases.json} lists to a demo installation, as \cref{sec:quickstart-later} shows.
 
 \section{Windows}
 \label{sec:installation-windows}
@@ -700,8 +705,8 @@ make help                                 # every check
 
 \paragraph{Update.} \cmd{git pull}, then the installer again with the same options (or
 \cmd{cargo build --release --locked} and \cmd{cmake --build --preset release}). Without
-\opt{--demo}, \cmd{medorama init -{}-demo} has nothing to connect; a Medorama that connected the
-demo keeps it. Restart the programs. Medorama updates its control store when it starts, and an
+\opt{--demo}, \cmd{medorama init -{}-demo} has nothing to connect; a demo installation that
+connected the demo keeps it. Restart the programs. Medorama updates its control store when it starts, and an
 older version refuses a control store a newer one has updated: back it up first
 (\cref{sec:administration-backups}). From 0.2 to 0.3 the update is made in place, with nothing
 to do by hand: the control store's migration has each database read again at its next check,

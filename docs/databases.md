@@ -123,7 +123,8 @@ recordings are read when the patient is opened
 OMOP, or views), where it is (a file on this server, chosen with **Choose…**, or a PostgreSQL
 server), the password (kept wrapped by the master key, never shown), the schemas, what OMOP's
 `person_source_value` holds, the issuer of its patient IDs, the MRN authority, the time zone and,
-for views, the SQL views. Then select **Connect**.
+for views, the SQL views. Then select **Connect**. A demo installation connects only demo
+databases, and a site's installation refuses them ([design/demo.md](design/demo.md)).
 
 **On the command line**, on the server, as the account that runs Medorama:
 
@@ -141,6 +142,7 @@ database), **Remove…**, its variables, who may use it (grants) and its identit
 | List the databases and their status | `medorama databases list [--json]` |
 | Check one, or all | `medorama databases check [NAME \| --all]` |
 | Read its persons, encounters and catalog again | `medorama databases refresh NAME` |
+| Replace its views (kind `views`), check them and read it again; its patients keep their numbers | `medorama databases views NAME --views FILE` |
 | What it holds (names and units; counts once counted) | `medorama databases variables NAME [--json]` |
 | Count its variables' entries and persons (**Count now**) | `medorama databases count NAME` |
 | Read and index every recording it lists (**Index all recordings**) | `medorama databases index NAME` |
@@ -149,8 +151,8 @@ database), **Remove…**, its variables, who may use it (grants) and its identit
 | Remove it, and every trace of it in Medorama | `medorama databases remove NAME [--yes]` |
 
 Permissions are `search` (criteria find its patients), `view` (its data on patient pages, its
-recordings), `phi` (its identifiers) and `manage` (check, refresh, count, index, grant, remove); each implies
-the weaker ones. Removing a database destroys its key, its workspace folder and every cohort
+recordings), `phi` (its identifiers) and `manage` (check, refresh, count, index, grant, remove; replacing
+the views needs an admin who manages it); each implies the weaker ones. Removing a database destroys its key, its workspace folder and every cohort
 member it contributed to; the database itself is never touched
 ([design/databases-only.md, Removing a database](design/databases-only.md#removing-a-database)).
 
@@ -163,7 +165,7 @@ its workspace folder, encrypted with the database's own key:
 
 | File | What it holds |
 |---|---|
-| `persons.sqlite` | The subject index: each person's identifiers and their issuers, names, date of birth and sex, the patient number they are linked to and the keyed hashes of their pairs; their encounters (the visit's key, start, end, intensive care or not); identity conflicts. |
+| `persons.sqlite` | The subject index: each person's identifiers and their issuers, names, date of birth and sex, the dates of their first and latest data (when the persons view gives `earliest` and `latest`), the patient number they are linked to and the keyed hashes of their pairs; their encounters (the visit's key, start, end, intensive care or not); identity conflicts. |
 | `variables.sqlite` | The catalog: each variable's category, name, vocabulary, code, unit and whether it has numbers; how many entries and persons hold it, only once counted (**Count now**); the categories of its recordings; the version they were read at. |
 | `recordings.sqlite` | The recordings Medorama has opened (or indexed when asked): each file's path, kind, size, fingerprint, format, times, label, category, whether it is present and why not; derived series. |
 | `index.sqlite` | Their indexes. |
@@ -174,11 +176,11 @@ and when:
 
 | When | Read from the database |
 |---|---|
-| Connecting, a new version, **Refresh** | Every person (however many: `--max-rows` bounds criteria, not this), every visit, the catalog (its `variables` view, else one grouped query over the entries, with no counting), and the categories of its recordings (`SELECT DISTINCT category`). No recording file is read. |
+| Connecting, a new version, **Refresh**, new views | Every person (however many: `--max-rows` bounds criteria, not this), every visit, the catalog (its `variables` view, else one grouped query over the entries, with no counting), and the categories of its recordings (`SELECT DISTINCT category`). No recording file is read. |
 | Every check (each minute) | Whether each view answers; the version (without a version query, a count of its persons and recordings). |
 | The Patient Catalog | For the page shown, what each online database holds of those patients (the **Data** and **Entries** columns); a filter on a kind of data (`has ECG`) asks each online database. |
 | A patient's page, a job, a cohort's selection | Their entries, visits, stays and recordings. Their recordings' files are checked then, kept, and queued for indexing. |
-| A cohort, a search | The criteria, sent to each database that may hold them; `has` too. |
+| A cohort, a search | The criteria, sent to each database that may hold them; `has` too. Each row is tested as it is read and only those that hold are kept, so a criterion reads a database of millions of rows (`QTc > 450 ms` over every ECG; `latest` keeps each person's latest value). |
 | **Count now** (`medorama databases count NAME`) | One grouped count over the entries: how many entries and persons hold each variable, kept until the catalog is read again. Counts from 1 to 10 are shown as "< 11" (the page, the command, the API). |
 | **Index all recordings** (`medorama databases index NAME`) | Every recording it lists (at most `--max-rows`): their files checked, and the new or changed ones queued for indexing. For a database of ICU recordings that should all be indexed ahead of time; `medorama init --demo` does it for the demo's databases. |
 
@@ -202,7 +204,7 @@ and the recordings kept from before are shown.
 | `--timezone` | the `timezone` setting | The time zone of the database's times written without an offset (an IANA name such as `Europe/Paris`; an unknown one is refused). |
 | `--files-root` | a SQLite file's folder | The folder relative recording files are read from. |
 | `--timeout-s` | 60 | Each PostgreSQL query's time limit, in seconds. |
-| `--max-rows` | 1,000,000 | The rows a criterion may read, and the recordings **Index all recordings** may read. Connecting and refreshing read every person and visit, however many. |
+| `--max-rows` | 1,000,000 | The rows a criterion may keep (it reads as many as it needs: each is tested as it is read), and the recordings **Index all recordings** may read. The persons behind `has …` are not bounded, and connecting and refreshing read every person and visit, however many. |
 
 ## Build a database with db-builder
 
@@ -478,6 +480,7 @@ A recording database read through views still gives an `entries` view; it may re
 | `last_name`, `first_name` | text | Empty strings when the database has none or should not give them (**PHI**). |
 | `birth_date` | text | `YYYY-MM-DD` (also `MM/DD/YYYY`, `YYYYMMDD`), or empty (**PHI**). |
 | `sex` | text | `F`, `M`, or empty. The cohort criteria `female` and `male` match `F` and `M`. |
+| `earliest`, `latest` | time | Optional: the times of the person's first and latest data (an ECG database's `MIN` and `MAX` of its acquisition times). Kept in the subject index; the Patient Catalog is sorted by the latest (with the encounters'), so a database without visits lists its patients newest first. |
 
 A person with neither `patient_id` nor `mrn` is a patient of its own, linked to no other
 database's persons.
@@ -653,7 +656,7 @@ The views read these columns of `ecg`:
 | `source_file` | The XML file's path, inside a data root. |
 
 and `additions.added_at`, the time of each batch. The views are the demo's `muse/views.toml`
-(written by [tools/make-demo-data.py](../tools/make-demo-data.py)); copy it, and change the
+(written by [tools/make-demo-data.py](../tools/make-demo-data.py)); copy it, change the form of the MRNs it reads ([below](#the-mrns-it-reads)), and the
 column names if a database names them otherwise:
 
 ```bash
@@ -663,7 +666,7 @@ medorama databases connect muse --kind views --url sqlite:/data/ecg/ecg_metadata
 
 | View | What it gives |
 |---|---|
-| `persons` | One person per MUSE patient ID, read as the MRN (of the `--mrn-authority`); the names, date of birth and sex of the person's latest ECG. |
+| `persons` | One person per MUSE patient ID, read as the MRN (of the `--mrn-authority`); the names, date of birth and sex of their latest ECG (`MAX` the one aggregate, so that SQLite reads them from its row; the first ECG's time in a subquery); the times of their first and latest ECG (`earliest`, `latest`). Only MRNs of the site's form ([below](#the-mrns-it-reads)). |
 | `entries` | Per ECG, an `ecg` entry named `12-lead ECG`, its text the confirmed statements (else the computer's); and one `ecg` entry per measurement of the final (overread) set: Vent. rate, Atrial rate, PR, QRS, QT, QTc, QTcF, RR, the P, R and T axes and the blood pressure, in their units, for cohorts (`muse.QTc > 450 ms`). |
 | `recordings` | Per ECG, its XML file, keyed as the ECG entry's file: the patient's page shows it with the entry, and it opens in the ECG viewer with its median beats ([viewers/ecg](../viewers/ecg/README.md#muse-xml)). |
 | `version` | The number of tables merged into it, and when the last was. |
@@ -681,6 +684,29 @@ medorama databases connect muse --kind views --url sqlite:/data/ecg/ecg_metadata
   indexed.
 - **The demo** holds one: `demo_muse` (`muse/ecg_metadata.sqlite`, with the same views in
   `muse/views.toml`).
+
+#### The MRNs it reads
+
+A patient ID typed at the cart is not always an MRN: a name, or `test`. Such an ID links no one,
+so the views leave it out: every view reads only the patient IDs of the site's form. For MRNs of
+digits only:
+
+```sql
+SELECT patient_id AS person_key, '' AS patient_id, '' AS patient_id_issuer,
+       patient_id AS mrn, '' AS mrn_authority,
+       COALESCE(last_name, '') AS last_name, COALESCE(first_name, '') AS first_name,
+       COALESCE(birth_date, '') AS birth_date,
+       CASE sex WHEN 'female' THEN 'F' WHEN 'male' THEN 'M' ELSE '' END AS sex,
+       (SELECT MIN(e.acquisition_datetime) FROM ecg e WHERE e.patient_id = ecg.patient_id) AS earliest,
+       MAX(acquisition_datetime) AS latest
+FROM ecg WHERE patient_id NOT GLOB '*[^0-9]*'
+GROUP BY patient_id
+```
+
+The `entries` and `recordings` views take the same `WHERE`. The demo's views read its invented
+MRNs (`patient_id GLOB 'SYN[0-9]*'`), and leave out its one test ECG, whose patient ID is a word.
+To change the views of a database already connected, without connecting it again:
+`medorama databases views muse --views muse-views.toml` (its patients keep their numbers).
 
 ## Files: recordings, ECGs and images
 
@@ -739,14 +765,17 @@ Catalog** lists its patients; a patient's page shows each entry in its column of
 | `no database file …`, `the file is outside the folders data may come from (data_roots)` | The SQLite file is not there, or outside the data roots. | Check the path; extend `data_roots`. |
 | `that is Medorama's own control store`, `that file is in Medorama's workspace` | The file is Medorama's own. | Connect a database file kept elsewhere. |
 | `a database named NAME is connected` | The name is taken (names are compared ignoring case). | Choose another name. |
+| `this is a demo installation: it connects demo databases (invented patients) only, and NAME is not one …` | A database of real patients connected to a demo installation. | Connect it to a site's installation (`medorama init`, without `--demo`; [design/demo.md](design/demo.md)). |
+| `NAME is a demo database (invented patients): connect it to a demo installation …` | A demo database (its `medorama_demo` table) connected to a site's installation. | Connect it to a demo installation, with its own home (`medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo`). |
+| `demo databases (invented patients) are connected to this site's installation: …` | A control store from before 0.3.1 connects both kinds; every command but listing and removing databases is refused. | Remove the demo's databases it names (`medorama databases remove NAME`), and run the demo as its own installation. |
 | `NAME: the view entries: …` | A view fails in the database: a missing table or column, a trailing semicolon, a syntax error. | Run the view's SQL in the database; give every canonical column (including `patient_id_issuer`). |
 | `NAME: the version: …` | The version query fails. | Fix it, or leave it out. |
 | `columns of type … are not read (cast them in the query)` | A PostgreSQL column of an unsupported type. | Cast it to text or a number in the view. |
 | `NAME is connected, but reading it failed (refresh it)` | The views answer, but reading the persons, visits or catalog failed. | Fix the cause it gives, then **Refresh** (`medorama databases refresh NAME`). |
-| `NAME: more than N persons: narrow the criteria` | A search reads more persons (or visits) than `max_rows`. | Narrow the criteria, or raise `--max-rows`. |
+| `NAME: more than N persons: narrow the criteria` | A search keeps more persons (or visits) than `max_rows`. | Narrow the criteria, or raise `--max-rows`. |
 | `NAME: more than N recordings` | **Index all recordings** reads more recordings than `max_rows`. | Raise `--max-rows`, or let the recordings be indexed as patients are opened. |
 | `NAME: the view variables: …` | The `variables` view fails, or lacks a column. | Give it the columns `category, name, vocabulary, code, unit, numeric`, or leave it out. |
-| `NAME: the criterion reads more than N rows: narrow it …` | A criterion reads more than `max_rows` rows. | Narrow it (a date range, a database), or raise `--max-rows`. |
+| `NAME: the criterion finds more than N rows: narrow it …` | More than `max_rows` rows hold a criterion (rows that do not hold are not kept, however many are read). | Narrow it (a date range, a database), or raise `--max-rows`. |
 | A grey dot: `no such SQLite file`, or a connection error | The database is offline. | Bring it back; Medorama checks every minute, or select **Check now**. |
 | Identity conflicts listed | A person's identifiers name two patients. | Correct the identifiers in the database, then refresh. |
 | One patient appears twice | The two databases name the patient by different pairs (another issuer, a missing authority). | Give both databases the same issuer and identifier. |

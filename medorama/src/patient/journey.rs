@@ -181,7 +181,17 @@ pub fn journey(c: &Connection, cfg: &Config, user: &User, id: i64) -> anyhow::Re
     };
     let mut cells: BTreeMap<(usize, usize, i64), (u32, u8)> = BTreeMap::new();
     let mut spans = vec![];
+    // an ECG counts once, not once more for each of its measurements
+    let mut ecgs: HashMap<&str, Vec<&It>> = HashMap::new();
     for it in items {
+        if let Some(k) = &it.ecg {
+            ecgs.entry(k.as_str()).or_default().push(it);
+        }
+    }
+    for it in items {
+        if it.ecg.as_deref().and_then(|k| ecgs.get(k)).is_some_and(|g| !is_ecg_head(it, g)) {
+            continue;
+        }
         let (Some(lane), Some(t)) = (lane_of(&it.category), it.time) else { continue };
         let sub = sub_of(lane, &it.name);
         match it.end {

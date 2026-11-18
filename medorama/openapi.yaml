@@ -93,6 +93,7 @@ paths:
                 type: object
                 properties:
                   version: { type: string }
+                  demo: { type: boolean, description: "a demo installation: invented patients only (docs/design/demo.md)" }
                   timezone: { type: string }
                   viewer_url: { type: string, description: "a viewer running elsewhere, opened in a new browser tab; empty when Medorama runs its own" }
                   auto_index: { type: boolean, description: "new and changed recordings are indexed while the server runs" }
@@ -146,7 +147,7 @@ paths:
   /patients/{id}/report:
     get:
       tags: [patients]
-      summary: "The report's entries; with q, the search"
+      summary: "The report's entries, one per thing done, by name (an ECG with its measurements is one); with q, the search"
       parameters: [{ $ref: "#/components/parameters/Id" }, { name: q, in: query, schema: { type: string } }]
       responses: { "200": { $ref: "#/components/responses/Json" } }
   /patients/{id}/trends:
@@ -154,7 +155,7 @@ paths:
   /patients/{id}/detail:
     get:
       tags: [patients]
-      summary: "One entry's detail (item:…, labs:…, vit:…, rec:…, live:…)"
+      summary: "One entry's detail (item:…, labs:…, vit:…, ecg:…, rec:…, live:…); an ECG's (ecg:…) with its measurements against the patient's previous ECG and over their ECGs, its statements new or no longer said"
       parameters: [{ $ref: "#/components/parameters/Id" }, { name: key, in: query, required: true, schema: { type: string } }]
       responses: { "200": { $ref: "#/components/responses/Json" }, "400": { $ref: "#/components/responses/Error" } }
   /patients/{id}/file/{item}:

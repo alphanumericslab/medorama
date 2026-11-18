@@ -10,10 +10,11 @@ pub struct Entry {
     pub time: Option<f64>,
     pub end: Option<f64>,
     pub category: String,
+    /// What was done: the report lists entries by name only, their values are the detail's.
     pub title: String,
-    pub summary: String,
-    /// Abnormal values in it.
-    pub abnormal: u32,
+    /// The names of what it holds (a panel's tests, a day's vital signs, an ECG's measurements),
+    /// which the journey's sub-columns find it by; not shown.
+    pub names: Vec<String>,
     pub encounter: Option<i64>,
     /// With a search: the text around the first match.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -59,23 +60,10 @@ pub(super) fn shown_value(it: &It, read_notes: bool) -> String {
     }
 }
 
-/// H, L or critical after a value outside its range.
-pub(super) fn flag_mark(it: &It) -> &'static str {
-    match it.level {
-        2 => " critical",
-        1 if it.num.is_some() && it.flag_low => " L",
-        1 if it.num.is_some() => " H",
-        1 => " abnormal",
-        _ => "",
-    }
-}
-
 /// Build the report's entries from items and recordings; `keep`: only those items.
 pub(super) fn entries(
     d: &Data,
     items: &[It],
-    read_notes: bool,
-    privacy: bool,
     keep: Option<&HashSet<i64>>,
     recs: Option<&HashSet<i64>>,
 ) -> anyhow::Result<Vec<Entry>> {
@@ -89,62 +77,26 @@ pub(super) fn entries(
     let mut out = vec![];
     for (key, its) in groups {
         let first = its[0];
-        let abnormal = its.iter().filter(|i| i.level > 0).count() as u32;
-        let (title, summary) = if key.starts_with("labs:") {
-            let names: Vec<&str> = its.iter().map(|i| i.name.as_str()).collect();
-            let title =
-                if names.len() == 1 { names[0].to_string() } else { format!("Laboratory · {} tests", names.len()) };
-            let mut shown: Vec<&&It> = its.iter().filter(|i| i.level > 0).collect();
-            if shown.is_empty() {
-                shown = its.iter().collect();
+        let mut names: Vec<String> = vec![];
+        for i in &its {
+            if !names.contains(&i.name) {
+                names.push(i.name.clone());
             }
-            let summary = shown
-                .iter()
-                .take(4)
-                .map(|i| format!("{} {}{}", i.name, shown_value(i, read_notes), flag_mark(i)))
-                .collect::<Vec<_>>()
-                .join(" · ");
-            (title, summary)
+        }
+        let title = if key.starts_with("labs:") {
+            // a panel by its tests' names (without their values: the detail's)
+            match names.len() {
+                0..=3 => names.join(", "),
+                n => format!("{} +{} more", names[..3].join(", "), n - 3),
+            }
         } else if key.starts_with("vit:") {
-            let mut by: BTreeMap<&str, (f64, f64)> = BTreeMap::new();
-            for i in &its {
-                if let Some(v) = i.num {
-                    let e = by.entry(i.name.as_str()).or_insert((v, v));
-                    e.0 = e.0.min(v);
-                    e.1 = e.1.max(v);
-                }
-            }
-            let summary = by
-                .iter()
-                .take(4)
-                .map(|(n, (a, b))| {
-                    if a == b {
-                        format!("{n} {}", fmt_num(*a))
-                    } else {
-                        format!("{n} {}–{}", fmt_num(*a), fmt_num(*b))
-                    }
-                })
-                .collect::<Vec<_>>()
-                .join(" · ");
-            (format!("Vital signs · {} readings", its.len()), summary)
-        } else if first.category == "note" {
-            // staff names are withheld in Privacy Mode
-            let author =
-                if privacy && !first.author.is_empty() { crate::gate::STAFF_NAME } else { first.author.as_str() };
-            let who = [author, first.service.as_str()]
-                .iter()
-                .filter(|s| !s.is_empty())
-                .copied()
-                .collect::<Vec<_>>()
-                .join(" · ");
-            (first.name.clone(), who)
+            format!("Vital signs · {} readings", its.len())
+        } else if key.starts_with("ecg:") {
+            its.iter().find(|i| is_ecg_head(i, &its)).map_or_else(|| first.name.clone(), |h| h.name.clone())
+        } else if first.code.is_empty() || first.category != "dx" {
+            first.name.clone()
         } else {
-            let title = if first.code.is_empty() || first.category != "dx" {
-                first.name.clone()
-            } else {
-                format!("{} · {}", first.name, first.code)
-            };
-            (title, shown_value(first, read_notes))
+            format!("{} · {}", first.name, first.code)
         };
         let times: Vec<f64> = its.iter().filter_map(|i| i.time).collect();
         out.push(Entry {
@@ -153,8 +105,7 @@ pub(super) fn entries(
             end: its.iter().filter_map(|i| i.end).fold(None, |a: Option<f64>, t| Some(a.map_or(t, |a| a.max(t)))),
             category: first.category.clone(),
             title,
-            summary,
-            abnormal,
+            names,
             encounter: first.encounter,
             snippet: None,
             attachment: its.iter().any(|i| i.file.is_some()),
@@ -165,22 +116,13 @@ pub(super) fn entries(
             continue;
         }
         let (a, b) = (r.t_start, r.t_end);
-        let dur = match (a, b) {
-            (Some(a), Some(b)) => duration(b - a),
-            _ => String::new(),
-        };
         out.push(Entry {
             key: format!("rec:{}", r.id),
             time: a,
             end: b,
             category: r.category.clone(),
             title: recording_title(&r.category).into(),
-            summary: [r.label.clone(), dur, r.format.clone()]
-                .into_iter()
-                .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join(" · "),
-            abnormal: 0,
+            names: vec![],
             encounter: visit_of_recording(d, r),
             snippet: None,
             attachment: true,
@@ -272,20 +214,6 @@ pub(super) fn snippet(text: &str, words: &[String]) -> Option<String> {
     Some(s)
 }
 
-/// A length of time in words: minutes, hours and minutes, days and hours; rounded once, then
-/// split (never "1 h 60 min" or "1 d 24 h").
-pub(super) fn duration(seconds: f64) -> String {
-    let min = (seconds / 60.0).round().max(0.0) as i64;
-    if min >= 24 * 60 {
-        let h = (seconds / 3600.0).round() as i64;
-        format!("{} d {} h", h / 24, h % 24)
-    } else if min >= 60 {
-        format!("{} h {} min", min / 60, min % 60)
-    } else {
-        format!("{min} min")
-    }
-}
-
 pub fn report(c: &Connection, cfg: &Config, user: &User, id: i64, q: &str) -> anyhow::Result<Report> {
     patient_exists(c, user, id)?;
     // notes' text: with the PHI permission, or in a de-identified session that lets notes through
@@ -295,12 +223,7 @@ pub fn report(c: &Connection, cfg: &Config, user: &User, id: i64, q: &str) -> an
     // free text only for who may read it: else entries are found by name only
     let visible = |it: &It| read_notes || !is_free_text(it);
     if q.trim().is_empty() {
-        let mut e = entries(&d, &items, read_notes, user.privacy, None, None)?;
-        if !read_notes {
-            for x in e.iter_mut().filter(|x| x.category == "note") {
-                x.summary.clear();
-            }
-        }
+        let e = entries(&d, &items, None, None)?;
         return Ok(Report { entries: e, counts: vec![], terms: vec![], fuzzy: vec![] });
     }
     let (words, cmps) = search_words(q);
@@ -399,7 +322,7 @@ pub fn report(c: &Connection, cfg: &Config, user: &User, id: i64, q: &str) -> an
         highlight.push(n);
     }
     let matched: Vec<It> = items.into_iter().filter(|i| keep.contains(&i.id)).collect();
-    let mut e = entries(&d, &matched, read_notes, user.privacy, None, Some(&recs))?;
+    let mut e = entries(&d, &matched, None, Some(&recs))?;
     for x in e.iter_mut() {
         if x.key.starts_with("live:") {
             if let Some(it) = matched.iter().find(|i| entry_key(i) == x.key) {
@@ -408,9 +331,6 @@ pub fn report(c: &Connection, cfg: &Config, user: &User, id: i64, q: &str) -> an
                     x.snippet = snippet(&text_of(it), &highlight);
                 }
             }
-        }
-        if !read_notes && x.category == "note" {
-            x.summary.clear();
         }
     }
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
@@ -423,15 +343,4 @@ pub fn report(c: &Connection, cfg: &Config, user: &User, id: i64, q: &str) -> an
     highlight.sort();
     highlight.dedup();
     Ok(Report { entries: e, counts, terms: highlight, fuzzy })
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn durations_are_rounded_once() {
-        assert_eq!(super::duration(3599.0), "1 h 0 min");
-        assert_eq!(super::duration(2.0 * 86400.0 - 60.0), "2 d 0 h");
-        assert_eq!(super::duration(90.0 * 60.0), "1 h 30 min");
-        assert_eq!(super::duration(125.0), "2 min");
-    }
 }

@@ -162,6 +162,16 @@ pub fn create(path: &Path, how: &Opening, timezone: &str) -> anyhow::Result<Conn
     Ok(c)
 }
 
+/// Mark a database a demo database (invented patients): the table Medorama reads it by
+/// (medorama/src/installation.rs).
+pub fn mark_demo(c: &Connection) -> anyhow::Result<()> {
+    c.execute_batch(
+        "CREATE TABLE IF NOT EXISTS medorama_demo (note TEXT NOT NULL);
+         INSERT INTO medorama_demo (note) VALUES ('A demo database: every patient in it is invented.');",
+    )?;
+    Ok(())
+}
+
 /// A new database in memory (a dry run on a database not made yet: `add --dry-run`).
 pub fn scratch(timezone: &str) -> anyhow::Result<Connection> {
     crate::util::tz(timezone)?;

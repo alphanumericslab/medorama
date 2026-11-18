@@ -44,8 +44,8 @@ function renderBar() {
   else meta.push([s.pseudonym, 'pseudonym']);
   const mrns = s.phi?.mrns || [];
   if (mrns.length) meta.push([mrns.map((m) => m[1]).join(' · '), mrns.some((m) => m[0]) ? `MRN · ${mrns.map((m) => m[0] || 'default').join(', ')}` : 'MRN']);
-  const stays = s.encounters.length;
-  if (s.first) meta.push([`${fmtDate(s.first)} – ${fmtDate(s.last)}`, `${stays} visit${stays === 1 ? '' : 's'}`]);
+  // (the visits are counted once, in the column beside)
+  if (s.first) meta.push([`${fmtDate(s.first)} – ${fmtDate(s.last)}`, 'first – latest data']);
   if ((s.sources || []).length) meta.push([s.sources.join(', '), s.sources.length === 1 ? 'database' : 'databases']);
   let allergy;
   if (s.allergies === null) allergy = '<span class="allergy none">Allergies: not recorded</span>';
@@ -173,7 +173,7 @@ function clickHit(k) {
   // a cell: the newest entry of this column in that time
   const cands = pp.entries.filter((x) => x.category === lane.key && x.time !== null && x.time >= k.t0 && x.time < k.t1);
   const sub = lane.subs.length > 1 ? lane.subs[k.sub] : null;
-  const best = cands.find((x) => sub && (x.title.includes(sub) || x.summary.includes(sub))) || cands[0];
+  const best = cands.find((x) => sub && (x.title.includes(sub) || x.names.includes(sub))) || cands[0];
   if (best) select(best.key, { scrollList: true });
 }
 

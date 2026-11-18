@@ -4,9 +4,14 @@
 waveforms, imaging and laboratory results across databases.**
 
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
-![Version 0.3.0, pre-release](https://img.shields.io/badge/version-0.3.0%20pre--release-informational)
+![Version 0.3.1, pre-release](https://img.shields.io/badge/version-0.3.1%20pre--release-informational)
 
-**Version 0.3.0 (pre-release, November 2026).** Medorama keeps of each connected database only
+**Version 0.3.1 (pre-release, November 2026).** A patient's page names what was done and shows
+each fact once, in four columns, and compares each ECG with the patient's previous one
+([patient-page.md](docs/design/patient-page.md)); the demo is an installation of its own
+([demo.md](docs/design/demo.md)); criteria read databases of millions of rows; a database may
+give the dates of each person's first and latest data; `medorama databases views` replaces a
+database's views. Since 0.3.0, Medorama keeps of each connected database only
 its subjects (their identities and encounters) and the names and units of its variables, and
 reads the rest from the database when it is asked: connecting a database of millions of rows
 takes minutes, not hours ([connected-databases.md](docs/design/connected-databases.md)). 0.2.1
@@ -29,8 +34,8 @@ privacy review. A 0.1.0 installation is set up again rather than updated
 
 ![A patient's page in Medorama: the Patient Journey, the report and a 12-lead ECG](docs/images/screens/patient.png)
 
-*A patient's page: the Patient Journey (left), the report of every entry (center) and the
-selected ECG (right). Every picture on this site shows synthetic data made by
+*A patient's page: the visits, the Patient Journey, what was done (one line per thing done) and
+the selected ECG in detail. Every picture on this site shows synthetic data made by
 `tools/make-demo-data.py`.*
 
 ## Why Medorama
@@ -61,7 +66,8 @@ Medorama brings these sources together without moving them:
 
 - **One patient, one page.** Visits, laboratory results, vital signs, medications, conditions,
   notes, ECGs, imaging and bedside-monitor recordings from every connected database appear on one
-  time line, beside a searchable report of every entry
+  time line, beside a searchable list of what was done and the detail of the one chosen, each
+  fact once; an ECG is compared with the patient's previous one
   ([user guide](docs/user-guide.md)).
 - **Cohorts across the databases you choose.** Researchers tick the databases to search and find
   patients by results, ECG and imaging measurements, diagnoses, medications, stays, age, sex,
@@ -170,18 +176,25 @@ Python 3.9 or later, Perl and a C compiler present, these lines install Medorama
 git clone https://github.com/alphanumericslab/medorama.git && cd medorama
 tools/install-medorama.sh --viewer rs --demo   # shows the license terms (type y to accept), then builds Medorama, db-builder, a viewer and the demo
 source .venv/bin/activate
-medorama init --workspace ~/medorama-workspace --demo   # once: asks for the admin password; connects the demo
-medorama serve                                # then open http://127.0.0.1:8090 and sign in as admin
+medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo   # once: asks for the admin password; a demo installation
+medorama --home ~/medorama-demo serve --port 8095    # then open http://127.0.0.1:8095 and sign in as admin
 ```
 
-[Get started](docs/getting-started.md) continues with a guided tour of the demo, and how to
-remove it (its databases) before connecting real ones. Coming from 0.1.0? See
+The demo runs as an installation of its own (its own home, workspace and port); real databases
+go into a site's installation, set up apart with `medorama init --workspace DIR`.
+[Get started](docs/getting-started.md) continues with a guided tour of the demo, and how to set
+up a site's installation for real data. Coming from 0.1.0? See
 [upgrading from 0.1.0](docs/install.md#upgrading-from-010).
 
 ## Demo
 
 The demo is a complete, invented hospital world for trying, showing and teaching every feature
-of Medorama. The installers' `--demo` option makes it, and `medorama init --demo` connects it.
+of Medorama. The installers' `--demo` option makes it, and `medorama init --demo` makes a **demo
+installation** that connects it: an installation of its own, which connects demo databases only
+(each is marked, by a `medorama_demo` table), as a site's installation never connects one. A band
+on every page says that every patient there is invented; its cohort exports are named
+`demo-cohort-…`; it comes with four example cohorts (*ICU stays*, *Long QTc*, *Women over 65 with
+an ECG*, *Sepsis*) ([design/demo.md](docs/design/demo.md)).
 
 **What it holds.** About 40 invented patients (pseudo names such as Jane Doe, MRNs starting with
 `SYN`, dates of birth and every date in an invented period), in six databases:
@@ -207,17 +220,19 @@ collections' attributions. Everything else, and every identifier and text, is in
 
 | To try | Do |
 |---|---|
-| Patient search, the Patient Journey, trends | Open **Patient Catalog**, search `Doe` or a pseudonym, open a patient; switch the report to **Trends** |
+| Patient search, the Patient Journey, trends | Open **Patient Catalog**, search `Doe` or a pseudonym, open a patient; switch **What was done** to **Trends** |
+| An ECG compared with the previous one | Open a patient of `demo_muse` (every one has two ECGs or more) and click a **12-lead ECG** line: the statements new and no longer said, each measurement's change and trend; ‹ › step from ECG to ECG |
+| An ECG archive without visits | `demo_muse`'s patients are listed by the date of their latest ECG (its persons view's `earliest` and `latest`); its one test ECG, whose patient ID is a word, is left out by its views |
 | Patients linked across databases | Jane Doe (`demo`, `demo_registry`, `demo_muse`, `demo_secure`); Eva Lindqvist and Richard Roe (`demo`, `demo_north`, `demo_omop`) |
 | Identity conflicts | **Databases** › `demo_north` › **Identity conflicts**, or `medorama databases conflicts demo_north` |
-| Cohorts | **Cohorts**: `demo.creatinine > 1.5 OR has icu`, `female AND age > 70`, `demo.troponin > 100`, `demo_muse.QRS > 100 ms`, `has eeg` |
+| Cohorts | **Cohorts**: the four example cohorts; `demo.creatinine > 1.5 OR has icu`, `female AND age > 70`, `demo.troponin > 100`, `demo_muse.QRS > 100 ms`, `has eeg`; after ticking a page of matches, **Tick all** |
 | Privacy Mode | Turn **Privacy Mode** on: names become `[Patient Name]` (in notes too), dates move, the patient over 89 shows as `90+` |
 | Recordings and viewers | A patient's ICU monitoring, Holter, sleep study or EEG opens VitalStream; a 12-lead ECG opens the ECG viewer (a MUSE ECG with its median beats; Eva Lindqvist's 2019 ECG of `demo_muse`, without its sampling rate, by sample number); CT, radiographs, echo and angiography open PACS |
 | Actions and jobs | **Actions**: run **Index** or the example plug-in **Recording summary** on all recordings; watch **Jobs** |
 | History | Open a few patients, then **History** |
 
-[Administration, The demo](docs/administration.md#the-demo) explains how it is built and
-removed; [tools/README.md](tools/README.md#the-demo) lists which feature each part of it
+[Administration, The demo](docs/administration.md#the-demo) explains how it is built, run beside
+a site's installation, and removed; [tools/README.md](tools/README.md#the-demo) lists which feature each part of it
 demonstrates. Every new feature of Medorama extends the demo.
 
 ## License and commercial use
