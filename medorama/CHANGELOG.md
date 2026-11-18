@@ -53,6 +53,11 @@ database, and a search's reasons are written out for the page shown only. Every 
   mode, and told to screen readers.
 - **The demo:** a fifth example cohort, *Long QTc since 2022* (`demo_muse.QTc > 450 ms` from
   2022-01-01): a criterion whose dates are sent to `demo_muse` (its times are ISO 8601 text).
+- **CI on Node.js 24** (`.github/workflows`): the GitHub actions pinned on Node.js 20, which
+  GitHub now forces onto Node.js 24 with a warning, move to their Node.js 24 releases, still
+  pinned by commit: `checkout` v7.0.1, `setup-python` v7.1.0, `setup-node` v7.1.0,
+  `upload-artifact` v7.0.2, `download-artifact` v8.0.2, `softprops/action-gh-release` v3.0.4.
+  `ilammy/msvc-dev-cmd` (v1.13.0, the latest) has no Node.js 24 release yet.
 - **Tests:** `tests/connected.rs`
   `a_pages_requests_read_a_patients_recordings_at_once_without_a_lock_refused` (fails with error
   517 without the fix); `tests/criteria_reads.rs`
