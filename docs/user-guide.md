@@ -229,7 +229,10 @@ on the patient alone (sex, age, `in`) apply among the patients that the searched
 **Large databases.** Each row a criterion reads is tested as it is read, and only those that hold
 are kept, so a criterion such as `muse.QTc > 450 ms` reads every ECG of a database of millions of
 them. A criterion that more than `max_rows` rows hold (1,000,000 by default) is refused, with a
-message saying to narrow it; the patients behind `has …` are never bounded.
+message saying to narrow it; the patients behind `has …` are never bounded. A threshold is
+sent to the database, which reads only the values that may pass, and a search repeated while a
+database's data stay the same is answered from what was read
+([performance.md, What a criterion reads](performance.md#what-a-criterion-reads)).
 
 **The ID column** of the patients found shows, with the PHI permission out of Privacy Mode, the
 patient ID, or the MRN when there is no patient ID; otherwise the pseudonym.
@@ -323,14 +326,26 @@ facts: in column 1 as the current status, and in column 3 as their history, on t
 
 | Part | What it shows |
 |---|---|
-| Patient bar | The name, sex, age and date of birth, the patient ID and the MRNs (identity only from the databases granted to you with `phi`, out of Privacy Mode), the dates of the first and latest data, the databases that hold the patient, and the allergies ("not recorded" when no database holds allergies). |
-| 1. Visits | The current status: the visits, each with the name of its database (click one to show only that visit), the latest stay's medications, and the conditions. |
+| Patient bar | The name, sex, age and date of birth, the patient ID and the MRNs (identity only from the databases granted to you with `phi`, out of Privacy Mode), and the dates of the first and latest data; at the row's end, the databases that hold the patient, and any that does not answer now. |
+| 1. Visits | The current status: the allergies first (in amber; the section only when one of the patient's databases can hold allergies, so that *No allergy recorded* means what it says), the visits, each with the name of its database (click one to show only that visit), the latest stay's medications, and the conditions, labelled by the vocabularies of their codes (ICD-10-CM, ICD-9 …). A section with nothing to show is left out, and the whole column for a patient with none (one known to an ECG archive alone), so that the journey and the report get its room. |
 | 2. Journey | Every entry on one time line, the newest on top, with one column per category. ICU stays are drawn as light bars, with their recordings over them: the stays in intensive-care units when the database gives them (db-builder's bed stays, OMOP's `visit_detail`), else the whole intensive-care visit. A result flagged normal (`N`, `WNL`) is shown normal whatever its range says. Abnormal values are amber and critical values orange, a critical mark also outlined when it is wide enough; red is used only for alarms. Months without data are folded. Hover over a mark to see what it is, and click it to open it. A column's name hides or shows that column: click it, or reach it with Tab and press Enter or Space; **Columns…** above the journey lists the columns with a box for each. For a screen reader, the journey is a picture whose text says its span and columns; every mark is also a line of **What was done**. |
 | 3. What was done | One line per thing done, newest first, grouped by day with the visit, the hospital day and the unit; each line by name only, with no value and no flag (abnormal, high). Laboratory results taken at the same moment form one line named by their tests (*Lactate, Sodium, Potassium*; past three, the first three and *+N more*); vital signs one line a day, *Vital signs · N readings* (the day in Medorama's time zone); an ECG with its measurements one line (*12-lead ECG*). The list can also be grouped by category, or show the trends. |
 | 4. Detail | Everything about the thing done chosen in column 3 or the journey: a panel's values with their ranges, previous values and trend (a critical value also named *critical*); a note; an ECG ([below](#an-ecg)); a picture, a PDF or a video, with **Open in ECG** or **Open in PACS**; a recording's main vital signs over its whole length (click to open VitalStream at that moment); and the notes written around that time. |
 
+**Widths.** Column 4, the detail, has the most room; column 3 about a third of what the
+detail and it share. Drag the thin line between two columns to change their widths (or focus it
+with Tab and press ← or →); double-click it, or press Home, for the default. Your widths are
+kept in this browser.
+
+**The keyboard.** ↑ and ↓ move to the line above or below in column 3, and the detail follows;
+Enter or Space selects the line that has the focus; Escape clears the selection. The page's
+address keeps the selection: reload it, go back, or share the link, and the same entry opens.
+While a detail is read from a slow database its outline is shown; the previous and next of the
+same kind are read ahead, so that stepping through them is at once.
+
 **On a tablet.** In a window narrower than 1100 pixels, columns 3 and 4 go below the visits
-and the journey, and the page scrolls, so that each keeps room to read.
+and the journey, and the page scrolls, so that each keeps room to read; the widths are then
+fixed.
 
 #### An ECG
 

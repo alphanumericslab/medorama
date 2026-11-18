@@ -176,7 +176,7 @@ async function connect() {
   const settings = {
     issuer: v('cn-issuer'), mrn_authority: v('cn-auth'), timezone: v('cn-tz'),
     ...(kind === 'omop' ? { schema: v('cn-schema'), vocabulary_schema: v('cn-vschema'), identifier: v('cn-ident') } : {}),
-    ...(kind === 'views' ? { persons: v('cn-v-persons'), visits: v('cn-v-visits'), entries: v('cn-v-entries'), ...(v('cn-v-stays') ? { stays: v('cn-v-stays') } : {}), recordings: v('cn-v-recordings'), version: v('cn-v-version') } : {}),
+    ...(kind === 'views' ? { persons: v('cn-v-persons'), visits: v('cn-v-visits'), entries: v('cn-v-entries'), ...(v('cn-v-stays') ? { stays: v('cn-v-stays') } : {}), ...(v('cn-v-has') ? { has: v('cn-v-has') } : {}), recordings: v('cn-v-recordings'), version: v('cn-v-version') } : {}),
   };
   if (!(server ? v('cn-url') : v('cn-path'))) {
     $(server ? '#cn-url' : '#cn-path').focus();

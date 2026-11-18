@@ -12,7 +12,9 @@ export function element(sel, classes = []) {
   const on = {};
   const e = {
     sel, id: String(sel).replace(/^#/, ''), innerHTML: '', textContent: '', value: '', placeholder: '', title: '',
-    disabled: false, hidden: false, required: false, open: false, checked: false, on, dataset: {}, style: {},
+    disabled: false, hidden: false, required: false, open: false, checked: false, on, dataset: {},
+    // (custom properties too: setProperty, as a page's)
+    style: { setProperty(k, v) { this[k] = String(v); }, removeProperty(k) { delete this[k]; }, getPropertyValue(k) { return this[k] ?? ''; } },
     scrollTop: 0, clientWidth: 600, clientHeight: 400, scrollWidth: 600, isConnected: true,
     classList: {
       contains: (c) => cls.has(c),

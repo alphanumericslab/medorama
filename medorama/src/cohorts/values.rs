@@ -122,6 +122,33 @@ pub(super) fn test_value(k: &Criterion, v: f64, unit: &str) -> anyhow::Result<bo
     Ok(lo.is_none_or(|m| v >= m) && hi.is_none_or(|m| v <= m))
 }
 
+/// The bounds, in `unit`, that hold every value [`test_value`] may pass (it allows a value a
+/// billionth off the criterion's): the threshold the database tests (in_sources.rs); none
+/// when the criterion's unit does not compare with `unit`.  `!=` has none: every value.
+pub(super) fn bounds(k: &Criterion, unit: &str) -> Option<(Option<f64>, Option<f64>)> {
+    let conv = |x: f64| crate::expr::convert(x, &k.unit, unit);
+    let wide = |x: f64| 2e-9 * x.abs().max(1.0);
+    if let Some(x) = k.value {
+        let x = conv(x)?;
+        let e = wide(x);
+        return Some(match k.cmp.as_str() {
+            ">" | ">=" => (Some(x - e), None),
+            "<" | "<=" => (None, Some(x + e)),
+            "!=" => (None, None),
+            _ => (Some(x - e), Some(x + e)),
+        });
+    }
+    let lo = match k.min {
+        Some(m) => Some(conv(m)?),
+        None => None,
+    };
+    let hi = match k.max {
+        Some(m) => Some(conv(m)?),
+        None => None,
+    };
+    Some((lo.map(|m| m - wide(m)), hi.map(|m| m + wide(m))))
+}
+
 pub(super) fn has_value_test(k: &Criterion) -> bool {
     k.value.is_some() || k.min.is_some() || k.max.is_some()
 }
@@ -159,9 +186,16 @@ pub(super) fn one_unit(k: &Criterion, units: &[String]) -> anyhow::Result<()> {
 pub(super) struct Skipped {
     by_unit: std::collections::BTreeMap<String, usize>,
     compared: usize,
+    /// The database tested the values of a unit that compares (their threshold pushed down):
+    /// the criterion compares with these data, whether a value of that unit was read or not.
+    pushed: bool,
 }
 
 impl Skipped {
+    pub(super) fn pushed(&mut self) {
+        self.pushed = true;
+    }
+
     /// Whether a value in `unit` compares (counted either way).
     pub(super) fn compares(&mut self, k: &Criterion, unit: &str) -> bool {
         if comparable(k, unit) {
@@ -182,7 +216,7 @@ impl Skipped {
         let value = k.value.or(k.min).or(k.max).map(fmt_num).unwrap_or_default();
         let written = format!("{value}{}", if k.unit.is_empty() { String::new() } else { format!(" {}", k.unit) });
         let units: Vec<&str> = self.by_unit.keys().map(|u| if u.is_empty() { "no unit" } else { u.as_str() }).collect();
-        if self.compared == 0 {
+        if self.compared == 0 && !self.pushed {
             anyhow::bail!("{} is in {}: {written} does not compare with it", k.name, units.join(" and "));
         }
         let parts: Vec<String> =

@@ -307,7 +307,7 @@ kinds:
 | Kind | What | Read through |
 |---|---|---|
 | `omop` | An OMOP CDM 5.3 or 5.4 database (PostgreSQL or SQLite) | Views built into Medorama ([sources/omop.rs](../medorama/src/sources/omop.rs)) |
-| `views` | Any SQL database | SQL views the site writes: `persons`, `visits`, `entries`, `recordings`, `stays`, `version`, `variables` |
+| `views` | Any SQL database | SQL views the site writes: `persons`, `visits`, `entries`, `recordings`, `stays`, `version`, `variables`, `has` |
 | `dbb` | A SQLite database built by db-builder from tables, known exports and folders of recordings | Its tables, which have the canonical columns ([db-builder/docs/schema.md](../db-builder/docs/schema.md)) |
 
 Connecting checks each view, makes the database's data key and workspace folder, grants the
@@ -318,7 +318,9 @@ person whose pairs name two patients is a conflict, listed and not linked) with 
 **encounters**. That is all Medorama keeps of it, besides what it does itself: no entry, no count
 of anyone's data, no list of files. Each database is then checked every minute (a green dot
 online, grey offline); a new data version reads it again. Cohort criteria go to the databases
-the user ticked and is granted, that are online and whose variables may hold them; each member
+the user ticked and is granted, that are online and whose variables may hold them, with their
+thresholds, 4 at a time; each answer is kept while the database's data version stays
+([performance.md, What a criterion reads](performance.md#what-a-criterion-reads)). Each member
 records the databases that put it there. The patient page reads every granted database live,
 and the patient list reads the online databases for the page shown. A patient's recordings are
 read when the patient is opened, and then checked, kept and indexed. Removing a database
@@ -459,7 +461,7 @@ The modules of the Medorama server (`medorama/src/`). A guide for contributors i
 | `gate.rs`, `deid.rs`, `dicom.rs`, `pseudonyms.rs` | The privacy gate: identifier dictionary and placeholders; dates, ages, WFDB, MUSE and EDF headers; DICOM; pseudonyms |
 | `gateway.rs`, `viewer.rs` | The VitalStream gateway; the viewer's supervisor |
 | `databases.rs` | Connecting a database, its status checks, refreshing, counting its variables and indexing all its recordings on request, removing it with every trace |
-| `sources/` | Reading connected databases: settings, read-only pools, the canonical views, OMOP's views |
+| `sources/` | Reading connected databases: settings, read-only pools, the canonical views, OMOP's views, the filters and thresholds a criterion sends, its answers kept per data version (`reads.rs`) |
 | `persons.rs` | The patient index (the subject index): (issuer, identifier) pairs, keyed hashes, conflicts, encounters; each database's `persons.sqlite` |
 | `variables.rs` | What each database holds (`variables.sqlite`: names and units, counts when asked), for the planner and the Cohort tab |
 | `recordings.rs`, `derived.rs`, `categories.rs` | Recordings of recording databases (`recordings.sqlite`: those opened or indexed, numbers, the index sweep); derived series and results databases of actions; categories |

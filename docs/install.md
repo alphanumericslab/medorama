@@ -64,7 +64,7 @@ git clone https://github.com/alphanumericslab/medorama.git && cd medorama
 tools/install-medorama.sh --viewer rs --demo                 # Medorama, db-builder, the Rust viewer and the demo
 source .venv/bin/activate                                    # in every new terminal
 medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo   # once: asks for the admin password; a demo installation
-medorama --home ~/medorama-demo serve --port 8095            # then open http://127.0.0.1:8095 and sign in as admin
+medorama --home ~/medorama-demo serve            # then open http://127.0.0.1:8095 and sign in as admin
 ```
 
 ### macOS
@@ -75,7 +75,7 @@ git clone https://github.com/alphanumericslab/medorama.git && cd medorama
 tools/install-medorama.sh --viewer rs --demo
 source .venv/bin/activate                                    # in every new terminal
 medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo
-medorama --home ~/medorama-demo serve --port 8095            # then open http://127.0.0.1:8095
+medorama --home ~/medorama-demo serve            # then open http://127.0.0.1:8095
 ```
 
 ### Windows 10 and 11
@@ -97,7 +97,7 @@ git clone https://github.com/alphanumericslab/medorama.git; cd medorama
 powershell -ExecutionPolicy Bypass -File tools\install-medorama.ps1 -Viewer rs -Demo
 .venv\Scripts\Activate.ps1                                   # in every new PowerShell window
 medorama --home $HOME\medorama-demo init --workspace $HOME\medorama-demo-workspace --demo
-medorama --home $HOME\medorama-demo serve --port 8095        # then open http://127.0.0.1:8095
+medorama --home $HOME\medorama-demo serve        # then open http://127.0.0.1:8095
 ```
 
 If PowerShell answers "running scripts is disabled on this system" for `Activate.ps1`, run

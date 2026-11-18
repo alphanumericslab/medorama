@@ -1,12 +1,154 @@
 //! A criterion in a connected database (docs/design/databases-only.md, "Searching").
 
 use super::*;
+use crate::sources::reads::{Answer, Read};
+use crate::sources::{Bounds, Find, Source};
+
+/// What a criterion asks a database for ([`Read`]), the same in every search of it, so that
+/// its answer is read once while the data stay the same (sources/reads.rs); none for a
+/// criterion a database does not answer (visits, the registry's).  `pushed`: the units whose
+/// values the database tests (their threshold is in the query).
+pub(super) fn read_of(cx: &Cx, k: &Criterion, s: &Source) -> anyhow::Result<Option<(Read, Vec<String>)>> {
+    let exact = k.database == Some(s.id);
+    Ok(Some(match k.kind.as_str() {
+        "has" => {
+            let cat = categories::named(&k.category).ok_or_else(|| anyhow::anyhow!("no category {:?}", k.category))?;
+            (Read::Persons(cat.to_string()), vec![])
+        }
+        "diagnosis" => (
+            Read::Entries(Find {
+                categories: vec!["dx".into()],
+                code_or_name: Some(k.text.trim().into()),
+                ..Default::default()
+            }),
+            vec![],
+        ),
+        "medication" => (
+            Read::Entries(Find {
+                categories: vec!["med".into(), "blood".into()],
+                name_contains: Some(k.text.trim().into()),
+                ..Default::default()
+            }),
+            vec![],
+        ),
+        "text" => {
+            let t = k.text.trim();
+            if t.chars().count() < 3 {
+                anyhow::bail!("text: at least 3 characters");
+            }
+            (Read::Entries(Find { text: Some(t.into()), notes: cx.user.reads_notes(), ..Default::default() }), vec![])
+        }
+        // `latest` reads every value (each person's latest is tested), and by its name in full
+        "measurement" if k.latest => {
+            let (f, _) = measurement_find(cx, k, s, true, false)?;
+            (Read::Values(f), vec![])
+        }
+        "measurement" => {
+            let (f, pushed) = measurement_find(cx, k, s, exact, true)?;
+            (Read::Values(f), pushed)
+        }
+        _ => return Ok(None),
+    }))
+}
+
+/// A measurement's filters: its name, as the database's variables spell it, and, `values`
+/// asked, the values its threshold leaves, by unit (docs/performance.md, "What a criterion
+/// reads"), with the units so pushed.  From the variables only when they were read at the
+/// data's version (else the names in any case, every value: as the criterion is written).
+///
+/// The bounds hold every value the criterion's own test may pass ([`test_value`], run on each
+/// row read): a value without a unit is the criterion's unit; a value in a unit the
+/// criterion's does not compare with is read whole, to be counted; a value written without a
+/// unit, where the data hold several, is not pushed (which unit is meant is asked after, by
+/// the units the rows read have).
+fn measurement_find(
+    cx: &Cx,
+    k: &Criterion,
+    s: &Source,
+    exact: bool,
+    values: bool,
+) -> anyhow::Result<(Find, Vec<String>)> {
+    let written = Find {
+        name: exact.then(|| k.name.trim().to_string()),
+        name_contains: (!exact).then(|| k.name.trim().to_string()),
+        numeric: true,
+        ..Default::default()
+    };
+    if !crate::variables::read_at(cx.c, s.id, &cx.version(s)?)? {
+        return Ok((written, vec![]));
+    }
+    let w = k.name.trim().to_lowercase();
+    let held: Vec<crate::variables::Variable> = crate::variables::of(cx.cfg, cx.c, s.id)?
+        .into_iter()
+        .filter(|v| v.numeric && v.category != "note")
+        .filter(|v| if exact { v.name.to_lowercase() == w } else { v.name.to_lowercase().contains(&w) })
+        .collect();
+    if held.is_empty() {
+        return Ok((written, vec![]));
+    }
+    // (a `variables` view is written apart from the entries: its names in any case, and the
+    // entries' other units read too)
+    let apart = !s.views().variables.trim().is_empty();
+    let mut names: Vec<String> = held.iter().map(|v| v.name.clone()).collect();
+    names.sort();
+    names.dedup();
+    let mut f = Find { names, names_any_case: apart, numeric: true, ..Default::default() };
+    let mut units: Vec<String> = held.iter().map(|v| v.unit.clone()).collect();
+    units.sort();
+    units.dedup();
+    if !values || !has_value_test(k) || (k.unit.trim().is_empty() && units.len() > 1) {
+        return Ok((f, vec![]));
+    }
+    let mut pushed = vec![];
+    for u in &units {
+        let unit = (apart || !k.unit.trim().is_empty() || units.len() > 1).then(|| u.clone());
+        match bounds(k, u) {
+            Some((lo, hi)) => {
+                f.values.push(Bounds { unit, lo, hi });
+                pushed.push(u.clone());
+            }
+            // not comparable: read whole, and counted as left out
+            None => f.values.push(Bounds { unit, lo: None, hi: None }),
+        }
+    }
+    f.other_units = apart;
+    if f.values.iter().all(|b| b.lo.is_none() && b.hi.is_none()) {
+        f.values.clear();
+        f.other_units = false;
+        pushed.clear();
+    }
+    Ok((f, pushed))
+}
+
+impl Cx<'_> {
+    /// A database's answer to a read: found once per evaluation (the reads made before it, in
+    /// parallel, included), kept while its data's version stays (sources/reads.rs).
+    pub(super) fn read(&self, s: &Source, r: &Read) -> anyhow::Result<Answer> {
+        let zone = s.zone(self.timezone);
+        let key = s.read_key(r, zone);
+        if let Some(a) = self.reads.borrow().get(&key) {
+            return Ok(a.clone());
+        }
+        let a = s.read_at(r, zone, &self.version(s)?)?;
+        self.reads.borrow_mut().insert(key, a.clone());
+        Ok(a)
+    }
+
+    /// A database's data version, read once per evaluation.
+    pub(super) fn version(&self, s: &Source) -> anyhow::Result<String> {
+        if let Some(v) = self.versions.borrow().get(&s.id) {
+            return Ok(v.clone());
+        }
+        let v = s.version()?;
+        self.versions.borrow_mut().insert(s.id, v.clone());
+        Ok(v)
+    }
+}
 
 /// The patients a connected database's data say meet a criterion.  Its filters are run there;
 /// values, units, `latest` and dates are tested here.  Sex, age and "data in that database" are
 /// the registry's (evaluate.rs): they are answered from the persons Medorama keeps.
-pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &crate::sources::Source) -> anyhow::Result<HashMap<i64, String>> {
-    use crate::sources::Find;
+pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &Source) -> anyhow::Result<HashMap<i64, String>> {
     let (c, user, timezone) = (cx.c, cx.user, cx.timezone);
     let (czone, zone) = (tz(timezone), s.zone(timezone));
     // the bounds on real times (widened for dates as shown, which each patient's own offset
@@ -32,8 +174,11 @@ pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &crate::sources::Source) -
             let cat = categories::named(&k.category).ok_or_else(|| anyhow::anyhow!("no category {:?}", k.category))?;
             let why = format!("has {}", categories::label(cat));
             // visits, entries, and the recordings the database lists of that category
-            let keys = s.persons_with(cat, zone)?;
-            found.extend(keys.into_iter().map(|p| (p, why.clone())));
+            if let Some((r, _)) = read_of(cx, k, s)? {
+                if let Answer::Persons(keys) = cx.read(s, &r)? {
+                    found.extend(keys.iter().map(|p| (p.clone(), why.clone())));
+                }
+            }
         }
         "encounter" => {
             let t = k.text.trim().to_lowercase();
@@ -76,48 +221,48 @@ pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &crate::sources::Source) -
             }
         }
         "diagnosis" => {
-            let f =
-                Find { categories: vec!["dx".into()], code_or_name: Some(k.text.trim().into()), ..Default::default() };
-            for e in s.find(&f, zone)? {
-                found.push((e.person, format!("{} {}", e.code, e.name).trim().to_string()));
+            for e in entries_of(cx, k, s)?.iter() {
+                found.push((e.person.clone(), format!("{} {}", e.code, e.name).trim().to_string()));
             }
         }
         "measurement" => {
-            let f = Find {
-                name: exact.then(|| k.name.trim().to_string()),
-                name_contains: (!exact).then(|| k.name.trim().to_string()),
-                numeric: true,
-                ..Default::default()
-            };
-            // each row tested as it is read, only those that hold kept (a criterion over every ECG
-            // reads millions); the units and the values left out are counted over the dates as
-            // read, before each patient's own dates (Privacy Mode) are tested
+            let Some((r, pushed)) = read_of(cx, k, s)? else { return Ok(HashMap::new()) };
+            let Answer::Values(rows) = cx.read(s, &r)? else { return Ok(HashMap::new()) };
+            // each row tested (only those the threshold may pass were read: the database tested
+            // the others, in their units); the units and the values left out are counted over
+            // the dates as read, before each patient's own dates (Privacy Mode) are tested
             let per_patient = dates.per_patient();
-            let mut units: HashSet<String> = HashSet::new();
+            // (the units whose values the database tested are the data's, read or not)
+            let mut units: HashSet<String> = pushed.iter().map(|u| u.trim().to_string()).collect();
             let mut skipped = Skipped::default();
+            if !pushed.is_empty() {
+                skipped.pushed();
+            }
             // (person, time, why); one per person when the dates are everyone's
             let mut held: Vec<(String, Option<f64>, String)> = vec![];
             let mut seen: HashSet<String> = HashSet::new();
             {
-                let mut test = |e: crate::sources::Entry| -> anyhow::Result<()> {
-                    if !in_range(e.time) {
+                let mut test = |person: &str, time: Option<f64>, name: &str, value: Option<f64>, unit: &str| {
+                    if !in_range(time) {
                         return Ok(());
                     }
-                    units.insert(e.unit.trim().to_string());
-                    let Some(v) = e.value_num else { return Ok(()) };
-                    if !skipped.compares(k, &e.unit) || (has_value_test(k) && !test_value(k, v, &e.unit)?) {
+                    units.insert(unit.trim().to_string());
+                    let Some(v) = value else { return Ok(()) };
+                    if !skipped.compares(k, unit) || (has_value_test(k) && !test_value(k, v, unit)?) {
                         return Ok(());
                     }
-                    if !per_patient && !seen.insert(e.person.clone()) {
+                    if !per_patient && !seen.insert(person.to_string()) {
                         return Ok(());
                     }
-                    let why = format!("{} {} {}{}", e.name, fmt_num(v), e.unit, on(e.time)).replace("  ", " ");
-                    held.push((e.person, e.time, why));
-                    Ok(())
+                    let why = format!("{name} {} {unit}{}", fmt_num(v), on(time)).replace("  ", " ");
+                    held.push((person.to_string(), time, why));
+                    anyhow::Ok(())
                 };
-                s.find_each(&f, zone, &mut test)?;
+                for e in rows.iter() {
+                    test(&e.person, e.time, &e.name, e.value, &e.unit)?;
+                }
                 for e in result_entries(cx, s, k, exact)? {
-                    test(e)?;
+                    test(&e.person, e.time, &e.name, e.value_num, &e.unit)?;
                 }
             }
             one_unit(k, &units.into_iter().collect::<Vec<_>>())?;
@@ -131,12 +276,7 @@ pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &crate::sources::Source) -
             skipped.done(k, cx)?;
         }
         "medication" => {
-            let f = Find {
-                categories: vec!["med".into(), "blood".into()],
-                name_contains: Some(k.text.trim().into()),
-                ..Default::default()
-            };
-            for e in s.find(&f, zone)? {
+            for e in entries_of(cx, k, s)?.iter() {
                 let end = e.end.or(e.time);
                 if from.is_some_and(|f| end.is_none_or(|t| t < f)) || to.is_some_and(|t| e.time.is_none_or(|x| x >= t))
                 {
@@ -144,21 +284,17 @@ pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &crate::sources::Source) -
                 }
                 spans.resize(found.len(), None);
                 spans.push(Some((e.time.unwrap_or(f64::NEG_INFINITY), end.unwrap_or(f64::INFINITY))));
-                found.push((e.person, e.name));
+                found.push((e.person.clone(), e.name.clone()));
             }
         }
         "text" => {
             let t = k.text.trim();
-            if t.chars().count() < 3 {
-                anyhow::bail!("text: at least 3 characters");
-            }
-            let f = Find { text: Some(t.into()), notes: user.reads_notes(), ..Default::default() };
-            for e in s.find(&f, zone)? {
+            for e in entries_of(cx, k, s)?.iter() {
                 if deid {
                     texts.insert(found.len(), (e.name.clone(), e.text.clone(), e.value_text.clone()));
                 }
                 found.push((
-                    e.person,
+                    e.person.clone(),
                     format!("“{t}” in {} ({})", categories::label(&e.category).to_lowercase(), e.name),
                 ));
             }
@@ -205,6 +341,17 @@ pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &crate::sources::Source) -
     Ok(out)
 }
 
+/// The entries a criterion's filter finds (a diagnosis, a medication, a text).
+fn entries_of(cx: &Cx, k: &Criterion, s: &Source) -> anyhow::Result<std::sync::Arc<Vec<crate::sources::Entry>>> {
+    match read_of(cx, k, s)? {
+        Some((r, _)) => match cx.read(s, &r)? {
+            Answer::Entries(v) => Ok(v),
+            _ => Ok(Default::default()),
+        },
+        None => Ok(Default::default()),
+    }
+}
+
 /// An entry's name and texts as a de-identified session is shown them (its free text withheld
 /// when Privacy Mode withholds it), as one text.
 fn shown_text(
@@ -235,14 +382,14 @@ pub(super) fn source_measurement_rows(
     k: &Criterion,
     s: &crate::sources::Source,
 ) -> anyhow::Result<Vec<(i64, String, f64, String, Option<f64>)>> {
-    use crate::sources::Find;
     let (c, user, timezone) = (cx.c, cx.user, cx.timezone);
-    let (czone, zone) = (tz(timezone), s.zone(timezone));
+    let czone = tz(timezone);
     let dates = Dates::of(c, k, czone)?;
     let (from, to) = dates.wide();
-    let f = Find { name: Some(k.name.trim().to_string()), numeric: true, ..Default::default() };
-    // each row taken as it is read: when the dates are everyone's, only each person's latest
-    // value is kept (the first read, of the same time), not the millions read
+    let Some((r, _)) = read_of(cx, k, s)? else { return Ok(vec![]) };
+    let Answer::Values(read) = cx.read(s, &r)? else { return Ok(vec![]) };
+    // when the dates are everyone's, only each person's latest value is kept (the first read,
+    // of the same time), not the millions read
     let per_patient = dates.per_patient();
     let mut rows: Vec<crate::sources::Entry> = vec![];
     let mut latest: HashMap<String, (usize, crate::sources::Entry)> = HashMap::new();
@@ -267,7 +414,16 @@ pub(super) fn source_measurement_rows(
             }
             Ok(())
         };
-        s.find_each(&f, zone, &mut take)?;
+        for v in read.iter() {
+            take(crate::sources::Entry {
+                person: v.person.clone(),
+                time: v.time,
+                name: v.name.to_string(),
+                value_num: v.value,
+                unit: v.unit.to_string(),
+                ..Default::default()
+            })?;
+        }
         for e in result_entries(cx, s, k, true)? {
             take(e)?;
         }

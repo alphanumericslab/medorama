@@ -44,7 +44,10 @@ silently lacks a database: after the number of patients, the tab says what it se
 it left out, and why (``12 patients match $\cdot$ searched demo, demo\_omop $\cdot$ left out:
 registry (offline)'').
 The reasons are \code{not ticked} and \code{offline}. A saved cohort keeps the databases it
-searches (its page says ``searches \dots''), and a refresh searches them again.
+searches (its page says ``searches \dots''), and a refresh searches them again. A threshold is
+sent to each database, which reads only the values that may pass, and a search repeated while a
+database's data stay the same is answered from what was read, with the same patients
+(\cref{sec:connecting-performance}).
 
 \section{Building the criteria}
 \label{sec:cohorts-builder}

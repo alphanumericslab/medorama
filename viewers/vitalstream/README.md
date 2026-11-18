@@ -246,7 +246,7 @@ vitalstream-cpp --help                # lists every option
 | `--no-auth` | Runs without asking for the password. |
 | `--index PATH` | Indexes `PATH` into the index store, prints `indexed PATH -> …/index.sqlite (KEY)`, then exits. |
 | `--keys-on-stdin` | Reads the index stores to use, and their keys, on standard input ([The index store](#the-index-store)). Medorama starts its viewer with it. |
-| `-V`, `--version` | Prints the program's name and version (`vitalstream-py 0.3.1`), then exits. |
+| `-V`, `--version` | Prints the program's name and version (`vitalstream-py 0.3.2`), then exits. |
 
 When it starts, the viewer prints its address, its root, its data roots, the cache folder, the
 time zone, and whether a password protects it. A data root outside the viewer's root is left

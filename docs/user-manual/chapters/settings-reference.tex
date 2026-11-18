@@ -451,10 +451,11 @@ kept sealed by the master key, or read from a password file or from
   \ui{Index all recordings} reads (not the persons and visits read when connecting). 0:
   1\,000\,000 \\
 \code{persons}, \code{visits}, \code{entries}, \code{recordings}, \code{stays}, \code{version},
-  \code{variables} & \code{views} & The views, as SQL (\cref{sec:connecting-views}); \code{persons}
-  and \code{entries} are required, \code{version} is a query whose one value names the data's
-  version, \code{variables} the optional catalog (\code{category, name, vocabulary, code, unit,
-  numeric}) \\
+  \code{variables}, \code{has} & \code{views} & The views, as SQL (\cref{sec:connecting-views});
+  \code{persons} and \code{entries} are required, \code{version} is a query whose one value
+  names the data's version, \code{variables} the optional catalog (\code{category, name,
+  vocabulary, code, unit, numeric}), \code{has} the optional list of who has data of each
+  category (\code{person\_key, category}) \\
 \end{xltabular}
 
 \subsection{Settings kept in the database}

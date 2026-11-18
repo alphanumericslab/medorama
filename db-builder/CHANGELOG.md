@@ -1,5 +1,14 @@
 # Changelog: db-builder
 
+## 0.3.2 (2026-11-17, pre-release)
+
+- Two indexes on `entries`, for the searches a reader sends ([docs/schema.md](docs/schema.md#indexes)):
+  `entries_name_value (name, value_num)`, so that a threshold (`QTc > 450`) is a range of the
+  index, and `entries_category_person (category, person_key)`, so that the persons with data of
+  a kind are read from the index. A new database has them; a database made before gets them the
+  next time `db-builder add` or `db-builder recordings` writes to it, from the command line or the web page (not in a dry run). No
+  table changed: the schema's version stays 1.
+
 ## 0.3.1 (2026-11-17, pre-release)
 
 - `db-builder new --demo` marks a new database a demo database (invented patients): a

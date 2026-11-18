@@ -20,7 +20,7 @@ the rest of CLIF, HL7 v2 files) is tracked in [db-builder/](../db-builder/README
   [H2 Built-in key managers](#h2-built-in-key-managers)
 - **Connected databases:**
   [A2 Recordings of an OMOP database](#a2-recordings-of-an-omop-database) ·
-  [A3 Value thresholds pushed down](#a3-value-thresholds-pushed-down) ·
+  [A3 `latest` sent to the database](#a3-latest-sent-to-the-database) ·
   [A7 A Source interface; FHIR](#a7-a-source-interface-fhir) ·
   [A8 SQL Server, Oracle, Snowflake, BigQuery](#a8-sql-server-oracle-snowflake-bigquery)
 - **Cohorts:** [B4 Snapshots: reproducible cohorts](#b4-snapshots-reproducible-cohorts) ·
@@ -47,7 +47,8 @@ the rest of CLIF, HL7 v2 files) is tracked in [db-builder/](../db-builder/README
   [F4 Text burned into pixels](#f4-text-burned-into-pixels)
 - **Scalability:**
   [S4 The Patient Catalog's text search in SQL](#s4-the-patient-catalogs-text-search-in-sql) ·
-  [S5 Files in object storage](#s5-files-in-object-storage)
+  [S5 Files in object storage](#s5-files-in-object-storage) ·
+  [S6 Criteria: dates sent, and reasons for the page shown](#s6-criteria-dates-sent-and-reasons-for-the-page-shown)
 - **Clients:** [G1 A Python client](#g1-a-python-client)
 - [Suggested order](#suggested-order)
 
@@ -149,32 +150,29 @@ workspace's `recordings.sqlite`, `data_roots`, the viewers, the gate) is unchang
 under a test `data_roots`: the ECG opens from the patient page, identified and in Privacy Mode,
 and a path outside `data_roots` is listed with its problem.
 
-### A3 Value thresholds pushed down
+### A3 `latest` sent to the database
 
-**Why.** `omop.lactate > 4` reads every lactate result and tests the values in Medorama, because
-units may differ from row to row. On a large OMOP database, that is millions of rows per
-criterion.
+**Why.** Since 0.3.2 a threshold is sent to the database with its units
+([performance.md, What a criterion reads](performance.md#what-a-criterion-reads)), but
+`latest troponin t > 290` still reads every value of its name, because each person's latest
+value is found in Medorama. On a large database that is every result of the test.
 
-**Design.** The database's `variables.sqlite` already lists the units it holds for each name.
-For each unit, convert the threshold (`expr::convert`) and push down `(unit = ?u AND value_num >
-?v)` terms joined by `OR`. Rows of a unit that does not convert are refused, as now. `latest`
-cannot be pushed down, because it needs every row of a person: keep it in Medorama, or push it
-down as a window query on PostgreSQL only.
+**Design.** On PostgreSQL, read each person's latest row in the database (a window query:
+`ROW_NUMBER() OVER (PARTITION BY person_key ORDER BY time DESC)`, or `DISTINCT ON`), then test
+it in Medorama as now. On SQLite, the same window query where it is faster than reading every
+value (measure first). Privacy Mode's dates do not change which row is latest.
 
 **Steps.**
-1. `src/sources/mod.rs`: `Find` gains `values: Vec<(String unit, String cmp, f64 value)>` (or a
-   range); `find_sql` writes the terms; the units come from `variables::of`.
-2. `src/cohorts/in_sources.rs`, `meets_source` (`"measurement"`): fill `values` when `k.latest` is
-   false, and still test each row, which is cheap and a safety net.
-3. Indexes: say in design/sources.md which OMOP indexes make this fast
-   (`measurement (measurement_concept_id, value_as_number)`).
+1. `src/sources/mod.rs`: a `Read` for the latest values of a `Find` (`Source::latest_values`).
+2. `src/cohorts/in_sources.rs`, `read_of`: `latest` uses it.
+3. Say in [databases.md, Indexes for searches](databases.md#indexes-for-searches) which index
+   serves it (name, patient key, time).
 
-**Tests.** In `tests/databases.rs`: the same answers with and without push-down; a unit that does
-not convert is still refused; and a query plan check on PostgreSQL (`EXPLAIN` uses an index on a
-fixture that has one).
+**Tests.** In `tests/criteria_reads.rs`: the same patients with and without it, on SQLite and
+on PostgreSQL (`MEDORAMA_TEST_POSTGRES`); and a query plan check on PostgreSQL (`EXPLAIN` uses an
+index on a fixture that has one).
 
-**Done when** the rows read for `omop.lactate > 4` equal the rows that match, and the answers are
-unchanged.
+**Done when** `latest` reads one row per person, and the answers are unchanged.
 
 ### A7 A Source interface; FHIR
 
@@ -718,6 +716,26 @@ backend (`s3://bucket/prefix/…` paths in the recording databases), which reads
 under the same `data_roots` rule (allowed prefixes). It needs a decision first: which stores, and
 how Medorama authenticates to them (instance roles, keys in files).
 
+### S6 Criteria: dates sent, and reasons for the page shown
+
+**Status: parked** (after 0.3.2; no date set).
+
+**Why.** On a synthetic database of 2.5 million ECGs, `QTc > 450` takes 3 to 5 s
+([performance.md, A MUSE-shaped database](performance.md#a-muse-shaped-database)), most of it
+in Medorama handling about 500,000 matches, not in the database.
+
+**Design.**
+- **Reasons for the page shown.** Each match's reason (the value and the time that matched) is
+  formatted for every match; format it only for the result page shown (and for an export, when
+  asked), keeping what is needed to format it later.
+- **Date ranges sent.** A criterion's date range (`QTc > 450 in 2024`) is tested in Medorama;
+  send it with the threshold (`time >= ? AND time < ?`), a little wider than the range, since
+  times are read in each database's time zone and Privacy Mode's dates move per patient. Keep
+  testing every row read.
+
+**Tests.** In `tests/criteria_reads.rs`: the same patients and the same reasons, with and
+without each change.
+
 ---
 
 ## Clients
@@ -756,4 +774,4 @@ checks).
 | 7 | B4, B5 | Reproducible cohorts, as the databases change; ages at the events studied. |
 | 8 | F1 | For sites that cannot run an authenticating proxy, and a second factor for passwords. |
 | 9 | S4 | As the data grow ([performance.md](performance.md)). |
-| 10 | A2, A8, E4, E5, F3, F4, S5, D4, D5, G1 | As needs arise. |
+| 10 | A2, A8, E4, E5, F3, F4, S5, S6, D4, D5, G1 | As needs arise (S6 is parked). |

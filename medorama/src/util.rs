@@ -98,6 +98,11 @@ pub fn parse_time(text: &str, zone: Tz) -> Result<Option<f64>, String> {
             Err(format!("not a time: {t:?} (before 1700 or after 2500)"))
         }
     };
+    // the form databases write (`2024-03-02 07:10:00`), read directly: a criterion reads
+    // millions of them; any other form, or a time this does not read, by the forms below
+    if let Some(n) = iso_local(t) {
+        return local(n, zone, in_range);
+    }
     if let Ok(x) = t.parse::<f64>() {
         if x.is_finite() && x >= 1e11 {
             return Err(format!("{t} is too large for Unix seconds: if it counts milliseconds, divide it by 1000"));
@@ -136,18 +141,71 @@ pub fn parse_time(text: &str, zone: Tz) -> Result<Option<f64>, String> {
     match naive {
         Some(n) => {
             four_digit_year(t, chrono::Datelike::year(&n))?;
-            match zone.from_local_datetime(&n).earliest() {
-                Some(d) => in_range(d.timestamp_micros() as f64 / 1e6),
-                // a local time skipped by a daylight-saving change: read with the offset after the
-                // change (02:30 on 2024-03-10 in New York is the moment shown as 01:30)
-                None => match zone.from_local_datetime(&(n + chrono::Duration::hours(1))).earliest() {
-                    Some(d) => in_range(d.timestamp_micros() as f64 / 1e6 - 3600.0),
-                    None => Ok(None),
-                },
-            }
+            local(n, zone, in_range)
         }
         None => Err(format!("not a time: {t:?}")),
     }
+}
+
+/// A local time in `zone`, as Unix seconds (within `in_range`).
+fn local(
+    n: NaiveDateTime,
+    zone: Tz,
+    in_range: impl Fn(f64) -> Result<Option<f64>, String>,
+) -> Result<Option<f64>, String> {
+    match zone.from_local_datetime(&n).earliest() {
+        Some(d) => in_range(d.timestamp_micros() as f64 / 1e6),
+        // a local time skipped by a daylight-saving change: read with the offset after the
+        // change (02:30 on 2024-03-10 in New York is the moment shown as 01:30)
+        None => match zone.from_local_datetime(&(n + chrono::Duration::hours(1))).earliest() {
+            Some(d) => in_range(d.timestamp_micros() as f64 / 1e6 - 3600.0),
+            None => Ok(None),
+        },
+    }
+}
+
+/// `YYYY-MM-DD`, `YYYY-MM-DD HH:MM`, `YYYY-MM-DD HH:MM:SS` and `…:SS.ffffff` (a `T` or a space
+/// before the clock), a year from 1000, as a local time; none for anything else (read by
+/// [`parse_time`]'s forms).
+fn iso_local(t: &str) -> Option<NaiveDateTime> {
+    let b = t.as_bytes();
+    let digits = |r: std::ops::Range<usize>| -> Option<u32> {
+        let s = b.get(r)?;
+        s.iter().all(u8::is_ascii_digit).then(|| s.iter().fold(0, |n, d| n * 10 + (d - b'0') as u32))
+    };
+    if b.len() < 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let (y, mo, d) = (digits(0..4)?, digits(5..7)?, digits(8..10)?);
+    if y < 1000 {
+        return None;
+    }
+    let date = NaiveDate::from_ymd_opt(y as i32, mo, d)?;
+    if b.len() == 10 {
+        return date.and_hms_opt(0, 0, 0);
+    }
+    if !(b[10] == b' ' || b[10] == b'T') || b.len() < 16 || b[13] != b':' {
+        return None;
+    }
+    let (h, mi) = (digits(11..13)?, digits(14..16)?);
+    let (sec, micro) = match b.len() {
+        16 => (0, 0),
+        19.. if b[16] == b':' => {
+            let sec = digits(17..19)?;
+            let micro = match &b[19..] {
+                [] => 0,
+                [b'.', f @ ..] if (1..=9).contains(&f.len()) && f.iter().all(u8::is_ascii_digit) => {
+                    // (as chrono's `%.f`: the fraction's first six digits, the rest dropped)
+                    let six: u32 = f.iter().take(6).fold(0, |n, d| n * 10 + (d - b'0') as u32);
+                    six * 10u32.pow(6 - f.len().min(6) as u32)
+                }
+                _ => return None,
+            };
+            (sec, micro)
+        }
+        _ => return None,
+    };
+    date.and_hms_micro_opt(h, mi, sec, micro)
 }
 
 /// A date of birth as 'YYYY-MM-DD' (also accepts MM/DD/YYYY, or DD/MM/YYYY as
@@ -242,6 +300,46 @@ mod tests {
         assert!(parse_time("yesterday", ny).is_err());
         assert_eq!(fmt_local(1709380800.0, ny), "2024-03-02 07:00:00");
         assert_eq!(parse_date("03/04/1950").unwrap(), "1950-03-04");
+    }
+
+    #[test]
+    fn the_form_databases_write_is_read_as_chronos_forms_read_it() {
+        let ny = tz("America/New_York");
+        let forms = ["%Y-%m-%d %H:%M:%S%.f", "%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M"];
+        let by_chrono = |t: &str| {
+            let n = forms
+                .iter()
+                .find_map(|f| NaiveDateTime::parse_from_str(t, f).ok())
+                .or_else(|| NaiveDate::parse_from_str(t, "%Y-%m-%d").ok().and_then(|d| d.and_hms_opt(0, 0, 0)))
+                .unwrap();
+            local(n, ny, |x| Ok(Some(x))).unwrap()
+        };
+        let mut r = Rng::new(7);
+        let mut times: Vec<String> = (0..2000)
+            .map(|_| {
+                let (y, mo, d, h, mi, s) =
+                    (1900 + r.below(200), 1 + r.below(12), 1 + r.below(28), r.below(24), r.below(60), r.below(60));
+                match r.below(5) {
+                    0 => format!("{y:04}-{mo:02}-{d:02}"),
+                    1 => format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}"),
+                    2 => format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}"),
+                    3 => format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}.{}", r.below(1000)),
+                    _ => format!("{y:04}-{mo:02}-{d:02} {h:02}:{mi:02}:{s:02}.123456789"),
+                }
+            })
+            .collect();
+        // a local time a change of clocks skips, and one it repeats
+        times.extend(["2024-03-10 02:30:00".into(), "2024-11-03 01:30:00".into(), "2024-02-29".into()]);
+        for t in &times {
+            assert!(iso_local(t).is_some(), "{t}");
+            assert_eq!(parse_time(t, ny).unwrap(), by_chrono(t), "{t}");
+        }
+        // anything else: the forms (or an error), as before
+        for t in ["2024-02-30", "2024-03-02 25:00", "2024-03-02 07:00:60", "0999-01-01", "2024-3-2", "2024-03-02 7:00"]
+        {
+            assert!(iso_local(t).is_none(), "{t}");
+        }
+        assert!(parse_time("2024-02-30", ny).is_err());
     }
 
     #[test]

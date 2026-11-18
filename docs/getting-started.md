@@ -140,12 +140,13 @@ workspace on an encrypted disk).
    A demo installation is never the home that commands without `--home` reach: give
    `--home ~/medorama-demo` to every command for the demo.
 
-2. Start the server, on a port of its own. It serves the web page and the API, checks the
+2. Start the server, on a port of its own (8095, which `init --demo` gives it: a site's
+   installation keeps 8090, so that both can be open at once, each with its own sign-in). It serves the web page and the API, checks the
    databases every minute, and indexes the recordings in the background (every recording of
    the demo):
 
    ```bash
-   medorama --home ~/medorama-demo serve --port 8095
+   medorama --home ~/medorama-demo serve
    ```
 
 3. Open <http://127.0.0.1:8095> in a browser on the same computer. A band on every page says
@@ -207,10 +208,11 @@ A patient's page shows everything known about the patient on one time line.
 
 ![A patient's page: the Patient Journey, the report and the detail of an ECG](images/screens/patient.png)
 
-- The **patient bar** at the top shows the name, sex, age, patient ID, pseudonym, MRN, the dates
-  of the first and latest data and any allergies.
+- The **patient bar** at the top shows the name, sex, age, patient ID, pseudonym, MRN and the dates
+  of the first and latest data; at its right end, the databases the data come from.
 - Four columns follow, and each fact appears once among them:
-  1. **Visits**: the current status: the visits, the latest stay's medications, the conditions.
+  1. **Visits**: the current status: the allergies first, the visits, the latest stay's
+     medications, the conditions.
   2. The **Patient Journey** draws every item, from every database that holds the patient, on
      one time line, newest at the top, with one column per clinical category (ICU, Vitals, Labs,
      ECG, Holter, Imaging, Medications and so on). ICU stays appear as light bars with their

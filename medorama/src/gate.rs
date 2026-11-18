@@ -158,11 +158,11 @@ impl Dict {
             d.pseudonyms.insert(id, ps);
         }
         for s in crate::sources::list(c)? {
-            for k in crate::persons::all_of(cfg, c, s.id)? {
+            for k in crate::persons::all_of(cfg, c, s.id)?.iter() {
                 let ps = d.pseudonyms.get(&k.patient).cloned().unwrap_or_else(|| PATIENT_ID.into());
                 d.add(&k.patient_id, ps);
                 d.add(&k.mrn, MRN.into());
-                for w in name_words(&[k.last_name, k.first_name]) {
+                for w in name_words(&[k.last_name.clone(), k.first_name.clone()]) {
                     if w.chars().count() >= 3 && w.chars().all(char::is_alphabetic) {
                         d.names.insert(w.to_lowercase());
                     }

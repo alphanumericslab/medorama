@@ -6,7 +6,7 @@ describes what Medorama protects, against whom, how, and what it leaves to the d
 institution. Each control names the code that implements it and the test that checks it, so
 that every claim can be verified rather than taken on trust.
 
-It describes Medorama 0.3.1 (a pre-release). Medorama is research software, not a medical device,
+It describes Medorama 0.3.2 (a pre-release). Medorama is research software, not a medical device,
 and it holds no certification. To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 
 A plain-language explanation of how identifiers are hidden is
@@ -160,7 +160,7 @@ is specified in [administration.md](administration.md) and [api.md](api.md).
 | Asset | Examples | Classification | Where it lives |
 |---|---|---|---|
 | Direct identifiers | Names, MRNs, dates of birth, patient IDs; encounters' dates | **PHI** | The connected databases (read only); as linked, with each person's encounters (key, start, end, intensive care), in each database's `persons.sqlite` in the workspace (encrypted with its key) |
-| Clinical data | Results, vital signs, medications, conditions, notes, with their real dates | **PHI** (dates and free text identify; HIPAA counts them) | The connected databases, read at each request; not copied |
+| Clinical data | Results, vital signs, medications, conditions, notes, with their real dates | **PHI** (dates and free text identify; HIPAA counts them) | The connected databases, read at each request; not copied. A criterion's answer (person keys, times, values) is kept in the server's memory while the database's data version stays, at most 4,000,000 rows, never written to disk ([performance.md, Answers kept](performance.md#answers-kept)) |
 | Files | Recordings, ECGs, DICOM studies, PDFs, pictures, videos | **PHI** (headers, file names, burned-in text) | Where the connected databases say (read only) |
 | What Medorama generates | Each database's catalog (the names and units of its variables, their counts once a manager counts them), the state of the recordings it has opened, the numbers of actions' results; cohorts' members and their provenance | **PHI** or sensitive (dated, linkable) | The workspace: one SQLite file each, encrypted (SQLCipher, AES-256) with its owner's data key |
 | Recording indexes | Waveform envelopes, vital-sign series, markers, derived series | Sensitive (dated, linkable) | Each database's index store in the workspace (`db-NNNN/index.sqlite`), encrypted (SQLCipher) with that database's data key; the viewer's own store (`viewer/index.sqlite`) with a key of its own |
@@ -663,6 +663,9 @@ Every file and every value a connected database returns is treated as untrusted.
   without bound on a crafted file).
 - **No uploads of data.** Medorama accepts no tables or files from the browser: data come only
   from connected databases.
+- **Criteria sent as SQL** (`sources/mod.rs`, `find_sql`): what a user types never becomes SQL.
+  A criterion's values and texts are bound parameters; the units a threshold names are written
+  as quoted literals taken from the database's own catalog, never from the criterion.
 - **Files on the server** (`server-files`: the **Choose…** dialog that picks a SQLite database to
   connect) are listed for administrators only, inside `data_roots` (real paths, as above; hidden entries and links that
   lead out are not listed), and never listed in Privacy Mode, whose folders' names may identify.

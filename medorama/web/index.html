@@ -91,9 +91,10 @@
         <div id="pp-suggest" class="suggest hidden" role="listbox" aria-label="Patients found"></div>
       </div>
       <div id="pp-bar" class="pbar"></div>
-      <div class="cols">
+      <div id="pp-grid" class="cols">
         <section id="pp-info" class="col info"></section>
         <section class="col journey">
+          <div class="gutter" data-gutter="c1" role="separator" aria-orientation="vertical" aria-label="Resize the left column" tabindex="0" title="Drag to resize; double-click: back to the default"></div>
           <div class="jtools"><span id="pp-encs" class="chips"></span><span class="spacer"></span>
             <details id="pp-cols" class="jcols"><summary>Columns…</summary><div id="pp-cols-list" class="jcolpop" role="group" aria-label="The journey's columns shown"></div></details>
             <button id="pp-zout" class="small" title="Zoom out" aria-label="Zoom out">−</button><button id="pp-zin" class="small" title="Zoom in" aria-label="Zoom in">+</button></div>
@@ -101,12 +102,14 @@
           <div id="pp-tip" class="tip hidden"></div>
         </section>
         <section class="col rcol">
+          <div class="gutter" data-gutter="c2" role="separator" aria-orientation="vertical" aria-label="Resize the journey" tabindex="0" title="Drag to resize; double-click: back to the default"></div>
           <div class="rtools">
             <label class="sbox"><span class="glass" aria-hidden="true">⌕</span><input id="pp-q" aria-label="Search this patient" placeholder="Search everything about this patient: notes, results, codes…" autocomplete="off"><button id="pp-qx" class="icon hidden" title="Clear">✕</button></label>
             <span class="seg" id="pp-mode" role="group" aria-label="How the report is shown"><button data-mode="timeline" class="on" aria-pressed="true">Timeline</button><button data-mode="category" aria-pressed="false">By category</button><button data-mode="trends" aria-pressed="false">Trends</button></span>
           </div>
-          <div class="rsplit">
-            <div id="pp-list" class="rlist"></div>
+          <div id="pp-split" class="rsplit">
+            <div id="pp-list" class="rlist" aria-label="What was done, one line each (arrow keys move, Escape clears)"></div>
+            <div class="gutter split" data-gutter="c3" role="separator" aria-orientation="vertical" aria-label="Resize the list" tabindex="0" title="Drag to resize; double-click: back to the default"></div>
             <div id="pp-detail" class="rdetail"></div>
           </div>
         </section>
@@ -166,6 +169,7 @@
                 <p class="muted small">Each a query with the canonical columns (docs/databases.md): persons, visits, entries, stays (optional: the stays in units within visits), recordings (a recording database), and a version query.</p>
                 <div class="formgrid"><label>persons <textarea id="cn-v-persons" rows="4"></textarea></label><label>visits <textarea id="cn-v-visits" rows="4"></textarea></label>
                   <label>stays (optional) <textarea id="cn-v-stays" rows="4" placeholder="stay_key, person_key, visit_key, start_time, end_time, unit, icu"></textarea></label>
+                  <label>has (optional: who has data of each kind) <textarea id="cn-v-has" rows="3" placeholder="person_key, category"></textarea></label>
                   <label>entries <textarea id="cn-v-entries" rows="4"></textarea></label><label>recordings <textarea id="cn-v-recordings" rows="4"></textarea></label><label>version <textarea id="cn-v-version" rows="4"></textarea></label></div>
               </details>
               <div class="ftools"><button class="primary">Connect</button><span id="cn-result" class="muted" aria-live="polite"></span></div>

@@ -4,14 +4,21 @@
 waveforms, imaging and laboratory results across databases.**
 
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
-![Version 0.3.1, pre-release](https://img.shields.io/badge/version-0.3.1%20pre--release-informational)
+![Version 0.3.2, pre-release](https://img.shields.io/badge/version-0.3.2%20pre--release-informational)
 
-**Version 0.3.1 (pre-release, November 2026).** A patient's page names what was done and shows
-each fact once, in four columns, and compares each ECG with the patient's previous one
-([patient-page.md](docs/design/patient-page.md)); the demo is an installation of its own
-([demo.md](docs/design/demo.md)); criteria read databases of millions of rows; a database may
-give the dates of each person's first and latest data; `medorama databases views` replaces a
-database's views. Since 0.3.0, Medorama keeps of each connected database only
+**Version 0.3.2 (pre-release, November 2026).** Searches read less of each database: a
+threshold is sent to the database, which reads only the values that may pass; an optional `has`
+view answers `has ecg`; answers are kept while a database's data stay the same, and criteria are
+read in parallel, with the same results ([performance.md](docs/performance.md#what-a-criterion-reads)).
+A patient's page gives its detail the most room, with columns you can resize, the allergies
+first in its left column, the databases at the end of the patient bar, ↑ ↓ through what was
+done, and the next entries read ahead. The demo runs on its own port, 8095, beside a site's
+installation. 0.3.1 made a patient's page
+of four columns that names what was done and shows each fact once, comparing each ECG with the
+patient's previous one ([patient-page.md](docs/design/patient-page.md)); made the demo an
+installation of its own ([demo.md](docs/design/demo.md)); let criteria read databases of
+millions of rows and a database give the dates of each person's first and latest data; and added
+`medorama databases views`, which replaces a database's views. Since 0.3.0, Medorama keeps of each connected database only
 its subjects (their identities and encounters) and the names and units of its variables, and
 reads the rest from the database when it is asked: connecting a database of millions of rows
 takes minutes, not hours ([connected-databases.md](docs/design/connected-databases.md)). 0.2.1
@@ -177,7 +184,7 @@ git clone https://github.com/alphanumericslab/medorama.git && cd medorama
 tools/install-medorama.sh --viewer rs --demo   # shows the license terms (type y to accept), then builds Medorama, db-builder, a viewer and the demo
 source .venv/bin/activate
 medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo   # once: asks for the admin password; a demo installation
-medorama --home ~/medorama-demo serve --port 8095    # then open http://127.0.0.1:8095 and sign in as admin
+medorama --home ~/medorama-demo serve    # port 8095: open http://127.0.0.1:8095 and sign in as admin
 ```
 
 The demo runs as an installation of its own (its own home, workspace and port); real databases
@@ -226,6 +233,7 @@ collections' attributions. Everything else, and every identifier and text, is in
 | Patients linked across databases | Jane Doe (`demo`, `demo_registry`, `demo_muse`, `demo_secure`); Eva Lindqvist and Richard Roe (`demo`, `demo_north`, `demo_omop`) |
 | Identity conflicts | **Databases** › `demo_north` › **Identity conflicts**, or `medorama databases conflicts demo_north` |
 | Cohorts | **Cohorts**: the four example cohorts; `demo.creatinine > 1.5 OR has icu`, `female AND age > 70`, `demo.troponin > 100`, `demo_muse.QRS > 100 ms`, `has eeg`; after ticking a page of matches, **Tick all** |
+| Searches sent to a database | `demo_muse.QTc > 450 ms` asks `demo_muse` only for the QTc values over 450 (served by its index on the QTc column), and `has ecg` reads its `has` view; the same search again is answered from what was read, while its data stay the same ([performance.md](docs/performance.md#what-a-criterion-reads)) |
 | Privacy Mode | Turn **Privacy Mode** on: names become `[Patient Name]` (in notes too), dates move, the patient over 89 shows as `90+` |
 | Recordings and viewers | A patient's ICU monitoring, Holter, sleep study or EEG opens VitalStream; a 12-lead ECG opens the ECG viewer (a MUSE ECG with its median beats; Eva Lindqvist's 2019 ECG of `demo_muse`, without its sampling rate, by sample number); CT, radiographs, echo and angiography open PACS |
 | Actions and jobs | **Actions**: run **Index** or the example plug-in **Recording summary** on all recordings; watch **Jobs** |

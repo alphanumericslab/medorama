@@ -493,7 +493,8 @@ def main():
                 b.until(f"[...document.querySelectorAll('#view-patient button, #view-patient a')].some(x => x.innerText.includes({json.dumps(button)}))", button)
                 b.eval(f"[...document.querySelectorAll('#view-patient button, #view-patient a')].find(x => x.innerText.includes({json.dumps(button)})).click(); true")
 
-        patient_ready = "document.querySelector('#view-patient') && document.querySelector('#view-patient').innerText.includes('Laboratory')"
+        # (the report listed: one line per thing done)
+        patient_ready = "document.querySelectorAll('#pp-list .it[data-key]').length > 0"
 
         go(f"#/patient/{pid}", patient_ready, "the patient's page")
         open_entry("12-lead ECG", None)

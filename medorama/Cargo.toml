@@ -4,7 +4,7 @@
 # background job queue, a command-line tool and a web interface (docs/architecture.md).
 [package]
 name = "medorama"
-version = "0.3.1"
+version = "0.3.2"
 description = "Medorama: patients, encounters, EHR data, recordings and images from many databases, on one page, for research"
 readme = "README.md"
 edition.workspace = true

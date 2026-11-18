@@ -75,9 +75,13 @@ pub(super) struct Cx<'a> {
     /// Each criterion's answers.
     sources: std::cell::RefCell<HashMap<String, HashMap<i64, (String, BTreeSet<i64>)>>>,
     /// Each database's persons as kept (the registry's criteria).
-    persons: std::cell::RefCell<HashMap<i64, Vec<crate::persons::Known>>>,
+    persons: std::cell::RefCell<HashMap<i64, std::sync::Arc<Vec<crate::persons::Known>>>>,
     /// Values left out (their unit does not compare), in words, each once.
     pub(super) warnings: std::cell::RefCell<Vec<String>>,
+    /// The databases' answers to the criteria's reads, by read (in_sources.rs).
+    pub(super) reads: std::cell::RefCell<HashMap<String, crate::sources::reads::Answer>>,
+    /// Each database's data version, read once.
+    pub(super) versions: std::cell::RefCell<HashMap<i64, String>>,
 }
 
 impl<'a> Cx<'a> {
@@ -97,6 +101,8 @@ impl<'a> Cx<'a> {
             sources: Default::default(),
             persons: Default::default(),
             warnings: Default::default(),
+            reads: Default::default(),
+            versions: Default::default(),
         }
     }
 
@@ -107,8 +113,9 @@ impl<'a> Cx<'a> {
         }
     }
 
-    /// A database's persons as kept, read once per evaluation.
-    fn persons_of(&self, db: i64) -> anyhow::Result<Vec<crate::persons::Known>> {
+    /// A database's persons as kept, read once per evaluation (and shared, not copied: a
+    /// database may keep millions).
+    fn persons_of(&self, db: i64) -> anyhow::Result<std::sync::Arc<Vec<crate::persons::Known>>> {
         if let Some(v) = self.persons.borrow().get(&db) {
             return Ok(v.clone());
         }
@@ -117,17 +124,61 @@ impl<'a> Cx<'a> {
         Ok(v)
     }
 
+    /// The reads of every criterion, in every database of the scope that may hold it, made
+    /// at once, [`PARALLEL_READS`] at a time, before the criteria are combined: a search over
+    /// several criteria or databases waits for the longest read, not for their sum.  A read
+    /// that fails is made again in its turn, so that its error is the search's as before.
+    fn read_ahead(&self, q: &Criteria) {
+        let mut plans: Vec<(crate::sources::Source, crate::sources::reads::Read, String, String)> = vec![];
+        for k in q.leaves() {
+            if matches!(k.kind.as_str(), "sex" | "age" | "database" | "expression") {
+                continue;
+            }
+            for s in &self.scope.sources {
+                if k.database.is_some_and(|d| d != s.id) || !may_hold(self, k, s).unwrap_or(false) {
+                    continue;
+                }
+                if let (Ok(Some((r, _))), Ok(version)) = (read_of(self, k, s), self.version(s)) {
+                    let key = s.read_key(&r, s.zone(self.timezone));
+                    if !plans.iter().any(|p| p.2 == key) {
+                        plans.push((s.clone(), r, key, version));
+                    }
+                }
+            }
+        }
+        if plans.len() < 2 {
+            return;
+        }
+        let (next, done, timezone) =
+            (std::sync::atomic::AtomicUsize::new(0), std::sync::Mutex::new(vec![]), self.timezone);
+        std::thread::scope(|sc| {
+            for _ in 0..PARALLEL_READS.min(plans.len()) {
+                sc.spawn(|| loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some((s, r, key, version)) = plans.get(i) else { break };
+                    if let Ok(a) = s.read_at(r, s.zone(timezone), version) {
+                        done.lock().unwrap().push((key.clone(), a));
+                    }
+                });
+            }
+        });
+        self.reads.borrow_mut().extend(done.into_inner().unwrap());
+    }
+
     /// The registry's answers are read again (patients were linked since).
     fn forget_persons(&self) {
         self.persons.borrow_mut().clear();
     }
 }
 
+/// The reads a search makes at once (`Cx::read_ahead`), across its criteria and databases.
+pub const PARALLEL_READS: usize = 4;
+
 /// Every patient of the scope, with the databases of the scope that link them.
 pub(super) fn everyone(cx: &Cx) -> anyhow::Result<HashMap<i64, BTreeSet<i64>>> {
     let mut out: HashMap<i64, BTreeSet<i64>> = HashMap::new();
     for db in cx.scope.ids() {
-        for p in cx.persons_of(db)? {
+        for p in cx.persons_of(db)?.iter() {
             out.entry(p.patient).or_default().insert(db);
         }
     }
@@ -150,7 +201,7 @@ fn meets_registry(cx: &Cx, k: &Criterion) -> anyhow::Result<HashMap<i64, (String
         let capped = k.kind == "age"
             && (cx.user.privacy || !crate::grants::can(cx.c, cx.user, &format!("db:{db}"), "phi")?)
             && crate::deid::load(cx.c)?.hides("age_over_89");
-        for p in cx.persons_of(*db)? {
+        for p in cx.persons_of(*db)?.iter() {
             let why = match k.kind.as_str() {
                 "sex" if !p.sex.is_empty() && p.sex.eq_ignore_ascii_case(k.text.trim()) => format!("sex {}", p.sex),
                 "age" => match patient::age(&p.birth_date).map(|a| if capped { a.min(90) } else { a }) {
@@ -383,6 +434,7 @@ pub fn evaluate_full(
 ) -> anyhow::Result<Evaluated> {
     let scope = Scope::new(c, user, chosen)?;
     let cx = Cx::new(c, cfg, user, &cfg.timezone, &scope);
+    cx.read_ahead(q);
     let (found, excluded) = evaluate_twice(&cx, q)?;
     let phi_criteria =
         q.leaves().iter().any(|k| k.kind == "age" || (k.kind == "text" && user.phi) || k.kind == "expression");
@@ -412,16 +464,19 @@ pub(super) fn evaluate_twice(cx: &Cx, q: &Criteria) -> anyhow::Result<(Hits, Hit
 
 pub(super) fn evaluate_with(cx: &Cx, q: &Criteria) -> anyhow::Result<(Hits, Hits)> {
     let all = everyone(cx)?;
-    let mut keep: Hits = all.iter().map(|(p, dbs)| (*p, Hit { why: vec![], from: dbs.clone() })).collect();
-    if let Some(inc) = &q.include {
-        let f = eval(cx, inc, &all)?;
-        keep.retain(|p, _| f.contains_key(p));
-        for (p, hit) in keep.iter_mut() {
-            // in because of the criteria: their databases, not every one that links the patient
-            hit.from = f[p].from.clone();
-            push(&mut hit.why, f[p].why.clone());
-        }
-    }
+    let mut keep: Hits = match &q.include {
+        // in because of the criteria: their databases, not every one that links the patient
+        Some(inc) => eval(cx, inc, &all)?
+            .into_iter()
+            .filter(|(p, _)| all.contains_key(p))
+            .map(|(p, f)| {
+                let mut why = vec![];
+                push(&mut why, f.why);
+                (p, Hit { why, from: f.from })
+            })
+            .collect(),
+        None => all.iter().map(|(p, dbs)| (*p, Hit { why: vec![], from: dbs.clone() })).collect(),
+    };
     let mut excluded: Hits = HashMap::new();
     for x in &q.exclude {
         for (p, hit) in eval(cx, x, &all)? {

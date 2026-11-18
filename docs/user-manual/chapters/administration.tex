@@ -147,11 +147,13 @@ installation's Privacy Mode dictionary, or exported from it.
 The demo runs as its own installation, with its own home, workspace and port:
 \begin{lstlisting}[style=shell]
 medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo
-medorama --home ~/medorama-demo serve --port 8095
+medorama --home ~/medorama-demo serve                   # port 8095
 medorama init --workspace ~/medorama-workspace          # a site's installation, apart
 medorama serve                                          # port 8090
 \end{lstlisting}
-To be rid of the demo, stop its server and delete its home and its workspace.
+\cmd{init -{}-demo} gives the demo port 8095 (\opt{-{}-port} sets another), so that both can be
+open in one browser at once: each signs in with its own cookie, named by its port, and signing
+in to one never signs out of the other. To be rid of the demo, stop its server and delete its home and its workspace.
 
 \paragraph{A control store made before 0.3.1} has no mode. At its first command, Medorama decides
 it by what it connects: demo databases only, the demo's; otherwise a site's. A database is a demo

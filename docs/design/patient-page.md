@@ -47,11 +47,24 @@ in full. Each fact is shown once on the page ([Each fact once](#each-fact-once))
 | Part | Width | Content |
 |---|---|---|
 | Search line | full | The patients' search. On a patient page, the patient as a chip (✕ closes it) and a search for another one. |
-| Patient bar | full | Name, sex, age and date of birth, patient ID, MRNs (from the databases granted `phi`), the dates of their first and latest data, the databases, those not answering, and allergies (amber; "not recorded" when no database holds allergies). |
-| 1. Visits | 320 px | The current status: visits, each with its database (click one to show only it), medications of the latest stay, conditions. |
-| 2. Journey | 330 px | The picture of the patient's data, newest on top; a click selects the newest thing done there in column 3. |
-| 3. What was done | the rest, left | One line per thing done, by name (an ECG with its measurements is one line, a laboratory panel one, a day of vital signs one); no values, no flags. |
-| 4. Detail | the rest, right | Everything about the thing done chosen in column 3 or the journey. |
+| Patient bar | full | Who the patient is: name, sex, age and date of birth, patient ID, MRNs (from the databases granted `phi`), the dates of their first and latest data; at the row's end, apart, where the data come from: the databases, and those not answering. |
+| 1. Visits | 340 px | The current status: the allergies first (amber; the section only when a database of the patient can hold allergies: "No allergy recorded" then means what it says), visits, each with its database (click one to show only it), medications of the latest stay, conditions (labelled by the vocabularies of their codes: ICD-10-CM, ICD-9 …). A section with nothing is left out, and the column itself when every one is (a patient of an ECG archive alone: the journey and the report get its room). |
+| 2. Journey | 400 px | The picture of the patient's data, newest on top; a click selects the newest thing done there in column 3. |
+| 3. What was done | about a third of the rest | One line per thing done, by name (an ECG with its measurements is one line, a laboratory panel one, a day of vital signs one); no values, no flags. A long name is cut with "…", all of it on hover. |
+| 4. Detail | the rest | Everything about the thing done chosen in column 3 or the journey: it has the most room. |
+
+**Widths.** The dividers between the columns are dragged to set their widths (focused, ← and →
+by 24 pixels; double-click or Home: the default), kept in the browser (`localStorage`, per
+browser: no setting on the server). Below 1500 pixels the defaults are narrower (290 px, 340 px);
+below 1100 pixels the page has two rows and no dividers.
+
+**The keyboard.** ↑ and ↓ move to the line above or below in column 3, and the detail follows;
+Enter or Space selects the line that has the focus; Escape clears the selection. The page's
+address holds the selection (`?item=…`), so that reloading, back and a shared link keep it.
+
+**While a detail is read** (a database that answers slowly), its outline is shown, not the
+detail before. The previous and next thing done of the same kind are read ahead, so that ‹ › and
+↑ ↓ step through them at once; a detail read in the last 30 seconds is not read again.
 
 ![The list of patients](../images/screens/patients.png)
 

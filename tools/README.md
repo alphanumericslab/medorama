@@ -117,6 +117,9 @@ demo](../docs/administration.md#the-demo) says how to install it and what to try
 | `catalog` | A catalog view: what demo_muse holds, named without reading its entries | `muse/views.toml` |
 | `demo-marked` | Every demo database marked as invented: only a demo installation connects it | `demo-databases.json` |
 | `person-dates` | Each MUSE patient's first and latest ECG, from the persons view (the list's dates without visits) | `muse/views.toml` |
+| `has-view` | A has view: who has an ECG in demo_muse, read for `has ecg` without its measurements | `muse/views.toml` |
+| `search-indexes` | An index per searched MUSE measurement (value, patient, time): a threshold read from the index | `muse/ecg_metadata.sqlite` |
+| `muse-only` | A patient known to the ECG archive alone: the patient page without its left column | `muse/ecg_metadata.sqlite` |
 | `muse-ids` | A test ECG whose patient ID is a word, left out by the views | `muse/ecg_metadata.sqlite` |
 | `ecg-compare` | Patients with two ECGs or more: each ECG compared with the previous one | `muse/ecg_metadata.sqlite` |
 | `ecg-median` | MUSE ECGs with their median beats and P, QRS and T onsets | `ecg/*.xml` |
@@ -173,7 +176,7 @@ such a Medorama and take the screenshots:
 4. In another terminal, take the screenshots:
 
    ```bash
-   python3 tools/screenshots.py --url http://127.0.0.1:8090/ --password-file pw --demo /path/to/demo
+   python3 tools/screenshots.py --url http://127.0.0.1:8095/ --password-file pw --demo /path/to/demo
    ```
 
 `init --home` makes the new home the default for later commands. When you are done, point your

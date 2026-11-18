@@ -7,6 +7,9 @@ use super::*;
 #[derive(Debug, Serialize)]
 pub struct Coded {
     pub code: String,
+    /// The code's vocabulary, as the database names it (ICD-10-CM, ICD-9, RxNorm …).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub vocabulary: String,
     pub name: String,
     pub detail: String,
     pub time: Option<f64>,
@@ -49,7 +52,14 @@ fn coded(it: &It, read_notes: bool) -> Coded {
         None if read_notes || !is_free_text(it) => it.text.lines().next().unwrap_or("").to_string(),
         None => String::new(),
     };
-    Coded { code: it.code.clone(), name: it.name.clone(), detail, time: it.time, end: it.end }
+    Coded {
+        code: it.code.clone(),
+        vocabulary: it.vocabulary.clone(),
+        name: it.name.clone(),
+        detail,
+        time: it.time,
+        end: it.end,
+    }
 }
 
 pub fn summary(c: &Connection, cfg: &Config, user: &User, id: i64) -> anyhow::Result<Summary> {

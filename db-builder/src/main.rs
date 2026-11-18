@@ -225,7 +225,11 @@ fn open_to_add(out: &std::path::Path, how: &db::Opening, common: &Common) -> any
     if common.dry_run && !out.exists() {
         return db::scratch(common.timezone.as_deref().unwrap_or(db::DEFAULT_TIMEZONE));
     }
-    db::open_or_create(out, how, common.timezone.as_deref())
+    let c = db::open_or_create(out, how, common.timezone.as_deref())?;
+    if !common.dry_run {
+        db::ensure_indexes(&c)?;
+    }
+    Ok(c)
 }
 
 /// `db-builder serve`: set the password (`--set-password`), or run the web interface.

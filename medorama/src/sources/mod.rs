@@ -12,8 +12,10 @@
 //! |---|---|
 //! | here | settings, the pools; reading the views; the filters pushed down |
 //! | [`omop`] | the OMOP CDM's views |
+//! | [`reads`] | a criterion's reads, kept while the database's version stays |
 
 pub mod omop;
+pub mod reads;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -77,6 +79,11 @@ pub struct Settings {
     /// and units are read from the entries.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub variables: String,
+    /// Kind `views`, optional: who has data of each category (person_key, category), so that
+    /// `has ecg` reads one small view, not every entry and recording; empty: read from the
+    /// entries and the recordings.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub has: String,
     /// A demo database (invented patients): it holds the marker table (installation.rs), read
     /// when it is connected.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -129,6 +136,8 @@ pub struct Views {
     pub version: String,
     /// What the database holds, one row per variable (optional: empty, read from the entries).
     pub variables: String,
+    /// Who has data of each category (optional: empty, read from the entries and recordings).
+    pub has: String,
 }
 
 const COLS: &str = "id, name, kind, url, password_file, password_wrapped, ca_file, settings, created_at";
@@ -420,6 +429,7 @@ impl Source {
                 stays: DBB_STAYS.into(),
                 version: "SELECT value FROM meta WHERE key = 'version'".into(),
                 variables: String::new(),
+                has: String::new(),
             },
             _ => Views {
                 persons: self.settings.persons.clone(),
@@ -429,6 +439,7 @@ impl Source {
                 stays: self.settings.stays.clone(),
                 version: self.settings.version.clone(),
                 variables: self.settings.variables.clone(),
+                has: self.settings.has.clone(),
             },
         }
     }
@@ -477,6 +488,7 @@ impl Source {
             // (stays are optional: only a site's own view is checked)
             ("stays", if self.kind == "views" { &v.stays } else { &none }, STAY_COLS),
             ("variables", &v.variables, VARIABLE_COLS),
+            ("has", &v.has, HAS_COLS),
         ] {
             // a db-builder database without recordings, or recordings without entries
             if self.kind == "dbb" && !self.has_table(&db, name)? {
@@ -547,6 +559,7 @@ pub fn forget(s: &Source) {
     let prefix = format!("{}\u{1}", s.id);
     pools().lock().unwrap().retain(|k, _| !k.starts_with(&prefix));
     recent().map.lock().unwrap().retain(|k, _| !k.starts_with(&prefix));
+    reads::forget(&prefix);
 }
 
 /// What was read lately from connected databases, by query: (entries, visits, stays), kept
@@ -601,6 +614,8 @@ const DBB_STAYS: &str = "SELECT b.stay_key, v.person_key, b.visit_key, b.start_t
      JOIN visits v ON v.visit_key = b.visit_key";
 /// The optional `variables` view: one row per variable the database holds.
 pub const VARIABLE_COLS: &str = "category, name, vocabulary, code, unit, numeric";
+/// The optional `has` view: one row per person and category of data they have.
+pub const HAS_COLS: &str = "person_key, category";
 const RECORDING_COLS: &str =
     "recording_key, person_key, visit_key, file, format, start_time, end_time, label, category, size, fingerprint";
 
@@ -688,6 +703,16 @@ pub struct Stay {
     pub unit: String,
     /// In an intensive-care unit: by the database's say, or by the unit's name.
     pub icu: bool,
+}
+
+/// A number of a source, as a measurement's criterion reads it ([`Source::find_values`]).
+#[derive(Debug, Clone)]
+pub struct ValueRow {
+    pub person: String,
+    pub time: Option<f64>,
+    pub name: Arc<str>,
+    pub value: Option<f64>,
+    pub unit: Arc<str>,
 }
 
 /// An entry of a source (a result, a drug, a condition, a note …).
@@ -862,7 +887,9 @@ fn stay_of(r: &crate::sql::Row, zone: chrono_tz::Tz) -> crate::sql::Result<Stay>
 // ------------------------------------------------------------------ the filters pushed down
 
 /// What a criterion asks a source for (cohorts.rs tests the rest: values, units, dates, ages).
-#[derive(Debug, Clone, Default)]
+/// The filters run in the database, so that it reads and sends only those rows, through its
+/// own indexes (docs/performance.md, "What a criterion reads").
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Find {
     /// Entries of these categories (empty: any).
     pub categories: Vec<String>,
@@ -870,6 +897,19 @@ pub struct Find {
     pub name: Option<String>,
     /// Whose name contains this.
     pub name_contains: Option<String>,
+    /// Named one of these, as the database's variables spell them (an index on the name serves
+    /// it); in any case when `names_any_case` (variables from a `variables` view, written apart
+    /// from the entries).  Given: `name` and `name_contains` are not.
+    pub names: Vec<String>,
+    pub names_any_case: bool,
+    /// The values a criterion's threshold leaves, by unit (cohorts' values.rs): only those rows
+    /// are read.  Empty: every value.
+    pub values: Vec<Bounds>,
+    /// With `values`: the rows of a unit none of them names are read too (a `variables`
+    /// view's units may not be all the entries').
+    pub other_units: bool,
+    /// Of a unit other than these (how [`Source::find_values`] reads `other_units`).
+    pub not_units: Vec<String>,
     /// Whose code starts with this, or whose name contains it (conditions).
     pub code_or_name: Option<String>,
     /// Whose name, value or text contains this.
@@ -878,6 +918,21 @@ pub struct Find {
     pub numeric: bool,
     /// Notes too (their text needs the PHI permission).
     pub notes: bool,
+}
+
+/// The values of one unit a threshold leaves (none: every unit): `lo <= value <= hi`, each bound
+/// when given.  The test itself is Medorama's: the bounds hold every value it may pass.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Bounds {
+    pub unit: Option<String>,
+    pub lo: Option<f64>,
+    pub hi: Option<f64>,
+}
+
+/// A text as an SQL literal (the units a threshold compares, written in the query so that a
+/// view of one unit per measurement drops the others before it reads a row).
+fn literal(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
 }
 
 /// Whether a diagnosis's text is a word to find in names (`sepsis`, `heart failure`): it has a
@@ -950,8 +1005,53 @@ impl Source {
             let text = if f.notes { format!(" OR lower(text) LIKE {a} ESCAPE '\\'") } else { String::new() };
             wh.push(format!("(lower(name) LIKE {a} ESCAPE '\\' OR lower(value_text) LIKE {a} ESCAPE '\\'{text})"));
         }
+        if !f.names.is_empty() {
+            let list: Vec<String> = f
+                .names
+                .iter()
+                .map(|n| {
+                    let a = arg(n.clone().into(), &mut args);
+                    if f.names_any_case {
+                        format!("lower({a})")
+                    } else {
+                        a
+                    }
+                })
+                .collect();
+            let col = if f.names_any_case { "lower(name)" } else { "name" };
+            wh.push(format!("{col} IN ({})", list.join(", ")));
+        }
         if f.numeric {
             wh.push("value_num IS NOT NULL".into());
+        }
+        if !f.values.is_empty() {
+            // a bound is a number of the database's own type: PostgreSQL compares a numeric or
+            // double column with it through its index; SQLite compares a number held as text
+            // as the number
+            let num = if pg { "NUMERIC" } else { "REAL" };
+            let mut any: Vec<String> = vec![];
+            for b in &f.values {
+                let mut t: Vec<String> = vec![];
+                if let Some(u) = &b.unit {
+                    t.push(format!("COALESCE(unit, '') = {}", literal(u)));
+                }
+                if let Some(lo) = b.lo {
+                    t.push(format!("value_num >= CAST({} AS {num})", arg(lo.into(), &mut args)));
+                }
+                if let Some(hi) = b.hi {
+                    t.push(format!("value_num <= CAST({} AS {num})", arg(hi.into(), &mut args)));
+                }
+                any.push(if t.is_empty() { "1 = 1".into() } else { t.join(" AND ") });
+            }
+            let units: Vec<String> = f.values.iter().filter_map(|b| b.unit.as_deref()).map(literal).collect();
+            if f.other_units && !units.is_empty() {
+                any.push(format!("COALESCE(unit, '') NOT IN ({})", units.join(", ")));
+            }
+            wh.push(if any.len() == 1 { any.remove(0) } else { format!("({})", any.join(" OR ")) });
+        }
+        if !f.not_units.is_empty() {
+            let units: Vec<String> = f.not_units.iter().map(|u| literal(u)).collect();
+            wh.push(format!("COALESCE(unit, '') NOT IN ({})", units.join(", ")));
         }
         (
             format!(
@@ -960,6 +1060,97 @@ impl Source {
             ),
             args,
         )
+    }
+
+    /// The numbers the filters find, each (person, time, name, value, unit) handed to `each` as
+    /// it is read: only those columns asked for, so that the database answers from an index
+    /// that holds them.  The filters' categories are not asked (a measurement's criterion has
+    /// none).  Bounds of several units are asked one unit at a time (the units' rows are
+    /// apart), each a plain range an index serves, not one disjunction none does.  A database
+    /// that cannot compare its values with a bound (a PostgreSQL view whose `value_num` is
+    /// text) is asked again without the bounds, the values tested here.
+    pub fn find_values(
+        &self,
+        f: &Find,
+        zone: chrono_tz::Tz,
+        mut each: impl FnMut(ValueRow) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        if f.values.len() <= 1 && !f.other_units {
+            return self.find_values_in(f, zone, &mut each);
+        }
+        let one = |b: &Bounds| Find { values: vec![b.clone()], other_units: false, ..f.clone() };
+        for b in &f.values {
+            self.find_values_in(&one(b), zone, &mut each)?;
+        }
+        let units: Vec<String> = f.values.iter().filter_map(|b| b.unit.clone()).collect();
+        if f.other_units && !units.is_empty() {
+            let rest = Find { values: vec![], other_units: false, not_units: units, ..f.clone() };
+            self.find_values_in(&rest, zone, &mut each)?;
+        }
+        Ok(())
+    }
+
+    fn find_values_in(
+        &self,
+        f: &Find,
+        zone: chrono_tz::Tz,
+        each: &mut impl FnMut(ValueRow) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        debug_assert!(f.categories.is_empty());
+        let db = self.db()?;
+        let lean = |f: &Find| {
+            let (sql, args) = self.find_sql(f);
+            (
+                sql.replacen(
+                    &format!("SELECT {ENTRY_COLS} FROM"),
+                    "SELECT person_key, time, name, value_num, unit FROM",
+                    1,
+                ),
+                args,
+            )
+        };
+        let (sql, args) = lean(f);
+        let (mut st, args) = match db.prepare_native(&sql) {
+            Ok(st) => (st, args),
+            Err(e) if !f.values.is_empty() => {
+                eprintln!("medorama: {}: values compared in Medorama, not in the database ({e})", self.name);
+                // (each part keeps its unit: only the numbers are left to Medorama)
+                let values = f
+                    .values
+                    .iter()
+                    .filter(|b| b.unit.is_some())
+                    .map(|b| Bounds { unit: b.unit.clone(), lo: None, hi: None })
+                    .collect();
+                let (sql, args) = lean(&Find { values, ..f.clone() });
+                (db.prepare_native(&sql).map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?, args)
+            }
+            Err(e) => anyhow::bail!("{}: {e}", self.name),
+        };
+        let mut rows = st.query(args).map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?;
+        // (the names and units are a few, each kept once)
+        let mut words: std::collections::HashSet<Arc<str>> = std::collections::HashSet::new();
+        let mut word = |v: Value| -> Arc<str> {
+            let t = text_of(&v);
+            match words.get(t.as_str()) {
+                Some(w) => w.clone(),
+                None => {
+                    let w: Arc<str> = t.into();
+                    words.insert(w.clone());
+                    w
+                }
+            }
+        };
+        while let Some(r) = rows.next().map_err(|e| anyhow::anyhow!("{}: {e}", self.name))? {
+            let g = |i: usize| r.get::<_, Value>(i).map_err(|e| anyhow::anyhow!("{}: {e}", self.name));
+            each(ValueRow {
+                person: text_of(&g(0)?),
+                time: time_of(&g(1)?, zone),
+                name: word(g(2)?),
+                value: num_of(&g(3)?),
+                unit: word(g(4)?),
+            })?;
+        }
+        Ok(())
     }
 
     /// The entries a criterion's filters find (at most `max_rows`, else an error).
@@ -1323,7 +1514,25 @@ impl Source {
     /// The persons who have data of a category (`has`: cohorts, the patient list's filters):
     /// visits for `enc` and `icu`, the entries of the category (lab results and vital signs told
     /// apart by their names, so read as rows), and the recordings of the category.
+    /// A database with a `has` view answers the entries' and the recordings' part from it.
     pub fn persons_with(&self, category: &str, zone: chrono_tz::Tz) -> anyhow::Result<Vec<String>> {
+        let has = self.views().has;
+        if !has.trim().is_empty() {
+            let mut keys = match category {
+                "icu" => self.visit_persons(true)?,
+                "enc" => self.visit_persons(false)?,
+                _ => vec![],
+            };
+            let pg = self.dialect() == Dialect::Postgres;
+            let sql = format!(
+                "SELECT DISTINCT person_key FROM ({has}) h WHERE category = {} AND person_key IS NOT NULL",
+                if pg { "$1" } else { "?1" }
+            );
+            keys.extend(self.keys_of(&sql, vec![category.to_string().into()])?);
+            keys.sort();
+            keys.dedup();
+            return Ok(keys);
+        }
         let mut keys = match category {
             "icu" => self.visit_persons(true)?,
             "enc" => self.visit_persons(false)?,

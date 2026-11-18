@@ -96,6 +96,9 @@ transaction: if one fails, nothing is added.
 For each source, `add` says what it added (persons, visits, entries, recordings), how many rows
 it left out and why (the first 50 warnings, each with the file and line).
 
+A database made by an earlier db-builder gets the indexes it lacks at its next `add` (or
+`recordings`), from the command line or the web page: those a reader's searches use ([docs/schema.md, Indexes](docs/schema.md#indexes)).
+
 ```bash
 db-builder add study.sqlite labs.csv --issuer HOSP --dry-run
 ```

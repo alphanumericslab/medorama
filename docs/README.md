@@ -33,7 +33,7 @@ For administrators who install Medorama and run it for other people.
 | [Administration](administration.md) | Setting up Medorama (the control store, the workspace and its master key), settings, PostgreSQL, connecting databases, grants, identity across databases, add-ons, users and the PHI permission, the audit log, deployment, services, backups and troubleshooting. |
 | [Install](install.md) | The installation commands for each operating system. |
 | [Building and installing](building.md) | Building every part on Linux, macOS and Windows, including without administrator rights or internet access, and updating or uninstalling. |
-| [Performance](performance.md) | Measured page times and query counts at 50,000 patients on SQLite and PostgreSQL, and many users at once; how fast the three VitalStream viewers index and read WFDB, EDF, BDF and `.Stp` recordings. |
+| [Performance](performance.md) | What a cohort criterion reads from a database, and what is kept; a search over a synthetic MUSE-shaped database of 2.5 million ECGs; measured page times and query counts at 50,000 patients on SQLite and PostgreSQL, and many users at once; how fast the three VitalStream viewers index and read WFDB, EDF, BDF and `.Stp` recordings. |
 
 ## Reviewing security and privacy
 
@@ -55,7 +55,7 @@ For data managers and database engineers who connect existing databases or build
 
 | Page | What it covers |
 |---|---|
-| [Databases](databases.md) | The kinds of database Medorama connects (OMOP, any SQL database through views, db-builder databases, recording databases), what every connected database must provide, and how to build and check one. |
+| [Databases](databases.md) | The kinds of database Medorama connects (OMOP, any SQL database through views, db-builder databases, recording databases), what every connected database must provide, the indexes that make searches fast, and how to build and check one. |
 | [db-builder](../db-builder/README.md) | The separate tool that turns tables (CSV, spreadsheets, Parquet), known exports (GE MUSE, CLIF) and folders of recordings into an open SQLite database that Medorama connects. |
 | [db-builder's schema](../db-builder/docs/schema.md) | The tables and columns of a db-builder database, readable by any SQLite program. |
 | [db-builder's input](importing.md) | The tables to export for db-builder, the columns it recognizes, how rows name their patients, times and time zones, and linked files. |
@@ -109,7 +109,7 @@ For designers and implementers who want the reasoning behind a part.
 | [The patient page](design/patient-page.md) | The patient page and its Patient Journey: its four columns, each fact once, an ECG compared with the previous one, viewers, and the light and dark themes. |
 | [The demo](design/demo.md) | The demo as an installation of its own: a demo installation connects demo databases only (marked by a `medorama_demo` table), a site's never one; what a user sees; installations made before 0.3.1; running both on one computer. |
 | [Databases only](design/databases-only.md) | Why and how Medorama connects databases and imports none: the control store, the encrypted workspace and its keys, grants, the patient index, searching by database, cohorts with provenance, and removing a database with every trace. |
-| [Connected databases](design/connected-databases.md) | What Medorama keeps of a connected database (the subject index, with the dates of each person's data, and the catalog) and what it reads live; criteria over millions of rows; replacing a database's views. |
+| [Connected databases](design/connected-databases.md) | What Medorama keeps of a connected database (the subject index, with the dates of each person's data, and the catalog) and what it reads live; criteria over millions of rows; searching a database (thresholds sent, answers kept, reads in parallel); replacing a database's views. |
 | [Sources](design/sources.md) | The control store (SQLite or PostgreSQL), connected databases and their canonical views, OMOP, and cohorts across databases. |
 
 ## Images

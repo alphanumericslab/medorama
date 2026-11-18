@@ -197,7 +197,7 @@ Medications use the same columns as results. Give the table the category `med`: 
 |---|---|---|
 | Conditions (diagnoses, problems) | `dx` | `name`, `code` and `vocabulary` (`A41.9`, `ICD10CM`), `time` (onset or diagnosis), `end_time` (resolution). Shown in the patient column of the patient page and in the journey. |
 | Procedures | `proc` | `name`, `code` and `vocabulary` (`CPT`), `time`, `end_time`. |
-| Allergies | `allergy` | `name` (the substance) and `text` (the reaction). Shown with the patient, in the patient bar, not as a journey column. |
+| Allergies | `allergy` | `name` (the substance) and `text` (the reaction). Shown with the patient, first in the patient page's column 1, not as a journey column. |
 
 ### Notes and reports
 

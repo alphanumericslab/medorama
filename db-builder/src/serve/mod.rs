@@ -689,9 +689,13 @@ async fn import(State(app): State<Shared>, _s: Signed, Json(b): Json<Import>) ->
         let inputs = b.inputs.iter().map(|i| app.root.existing(i).map_err(bad)).collect::<Result<Vec<_>, _>>()?;
         let opts = app.options(&b.options, &db_file, b.dry_run)?;
         let what = format!("add {}", inputs.iter().map(|i| app.root.shown(i)).collect::<Vec<_>>().join(", "));
-        let (a, f) = (app.clone(), db_file.clone());
+        let (a, f, dry) = (app.clone(), db_file.clone(), b.dry_run);
         let id = app.spawn(what, &db_file, opts, move |opts| {
             let mut c = db::open(&f, &a.how)?;
+            // (as the command line adds them: the indexes a reader's searches need)
+            if !dry {
+                db::ensure_indexes(&c)?;
+            }
             crate::add::add(&mut c, &f, &inputs, opts)
         });
         ok(json!({ "task": id }))
@@ -731,9 +735,13 @@ async fn recordings(State(app): State<Shared>, _s: Signed, Json(b): Json<AddReco
         let opts = app.options(&b.options, &db_file, b.dry_run)?;
         let who = crate::recordings::Patients { table, pattern };
         let what = format!("recordings of {}", app.root.shown(&folder));
-        let (a, f) = (app.clone(), db_file.clone());
+        let (a, f, dry) = (app.clone(), db_file.clone(), b.dry_run);
         let id = app.spawn(what, &db_file, opts, move |opts| {
             let mut c = db::open(&f, &a.how)?;
+            // (as the command line adds them: the indexes a reader's searches need)
+            if !dry {
+                db::ensure_indexes(&c)?;
+            }
             Ok(vec![crate::recordings::add_folder(&mut c, &f, &folder, &who, opts)?])
         });
         ok(json!({ "task": id }))

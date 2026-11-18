@@ -256,7 +256,7 @@ pub fn set_views(
     let v = views.clone();
     (s.settings.persons, s.settings.visits, s.settings.entries, s.settings.recordings, s.settings.version) =
         (v.persons, v.visits, v.entries, v.recordings, v.version);
-    (s.settings.stays, s.settings.variables) = (v.stays, v.variables);
+    (s.settings.stays, s.settings.variables, s.settings.has) = (v.stays, v.variables, v.has);
     crate::sources::forget(&s);
     let checked = s.check()?;
     let version = version_of(&s, &checked.version)?;

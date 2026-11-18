@@ -31,6 +31,7 @@ database) and [design/sources.md](design/sources.md); the settings are summarize
   - [What Medorama reads](#what-medorama-reads)
 - [Connect any SQL database through views](#connect-any-sql-database-through-views)
   - [Canonical views reference](#canonical-views-reference)
+  - [Indexes for searches](#indexes-for-searches)
   - [A MUSE ECG metadata database](#a-muse-ecg-metadata-database)
 - [Files: recordings, ECGs and images](#files-recordings-ecgs-and-images)
 - [Check the result](#check-the-result)
@@ -43,7 +44,7 @@ database) and [design/sources.md](design/sources.md); the settings are summarize
 |---|---|
 | Connected database | A database that Medorama reads in place, read-only, at each request: an OMOP CDM instance, a research warehouse, a db-builder SQLite file. Medorama never writes to it. |
 | Kind | How Medorama reads a database: `omop` (OMOP CDM, views built in), `views` (any SQL database, through views the site writes), `dbb` (a db-builder database, whose tables are the views). |
-| Canonical views | SQL queries (`persons`, `visits`, `entries`, `recordings`, `stays`, a `version` and a `variables` catalog) that present a database in the columns Medorama reads. |
+| Canonical views | SQL queries (`persons`, `visits`, `entries`, `recordings`, `stays`, a `version`, a `variables` catalog and a `has` list) that present a database in the columns Medorama reads. |
 | Recording database | A connected database with recordings: each file, its patient, its start and end. The files stay where they are. |
 | Issuer | Who assigned an identifier: a hospital's MRN system, a study, a registry. The pair (issuer, identifier) names one patient. |
 | Entry | A dated item of a patient: a result, a vital sign, a drug, a diagnosis, a note. |
@@ -178,9 +179,9 @@ and when:
 |---|---|
 | Connecting, a new version, **Refresh**, new views | Every person (however many: `--max-rows` bounds criteria, not this), every visit, the catalog (its `variables` view, else one grouped query over the entries, with no counting), and the categories of its recordings (`SELECT DISTINCT category`). No recording file is read. |
 | Every check (each minute) | Whether each view answers; the version (without a version query, a count of its persons and recordings). |
-| The Patient Catalog | For the page shown, what each online database holds of those patients (the **Data** and **Entries** columns); a filter on a kind of data (`has ECG`) asks each online database. |
+| The Patient Catalog | For the page shown, what each online database holds of those patients (the **Data** and **Entries** columns); a filter on a kind of data (`has ECG`) asks each online database (its `has` view when it has one). |
 | A patient's page, a job, a cohort's selection | Their entries, visits, stays and recordings. Their recordings' files are checked then, kept, and queued for indexing. |
-| A cohort, a search | The criteria, sent to each database that may hold them; `has` too. Each row is tested as it is read and only those that hold are kept, so a criterion reads a database of millions of rows (`QTc > 450 ms` over every ECG; `latest` keeps each person's latest value). |
+| A cohort, a search | The criteria, sent to each database that may hold them; `has` too. A threshold asks only for the values that may pass ([performance.md, What a criterion reads](performance.md#what-a-criterion-reads)). Each row is tested as it is read and only those that hold are kept, so a criterion reads a database of millions of rows (`QTc > 450 ms` over every ECG; `latest` keeps each person's latest value). Each answer is kept while the database's version stays. |
 | **Count now** (`medorama databases count NAME`) | One grouped count over the entries: how many entries and persons hold each variable, kept until the catalog is read again. Counts from 1 to 10 are shown as "< 11" (the page, the command, the API). |
 | **Index all recordings** (`medorama databases index NAME`) | Every recording it lists (at most `--max-rows`): their files checked, and the new or changed ones queued for indexing. For a database of ICU recordings that should all be indexed ahead of time; `medorama init --demo` does it for the demo's databases. |
 
@@ -196,7 +197,7 @@ and the recordings kept from before are shown.
 | `--url` | (required) | `postgres://user@host/db?sslmode=require` without a password, or `sqlite:/path/to/file` (a `dbb` database is always a SQLite file). |
 | `--password-file`, `--password-stdin` | none | The password, from a file, or from standard input (then kept wrapped by the master key). `$MEDORAMA_SOURCE_PASSWORD_<NAME>` (the name in capitals, other characters as `_`) takes precedence. |
 | `--ca-file` | none | Certificate authorities (PEM) for the server's certificate, besides the system's. |
-| `--views` | none | Kind `views`: the TOML file with the views (`persons`, `visits`, `entries`, `recordings`, `stays`, `version`, `variables`). |
+| `--views` | none | Kind `views`: the TOML file with the views (`persons`, `visits`, `entries`, `recordings`, `stays`, `version`, `variables`, `has`). |
 | `--schema`, `--vocabulary-schema` | the default schema | OMOP's CDM tables, and its vocabulary when apart. |
 | `--identifier` | `mrn` | OMOP: what `person_source_value` holds: `mrn`, `patient_id` or `none`. |
 | `--issuer` | empty: the database itself | Who issued the database's patient IDs, for rows that name none. Empty: its patient IDs link only its own persons. |
@@ -464,6 +465,7 @@ have the same columns.
 | `stays` | No | stay in a unit during a visit (a bed stay, a transfer) |
 | `version` | No | (one row, one value: the data's version) |
 | `variables` | No | variable the database holds (its catalog: names and units) |
+| `has` | No | person and category of data they have |
 
 A recording database read through views still gives an `entries` view; it may return no rows
 (`SELECT … WHERE 1 = 0`).
@@ -547,7 +549,9 @@ visit is drawn whole. A db-builder database gives its bed stays (kept in `extras
 
 **`version`** is a query that returns one value that changes when the data do (a load time, a
 row count). Medorama reads it at each check: a new value reads the persons, their encounters
-and the catalog again, and cohorts record it. Without it, Medorama counts the persons and the
+and the catalog again, and cohorts record it. A search keeps each criterion's answer while the
+version stays ([performance.md, Answers kept](performance.md#answers-kept)), so the version must
+change whenever the data do: data changed under the same version are not read again. Without it, Medorama counts the persons and the
 recordings (not the entries, which on a large database would read them all at every check).
 
 **`variables`** (optional) names what the database holds, one row per variable, so that
@@ -568,6 +572,20 @@ as a list of constants; an OMOP-like warehouse may write it over its own summary
 A variable named here but absent from `entries` is offered by the cohort builder and finds
 nobody; a variable of `entries` not named here is not offered, and the planner does not send a
 criterion on it to this database. Keep the two in step.
+
+**`has`** (optional) says who has data of each category, one row per person and category, so
+that `has ecg` (a cohort's criterion, and the Patient Catalog's filter by kind of data) reads
+one small view instead of every entry and recording. Without it, Medorama reads the persons with
+entries of that category and with recordings of it. Visits are still read from `visits` and
+`stays` for `enc` and `icu`.
+
+| Column | Type | Content |
+|---|---|---|
+| `person_key` | any | The person (as in `persons`). |
+| `category` | text | A Medorama category key, in lower case: `ecg`, `lab`, `vit`, `dx`, `med`, `icu` … ([importing.md, Categories](importing.md#categories)). |
+
+Like `variables`, it must agree with `entries` and `recordings`: a person it leaves out is not
+found by `has`.
 
 #### Times in views
 
@@ -631,13 +649,32 @@ JSON are refused with "columns of type … are not read (cast them in the query)
    In the page, choose the kind **views** and paste the queries under **SQL views**.
 
 3. **Make it fast.** Medorama asks the views for the persons it shows (`WHERE person_key IN
-   (…)`) and, for cohort searches, for the entries with a category, a name, a code or a text.
-   Index the underlying tables on the person, the time, and the name or code that entries are
-   searched by.
+   (…)`) and, for cohort searches, for the entries with a category, a name, a code, a text or a
+   value. Index the underlying tables as [Indexes for searches](#indexes-for-searches) says.
 
 Other engines (SQL Server, Oracle, Snowflake, BigQuery) are not read directly yet. A PostgreSQL
 foreign-data wrapper can reach them in the meantime, and Medorama connects to that PostgreSQL
 database.
+
+### Indexes for searches
+
+A search is as fast as the database answers what each criterion asks
+([performance.md, What a criterion reads](performance.md#what-a-criterion-reads)). The views run
+as written, inside Medorama's queries, so the indexes that help are those of the tables under
+them:
+
+| Medorama asks | An index that serves it |
+|---|---|
+| A patient's data: `WHERE person_key IN (…)` | Each table under a view, on its patient key; on its time too. |
+| A threshold: `WHERE name IN (…) AND COALESCE(unit, '') = 'ms' AND value_num >= …`, reading `person_key, time, name, value_num, unit` | A table of one row per result: on (name, value), or (name, unit, value). A table of one column per measurement (an ECG's QTc): on (that column, the patient key, the time), for each column searched. |
+| `has ecg` | A `has` view over a table indexed on the patient key (`SELECT DISTINCT …` reads the index alone), or an index on (category, patient key). |
+| A diagnosis by code, a drug by name | On the code, on the name. |
+
+An index that holds every column a query reads (a *covering* index) answers it alone, without
+reading the table: with an index on `(qtc_ms, patient_id, acquisition_datetime)`, `QTc > 450`
+is a range search of the index. Create the indexes, then let the database update its statistics
+(`ANALYZE`, on SQLite and PostgreSQL). A db-builder database has its indexes already
+([db-builder/docs/schema.md, Indexes](../db-builder/docs/schema.md#indexes)).
 
 ### A MUSE ECG metadata database
 
@@ -671,15 +708,22 @@ medorama databases connect muse --kind views --url sqlite:/data/ecg/ecg_metadata
 | `recordings` | Per ECG, its XML file, keyed as the ECG entry's file: the patient's page shows it with the entry, and it opens in the ECG viewer with its median beats ([viewers/ecg](../viewers/ecg/README.md#muse-xml)). |
 | `version` | The number of tables merged into it, and when the last was. |
 | `variables` | Its catalog, as constants: `12-lead ECG` and the measurements above, each with its unit, so that connecting reads no ECG for it. |
+| `has` | Who has an ECG, so that `has ecg` reads one column of `ecg` (over the index on `patient_id`), not every measurement: `SELECT DISTINCT patient_id AS person_key, 'ecg' AS category FROM ecg WHERE patient_id <> '' AND patient_id NOT GLOB '*[^0-9]*'` (the same `WHERE` as the other views). |
 
 - **Its indexes.** Indexes on `ecg(patient_id)` and `ecg(acquisition_datetime)` keep each
   patient's page to an index search. Create them once on the file, if it lacks them:
   `CREATE INDEX IF NOT EXISTS ecg_patient ON ecg (patient_id); CREATE INDEX IF NOT EXISTS
-  ecg_time ON ecg (acquisition_datetime); ANALYZE;`
+  ecg_time ON ecg (acquisition_datetime); ANALYZE;`. For cohorts, one covering index per
+  measurement searched makes a threshold a search of the index
+  ([Indexes for searches](#indexes-for-searches)): `CREATE INDEX IF NOT EXISTS ecg_qtc_ms ON
+  ecg (qtc_ms, patient_id, acquisition_datetime);`, and the same for `qt_interval_ms`,
+  `ventricular_rate_bpm` and the others, then `ANALYZE;`.
 - **Its size.** Connecting a database of millions of ECGs reads its persons (one `GROUP BY
   patient_id`, over the index), its `variables` view (no ECG read) and the categories of its
   recordings (one scan): minutes. No XML file is read until a patient is opened; then only that
-  patient's few. A criterion such as `muse.QTc > 450 ms` reads one column of the `entries` view.
+  patient's few. A criterion such as `muse.QTc > 450 ms` reads the QTc arm of the `entries` view,
+  only the values over 450 when the column has its index; `has ecg` reads the `has` view
+  ([performance.md, A MUSE-shaped database](performance.md#a-muse-shaped-database)).
   **Index all recordings** is not needed: its files are ECGs, opened in the ECG viewer, not
   indexed.
 - **The demo** holds one: `demo_muse` (`muse/ecg_metadata.sqlite`, with the same views in
@@ -775,6 +819,7 @@ Catalog** lists its patients; a patient's page shows each entry in its column of
 | `NAME: more than N persons: narrow the criteria` | A search keeps more persons (or visits) than `max_rows`. | Narrow the criteria, or raise `--max-rows`. |
 | `NAME: more than N recordings` | **Index all recordings** reads more recordings than `max_rows`. | Raise `--max-rows`, or let the recordings be indexed as patients are opened. |
 | `NAME: the view variables: …` | The `variables` view fails, or lacks a column. | Give it the columns `category, name, vocabulary, code, unit, numeric`, or leave it out. |
+| `NAME: the view has: …` | The `has` view fails, or lacks a column. | Give it the columns `person_key, category`, or leave it out. |
 | `NAME: the criterion finds more than N rows: narrow it …` | More than `max_rows` rows hold a criterion (rows that do not hold are not kept, however many are read). | Narrow it (a date range, a database), or raise `--max-rows`. |
 | A grey dot: `no such SQLite file`, or a connection error | The database is offline. | Bring it back; Medorama checks every minute, or select **Check now**. |
 | Identity conflicts listed | A person's identifiers name two patients. | Correct the identifiers in the database, then refresh. |

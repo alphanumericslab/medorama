@@ -207,12 +207,18 @@ entry, not on its own).
 
 | Table | Index |
 |---|---|
-| `entries` | `person_key`; `time`; `(category, name)`; `visit_key`; `source_id` |
+| `entries` | `person_key`; `time`; `(category, name)`; `(name, value_num)`; `(category, person_key)`; `visit_key`; `source_id` |
 | `visits` | `person_key` |
 | `recordings` | `person_key`; `file`; `source_id` |
 | `persons` | `(patient_id, patient_id_issuer)`; `(mrn, mrn_authority)` |
 | `extras` | `(table_name, row_key)`; `source_id` |
 | `row_sources` | `source_id` |
+
+`(name, value_num)` serves a reader's threshold (`QTc > 450`: a range of the index), and
+`(category, person_key)` the persons with data of a kind (`has ecg`). A database made before
+them (db-builder 0.3.1 and earlier) gets them the next time `db-builder add` or
+`db-builder recordings` writes to it, from the command line or the web page (not in a dry run); an index is not a change of the
+schema ([The version rule](#the-version-rule)).
 
 ## The version rule
 

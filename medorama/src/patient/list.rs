@@ -42,8 +42,14 @@ struct Gathered {
     records: Vec<crate::persons::Known>,
 }
 
-/// Every patient of the databases `user` may view, gathered from the persons files.
-fn gather(cfg: &Config, c: &Connection, user: &User) -> anyhow::Result<HashMap<i64, Gathered>> {
+/// Every patient of the databases `user` may view (of `only`, when given: a search's), gathered
+/// from the persons files.
+fn gather(
+    cfg: &Config,
+    c: &Connection,
+    user: &User,
+    only: Option<&HashSet<i64>>,
+) -> anyhow::Result<HashMap<i64, Gathered>> {
     let viewable = crate::databases::granted(c, user, "view")?;
     // outside Privacy Mode, the times of databases granted without `phi` as Privacy Mode shows
     // them (restricted.rs); in it, the gate moves every time
@@ -59,7 +65,10 @@ fn gather(cfg: &Config, c: &Connection, user: &User) -> anyhow::Result<HashMap<i
             continue;
         }
         let sums = crate::persons::encounter_summaries(cfg, c, s.id)?;
-        for k in crate::persons::all_of(cfg, c, s.id)? {
+        for k in crate::persons::all_of(cfg, c, s.id)?.iter() {
+            if only.is_some_and(|o| !o.contains(&k.patient)) {
+                continue;
+            }
             let g = out.entry(k.patient).or_insert_with(|| Gathered {
                 row: PatientRow {
                     id: k.patient,
@@ -108,7 +117,7 @@ fn gather(cfg: &Config, c: &Connection, user: &User) -> anyhow::Result<HashMap<i
             if g.row.sex.is_empty() {
                 g.row.sex = k.sex.clone();
             }
-            g.records.push(k);
+            g.records.push(k.clone());
         }
     }
     let order: Vec<&str> = categories::journey_keys().collect();
@@ -123,8 +132,11 @@ fn patients_with(cfg: &Config, c: &Connection, user: &User, category: &str) -> a
     let viewable = crate::databases::online(c, &crate::databases::granted(c, user, "view")?)?;
     let mut out = HashSet::new();
     for s in crate::sources::list(c)?.into_iter().filter(|s| viewable.contains(&s.id)) {
-        let keys = s.persons_with(category, s.zone(&cfg.timezone))?;
-        out.extend(crate::persons::known(cfg, c, s.id, &keys)?.into_values());
+        // (read as a cohort's `has` is, and kept while the data stay the same: sources/reads.rs)
+        let read = crate::sources::reads::Read::Persons(category.to_string());
+        if let crate::sources::reads::Answer::Persons(keys) = s.read(&read, s.zone(&cfg.timezone))? {
+            out.extend(crate::persons::known(cfg, c, s.id, &keys)?.into_values());
+        }
     }
     Ok(out)
 }
@@ -248,7 +260,7 @@ fn list_core(
         let cat = categories::named(name).ok_or_else(|| anyhow::anyhow!("no category {name:?}"))?;
         with.push((want, patients_with(cfg, c, user, cat)?));
     }
-    for (id, g) in gather(cfg, c, user)? {
+    for (id, g) in gather(cfg, c, user, only)? {
         if only.is_some_and(|o| !o.contains(&id)) {
             continue;
         }

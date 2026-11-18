@@ -3,7 +3,7 @@
 // right whatever order dates are written in; the detail's warning above a file sent as it is.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { element, install } from './dom.mjs';
+import { element, els, install } from './dom.mjs';
 
 install();
 const core = await import('../../web/js/core.js');
@@ -109,4 +109,42 @@ test("an ECG's detail: each measurement once, with its change and trend; stateme
   assert.match(h, /Prolonged QT<\/li>/);
   assert.match(h, /no longer<\/span> Sinus rhythm/);
   assert.match(h, /change since the ECG of/);
+});
+
+const { drawSummary } = await import('../../web/js/views/patient.js');
+// (an element as the page drew it)
+const shown = (sel) => els.get(sel);
+const summary = (over) => ({
+  id: 1, patient_id: '', pseudonym: 'MO-000001', sex: 'F', encounters: [], problems: [], medications: [],
+  allergies: null, first: T, last: T, sources: ['muse'], ...over,
+});
+
+test('the databases are at the end of the identity row, apart from who the patient is', () => {
+  core.st.user = { privacy: false };
+  drawSummary(summary({ unavailable: ['omop'] }));
+  const bar = shown('#pp-bar').innerHTML;
+  assert.match(bar, /<div class="meta src"><span class="pill"[^>]*>omop: not available<\/span><div>muse<small>database<\/small><\/div><\/div>$/);
+  assert.doesNotMatch(bar, /Allerg/, 'the allergies are in the left column');
+});
+
+test('a patient of an ECG archive alone: no allergies section, no empty visits, the left column left out', () => {
+  drawSummary(summary({}));
+  assert.equal(shown('#pp-info').innerHTML, '');
+  assert.ok(shown('#pp-grid').classList.contains('noinfo'));
+});
+
+test('the allergies come first in the left column; the conditions name their vocabulary', () => {
+  drawSummary(summary({
+    allergies: ['Penicillin'],
+    encounters: [{ id: 3, admit: T, discharge: T + 86400 * 2, unit: 'ICU', icu: true, source: 'hosp' }],
+    problems: [{ code: 'I48.91', vocabulary: 'ICD-10-CM', name: 'Atrial fibrillation', time: T }, { code: '427.31', vocabulary: 'ICD-9-CM', name: 'Atrial fibrillation', time: T }],
+  }));
+  const info = shown('#pp-info').innerHTML;
+  assert.ok(info.indexOf('Allergies') < info.indexOf('Visits'), info);
+  assert.match(info, /class="allergy"><span aria-hidden="true">▲<\/span> Penicillin/);
+  assert.match(info, /Conditions <span>ICD-10-CM · ICD-9-CM<\/span>/);
+  assert.ok(!shown('#pp-grid').classList.contains('noinfo'));
+  // a database that can hold allergies, none for this patient: said once, quietly
+  drawSummary(summary({ allergies: [] }));
+  assert.match(shown('#pp-info').innerHTML, /No allergy recorded/);
 });

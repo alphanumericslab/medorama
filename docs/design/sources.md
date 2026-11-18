@@ -128,7 +128,10 @@ in [databases.md, Canonical views reference](../databases.md#canonical-views-ref
 | `visits` | No | `visit_key`, `person_key`, `start_time`, `end_time`, `unit`, `icu` |
 | `entries` | Yes | `entry_key`, `person_key`, `visit_key`, `category`, `time`, `end_time`, `name`, `code`, `vocabulary`, `value_num`, `value_text`, `unit`, `ref_low`, `ref_high`, `flag`, `author`, `text` |
 | `recordings` | No (a recording database) | `recording_key`, `person_key`, `visit_key`, `file`, `format`, `start_time`, `end_time`, `label`, `category`, `size`, `fingerprint` |
+| `stays` | No | `stay_key`, `person_key`, `visit_key`, `start_time`, `end_time`, `unit`, `icu` |
 | `version` | No | One value that changes when the data do |
+| `variables` | No | `category`, `name`, `vocabulary`, `code`, `unit`, `numeric` (the catalog) |
+| `has` | No | `person_key`, `category` (who has data of each category, read by `has`; 0.3.2) |
 
 Design decisions that follow from it:
 
@@ -290,7 +293,9 @@ The Patient Catalog lists the patients of the databases the user may view, from 
 - Each PostgreSQL query has a time limit (`timeout_s`, default 60 seconds). A criterion that
   finds more than `max_rows` rows (default 1,000,000) is refused with a message saying to
   narrow it. Since 0.3.1 each row is tested as it is read and only those that hold count
-  ([connected-databases.md, Criteria over millions of rows](connected-databases.md#criteria-over-millions-of-rows)).
+  ([connected-databases.md, Criteria over millions of rows](connected-databases.md#criteria-over-millions-of-rows));
+  since 0.3.2 a threshold is sent to the database, which reads only the values that may pass
+  ([connected-databases.md, Searching a database](connected-databases.md#searching-a-database)).
 - A database that fails during a search fails the search, with its name, because a result
   silently missing a database would be wrong. A database already offline is left out and named.
 - Connections are pooled per database; a connection the server closed is replaced, and a

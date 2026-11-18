@@ -8,6 +8,9 @@ contributors. The design behind these numbers is in
 
 ## Contents
 
+- [What a criterion reads](#what-a-criterion-reads): [Answers kept](#answers-kept) ·
+  [Reads in parallel](#reads-in-parallel) · [The subject index in memory](#the-subject-index-in-memory)
+- [A MUSE-shaped database](#a-muse-shaped-database)
 - [The measurement](#the-measurement): [Pages](#pages) · [Query counts](#query-counts)
 - [Many users at once](#many-users-at-once)
 - [The VitalStream viewers](#the-vitalstream-viewers): [Recordings tested](#recordings-tested) ·
@@ -16,6 +19,84 @@ contributors. The design behind these numbers is in
 - [Index format 3](#index-format-3)
 - [How each part grows](#how-each-part-grows)
 - [Repeating the measurement](#repeating-the-measurement)
+
+## What a criterion reads
+
+Medorama reads a connected database in place: each cohort criterion is sent as SQL to each
+database of the search that may hold it ([design/connected-databases.md, Searching a
+database](design/connected-databases.md#searching-a-database)). What it asks for decides how
+much the database reads, and which of its indexes help
+([databases.md, Indexes for searches](databases.md#indexes-for-searches)).
+
+| Criterion | What the database is asked for | What Medorama tests on each row read |
+|---|---|---|
+| A threshold on a measurement (`QTc > 450`, `lactate 2..4 mmol/L`) | Its names, as the database's catalog spells them (`name IN (…)`), and per unit of the catalog the values that may pass, the threshold converted into that unit (`COALESCE(unit, '') = 'ms' AND value_num >= CAST(? AS REAL)`), one unit at a time. Only `person_key, time, name, value_num, unit`. | The value, in the criterion's unit; the dates. |
+| A measurement without a threshold, with `latest`, or with `!=` | Its names; every value. | `latest`: each person's latest value. |
+| A value written without a unit, where the data hold several units | Its names; every value. | Which unit is meant: "write the unit" is asked, as before. |
+| `has ecg` (and the Patient Catalog's filter by kind of data) | The database's `has` view, when it has one; else the persons with entries of that category and recordings of it (`SELECT DISTINCT person_key`). Visits for `enc` and `icu`. | Nothing. |
+| A diagnosis, a drug, a text | The entries of the category with the code's prefix, a word of the name, or the text; at most `max_rows`. | The dates. |
+
+- **The same patients as testing every row.** The bounds sent are a few billionths wider than
+  the criterion, and Medorama still tests every row it reads, so a threshold finds what reading
+  every value would. Values of a unit the criterion's does not compare with are still read, and
+  counted in the result's "left out" warning.
+- **Only from a catalog of the data's version.** A threshold is sent only when the database's
+  catalog (the names and units of its variables) was read at its current data version (the
+  `version` view). Otherwise the criterion is read as written, every value of its name.
+- **A `variables` view's units** may not be all those of the entries: the rows of other units
+  are read too, in a query of their own, and tested.
+- **A database that cannot compare a bound** (a PostgreSQL view whose `value_num` is text) is
+  asked again without the bounds, and the values are compared in Medorama.
+- **SQL injection.** The units written into the SQL are literals taken from the database's own
+  catalog, never from what a user types; the values are bound parameters; the text of a
+  criterion never becomes SQL.
+
+### Answers kept
+
+Each criterion's read (a measurement's numbers, the persons with a category, the entries a
+filter finds) is kept in memory, keyed by the database, its time zone, the read and the data's
+version (the `version` view's value). A search repeated, or a cohort edited one criterion at a
+time, reads only what changed; within one search, each read is made once.
+
+- A new version reads again. A database without a `version` view is read every time.
+- At most 4,000,000 rows are kept in all, the least recently used dropped first; a larger
+  answer is not kept.
+- What is kept is the database's own answer, the same for every user: linking, Privacy Mode,
+  grants and the dates as shown are applied afterwards, by each search.
+- **The `version` view must change whenever the data change.** If the data change and the
+  version does not, Medorama answers from what it kept (cohorts already rely on it).
+
+### Reads in parallel
+
+A search reads all its criteria in all the databases of its scope at once, 4 at a time, before
+it combines them: it waits for its longest read, not for their sum. A read that failed is made
+again in its turn, so the search's error is as before.
+
+### The subject index in memory
+
+Each database's persons, as kept in its subject index (`persons.sqlite`), are read once and
+shared, at most 5,000,000 persons in all, and read again when Medorama writes the index or its
+file changes (another process's refresh). A search that links more than 5,000 persons links
+them from it, not with thousands of queries; its result page reads only the patients it
+matched, and its evaluation starts from the matches, not from every patient.
+
+## A MUSE-shaped database
+
+`QTc > 450` and `has ecg` were timed on a synthetic SQLite copy shaped like a MUSE ECG metadata
+database ([databases.md, A MUSE ECG metadata database](databases.md#a-muse-ecg-metadata-database)):
+2.5 million invented ECGs, connected through views, on a laptop (Apple silicon), a release build.
+Seconds per search:
+
+| Search | Before 0.3.2 | 0.3.2, an index per measurement and a `has` view: first | Repeated |
+|---|---|---|---|
+| `QTc > 450` | 15.6 | 4.7 | 3.0 |
+| `QTc > 500` | | 2.1 | |
+| `QTc > 600` | | 0.3 | |
+| `has ecg` | 53 | 4.3 | |
+
+The indexes were one per searched measurement column holding (value, patient key, time), as the
+demo's `demo_muse` has them. Most of what remains is Medorama's handling of about 500,000
+matches (each one's reason, the result page), not the database's reading.
 
 ## The measurement
 
@@ -298,12 +379,12 @@ others' are within 40 MB.
 | Part | Grows with | Why it holds up |
 |---|---|---|
 | Patient Catalog (browsing, a cohort's members) | The number of patients of the databases the user may view; for the page shown (50 rows), those patients' entries and recordings in each online database. | The list is read from the persons and encounters Medorama keeps of each database (`persons.sqlite` in the workspace), so it also answers while a database is offline. Its **Data** and **Entries** columns are one grouped query per online database, over the page's persons only. |
-| Patient Catalog (filters on a kind of data) | The persons with data of that kind in each online database. | Each online database is asked which persons have it (`has`), as a cohort's `has` criterion is. |
+| Patient Catalog (filters on a kind of data) | The persons with data of that kind in each online database. | Each online database is asked which persons have it (`has`), as a cohort's `has` criterion is: from its `has` view when it has one, and kept while its version stays ([Answers kept](#answers-kept)). |
 | Patient Catalog (text search) | Every patient's identity and encounters. | The search matches every field of every patient in memory. Moving it into SQL is planned ([S4](todo.md#s4-the-patient-catalogs-text-search-in-sql)). |
 | A patient's page | That patient's data in each database. | It is read from each database the user may view, by the patient's person keys there. |
-| Cohort criteria | The rows a criterion keeps in each database searched (`max_rows`); each row is tested as it is read, so the rows read are not bounded. | A criterion goes only to the databases whose variables may hold it, and its filters run in the connected database. Criteria are combined as sets of patient numbers. A threshold reads only the values that may pass, per unit (with the threshold converted), and tests them in Medorama. |
+| Cohort criteria | The rows a criterion reads in each database searched: for a threshold, the values that may pass; `max_rows` bounds the rows a criterion keeps. | A criterion goes only to the databases whose variables may hold it, and its filters run in the connected database. A threshold reads only the values that may pass, per unit (with the threshold converted), and tests them in Medorama ([What a criterion reads](#what-a-criterion-reads)). The answers are kept while the data's version stays, and read 4 at a time. Criteria are combined as sets of patient numbers. |
 | A cohort's data | The members' data in each database. | Read from the connected databases, as a patient's page is. |
-| A connected database | Its own indexes; the rows a criterion reads (all that its filters find; `max_rows` bounds those kept). | The filters run in the connected database, and a page's reads are kept for 30 seconds. |
+| A connected database | Its own indexes ([databases.md, Indexes for searches](databases.md#indexes-for-searches)); the rows a criterion reads (all that its filters find; `max_rows` bounds those kept). | The filters run in the connected database, a page's reads are kept for 30 seconds, and a criterion's while the data's version stays. |
 | Connecting, refreshing a database | Its persons and visits. | One pass over its persons and one over its visits, however many; its catalog from its `variables` view or one grouped query without counting; no recording file is read. Minutes for millions of persons. Counting its variables (**Count now**) and reading all its recordings (**Index all recordings**) are done only when a manager asks. |
 | Several servers | | Not in this version: the workspace is one server's folder ([design/databases-only.md](design/databases-only.md)). |
 

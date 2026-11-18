@@ -164,11 +164,12 @@ control store) are described in \cref{chap:administration}.
 \section{Serve, and sign in}
 \label{sec:quickstart-serve}
 
-The following command starts the demo's server, on a port of its own (8095; a site's
-installation keeps the default, 8090), which serves the web page and the API and indexes the
-demo's recordings in the background:
+The following command starts the demo's server, on a port of its own (\cmd{init -{}-demo}
+gives it 8095; a site's installation keeps the default, 8090, so that both can be open at
+once, each with its own sign-in), which serves the web page and the API and indexes the demo's
+recordings in the background:
 \begin{lstlisting}[style=shell]
-medorama --home ~/medorama-demo serve --port 8095
+medorama --home ~/medorama-demo serve
 \end{lstlisting}
 \cmd{serve} prints the address of the page, the home, the control store and the viewer it
 runs:
@@ -218,9 +219,10 @@ databases you may view, with the databases and the kinds of data each one has, a
 such as \ui{Doe, Jane} (patient ID \code{P900001}). The patient's page has the following parts (\cref{chap:patients}):
 \begin{itemize}
 \item The \emph{patient bar} at the top shows the name, sex, age and date of birth, the patient
-  ID and pseudonym, the MRN, the dates of the first and latest data, and any allergies.
-\item Column 1, on the left, gives the current status: the visits, each with the database it
-  comes from, the medications of the latest stay and the conditions.
+  ID and pseudonym, the MRN and the dates of the first and latest data; at its right end, the
+  databases the data come from.
+\item Column 1, on the left, gives the current status: the allergies first, the visits, each with
+  the database it comes from, the medications of the latest stay and the conditions.
 \item Column 2, the \emph{Patient Journey}, draws every item on one time line, newest on
   top, with one column per clinical category (ICU, Vitals, Labs, ECG, Holter, Sleep and so on).
   Hover over a mark to see what it is, and click it to open it.

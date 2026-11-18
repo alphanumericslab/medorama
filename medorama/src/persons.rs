@@ -125,6 +125,7 @@ pub fn link(
 ) -> anyhow::Result<Linked> {
     let secret = crate::gate::secret(c)?;
     let w = open(cfg, c, s.id)?;
+    written();
     let mut rep = Linked::default();
     let own = c.is_autocommit();
     // one transaction at a time decides patients: on SQLite the write lock taken at once (two
@@ -204,6 +205,8 @@ pub fn link(
         rep.linked += 1;
     }
     wt.commit()?;
+    // (counted before and after: a search that read the index in between reads it again)
+    written();
     if let Some(tx) = tx {
         tx.commit()?;
     }
@@ -240,6 +243,7 @@ pub fn sync(cfg: &Config, c: &Connection, s: &Source, user: Option<&User>) -> an
     }
     let now_keys: std::collections::HashSet<&str> = all.iter().map(|p| p.key.as_str()).collect();
     let w = open(cfg, c, s.id)?;
+    written();
     let gone: Vec<(String, String)> = {
         let mut st = w.prepare("SELECT person_key, hashes FROM persons")?;
         let v = st
@@ -281,6 +285,7 @@ pub fn sync(cfg: &Config, c: &Connection, s: &Source, user: Option<&User>) -> an
         sweep(c)?;
     }
     encounters_read(cfg, c, s)?;
+    written();
     Ok(rep)
 }
 
@@ -348,8 +353,17 @@ pub fn patients(
     Ok(out)
 }
 
-/// The patient numbers of these persons, as linked before.
+/// The patient numbers of these persons, as linked before: many of them (a criterion's
+/// thousands) from the shared index, a few from the file.
 pub fn known(cfg: &Config, c: &Connection, database: i64, keys: &[String]) -> anyhow::Result<HashMap<String, i64>> {
+    if keys.len() > 5000 {
+        let wanted: HashSet<&str> = keys.iter().map(String::as_str).collect();
+        return Ok(all_of(cfg, c, database)?
+            .iter()
+            .filter(|k| wanted.contains(k.person_key.as_str()))
+            .map(|k| (k.person_key.clone(), k.patient))
+            .collect());
+    }
     let w = open(cfg, c, database)?;
     let mut out = HashMap::new();
     for chunk in keys.chunks(500) {
@@ -452,12 +466,83 @@ pub fn records_of(cfg: &Config, c: &Connection, patient: i64, only: Option<&[i64
     Ok(out)
 }
 
-/// Every person of a database, as kept (the patient list, the gate's dictionary).
-pub fn all_of(cfg: &Config, c: &Connection, database: i64) -> anyhow::Result<Vec<Known>> {
+/// Every person of a database, as kept (the patient list, the gate's dictionary, a search's
+/// everyone): shared, and read again only when the index changed (written by this process, or
+/// its file or journal changed: another process's refresh), at most [`SHARED_PERSONS`] kept in
+/// all.  A search over a database of a million persons reads them once, not at each search.
+pub fn all_of(cfg: &Config, c: &Connection, database: i64) -> anyhow::Result<std::sync::Arc<Vec<Known>>> {
+    let stamp = Stamp::of(cfg, database);
+    if let Some(v) = stamp.as_ref().and_then(|st| shared().get(st)) {
+        return Ok(v);
+    }
     let w = open(cfg, c, database)?;
     let mut st = w.prepare(&format!("SELECT {KNOWN_COLS} FROM persons ORDER BY patient, person_key"))?;
-    let v = st.query_map([], |r| known_of(database, r))?.collect::<Result<_, _>>()?;
+    let v: std::sync::Arc<Vec<Known>> =
+        std::sync::Arc::new(st.query_map([], |r| known_of(database, r))?.collect::<Result<_, _>>()?);
+    if let Some(st) = stamp {
+        shared().put(st, v.clone());
+    }
     Ok(v)
+}
+
+/// The persons kept in memory in all (each database's whole index, or none of it).
+pub const SHARED_PERSONS: usize = 5_000_000;
+
+/// Which index (its file), and when it was last written: this process's writes counted, and
+/// the file's and its journal's times and sizes (another process's).
+#[derive(Debug, Clone, PartialEq)]
+struct Stamp {
+    file: std::path::PathBuf,
+    writes: u64,
+    files: Vec<Option<(std::time::SystemTime, u64)>>,
+}
+
+static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// An index was written (or is about to be): what was shared of every index is read again.
+fn written() {
+    WRITES.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+impl Stamp {
+    fn of(cfg: &Config, database: i64) -> Option<Stamp> {
+        let f = crate::workspace::database_dir(cfg, database).join("persons.sqlite");
+        let at = |p: &std::path::Path| std::fs::metadata(p).ok().and_then(|m| Some((m.modified().ok()?, m.len())));
+        let main = at(&f)?;
+        let journal = |ext: &str| at(&f.with_file_name(format!("persons.sqlite-{ext}")));
+        Some(Stamp {
+            writes: WRITES.load(std::sync::atomic::Ordering::SeqCst),
+            files: vec![Some(main), journal("wal"), journal("journal")],
+            file: f,
+        })
+    }
+}
+
+type Shared = HashMap<std::path::PathBuf, (Stamp, std::sync::Arc<Vec<Known>>)>;
+
+struct SharedIndexes(std::sync::Mutex<Shared>);
+
+fn shared() -> &'static SharedIndexes {
+    static S: std::sync::OnceLock<SharedIndexes> = std::sync::OnceLock::new();
+    S.get_or_init(|| SharedIndexes(Default::default()))
+}
+
+impl SharedIndexes {
+    fn get(&self, stamp: &Stamp) -> Option<std::sync::Arc<Vec<Known>>> {
+        let m = self.0.lock().unwrap();
+        m.get(&stamp.file).filter(|(st, _)| st == stamp).map(|(_, v)| v.clone())
+    }
+
+    fn put(&self, stamp: Stamp, v: std::sync::Arc<Vec<Known>>) {
+        let mut m = self.0.lock().unwrap();
+        m.remove(&stamp.file);
+        // (an index of a database since removed: its file gone)
+        m.retain(|f, _| f.is_file());
+        let kept: usize = m.values().map(|(_, v)| v.len()).sum();
+        if kept + v.len() <= SHARED_PERSONS {
+            m.insert(stamp.file.clone(), (stamp, v));
+        }
+    }
 }
 
 /// A database's conflicts: (person key, what is wrong).  The keys never leave the server

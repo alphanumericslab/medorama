@@ -12,7 +12,13 @@ const pp = {
   id: null, sum: null, jour: null, entries: [], counts: [], terms: [], fuzzy: [], trends: null, labels: {},
   mode: 'timeline', q: '', enc: null, zoom: 1, selected: null, hidden: new Set(store.get('hidden', [])), hits: [],
   qtimer: null, ftimer: null, detailSeq: 0, reportSeq: 0, findSeq: 0, suggest: [], sugIdx: -1,
+  // details read lately (the one shown, and those fetched ahead: the previous and next of its kind)
+  details: new Map(),
 };
+
+/** How long a detail read ahead stays good, and how many are kept. */
+const DETAIL_TTL = 30000;
+const DETAILS_KEPT = 24;
 
 /** `pp.trends` for this patient, unless another patient's page opened while it was read. */
 async function loadTrends() {
@@ -44,24 +50,32 @@ function renderBar() {
   else meta.push([s.pseudonym, 'pseudonym']);
   const mrns = s.phi?.mrns || [];
   if (mrns.length) meta.push([mrns.map((m) => m[1]).join(' · '), mrns.some((m) => m[0]) ? `MRN · ${mrns.map((m) => m[0] || 'default').join(', ')}` : 'MRN']);
-  // (the visits are counted once, in the column beside)
+  // (the visits are counted once, in the column beside; the allergies are its first section)
   if (s.first) meta.push([`${fmtDate(s.first)} – ${fmtDate(s.last)}`, 'first – latest data']);
-  if ((s.sources || []).length) meta.push([s.sources.join(', '), s.sources.length === 1 ? 'database' : 'databases']);
-  let allergy;
-  if (s.allergies === null) allergy = '<span class="allergy none">Allergies: not recorded</span>';
-  else if (!s.allergies.length) allergy = '<span class="allergy none">No allergy recorded</span>';
-  else allergy = `<span class="allergy"><span aria-hidden="true">▲</span> Allergy: ${esc(s.allergies.join(', '))}</span>`;
-  // a connected database that did not answer: what it holds is missing from the page
+  // where the data come from, apart from who the patient is: at the row's end, with a
+  // connected database that did not answer (what it holds is missing from the page)
   const missing = (s.unavailable || []).length
     ? `<span class="pill" title="This patient's data in ${esc(s.unavailable.join(', '))} could not be read now: the page shows the other sources">${esc(s.unavailable.join(', '))}: not available</span>`
     : '';
-  $('#pp-bar').innerHTML = `<div class="nm">${esc(name(s))}</div><div class="meta">${meta.map(([a, b]) => `<div>${esc(a)}<small>${esc(b)}</small></div>`).join('')}</div>${missing}${allergy}`;
+  const dbs = (s.sources || []).length
+    ? `<div>${esc(s.sources.join(', '))}<small>${s.sources.length === 1 ? 'database' : 'databases'}</small></div>`
+    : '';
+  $('#pp-bar').innerHTML = `<div class="nm">${esc(name(s))}</div><div class="meta">${meta.map(([a, b]) => `<div>${esc(a)}<small>${esc(b)}</small></div>`).join('')}</div>`
+    + (dbs || missing ? `<div class="meta src">${missing}${dbs}</div>` : '');
 }
 
+/** The left column: the allergies (when a database of the patient can hold them), the visits,
+ * the medications and the conditions; a section with nothing is left out, and the column
+ * itself when every one is (an ECG archive's patient: the journey and the report get its room). */
 function renderInfo() {
   const s = pp.sum;
-  let h = `<div><div class="label">Visits <span>${s.encounters.length}</span></div>`;
-  if (!s.encounters.length) h += '<p class="muted">No visit in the databases connected.</p>';
+  let h = '';
+  if (s.allergies !== null) {
+    h += s.allergies.length
+      ? `<div class="allergies"><div class="label">Allergies <span>${s.allergies.length}</span></div>${s.allergies.map((a) => `<div class="allergy"><span aria-hidden="true">▲</span> ${esc(a)}</div>`).join('')}</div>`
+      : '<div><div class="label">Allergies</div><p class="muted small">No allergy recorded</p></div>';
+  }
+  if (s.encounters.length) h += `<div><div class="label">Visits <span>${s.encounters.length}</span></div>`;
   // each database's visits and stays, latest first; one chosen shows only its data
   for (const e of s.encounters) {
     const { long, days: n } = stayDays(e);
@@ -72,14 +86,29 @@ function renderInfo() {
     const what = `${long ? 'Stay' : 'Visit'}${e.unit ? ` · ${esc(e.unit)}` : ''}${e.icu ? ' · ICU' : ''}`;
     h += `<div class="enc${pp.enc === e.id ? ' on' : ''}" data-enc="${e.id}" tabindex="0" role="button" aria-pressed="${pp.enc === e.id}" title="In the database ${esc(e.source)}"><div>${pp.enc === e.id ? `<b>${what}</b>` : what}<small>${esc(e.source)}${days}</small></div><span class="d">${esc(span || '')}</span></div>`;
   }
-  h += '</div>';
+  if (s.encounters.length) h += '</div>';
   if (s.medications.length) {
     h += `<div><div class="label">Medications <span>latest stay</span></div>${s.medications.map((m) => `<div class="li"><div>${esc(m.name)} <small>${esc(m.detail)}</small></div><span class="d">${m.end ? `until ${esc(fmtShort(m.end))}` : m.time ? `since ${esc(fmtShort(m.time))}` : ''}</span></div>`).join('')}</div>`;
   }
   if (s.problems.length) {
-    h += `<div><div class="label">Conditions <span>ICD-10</span></div>${s.problems.map((p) => `<div class="li"><div>${p.code ? `<span class="code">${esc(p.code)}</span>` : ''}${esc(p.name)}</div><span class="d">${esc(p.time ? fmtShort(p.time) : '')}</span></div>`).join('')}</div>`;
+    // the vocabularies the codes are of, as the databases name them (ICD-10-CM, ICD-9 …)
+    const vocab = [...new Set(s.problems.map((p) => p.vocabulary).filter(Boolean))].join(' · ');
+    h += `<div><div class="label">Conditions${vocab ? ` <span>${esc(vocab)}</span>` : ''}</div>${s.problems.map((p) => `<div class="li"><div>${p.code ? `<span class="code"${p.vocabulary ? ` title="${esc(p.vocabulary)}"` : ''}>${esc(p.code)}</span>` : ''}${esc(p.name)}</div><span class="d">${esc(p.time ? fmtShort(p.time) : '')}</span></div>`).join('')}</div>`;
   }
   $('#pp-info').innerHTML = h;
+  const none = !h;
+  if ($('#pp-grid').classList.contains('noinfo') !== none) {
+    $('#pp-grid').classList.toggle('noinfo', none);
+    // (the journey's width changed: drawn again)
+    if (pp.jour) drawJ();
+  }
+}
+
+/** A patient's identity bar and left column, drawn from their summary. */
+export function drawSummary(sum) {
+  pp.sum = sum;
+  renderBar();
+  renderInfo();
 }
 
 /** A visit over more than one day (a stay), and its days: calendar days in Medorama's time
@@ -221,21 +250,48 @@ async function select(key, { scrollList = false, push = false } = {}) {
   const seq = ++pp.detailSeq;
   const el = $('#pp-detail');
   const id = pp.id;
+  // a detail not read yet: its outline while it is (a slow database), not the one before
+  const waiting = detailKept(key) ? null : setTimeout(() => { if (seq === pp.detailSeq) el.innerHTML = SKELETON; }, 150);
   try {
-    const d = await api(`patients/${id}/detail?${qs({ key })}`);
+    const d = await detailOf(id, key);
     if (seq !== pp.detailSeq || id !== pp.id) return;
+    const nav = neighbours(key);
     renderDetail(el, d, {
-      id: pp.id, summary: pp.sum, terms: pp.terms, nav: neighbours(key), width: el.clientWidth,
+      id: pp.id, summary: pp.sum, terms: pp.terms, nav, width: el.clientWidth,
       context: (enc, t) => context(pp.sum, enc, t),
       setTimeAt: (f) => { el._timeAt = f; },
     });
+    // the previous and next of its kind read ahead, so that stepping through them is at once
+    for (const k of [nav.prev, nav.next]) if (k && !detailKept(k)) detailOf(id, k).catch(() => {});
   } catch (e) {
     if (seq === pp.detailSeq) el.innerHTML = `<p class="placeholder">${esc(e.message)}</p>`;
+  } finally {
+    clearTimeout(waiting);
   }
+}
+
+/** The outline of a detail being read. */
+const SKELETON = '<div class="skel" aria-busy="true" aria-label="Loading"><i class="w60"></i><i class="w35"></i><div class="skel-tiles"><i></i><i></i><i></i><i></i></div><i class="tall"></i></div>';
+
+function detailKept(key) {
+  const k = pp.details.get(key);
+  return k && Date.now() - k.at < DETAIL_TTL;
+}
+
+/** An entry's detail: as read in the last seconds (shown, or read ahead), else read now. */
+function detailOf(id, key) {
+  if (detailKept(key)) return pp.details.get(key).d;
+  const d = api(`patients/${id}/detail?${qs({ key })}`);
+  pp.details.set(key, { at: Date.now(), d });
+  d.catch(() => pp.details.delete(key));
+  // the oldest first out
+  while (pp.details.size > DETAILS_KEPT) pp.details.delete(pp.details.keys().next().value);
+  return d;
 }
 
 function emptyDetail() {
   pp.selected = null;
+  pp.detailSeq += 1;
   $('#pp-detail').innerHTML = '<p class="placeholder">Choose an entry, or a mark in the journey.</p>';
 }
 
@@ -262,6 +318,7 @@ function showMode() {
 async function open(id) {
   pp.id = id;
   pp.trends = null;
+  pp.details.clear();
   pp.zoom = 1;
   $('#pp-bar').innerHTML = '';
   $('#pp-info').innerHTML = '';
@@ -287,6 +344,96 @@ async function open(id) {
   renderBar();
 }
 
+// ------------------------------------------------------------ the keyboard and the columns' widths
+/** ↑ and ↓ move to the line above or below in the report (the detail follows), Enter or Space
+ * selects the line that has the focus, Escape clears the selection: anywhere on the page but in
+ * a box being typed in or the journey (whose column names take Enter and Space). */
+function onKey(e) {
+  const t = e.target;
+  if (t.closest?.('input, textarea, select, [contenteditable], .sline, #pp-journey, .gutter') || e.altKey || e.ctrlKey || e.metaKey) return;
+  const rows = [...document.querySelectorAll('#pp-list .it[data-key]')];
+  if (!rows.length) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    const at = rows.indexOf(t.closest?.('.it')) >= 0 ? rows.indexOf(t.closest('.it')) : rows.findIndex((r) => r.dataset.key === pp.selected);
+    const next = rows[at < 0 ? 0 : at + (e.key === 'ArrowDown' ? 1 : -1)];
+    if (!next) return;
+    e.preventDefault();
+    next.focus({ preventScroll: true });
+    next.scrollIntoView({ block: 'nearest' });
+    select(next.dataset.key).catch(fail);
+  } else if ((e.key === 'Enter' || e.key === ' ') && t.closest?.('#pp-list .it[data-key]')) {
+    e.preventDefault();
+    select(t.closest('.it').dataset.key).catch(fail);
+  } else if (e.key === 'Escape' && pp.selected) {
+    e.preventDefault();
+    clearSelection();
+  }
+}
+
+function clearSelection() {
+  document.querySelectorAll('#pp-list .it.sel').forEach((n) => { n.classList.remove('sel'); n.setAttribute('aria-pressed', 'false'); });
+  emptyDetail();
+  setParams({ item: '' });
+  drawJ();
+}
+
+/** The columns a divider sets the width of, its bounds and its default (none: the stylesheet's). */
+const GUTTERS = { c1: { el: '#pp-grid', min: 220, max: 560 }, c2: { el: '#pp-grid', min: 260, max: 760 }, c3: { el: '#pp-split', min: 240, max: 900 } };
+
+/** The widths chosen by dragging the dividers, as kept in this browser. */
+function applyWidths() {
+  const w = store.get('widths', {});
+  for (const [k, g] of Object.entries(GUTTERS)) {
+    const box = $(g.el);
+    if (w[k]) box.style.setProperty(`--${k}`, `${w[k]}px`); else box.style.removeProperty(`--${k}`);
+  }
+}
+
+function setWidth(k, px) {
+  const w = store.get('widths', {});
+  if (px === null) delete w[k]; else w[k] = Math.round(Math.max(GUTTERS[k].min, Math.min(GUTTERS[k].max, px)));
+  store.set('widths', w);
+  applyWidths();
+}
+
+/** The width the column left of a divider has now. */
+function widthOf(k) {
+  if (k === 'c1') return $('#pp-info').getBoundingClientRect().width;
+  if (k === 'c2') return document.querySelector('#pp-grid .col.journey').getBoundingClientRect().width;
+  return $('#pp-list').getBoundingClientRect().width;
+}
+
+function wireGutters() {
+  applyWidths();
+  const redrawn = () => { drawJ(); if (pp.selected) select(pp.selected); };
+  for (const g of document.querySelectorAll('#view-patient .gutter')) {
+    const k = g.dataset.gutter;
+    g.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      g.setPointerCapture(e.pointerId);
+      const x0 = e.clientX;
+      const w0 = widthOf(k);
+      document.body.classList.add('resizing');
+      const move = (m) => setWidth(k, w0 + m.clientX - x0);
+      const up = () => {
+        g.removeEventListener('pointermove', move);
+        document.body.classList.remove('resizing');
+        redrawn();
+      };
+      g.addEventListener('pointermove', move);
+      g.addEventListener('pointerup', up, { once: true });
+      g.addEventListener('pointercancel', up, { once: true });
+    });
+    g.addEventListener('dblclick', () => { setWidth(k, null); redrawn(); });
+    // from the keyboard: ← and → by 24 pixels, Home back to the default
+    g.addEventListener('keydown', (e) => {
+      const step = { ArrowLeft: -24, ArrowRight: 24 }[e.key];
+      if (step) { e.preventDefault(); setWidth(k, widthOf(k) + step); redrawn(); }
+      if (e.key === 'Home') { e.preventDefault(); setWidth(k, null); redrawn(); }
+    });
+  }
+}
+
 /** The suggestions closed (and said to be closed). */
 function hideSug() {
   $('#pp-suggest').classList.add('hidden');
@@ -296,7 +443,7 @@ function hideSug() {
 
 export default {
   /** The data changed: load the patient again at the next show. */
-  invalidate() { pp.id = null; pp.q = null; },
+  invalidate() { pp.id = null; pp.q = null; pp.details.clear(); },
   async show(r) {
     $('#pp-find').placeholder = privacy.on
       ? 'Search another patient: pseudonym (MO-…), sex, database…'
@@ -334,6 +481,8 @@ export default {
   },
   hide() { hideSug(); $('#pp-tip').classList.add('hidden'); $('#pp-cols').open = false; },
   wire() {
+    wireGutters();
+    $('#view-patient').addEventListener('keydown', onKey);
     const jel = $('#pp-journey');
     const tip = $('#pp-tip');
     jel.addEventListener('mousemove', (e) => {

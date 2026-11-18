@@ -4,7 +4,7 @@ title: "Medorama: A unified patient-journey research platform linking EHR data, 
 authors:
   - family-names: Sameni
     given-names: Reza
-version: 0.3.1
+version: 0.3.2
 # a pre-release; the versions of the crates, the Python packages, the C++ project and the manual
 # are set with it (docs/developing.md)
 date-released: 2026-11-17

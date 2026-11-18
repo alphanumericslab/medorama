@@ -150,7 +150,8 @@ enum DatabasesCmd {
         /// certificate authorities (PEM) for its server's certificate
         #[arg(long)]
         ca_file: Option<PathBuf>,
-        /// a TOML file with the views (persons, visits, entries, recordings, version): kind views
+        /// a TOML file with the views (persons, visits, entries, recordings, version; optional stays,
+        /// variables, has): kind views
         #[arg(long)]
         views: Option<PathBuf>,
         /// OMOP: the schema of the CDM's tables, and of its vocabulary
@@ -268,8 +269,9 @@ struct InitArgs {
     admin: String,
     #[arg(long, default_value = "America/New_York")]
     timezone: String,
-    #[arg(long, default_value_t = medorama::config::DEFAULT_PORT)]
-    port: u16,
+    /// [default: 8090; with --demo, 8095]
+    #[arg(long)]
+    port: Option<u16>,
     /// read the admin's password from standard input (for scripts)
     #[arg(long)]
     password_stdin: bool,
@@ -432,7 +434,8 @@ fn init(home: &Path, a: InitArgs) -> anyhow::Result<()> {
     let ws = PathBuf::from(recording_engine::paths::absolute(&a.workspace.to_string_lossy()));
     let mut cfg = Config::new(home, &ws);
     cfg.timezone = a.timezone;
-    cfg.port = a.port;
+    // a demo installation on a port of its own, so that it runs beside a site's
+    cfg.port = a.port.unwrap_or(if a.demo { medorama::config::DEMO_PORT } else { medorama::config::DEFAULT_PORT });
     if let Some(u) = &a.database_url {
         cfg.database_url = u.trim().to_string();
         cfg.database_password_file =
@@ -566,7 +569,12 @@ fn init(home: &Path, a: InitArgs) -> anyhow::Result<()> {
         }
     }
     if a.demo {
-        println!("Next: medorama --home {} serve (a port apart from a site's installation: --port)", home.display());
+        println!(
+            "Next: medorama --home {} serve (port {}: beside a site's installation, on {})",
+            home.display(),
+            cfg.port,
+            medorama::config::DEFAULT_PORT
+        );
     } else {
         println!("Next: medorama databases connect NAME --kind KIND --url URL, then medorama serve");
     }
@@ -965,8 +973,8 @@ fn keys_cmd(cfg: &Config, db: &Db, me: &User, cmd: KeysCmd) -> anyhow::Result<()
     Ok(())
 }
 
-/// A views file (TOML: persons, visits, entries, recordings, version; optional stays and
-/// variables) into a database's settings.
+/// A views file (TOML: persons, visits, entries, recordings, version; optional stays,
+/// variables and has) into a database's settings.
 fn read_views(f: &Path, settings: &mut medorama::sources::Settings) -> anyhow::Result<()> {
     let t: toml::Table = std::fs::read_to_string(f)
         .map_err(|e| anyhow::anyhow!("{}: {e}", f.display()))?
@@ -975,8 +983,9 @@ fn read_views(f: &Path, settings: &mut medorama::sources::Settings) -> anyhow::R
     let g = |k: &str| t.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
     (settings.persons, settings.visits, settings.entries, settings.recordings, settings.version) =
         (g("persons"), g("visits"), g("entries"), g("recordings"), g("version"));
-    // optional: the stays (ICU and bed stays) within visits; the catalog of variables
-    (settings.stays, settings.variables) = (g("stays"), g("variables"));
+    // optional: the stays (ICU and bed stays) within visits; the catalog of variables; who has
+    // data of each kind
+    (settings.stays, settings.variables, settings.has) = (g("stays"), g("variables"), g("has"));
     Ok(())
 }
 

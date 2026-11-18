@@ -1,5 +1,9 @@
 # Changelog: vitalstream-rs
 
+## 0.3.2 (2026-11-17, pre-release)
+
+No changes; the version follows Medorama's.
+
 ## 0.3.1 (2026-11-17, pre-release)
 
 No changes; the version follows Medorama's.

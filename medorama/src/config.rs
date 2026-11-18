@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
 pub const DEFAULT_PORT: u16 = 8090;
+/// A demo installation's port (`medorama init --demo`): apart from a site's, so that both run
+/// side by side on one computer (each signs in with its own cookie, named by its port).
+pub const DEMO_PORT: u16 = 8095;
 pub const CONFIG_NAME: &str = "medorama.toml";
 
 #[derive(Debug, Clone)]

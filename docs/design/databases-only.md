@@ -358,7 +358,10 @@ URL …` ([databases.md](../databases.md#connecting)):
 - **The scope** is the ticked databases, among those granted for `search`, among those online.
   Each criterion goes to the databases of the scope whose variables may hold it (a measurement's
   name, a diagnosis, a drug), one query per database and criterion; the persons found are mapped
-  to patient numbers, and the groups (`AND`, `OR`, `NOT`) are combined by patient.
+  to patient numbers, and the groups (`AND`, `OR`, `NOT`) are combined by patient. A threshold
+  is sent with the criterion, per unit; the criteria are read 4 at a time, and each answer is
+  kept while the database's data version stays (0.3.2;
+  [connected-databases.md, Searching a database](connected-databases.md#searching-a-database)).
 - **A result says what it searched**: "searched A, B · left out: C (offline)", with the reasons
   `not ticked` and `offline`.
 - `NOT` and the registry's criteria (sex, age, a database) apply among the patients that the

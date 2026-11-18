@@ -214,7 +214,7 @@ it stays connected, and \ui{Refresh} (or \cmd{medorama databases refresh}) reads
   the system's \\
 \opt{-{}-views} & (None) & For the kind \code{views}, a TOML file with the views
   (\code{persons}, \code{visits}, \code{entries}, \code{recordings}, \code{stays},
-  \code{version}, \code{variables}) \\
+  \code{version}, \code{variables}, \code{has}) \\
 \opt{-{}-schema} & The default schema & OMOP: the schema of the CDM's tables, a plain name
   (letters, digits, \code{\_}) \\
 \opt{-{}-vocabulary-schema} & The CDM's & OMOP: the schema of the vocabulary (\code{concept}),
@@ -301,12 +301,13 @@ Every check (each minute) & Whether each view answers; the version (without a ve
   count of its persons and recordings) \\
 The Patient Catalog & For the page shown, what each online database holds of those patients
   (the \ui{Data} and \ui{Entries} columns); a filter on a kind of data asks each online database
-  (\cref{chap:patients}) \\
+  (its \code{has} view when it has one; \cref{chap:patients}) \\
 A patient's page, a job, a cohort's selection & Their entries, visits, stays and recordings.
   Their recordings' files are checked then (present, inside \code{data\_roots}, not in the
   workspace, readable), kept, and queued for indexing \\
-A cohort, a search & The criteria, sent to each database that may hold them; a \code{has}
-  criterion asks the database too (\cref{chap:cohorts}) \\
+A cohort, a search & The criteria, sent to each database that may hold them, a threshold with
+  them; a \code{has} criterion asks the database too (\cref{chap:cohorts}). Each answer is kept
+  while the database's version stays (\cref{sec:connecting-performance}) \\
 \ui{Count now} (\cmd{medorama databases count NAME}) & One grouped count over the entries: how
   many entries and persons hold each variable, kept until the catalog is read again. A count
   from 1 to 10 is shown as ``< 11'', in the page, the command and the API \\
@@ -333,8 +334,9 @@ asks for the following:
 \item the \ui{Name};
 \item the \ui{Kind}: \ui{A db-builder database (a SQLite file)}, \ui{OMOP CDM 5.3 or 5.4}, or
   \ui{Any layout, through SQL views}, which opens \ui{SQL views (any layout)} with the boxes
-  \ui{persons}, \ui{visits}, \ui{entries}, \ui{recordings} and \ui{version} (a \code{variables}
-  view is given on the command line, in the \opt{-{}-views} file);
+  \ui{persons}, \ui{visits}, \ui{stays} (optional), \ui{has} (optional), \ui{entries},
+  \ui{recordings} and \ui{version} (a \code{variables} view is given on the command line, in
+  the \opt{-{}-views} file);
 \item \ui{Where}: \ui{A file on this server}, with its \ui{File on this server} (typed, or picked
   with \ui{Choose\ldots}, which lists the SQLite files, \file{.sqlite}, \file{.sqlite3} and
   \file{.db}, inside \code{data\_roots}), or \ui{A PostgreSQL server}, with its \ui{Server} (a URL
@@ -464,8 +466,8 @@ translates nothing in it (PostgreSQL's \code{?} operators, \code{E''} strings, d
 comments are fine). A view must be a single \code{SELECT} statement without a trailing
 semicolon. Each view's columns are named by its first query: in a \code{UNION ALL}, the later
 parts need no names. \code{persons} and \code{entries} are required; \code{visits},
-\code{recordings}, \code{stays}, \code{version} and \code{variables} are optional. A database with a \code{recordings} view is a
-recording database (\cref{chap:recordings}).
+\code{recordings}, \code{stays}, \code{version}, \code{variables} and \code{has} are optional. A
+database with a \code{recordings} view is a recording database (\cref{chap:recordings}).
 
 The views are given in a TOML file (\opt{-{}-views}), or in the boxes of \ui{SQL views (any
 layout)} in the page. The following file presents a warehouse's patients, admissions, results and
@@ -538,6 +540,8 @@ kind \code{views} gives its own.
 \code{version} & One value that changes when the data do (a load time, a count) & No \\
 \code{variables} & \code{category}, \code{name}, \code{vocabulary}, \code{code}, \code{unit},
   \code{numeric}: one row per variable the database holds, its catalog (below) & No \\
+\code{has} & \code{person\_key}, \code{category}: one row per person and category of data they
+  have (below) & No \\
 \bottomrule
 \end{tabularx}
 \end{table}
@@ -553,6 +557,21 @@ variables are its columns (a table of measurements) writes it as a list of const
 named there but absent from \code{entries} is offered and finds nobody; a variable of
 \code{entries} not named there is not offered, and the planner does not send a criterion on it
 to this database: keep the two in step.
+
+\paragraph{The version.} The \code{version} view returns one value that changes when the data
+do. A new value reads the persons, their encounters and the catalog again, and cohorts record
+it. A search keeps each criterion's answer while the version stays
+(\cref{sec:connecting-performance}), so the version must change whenever the data do: data
+changed under the same version are not read again.
+
+\paragraph{The has view.} The optional \code{has} view says who has data of each category, one
+row per person and category: \code{person\_key}, and \code{category}, a category key in lower
+case (\code{ecg}, \code{lab}, \code{vit}, \code{dx}, \code{med}, \code{icu} and so on;
+\cref{tab:connecting-keys}). \code{has ecg}, in a cohort or in the Patient Catalog's filter by
+kind of data, then reads this small view instead of every entry and recording. Visits are still
+read from \code{visits} and \code{stays} for \code{enc} and \code{icu}. Like \code{variables},
+it must agree with \code{entries} and \code{recordings}: a person it leaves out is not found by
+\code{has}.
 
 \paragraph{The dates of a person's data.} A \code{persons} view may give two optional columns,
 \code{earliest} and \code{latest}: the times of the person's first and latest data (an ECG
@@ -637,24 +656,80 @@ Medorama asks the views only for what it needs:
   reads it for its summary, journey and report.
 \item A cohort's criterion goes only to the databases whose variables may hold it
   (\cref{sec:connecting-status}), as one query over \code{entries}, with the filters that the
-  database can apply itself: the category, the name (exact, or containing a word), a code's
-  prefix, a text, and whether there is a number. Medorama itself tests values in other units,
-  \code{latest}, dates and stays. Each row is tested as it is read, and only the rows that hold
-  are kept: \code{QTc > 450 ms} reads every QTc of a database of millions of ECGs and keeps
-  those over 450; \code{latest} keeps each person's latest value only.
+  database can apply itself: the category, the name, a code's prefix, a text, and whether there
+  is a number. Each row is tested as it is read, and only the rows that hold are kept:
+  \code{latest} keeps each person's latest value only. Medorama itself tests the values, their
+  units, \code{latest}, dates and stays.
+\item \textbf{A threshold is sent.} A measurement's criterion (\code{QTc > 450}) sends its
+  names, as the database's catalog spells them (\code{name IN (\dots)}), and, for each unit the
+  catalog lists, the values that may pass, the threshold converted into that unit
+  (\code{COALESCE(unit, '') = 'ms' AND value\_num >= CAST(? AS REAL)}), one unit at a time. Only
+  \code{person\_key}, \code{time}, \code{name}, \code{value\_num} and \code{unit} are asked. The
+  bounds are a few billionths wider than the criterion and every row read is still tested, so
+  the patients found are those testing every value finds. Values of a unit that does not compare
+  are still read, and counted as left out (\cref{sec:cohorts-units}). Not sent: \code{latest},
+  \code{!=}, a value written without a unit where the data hold several, and a criterion on a
+  database whose catalog was read at another version than its current one; these read every
+  value of the name. With a \code{variables} view, the rows of units it does not list are read
+  too. A database that cannot compare a bound (a PostgreSQL view whose \code{value\_num} is
+  text) is asked again without it. The units written into the SQL come from the database's own
+  catalog, the values are parameters, and a criterion's text never becomes SQL.
+\item \textbf{Answers kept.} Each criterion's read (a measurement's numbers, the persons with a
+  category, the entries a filter finds) is kept in memory, keyed by the database, its time zone,
+  the read and the data's version: a search repeated, or a cohort edited one criterion at a time,
+  reads only what changed. A new version reads again; a database without a \code{version} view
+  is read every time. At most 4\,000\,000 rows are kept in all, the least recently used dropped
+  first. What is kept is the database's own answer, the same for every user: linking, Privacy
+  Mode, grants and dates as shown are applied afterwards, by each search.
+\item \textbf{Reads in parallel.} A search reads all its criteria in all the databases it
+  searches at once, 4 at a time, and then combines them.
 \item The patient list is read from the database's workspace files (its persons and their
-  encounters); for the page shown, each online database is asked, in one grouped query over
-  those persons' entries and recordings, for the \ui{Data} and \ui{Entries} columns
+  encounters), shared in memory (at most 5\,000\,000 persons in all) and read again when they
+  change; for the page shown, each online database is asked, in one grouped query over those
+  persons' entries and recordings, for the \ui{Data} and \ui{Entries} columns
   (\cref{chap:patients}).
 \item Connecting and refreshing read the \code{persons} and \code{visits} views whole, once
   each, the \code{variables} view (or one grouped query over \code{entries}), and one
   \code{SELECT DISTINCT category} over \code{recordings} (\cref{sec:connecting-kept}).
 \end{itemize}
-Index the underlying tables on the person, the time, and the name or code by which entries are
-searched. \code{max\_rows} bounds the rows a criterion keeps, not those it reads: a criterion
-that would keep more is refused, with a message that asks to narrow it (a date range, a
-database). The persons behind \code{has \dots} are never bounded: they are at most the
-database's persons, all of whom the subject index holds.
+\code{max\_rows} bounds the rows a criterion keeps, not those it reads: a criterion that would
+keep more is refused, with a message that asks to narrow it (a date range, a database). The
+persons behind \code{has \dots} are never bounded: they are at most the database's persons, all
+of whom the subject index holds.
+
+\paragraph{Indexes for searches.} The views run as written, inside Medorama's queries, so the
+indexes that help are those of the tables under them (\cref{tab:connecting-indexes}). An index
+that holds every column a query reads (a \emph{covering} index) answers it alone, without
+reading the table: with an index on \code{(qtc\_ms, patient\_id, acquisition\_datetime)},
+\code{QTc > 450} is a range search of the index. After creating indexes, let the database update
+its statistics (\code{ANALYZE}, on SQLite and PostgreSQL). A db-builder database has its indexes
+already (\file{db-builder/docs/schema.md}).
+
+\begin{table}[htbp]
+\caption{The indexes that serve what Medorama asks a database.}
+\label{tab:connecting-indexes}
+\begin{tabularx}{\linewidth}{@{}P{5.2cm}L@{}}
+\toprule
+{\tabhead Medorama asks} & {\tabhead An index that serves it} \\
+\midrule
+A patient's data (\code{WHERE person\_key IN (\dots)}) & Each table under a view, on its
+  patient key; on its time too \\
+A threshold (\code{name IN (\dots)}, a unit, \code{value\_num >= \dots}) & A table of one row
+  per result: on (name, value), or (name, unit, value). A table of one column per measurement
+  (an ECG's QTc): on (that column, the patient key, the time), for each column searched \\
+\code{has ecg} & A \code{has} view over a table indexed on the patient key, or an index on
+  (category, patient key) \\
+A diagnosis by code, a drug by name & On the code, on the name \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\paragraph{A measurement.} On a synthetic SQLite copy shaped like a MUSE ECG metadata database
+(\cref{sec:connecting-muse}), 2.5 million invented ECGs on a laptop, \code{QTc > 450} took
+15.6\,s before 0.3.2, and \code{has ecg} 53\,s. In 0.3.2, with one covering index per
+measurement and a \code{has} view, \code{QTc > 450} takes 4.7\,s (3.0\,s repeated),
+\code{QTc > 500} 2.1\,s, \code{QTc > 600} 0.3\,s and \code{has ecg} 4.3\,s. Most of what remains
+is Medorama's handling of about 500\,000 matches (their reasons, the result page).
 
 \subsection{A MUSE ECG metadata database}
 \label{sec:connecting-muse}
@@ -687,7 +762,9 @@ medorama databases connect muse --kind views \
   its median beats (\cref{sec:ecg-viewer-median});
 \item \code{version}: the tables merged into it, and when the last was;
 \item \code{variables}: its catalog, as constants: \code{12-lead ECG} and the measurements
-  above, each with its unit, so that connecting reads no ECG for it.
+  above, each with its unit, so that connecting reads no ECG for it;
+\item \code{has}: who has an ECG, so that \code{has ecg} reads the patient IDs (over the index
+  on \code{patient\_id}), not every measurement (below).
 \end{itemize}
 The \code{persons} view, as a site with digit-only MRNs writes it:
 \begin{lstlisting}[language=SQL]
@@ -706,13 +783,27 @@ A patient ID typed at the cart as a name or as \code{test} links no patient, so 
 only the patient IDs of the site's MRNs' form, with the same \code{WHERE} (the demo's keep
 \code{patient\_id GLOB 'SYN[0-9]*'}); the others are left out. A site changes the views of a
 database already connected with \cmd{medorama databases views} (\cref{sec:connecting-views}).
+The \code{has} view, with the same \code{WHERE}:
+\begin{lstlisting}[language=SQL]
+SELECT DISTINCT patient_id AS person_key, 'ecg' AS category
+FROM ecg WHERE patient_id <> '' AND patient_id NOT GLOB '*[^0-9]*'
+\end{lstlisting}
 
 Indexes on \code{ecg(patient\_id)} and \code{ecg(acquisition\_datetime)} keep each patient's
-page to an index search; create them once on the file if it lacks them. Connecting a database of
+page to an index search; create them once on the file if it lacks them. For cohorts, one covering
+index per measurement searched makes a threshold a search of the index
+(\cref{sec:connecting-performance}):
+\begin{lstlisting}[language=SQL]
+CREATE INDEX IF NOT EXISTS ecg_qtc_ms ON ecg (qtc_ms, patient_id, acquisition_datetime);
+-- the same for qt_interval_ms, ventricular_rate_bpm and the others searched
+ANALYZE;
+\end{lstlisting}
+The demo's \code{demo\_muse} has them, and its \code{has} view. Connecting a database of
 millions of ECGs reads its persons (one \code{GROUP BY patient\_id}, over the index), its
 \code{variables} view (no ECG read) and the categories of its recordings (one scan): minutes. No
 XML file is read until a patient is opened, and then only that patient's few; a criterion such
-as \code{muse.QTc > 450 ms} reads one column of the \code{entries} view. Its files are ECGs,
+as \code{muse.QTc > 450 ms} reads the QTc part of the \code{entries} view, only the values over
+450 when the column has its index. Its files are ECGs,
 opened in the ECG viewer and never indexed, so \ui{Index all recordings} is not needed. The
 demo's \code{demo\_muse} is one (\cref{sec:quickstart-demo}).
 

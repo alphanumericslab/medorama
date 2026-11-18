@@ -99,7 +99,7 @@ ends by naming the next step: `medorama databases connect`, then `medorama serve
 | `--workspace DIR` | Required. | The workspace. |
 | `--admin NAME` | `admin` | The first user's name. |
 | `--timezone TZ` | `America/New_York` | The time zone for times that a database writes without an offset (unless the database's own setting says otherwise), and for display. |
-| `--port N` | 8090 | The port of the web page and the API. |
+| `--port N` | 8090; 8095 with `--demo` | The port of the web page and the API (a demo installation's apart from a site's, so that both run at once). |
 | `--password-stdin` | | Reads the password from standard input, for scripts. |
 | `--database-url URL`, `--database-password-file FILE` | SQLite in the home folder | Puts the control store in PostgreSQL ([Put the control store in PostgreSQL](#put-the-control-store-in-postgresql)). |
 | `--demo` | | Makes a **demo installation**, for good: it connects the demo databases that the installer made with `--demo`, and only demo databases; it makes four example cohorts; its home is never remembered ([The demo](#the-demo)). Without that installer option there is nothing to connect, and `init` says so. Without `--demo`, `init` makes a site's installation, which never connects a demo database. |
@@ -395,7 +395,7 @@ folder of the workspace ([databases.md, What Medorama keeps of a database](datab
 
 | Aspect | Details |
 |---|---|
-| Kinds | `omop`: an OMOP CDM 5.3 or 5.4 database, read through built-in views. `views`: any SQL database, read through views that the site writes (`persons`, `visits`, `entries`, and `recordings` for a database of recordings, a `version` query and an optional `variables` catalog). `dbb`: a database made by [db-builder](../db-builder/README.md), whose tables are the views already. |
+| Kinds | `omop`: an OMOP CDM 5.3 or 5.4 database, read through built-in views. `views`: any SQL database, read through views that the site writes (`persons`, `visits`, `entries`, and `recordings` for a database of recordings, a `version` query, an optional `variables` catalog and an optional `has` list). `dbb`: a database made by [db-builder](../db-builder/README.md), whose tables are the views already. |
 | Database engines | PostgreSQL (on-site, Amazon RDS and Aurora, Azure) and SQLite files. A SQLite file must lie inside `data_roots`, and may not be Medorama's control store or lie inside its workspace. |
 | Access | Read-only, and enforced: PostgreSQL sessions are read-only, and SQLite files are opened read-only. Each query has a time limit (`timeout_s`, 60 seconds by default), and each criterion a limit on the rows it keeps (`max_rows`, 1,000,000 by default: each row is tested as it is read, so a criterion reads a database of millions of rows; the persons behind `has …` are not bounded; it also bounds **Index all recordings**, but not the persons and visits read when connecting). |
 | Passwords | A password given to Medorama (in the page, or with `databases connect --password-stdin`) is sealed with the master key and kept in the control store, never in a file and never shown again. Or it is in a file (`--password-file`), or in `$MEDORAMA_SOURCE_PASSWORD_<NAME>`. It is never stored in the URL, and never sent back to the page. |
@@ -446,7 +446,7 @@ identity conflicts if any.
 | `--url URL` | `postgres://user@host/db?sslmode=require`, or `sqlite:/path/to/file`. |
 | `--password-file F`, `--password-stdin` | Its password: in a file, or read from standard input and kept sealed by the master key. Without either, `$MEDORAMA_SOURCE_PASSWORD_<NAME>` is used if set. |
 | `--ca-file F` | Certificate authorities (PEM) for its server's certificate. |
-| `--views FILE.toml` | Kind `views`: a TOML file with the SQL of `persons`, `visits`, `entries`, `recordings`, `stays`, `version` and `variables` ([databases.md](databases.md#canonical-views-reference)). The views are run as written, in the database's own SQL: Medorama puts them inside its own queries and does not translate them. |
+| `--views FILE.toml` | Kind `views`: a TOML file with the SQL of `persons`, `visits`, `entries`, `recordings`, `stays`, `version`, `variables` and `has` ([databases.md](databases.md#canonical-views-reference)). The views are run as written, in the database's own SQL: Medorama puts them inside its own queries and does not translate them. |
 | `--schema S`, `--vocabulary-schema S` | OMOP: the schema of the CDM's tables, and of its vocabulary. Plain names (letters, digits, `_`). |
 | `--identifier mrn\|patient_id\|none` | OMOP: what `person_source_value` holds (by default `mrn`). With `none`, each person is a patient of its own, unique to this database. |
 | `--issuer I` | Who issued its patient IDs ([Identity](#identity)). Empty: the database itself, so that its patient IDs link only its own persons. |
@@ -1062,7 +1062,7 @@ archive would hold them, with enough data for every feature.
 | `demo_north` | `dbb` | A second hospital: some of the same patients by the same MRN authority (`DEMO`), one of them with its MRN in lower case (linked ignoring case), one identity conflict (one patient's MRN with another's patient ID), patient IDs written `PT_123` that its rules file makes `PT123`, and ECG files whose folder is moved after the database is built and repointed with `db-builder rewrite`. |
 | `demo_omop` | `omop` | A third hospital's OMOP CDM database: some of the demo's patients by MRN, and patients of its own. |
 | `demo_registry` | `views` | A heart-failure registry's own tables, connected through canonical SQL views ([databases.md](databases.md#connect-any-sql-database-through-views)): scores, NT-proBNP, LVEF, notes; some of the demo's patients by MRN, two of its own by study ID. |
-| `demo_muse` | `views` | An ECG archive: older MUSE XML files (2019 to 2022) of eight of the demo's patients, and an ECG metadata database of them (one row per file by MD5), connected through its views as it is ([databases.md](databases.md#a-muse-ecg-metadata-database)), the MUSE patient ID read as the MRN of the authority `DEMO`. The MUSE files carry their median beats with the P, QRS and T onsets; one is a 250 Hz ECG (a MAC5K with 12SL 237), and one gives no sampling rate. |
+| `demo_muse` | `views` | An ECG archive: older MUSE XML files (2019 to 2022) of eight of the demo's patients, and an ECG metadata database of them (one row per file by MD5), connected through its views as it is ([databases.md](databases.md#a-muse-ecg-metadata-database)), the MUSE patient ID read as the MRN of the authority `DEMO`. The MUSE files carry their median beats with the P, QRS and T onsets; one is a 250 Hz ECG (a MAC5K with 12SL 237), and one gives no sampling rate. Its views include a `has` view, and its file an index per searched measurement ([databases.md, Indexes for searches](databases.md#indexes-for-searches)). |
 | `demo_secure` | `dbb` | A transplant clinic's db-builder database, encrypted with SQLCipher; its key, a demo key published with the demo, is `keys/demo_secure.key` in the demo's folder. |
 
 Everyone in the demo is invented: pseudo names (such as Jane Doe), MRNs starting with `SYN`,
@@ -1140,7 +1140,7 @@ Then set the demo up as its own installation, with `--demo`, its own home, works
 
 ```bash
 medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo
-medorama --home ~/medorama-demo serve --port 8095
+medorama --home ~/medorama-demo serve                   # port 8095
 ```
 
 A site's installation on the same computer is set up apart, and stays the default home:

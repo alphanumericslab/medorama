@@ -221,8 +221,8 @@ echo "Next, in each new terminal:  source .venv/bin/activate"
 if [ "$DEMO" = 1 ]; then
   echo "  The demo is an installation of its own (invented patients only; never a site's databases):"
   echo "  medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo"
-  echo "  medorama --home ~/medorama-demo serve --port 8095   (http://127.0.0.1:8095)"
-  echo "  A site's installation, apart from it (its own home, workspace and port):"
+  echo "  medorama --home ~/medorama-demo serve   (http://127.0.0.1:8095: its own port)"
+  echo "  A site's installation, apart from it, open at the same time (its own home, workspace and port, 8090):"
 fi
 echo "  medorama init --workspace DIR    (once; docs/administration.md)"
 echo "  medorama databases connect NAME --kind KIND --url URL"

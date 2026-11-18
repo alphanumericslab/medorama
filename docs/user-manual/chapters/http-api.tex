@@ -20,7 +20,8 @@ The parameters of a \code{GET} or \code{DELETE} request are query parameters. Th
 says that the body is a file.
 
 The examples use \cmd{curl} with a cookie file (\file{jar}) against a server on
-\code{http://localhost:8090}, the default port, and the synthetic demo data.
+\code{http://localhost:8090}, the default port, and the synthetic demo data (a demo installation
+listens on 8095: change the port to try them on it).
 
 \section{Conventions}
 \label{sec:http-api-conventions}
@@ -652,8 +653,8 @@ Audited (\code{connect}).
   \code{mrn\_authority}, \code{timezone} (when none is given, Medorama's time zone is written
   into the database's settings, and stays fixed from then on), \code{files\_root},
   \code{timeout\_s}, \code{max\_rows}; for kind \code{views}, the views \code{persons} and
-  \code{entries} (required), \code{visits}, \code{recordings}, \code{stays}, \code{version} and
-  \code{variables}.
+  \code{entries} (required), \code{visits}, \code{recordings}, \code{stays}, \code{version},
+  \code{variables} and \code{has}.
 \end{params}
 \returns{\code{\{"id": ID\}}.}
 \raises{\code{400} an invalid name, kind or URL, a URL that holds a password, a file outside

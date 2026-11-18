@@ -85,10 +85,13 @@ message; the demo is then made as its own installation.
 
 ```bash
 medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo
-medorama --home ~/medorama-demo serve --port 8095
+medorama --home ~/medorama-demo serve                   # port 8095: init --demo's default
 medorama init --workspace ~/medorama-workspace          # a site's installation, apart
 medorama serve                                          # port 8090
 ```
+
+Both can be open in one browser at once: each signs in with its own cookie, named by its port
+(`medorama_8095`, `medorama_8090`), so that signing in to one never signs out of the other.
 
 `init --demo` never becomes the home that commands without `--home` reach: a site's installation
 on the same computer stays the default.

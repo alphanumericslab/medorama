@@ -95,6 +95,8 @@ CREATE TABLE row_sources (
 CREATE INDEX entries_person ON entries (person_key);
 CREATE INDEX entries_time ON entries (time);
 CREATE INDEX entries_category_name ON entries (category, name);
+CREATE INDEX entries_name_value ON entries (name, value_num);
+CREATE INDEX entries_category_person ON entries (category, person_key);
 CREATE INDEX entries_visit ON entries (visit_key);
 CREATE INDEX entries_source ON entries (source_id);
 CREATE INDEX visits_person ON visits (person_key);
@@ -238,6 +240,16 @@ pub fn open(path: &Path, how: &Opening) -> anyhow::Result<Connection> {
         Some(s) => anyhow::bail!("{}: schema {s}, but this db-builder writes schema {SCHEMA}", path.display()),
         None => anyhow::bail!("{}: not a db-builder database (no meta.schema)", path.display()),
     }
+}
+
+/// The indexes a reader's searches need (docs/schema.md, "Indexes"), added to a database
+/// made before them; none of the tables changes, so the schema's version stays.
+pub fn ensure_indexes(c: &Connection) -> anyhow::Result<()> {
+    c.execute_batch(
+        "CREATE INDEX IF NOT EXISTS entries_name_value ON entries (name, value_num);
+         CREATE INDEX IF NOT EXISTS entries_category_person ON entries (category, person_key);",
+    )?;
+    Ok(())
 }
 
 /// The database at `path`, made first when it does not exist yet.

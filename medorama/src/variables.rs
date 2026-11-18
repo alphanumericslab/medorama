@@ -289,6 +289,13 @@ fn like(s: &str) -> String {
     s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
 }
 
+/// Whether the variables were read at this version of the data (the database's version
+/// read now: a criterion pushes its names and units down only then, its catalog complete).
+pub fn read_at(c: &Connection, database: i64, version: &str) -> anyhow::Result<bool> {
+    let v: String = c.query_row("SELECT variables_version FROM databases WHERE id = ?1", [database], |r| r.get(0))?;
+    Ok(!version.is_empty() && v == version)
+}
+
 /// Whether the variables were read at the database's current version.
 pub fn fresh(c: &Connection, database: i64) -> anyhow::Result<bool> {
     Ok(c.query_row(

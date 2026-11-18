@@ -56,7 +56,8 @@ fn equal_identifiers_link_one_patient_exactly() {
         .unwrap()
         .map(Result::unwrap)
         .collect();
-    assert!(hashes.iter().all(|h| h.len() == 32 && !h.contains("100")));
+    // (32 hex digits each, never the MRN as it is; a random hash may hold the digits 100)
+    assert!(hashes.iter().all(|h| h.len() == 32 && h.bytes().all(|b| b.is_ascii_hexdigit()) && h != "100"));
     // the same number from another authority is another patient
     let d = Dbb::new(&s.data().join("d.sqlite"));
     d.person("d1", "", "", "100", "OTHER", "", "", "", "");

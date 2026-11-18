@@ -131,18 +131,30 @@ visits in the visits column only. It has the following parts:
   suggestions as you type (\key{$\uparrow$} \key{$\downarrow$} to choose, \key{Enter} to open,
   \key{Esc} to close);
 \item the \textbf{patient bar}, across the page (\cref{sec:patients-bar});
-\item column 1, the \textbf{patient column} (320 pixels wide): the current status, that is
-  the visits, the medications of the latest stay and the conditions (\cref{sec:patients-column});
-\item column 2, the \textbf{Patient Journey} (330 pixels wide; \cref{sec:patients-journey});
-\item column 3, \textbf{what was done}, the report: one line per thing done, by name only
-  (\cref{sec:patients-report});
-\item column 4, the \textbf{detail}: everything about the thing done chosen in column 3 or the
-  journey (\cref{sec:patients-detail}).
+\item column 1, the \textbf{patient column} (340 pixels wide): the current status, that is
+  the allergies, the visits, the medications of the latest stay and the conditions
+  (\cref{sec:patients-column});
+\item column 2, the \textbf{Patient Journey} (400 pixels wide; \cref{sec:patients-journey});
+\item column 3, \textbf{what was done}, the report: one line per thing done, by name only, about
+  a third of the room columns 3 and 4 share (a long name is cut with an ellipsis, all of it on
+  hover; \cref{sec:patients-report});
+\item column 4, the \textbf{detail}, which has the most room: everything about the thing done
+  chosen in column 3 or the journey (\cref{sec:patients-detail}).
 \end{itemize}
+Drag the thin line between two columns to change their widths (or focus it with \key{Tab} and
+press \key{$\leftarrow$} or \key{$\rightarrow$}); double-click it, or press \key{Home}, for the
+default. The widths are kept in the browser. Below 1500 pixels the defaults are narrower (290
+and 340 pixels). In column 3, \key{$\uparrow$} and \key{$\downarrow$} move to the line above or
+below and the detail follows, \key{Enter} or \key{Space} selects the line that has the focus,
+and \key{Esc} clears the selection. While a detail is read from a slow database its outline is
+shown; the previous and next thing done of the same kind are read ahead, so that stepping
+through them is at once.
 Conditions and medications appear twice, as two facts: in column 1 as the current status, and
-in column 3 as their history, on their dates. In a window narrower than 1100 pixels (a tablet),
+in column 3 as their history, on their dates. A patient with nothing for column 1 (one known to
+an ECG archive alone: no allergy section, no visit, no medication, no condition) has no column
+1: the journey and the report get its room. In a window narrower than 1100 pixels (a tablet),
 the report goes below the patient column and the journey, and the page scrolls: the journey
-keeps at least 320 pixels of height and the report at least 420.
+keeps at least 320 pixels of height and the report at least 420; the widths are then fixed.
 
 The page's address holds the entry chosen, the visit shown, and the report's search and mode,
 so that the browser's Back and Forward buttons, reloading and sharing the address keep them.
@@ -161,29 +173,33 @@ The patient bar shows the following:
 \item the MRNs\phimark, with their issuing authority;
 \item the dates of the patient's first and latest data (the number of visits is the patient
   column's);
-\item the databases that link the patient;
-\item the allergies, in amber with a warning triangle (\ui{$\blacktriangle$}). The bar says ``No allergy recorded'' when a
-  database holds allergies but none for the patient, and ``Allergies: not recorded'' when no
-  database holds allergies;
-\item when a database did not answer, its name followed by ``not available''. The page then
-  shows what the other databases hold, without what that database holds.
+\item at the row's end, apart from who the patient is, where the data come from: the databases
+  that link the patient, and, when a database did not answer, its name followed by ``not
+  available''. The page then shows what the other databases hold, without what that database
+  holds.
 \end{itemize}
+The allergies are the patient column's first section (\cref{sec:patients-column}).
 The identity (name, patient ID, MRNs, date of birth) comes only from the databases on which the
 user holds the \code{phi} grant, and is shown only with the PHI permission, out of Privacy Mode.
 
 \subsection{The patient column}
 \label{sec:patients-column}
 
+Each section is shown only when it has something to show.
 \begin{description}
+\item[\ui{Allergies}] In amber, with a warning triangle (\ui{$\blacktriangle$}). The section is
+  shown only when one of the patient's databases can hold allergies, so that ``No allergy
+  recorded'' means that a database that records them records none for the patient.
 \item[\ui{Visits}] Each visit of every database, latest first: \ui{Stay} (a visit of a day or
   more) or \ui{Visit}, its unit and whether it was an intensive-care stay, the database that
   holds it, its length in days (calendar days in Medorama's time zone, as the report counts its
   hospital days) and its dates. A click shows only that visit in the journey and
   the report, unfolded. A second click, or the visit's chip above the journey, shows all of them
-  again. A patient without visits shows ``No visit in the databases connected.''
+  again.
 \item[\ui{Medications}] The drugs of the latest visit that has any (else of the latest month of
   data), with their dose and since or until when.
-\item[\ui{Conditions}] The diagnoses, with their ICD-10 code and date.
+\item[\ui{Conditions}] The diagnoses, with their code and date, the section labelled by the
+  vocabularies of their codes as the databases name them (ICD-10-CM, ICD-9 \ldots).
 \end{description}
 
 \section{The Patient Journey}

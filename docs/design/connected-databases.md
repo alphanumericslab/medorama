@@ -1,6 +1,6 @@
 # Connected databases: a subject index, a catalog, and queries sent to each database
 
-**Status: built (Medorama 0.3.0, November 2026).** This page is the design note of what Medorama
+**Status: built (Medorama 0.3.0, November 2026; searching a database, 0.3.2).** This page is the design note of what Medorama
 keeps of a connected database, and what it reads from the database when it is asked. It refines
 [databases-only.md](databases-only.md) (Medorama connects databases and imports nothing): 0.2
 copied more of each database than it needed, and connecting a large one took hours. It is written
@@ -19,6 +19,7 @@ for contributors and reviewers, and for site engineers who connect large databas
 - [The patient list](#the-patient-list)
 - [Privacy Mode's dictionary](#privacy-modes-dictionary)
 - [Criteria over millions of rows](#criteria-over-millions-of-rows)
+- [Searching a database](#searching-a-database)
 - [Replacing a database's views](#replacing-a-databases-views)
 - [Refreshing](#refreshing)
 - [Upgrading from 0.2](#upgrading-from-02)
@@ -122,6 +123,13 @@ What the index answers without the database: who is a patient, in which database
 identity (with the `phi` grant), their pseudonym and age, their encounters' count and latest
 date. What it cannot answer: anything about their data.
 
+**Shared in memory** (0.3.2; [`persons::all_of`](../../medorama/src/persons.rs)): each
+database's kept persons are read once and shared by the patient list, the gate's dictionary and
+searches, at most 5,000,000 persons in all (`SHARED_PERSONS`). They are read again when this
+process writes the index, or when its file or journal changes (another process's refresh).
+Linking more than 5,000 keys at once (a criterion's persons) looks them up there instead of
+making thousands of queries.
+
 ## The catalog
 
 [medorama/src/variables.rs](../../medorama/src/variables.rs).
@@ -166,9 +174,9 @@ date. What it cannot answer: anything about their data.
 | Connecting, a new version, **Refresh** | Its persons, its visits; the catalog (a `variables` view, else one grouped query); its recordings' categories | The subject index, the catalog |
 | Every check (60 s) | Each view answers; the version query (else a count of persons and recordings) | Status |
 | The patient list | For the page shown (50 rows): each online database's entries and recordings of those persons, grouped | Nothing |
-| A filter on the list (`has ECG`), a cohort's `has` | Each online database: the persons with data of that kind | Nothing |
+| A filter on the list (`has ECG`), a cohort's `has` | Each online database: the persons with data of that kind (its `has` view when it has one) | The answer, in memory, while the version stays |
 | A patient's page | Their entries, visits, stays and recordings, from every database granted | The recordings (checked and kept) |
-| A cohort, a search | The criteria, sent to each database that may hold them | The cohort's members (its own store) |
+| A cohort, a search | The criteria, sent to each database that may hold them ([Searching a database](#searching-a-database)) | Each criterion's answer, in memory, while the version stays; the cohort's members (its own store) |
 | **Count now** | One grouped count over the entries | The counts |
 | **Index all recordings** | Every recording it lists | The recordings, then their indexes |
 
@@ -204,6 +212,54 @@ read and only the rows that hold are kept ([`Source::find_each`](../../medorama/
 keeps each person's latest value only. `max_rows` bounds the rows a criterion keeps, not those it
 reads; the persons behind `has ecg` are never bounded (they are at most the database's persons,
 whom the subject index holds every one of).
+
+## Searching a database
+
+0.3.2 ([medorama/src/cohorts/in_sources.rs](../../medorama/src/cohorts/in_sources.rs),
+[sources/mod.rs](../../medorama/src/sources/mod.rs) `find_sql`, `Source::find_values`,
+[sources/reads.rs](../../medorama/src/sources/reads.rs)). Every result is as in 0.3.1; the
+database reads less, and is read once while its data stay the same. What each criterion asks
+for, and the measurement, are in [performance.md, What a criterion
+reads](../performance.md#what-a-criterion-reads).
+
+- **A threshold is sent.** A measurement's criterion (`QTc > 450`) sends its names, as the
+  database's catalog spells them (`name IN (…)`; `lower(name) IN (lower(…))` when the catalog
+  comes from a `variables` view, written apart from the entries), and its threshold per unit,
+  converted into each unit the catalog lists (`COALESCE(unit, '') = 'ms' AND value_num >=
+  CAST(? AS REAL)`; `CAST($n AS NUMERIC)` on PostgreSQL). Each unit is asked on its own, a plain
+  range an index serves, not one `OR`. The bounds are a few billionths wider than the criterion
+  ([cohorts/values.rs](../../medorama/src/cohorts/values.rs) `bounds`), and Medorama still tests
+  every row it reads, so the patients found are the same. On SQLite, `CAST(? AS REAL)` makes a
+  number held as text compare as a number.
+- **What is not sent.** `latest` and `!=` (every value is needed); a value written without a
+  unit where the data hold several (the "write the unit" question is asked by the units of the
+  rows read); a catalog read at another version than the database's current one (checked
+  against the live `version` view, `variables::read_at`): the criterion is then read as
+  written. Values of a unit that does not compare are read whole, and counted as left out.
+- **Units a `variables` view does not list** are read too, in a query of their own. A database
+  that cannot compare a bound (a PostgreSQL view whose `value_num` is text) is asked again
+  without the bounds.
+- **Only the columns needed.** A measurement reads `person_key, time, name, value_num, unit`, so
+  that an index holding them answers alone.
+- **SQL.** Unit names are written into the SQL as quoted literals: they come from the database's
+  own catalog, never from what a user types. Values are bound parameters. A criterion's text
+  never becomes SQL.
+- **The `has` view** (optional; `person_key, category`): `has <category>` and the patient list's
+  filter by kind of data read it, not every entry and recording. Visits (`enc`, `icu`) are still
+  read from `visits` and `stays`.
+- **Answers kept.** Each read (a measurement's numbers, the persons with a category, the entries
+  of a diagnosis, drug or text filter) is kept in memory, keyed by the database, its time zone,
+  the read and its data version. A new version reads again; a database without a version view is
+  read every time. At most 4,000,000 rows in all (`KEPT_ROWS`), the least recently used dropped
+  first; a larger answer is not kept. What is kept is the database's own answer, the same for
+  every user: linking, Privacy Mode, grants and dates as shown are applied afterwards, by each
+  search. So the version must change whenever the data do.
+- **Reads in parallel.** A search reads every criterion in every database of its scope at once,
+  4 at a time (`PARALLEL_READS`), then combines them; a read that failed is made again in its
+  turn, so the search fails with the same error as before. Within one search each read is made
+  once.
+- **From the matches.** A search's evaluation starts from the patients matched, not from
+  everyone, and its result page gathers only those.
 
 ## Replacing a database's views
 
@@ -243,10 +299,13 @@ fingerprinted every file: hours. In 0.3:
 | Catalog | Its `variables` view: 14 constant rows, no entry read |
 | Recordings' categories | `SELECT DISTINCT category` over its `recordings` view: one scan |
 | A patient's page | `WHERE patient_id = ?` on each view (the index), and their few XML files |
-| `QTc > 450 ms` | The `QTc` arm of the `entries` view: one scan of a column |
+| `QTc > 450 ms` | The `QTc` arm of the `entries` view: with an index on (`qtc_ms`, `patient_id`, `acquisition_datetime`), a range of the index, only the values over 450 (0.3.2) |
+| `has ecg` | Its `has` view: the distinct patient IDs, over the index on `patient_id` (0.3.2) |
 
 ## Later
 
 - **Reading only what changed** at a refresh, by a watermark the database states.
 - **Indexes inside a recording database**, read before indexing.
 - **Progress** of a long refresh, shown in the Databases tab.
+- **Searching:** date ranges sent to the database with the threshold; a match's reasons
+  formatted only for the page shown ([todo.md, S6](../todo.md#s6-criteria-dates-sent-and-reasons-for-the-page-shown)).

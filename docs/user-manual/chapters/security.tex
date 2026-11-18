@@ -811,7 +811,10 @@ Every file and table is treated as untrusted.
   recurse without bound on a crafted file).
 \item \textbf{Connected databases' answers} are read as values of the canonical columns only,
   at most \code{max\_rows} rows kept per criterion (each row tested as it is read) and within
-  \code{timeout\_s}; a SQLite database file
+  \code{timeout\_s}. What a user types never becomes SQL: a criterion's values and texts are
+  parameters, and the units of a threshold are literals from the database's own catalog. A
+  criterion's answer is kept in the server's memory while the database's version stays (at most
+  4\,000\,000 rows, never written to disk; \cref{sec:connecting-performance}). A SQLite database file
   must lie inside \code{data\_roots}, and is refused inside the workspace or when it is the
   control store itself (\file{sources/mod.rs}, \code{checked\_url}).
 \item \textbf{Tables and folders} are read by db-builder, a separate program run by the site, not

@@ -142,6 +142,16 @@ def _marked(out, d):
         return db.execute("SELECT COUNT(*) FROM sqlite_master WHERE name = 'medorama_demo'").fetchone()[0] == 1
 
 
+def _muse_indexes(out):
+    """The demo MUSE database's indexes on a measurement (its search indexes)."""
+    f = Path(out) / 'muse/ecg_metadata.sqlite'
+    if not f.exists():
+        return 0
+    with sqlite3.connect(f) as db:
+        return sum(1 for (n,) in db.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
+                   if n.startswith('ecg_') and n not in ('ecg_patient', 'ecg_time'))
+
+
 def _muse_rows(out, where):
     """The demo MUSE database's ECGs that hold this condition (SQL)."""
     f = Path(out) / 'muse/ecg_metadata.sqlite'
@@ -240,6 +250,14 @@ feature('demo-marked', 'Every demo database marked as invented: only a demo inst
     lambda out: all(_marked(out, d) for d in _manifest(out)['databases'] if not d.get('encrypt')))
 feature('person-dates', "Each MUSE patient's first and latest ECG, from the persons view (the list's dates without visits)", 'muse/views.toml')(
     lambda out: 'AS earliest' in (Path(out) / 'muse/views.toml').read_text(encoding='utf-8'))
+feature('has-view', "A has view: who has an ECG in demo_muse, read for `has ecg` without its measurements", 'muse/views.toml')(
+    lambda out: 'has' in (_db(out, 'demo_muse') or {}).get('settings', {})
+    and 'has =' in (Path(out) / 'muse/views.toml').read_text(encoding='utf-8'))
+feature('search-indexes', "An index per searched MUSE measurement (value, patient, time): a threshold read from the index", 'muse/ecg_metadata.sqlite')(
+    lambda out: _muse_indexes(out) >= len(MUSE_MEASURES))
+feature('muse-only', "A patient known to the ECG archive alone: the patient page without its left column", 'muse/ecg_metadata.sqlite')(
+    lambda out: _muse_rows(out, f"patient_id = '{MUSE_ONLY[1]}'") >= 1
+    and not any(r['MRN'] == MUSE_ONLY[1] for r in _rows(out, 'databases/patients.csv')))
 feature('muse-ids', 'A test ECG whose patient ID is a word, left out by the views', 'muse/ecg_metadata.sqlite')(
     lambda out: _muse_rows(out, "patient_id = 'test'") == 1 and "GLOB 'SYN[0-9]*'" in (Path(out) / 'muse/views.toml').read_text(encoding='utf-8'))
 feature('ecg-compare', 'Patients with two ECGs or more: each ECG compared with the previous one', 'muse/ecg_metadata.sqlite')(
@@ -2490,6 +2508,8 @@ MUSE_MEASURES = [('vr', 'Vent. rate', 'ventricular_rate_bpm', 'bpm'), ('ar', 'At
 # the MRNs the views read: a patient ID typed at the cart that is not one (a name, "test") is
 # left out (a site writes its own MRNs' form: digits only, `patient_id NOT GLOB '*[^0-9]*'`)
 MUSE_MRN = "patient_id GLOB 'SYN[0-9]*'"
+# an invented patient whose ECGs are the archive's only data on them
+MUSE_ONLY = ('P990001', 'SYN0000990', 'Achterberg', 'Tibor', '1949-07-21', 'M')
 MUSE_VIEWS = {
     'persons': f"""SELECT patient_id AS person_key, '' AS patient_id, '' AS patient_id_issuer,
        patient_id AS mrn, '' AS mrn_authority,
@@ -2514,6 +2534,8 @@ FROM ecg WHERE {MUSE_MRN}
 FROM ecg WHERE {MUSE_MRN}
   AND source_file IS NOT NULL AND source_file <> ''""",
     'version': "SELECT COUNT(*) || ' ' || MAX(added_at) FROM additions",
+    # who has an ECG: `has ecg` reads this, not every measurement (docs/databases.md)
+    'has': f"SELECT DISTINCT patient_id AS person_key, 'ecg' AS category FROM ecg WHERE {MUSE_MRN}",
     # the catalog, as constants: connecting reads no entry for it (docs/design/connected-databases.md)
     'variables': "SELECT 'ecg' AS category, '12-lead ECG' AS name, '' AS vocabulary, '' AS code, '' AS unit, 0 AS numeric\n"
                  + '\n'.join(f"UNION ALL SELECT 'ecg', '{n}', '', '', '{u}', 1" for _, n, _, u in MUSE_MEASURES),
@@ -2530,7 +2552,9 @@ def muse_archive(out, pats, lib, seed):
     if d.exists():
         shutil.rmtree(d)
     rng = random.Random(seed + 13)
-    people = pats[:8]
+    # the main hospital's first patients, and one known to the ECG archive alone (no visit, no
+    # medication, no condition: the patient page leaves its left column out)
+    people = pats[:8] + [MUSE_ONLY]
     rows = []
     for i, p in enumerate(people):
         for k in range(2):
@@ -2570,6 +2594,7 @@ CREATE TABLE ecg (md5 TEXT PRIMARY KEY, md5_source TEXT, source_file TEXT, patie
   added_at TEXT, added_from TEXT);
 CREATE INDEX ecg_patient ON ecg (patient_id);
 CREATE INDEX ecg_time ON ecg (acquisition_datetime);
+''' + ''.join(f'CREATE INDEX ecg_{c} ON ecg ({c}, patient_id, acquisition_datetime);\n' for _, _, c, _ in MUSE_MEASURES) + '''
 CREATE TABLE additions (id INTEGER PRIMARY KEY, added_at TEXT, source TEXT, rows_read INTEGER, rows_added INTEGER,
   rows_duplicate_md5 INTEGER, md5_from_linkage INTEGER, md5_computed INTEGER, rows_excluded INTEGER);
 ''')
@@ -2689,7 +2714,10 @@ def identities(full=True, seed=SEED):
                 {'patient_id': 'PT000708', 'mrn': 'SYN0005002', 'last_name': 'Varga', 'first_name': 'Andras', 'birth_date': '1954-10-30'},
                 {'patient_id': '', 'mrn': 'SYN0006001', 'last_name': 'Aalto', 'first_name': 'Kaisa', 'birth_date': '1975-05-05'},
                 {'patient_id': 'HF-0101', 'mrn': '', 'last_name': '', 'first_name': '', 'birth_date': '1957-07-07'},
-                {'patient_id': 'HF-0102', 'mrn': '', 'last_name': '', 'first_name': '', 'birth_date': '1948-02-19'}]
+                {'patient_id': 'HF-0102', 'mrn': '', 'last_name': '', 'first_name': '', 'birth_date': '1948-02-19'},
+                # the ECG archive's own patient, named as the archive writes names (in capitals)
+                {'patient_id': '', 'mrn': MUSE_ONLY[1], 'last_name': MUSE_ONLY[2].upper(), 'first_name': MUSE_ONLY[3].upper(),
+                 'birth_date': MUSE_ONLY[4]}]
     out += [{'patient_id': '', 'mrn': m, 'last_name': '', 'first_name': '', 'birth_date': b} for m, b in omop_own]
     return out
 

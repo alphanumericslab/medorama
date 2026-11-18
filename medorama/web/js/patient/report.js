@@ -25,7 +25,7 @@ function entryRow(x, terms, selected, when = '') {
   const snip = x.snippet ? `<span class="snip">${mark(x.snippet, terms)}</span>` : '';
   const go = x.attachment ? '<span class="go" title="Opens a viewer or a file">↗</span>' : '<span></span>';
   return `<div class="it${x.key === selected ? ' sel' : ''}" data-key="${esc(x.key)}" tabindex="0" role="button" aria-pressed="${x.key === selected}"><span class="tm">${esc(fmtHM(x.time))}</span><span class="sw ${catClass(x.category)}"></span>
-    <span class="txt"><b>${mark(x.title, terms)}</b>${sum}${snip}</span>${go}</div>`;
+    <span class="txt"><span class="one" title="${esc(x.title)}"><b>${mark(x.title, terms)}</b>${sum}</span>${snip}</span>${go}</div>`;
 }
 
 /**

@@ -1,5 +1,78 @@
 # Changelog: medorama
 
+## 0.3.2 (2026-11-17, pre-release)
+
+Searches read less of a connected database, and read it once while its data stay the same
+([docs/performance.md, What a criterion reads](../docs/performance.md#what-a-criterion-reads)).
+Every result is as in 0.3.1. A 0.3.1 installation updates in place.
+
+- **A threshold is sent to the database:** `QTc > 450` asks only for the values that may pass.
+  The names are sent as the database's catalog spells them (`name IN (…)`, in any case for a
+  catalog from a `variables` view), and the threshold per unit, converted into each unit the
+  catalog lists (`COALESCE(unit, '') = 'ms' AND value_num >= CAST(? AS REAL)`; `NUMERIC` on
+  PostgreSQL), one unit at a time. The bounds are a few billionths wider than the criterion and
+  Medorama still tests every row read. Values of a unit that does not compare are still read and
+  counted ("left out"); a value written without a unit, where the data hold several, is not sent
+  (the question "write the unit" is asked as before). Only when the catalog was read at the
+  database's current version; else as in 0.3.1. With a `variables` view, the rows of units it
+  does not list are read too. A database that cannot compare a bound (a PostgreSQL view whose
+  `value_num` is text) is asked again without it. Only the columns a criterion needs are asked
+  (`person_key, time, name, value_num, unit`). Units are written in the SQL as literals from the
+  database's own catalog; values are bound parameters; criteria text never becomes SQL.
+- **An optional `has` view** (`person_key, category`, a Medorama category: `ecg`, `lab`, `vit`,
+  `dx`, `med`, `icu` …): `has ecg` and the Patient Catalog's filter by kind of data read it, not
+  every entry and recording (visits are still read for `enc` and `icu`). In a views file
+  (`has = '''…'''`), `databases connect --views`, `databases views`, the Connect form's optional
+  box **has**; checked by `databases check`. The demo's `demo_muse` has one.
+- **Answers kept while the data's version stays** (`sources/reads.rs`): each criterion's read (a
+  measurement's numbers, the persons with a category, a filter's entries) is kept in memory,
+  keyed by the database, its time zone, the read and its `version` view's value; a new version
+  reads again, and a database without a version view is read every time. At most 4,000,000 rows
+  kept in all (`KEPT_ROWS`), the least recently used dropped first. The answer kept is the
+  database's own, the same for every user: linking, Privacy Mode, grants and dates as shown are
+  applied by each search. Within one search each read is made once.
+- **Reads in parallel:** a search reads all its criteria in all the databases of its scope, 4 at
+  a time (`PARALLEL_READS`), then combines them; a read that failed is made again in its turn,
+  so the error is as before.
+- **The subject index shared in memory** (`persons::all_of`, at most 5,000,000 persons in all,
+  `SHARED_PERSONS`): each database's persons are read once, and again when this process writes
+  the index or its file or journal changes (another process's refresh). Linking more than 5,000
+  keys at once uses it instead of thousands of queries. A search's result page reads only the
+  matched patients, and the evaluation starts from the matches, not from everyone.
+- **Times read faster:** `YYYY-MM-DD` and `YYYY-MM-DD HH:MM[:SS[.ffffff]]` (a space or a `T`)
+  are read directly (`util::iso_local`); other forms as before.
+- **The demo's port:** `medorama init --demo` writes port 8095 (`DEMO_PORT`), a site's
+  installation 8090, so that both are open at once in one browser (each signs in with its own
+  cookie, `medorama_<port>`). `--port` sets another.
+- **A patient's page** ([docs/design/patient-page.md](../docs/design/patient-page.md)):
+  - the detail has the most room: column 3 (one line per thing done) takes about a third of
+    what it shares with column 4, a long name cut with "…" (all of it on hover); columns 1 and
+    2 are wider (340 and 400 pixels; 290 and 340 below 1500);
+  - the dividers between the columns are dragged to set the widths (← and → once focused;
+    double-click or Home: the default), kept in the browser;
+  - the databases, and any not answering, are at the end of the patient bar, apart from who the
+    patient is;
+  - the allergies are column 1's first section, shown only when one of the patient's
+    databases can hold allergies ("Allergies: not recorded" is gone);
+  - a section of column 1 with nothing is left out, and the column itself when every one is (a
+    patient of an ECG archive alone);
+  - the conditions are labelled by the vocabularies of their codes (the summary's conditions
+    and medications carry `vocabulary`), no longer "ICD-10" whatever they are;
+  - in column 3, ↑ and ↓ move to the line above or below (the detail follows), Enter or Space
+    selects, Escape clears the selection;
+  - while a detail is read its outline is shown, and the previous and next of the same kind are
+    read ahead (kept 30 seconds).
+- **The demo:** `demo_muse` has a `has` view and one index per searched measurement (value,
+  patient, time), and a patient known to the archive alone (*Achterberg, Tibor*); new feature
+  rows `has-view`, `search-indexes` and `muse-only`.
+- **tools/screenshots.py** waits for the report's lines, not for the word "Laboratory" (which
+  0.3.1's panel titles no longer hold).
+- **Tests:** `tests/criteria_reads.rs` (a threshold sent to the database finds what testing every
+  row finds, over numbers held as numbers and as text, two units, every comparison and a
+  `variables` view missing a unit; answers kept and read again at a new version; the "left out"
+  warning; criteria read in parallel; the `has` view; PostgreSQL when `MEDORAMA_TEST_POSTGRES` is
+  set); `util.rs`'s test of the time reader; the web tests of the patient bar and column 1.
+
 ## 0.3.1 (2026-11-17, pre-release)
 
 A patient's page names what was done and shows each fact once; the demo is an installation of its
