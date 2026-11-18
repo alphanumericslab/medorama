@@ -583,26 +583,39 @@ fn init(home: &Path, a: InitArgs) -> anyhow::Result<()> {
 
 /// The demo's example cohorts, made from its databases as a user would make them; a user makes
 /// more by their own criteria, as anywhere.
-const DEMO_COHORTS: &[(&str, &str)] = &[
-    ("ICU stays", "icu"),
-    ("Long QTc", "demo_muse.QTc > 450 ms"),
-    ("Women over 65 with an ECG", "female AND age > 65 AND has ecg"),
-    ("Sepsis", "dx sepsis"),
+/// The demo's example cohorts: (name, criteria text, the criteria's first day: none, or dates
+/// set as the page sets them, which criteria text does not write).
+const DEMO_COHORTS: &[(&str, &str, &str)] = &[
+    ("ICU stays", "icu", ""),
+    ("Long QTc", "demo_muse.QTc > 450 ms", ""),
+    ("Long QTc since 2022", "demo_muse.QTc > 450 ms", "2022-01-01"),
+    ("Women over 65 with an ECG", "female AND age > 65 AND has ecg", ""),
+    ("Sepsis", "dx sepsis", ""),
 ];
 
 fn demo_cohorts(cfg: &Config, c: &medorama::sql::Connection, admin: &User) {
-    for (name, text) in DEMO_COHORTS {
-        let made = medorama::cohorts::parse_text(c, cfg, admin, text).and_then(|e| {
+    for (name, text, from) in DEMO_COHORTS {
+        let made = medorama::cohorts::parse_text(c, cfg, admin, text).and_then(|mut e| {
+            if let (medorama::cohorts::Expr::Leaf(k), false) = (&mut e, from.is_empty()) {
+                k.from = (*from).into();
+            }
             let n = medorama::cohorts::NewCohort {
                 name: (*name).into(),
-                description: format!("An example of the demo: {text}"),
+                description: if from.is_empty() {
+                    format!("An example of the demo: {text}")
+                } else {
+                    format!("An example of the demo: {text}, from {from}")
+                },
                 criteria: medorama::cohorts::Criteria { include: Some(e), ..Default::default() },
                 ..Default::default()
             };
             medorama::cohorts::create(c, cfg, admin, &n)
         });
         match made {
-            Ok(_) => println!("Made the demo cohort {name} ({text})"),
+            Ok(_) => println!(
+                "Made the demo cohort {name} ({text}{})",
+                if from.is_empty() { String::new() } else { format!(", from {from}") }
+            ),
             Err(e) => println!("The demo cohort {name} was not made ({e:#})"),
         }
     }
@@ -611,9 +624,9 @@ fn demo_cohorts(cfg: &Config, c: &medorama::sql::Connection, admin: &User) {
 /// The demo the installer made (tools/install-medorama.sh --demo): the folder named in
 /// `medorama.demo` beside this program, which holds its db-builder database (`demo.sqlite`).
 fn demo_folder() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let named = std::fs::read_to_string(exe.parent()?.join("medorama.demo")).ok()?;
-    let dir = PathBuf::from(named.trim());
+    // (found as the viewer's choice is: beside the program as called, `.venv/bin`, whose
+    // `medorama` is a link to target/release's, which Linux resolves the program to)
+    let dir = PathBuf::from(medorama::viewer::installer_choice("medorama.demo")?);
     dir.join("demo.sqlite").is_file().then_some(dir)
 }
 
@@ -1033,6 +1046,12 @@ fn serve(cfg: Config, db: Db, a: ServeArgs) -> anyhow::Result<()> {
         println!("  db-builder: {}", app.dbbuilder.describe());
         app.dbbuilder.start();
         println!("  workspace: {} (indexes in each database's folder)", cfg.workspace_dir.display());
+        if let Some(fs) = medorama::workspace::network_fs(&cfg.workspace_dir) {
+            println!(
+                "  WARNING: the workspace is on a network file system ({fs}): SQLite's locking is not reliable there \
+                 (\"database is locked\"); keep the workspace on a local disk (docs/administration.md, \"The control store and the workspace\")."
+            );
+        }
         println!(
             "  {} worker(s); automatic indexing {}",
             cfg.workers,

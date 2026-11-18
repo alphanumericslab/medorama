@@ -280,7 +280,7 @@ pub fn store_result(
          );
          CREATE INDEX IF NOT EXISTS results_name ON results(name);",
     )?;
-    let tx = w.transaction()?;
+    let tx = w.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     for (name, x) in &nums {
         tx.execute(
             "INSERT INTO results (recording, person_key, name, value, at) VALUES (?1, ?2, ?3, ?4, ?5)

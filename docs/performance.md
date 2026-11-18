@@ -30,8 +30,8 @@ much the database reads, and which of its indexes help
 
 | Criterion | What the database is asked for | What Medorama tests on each row read |
 |---|---|---|
-| A threshold on a measurement (`QTc > 450`, `lactate 2..4 mmol/L`) | Its names, as the database's catalog spells them (`name IN (…)`), and per unit of the catalog the values that may pass, the threshold converted into that unit (`COALESCE(unit, '') = 'ms' AND value_num >= CAST(? AS REAL)`), one unit at a time. Only `person_key, time, name, value_num, unit`. | The value, in the criterion's unit; the dates. |
-| A measurement without a threshold, with `latest`, or with `!=` | Its names; every value. | `latest`: each person's latest value. |
+| A threshold on a measurement (`QTc > 450`, `lactate 2..4 mmol/L`) | Its names, as the database's catalog spells them (`name IN (…)`), and per unit of the catalog the values that may pass, the threshold converted into that unit (`COALESCE(unit, '') = 'ms' AND value_num >= CAST(? AS REAL)`), one unit at a time; the criterion's dates (SQLite, below). Only `person_key, time, name, value_num, unit`. | The value, in the criterion's unit; the dates. |
+| A measurement without a threshold, with `latest`, or with `!=` | Its names; every value in the criterion's dates (SQLite, below). | `latest`: each person's latest value; the dates. |
 | A value written without a unit, where the data hold several units | Its names; every value. | Which unit is meant: "write the unit" is asked, as before. |
 | `has ecg` (and the Patient Catalog's filter by kind of data) | The database's `has` view, when it has one; else the persons with entries of that category and recordings of it (`SELECT DISTINCT person_key`). Visits for `enc` and `icu`. | Nothing. |
 | A diagnosis, a drug, a text | The entries of the category with the code's prefix, a word of the name, or the text; at most `max_rows`. | The dates. |
@@ -45,8 +45,17 @@ much the database reads, and which of its indexes help
   `version` view). Otherwise the criterion is read as written, every value of its name.
 - **A `variables` view's units** may not be all those of the entries: the rows of other units
   are read too, in a query of their own, and tested.
+- **A measurement's dates** (`from`, `until`) are sent to a SQLite database as days in the
+  database's time zone, two days wider on each side (a time with an offset, the dates as shown in
+  Privacy Mode). Only times written as ISO 8601 text (`YYYY-MM-DD…`) are compared there; a time
+  written as a number, or as text of another form, is read whatever its date. Medorama tests the
+  dates of every row read exactly, so the patients found are the same. PostgreSQL databases are
+  asked without the dates (their time columns' types differ), and every value is read.
 - **A database that cannot compare a bound** (a PostgreSQL view whose `value_num` is text) is
   asked again without the bounds, and the values are compared in Medorama.
+- **Reasons for the page shown.** A search's reasons ("QTc 478 ms on 2024-01-01") are kept as
+  values and written out only for the rows of the page shown, not for each of the hundreds of
+  thousands of patients a search may find.
 - **SQL injection.** The units written into the SQL are literals taken from the database's own
   catalog, never from what a user types; the values are bound parameters; the text of a
   criterion never becomes SQL.
@@ -87,16 +96,19 @@ database ([databases.md, A MUSE ECG metadata database](databases.md#a-muse-ecg-m
 2.5 million invented ECGs, connected through views, on a laptop (Apple silicon), a release build.
 Seconds per search:
 
-| Search | Before 0.3.2 | 0.3.2, an index per measurement and a `has` view: first | Repeated |
-|---|---|---|---|
-| `QTc > 450` | 15.6 | 4.7 | 3.0 |
-| `QTc > 500` | | 2.1 | |
-| `QTc > 600` | | 0.3 | |
-| `has ecg` | 53 | 4.3 | |
+| Search | Before 0.3.2 | 0.3.2: first | 0.3.2: repeated | 0.3.3: first | 0.3.3: repeated |
+|---|---|---|---|---|---|
+| `QTc > 450` | 15.6 | 4.7 | 3.0 | 4.4 | 2.4 |
+| `QTc > 500` | | 2.1 | | 2.1 | |
+| `QTc > 600` | | 0.3 | | 0.3 | |
+| `has ecg` | 53 | 4.3 | | 4.4 | 3.3 |
+| `QTc > 450` from 2024-01-01 (32,350 patients) | | | | 0.7 | 0.5 |
 
-The indexes were one per searched measurement column holding (value, patient key, time), as the
-demo's `demo_muse` has them. Most of what remains is Medorama's handling of about 500,000
-matches (each one's reason, the result page), not the database's reading.
+0.3.2 and 0.3.3 were timed with an index per searched measurement column holding (value, patient
+key, time), as the demo's `demo_muse` has them, and a `has` view. Most of what remains is
+Medorama's handling of about 500,000 matches, not the database's reading; 0.3.3 writes their
+reasons out for the page shown only, and sends a criterion's dates to the database, which then
+reads only the ECGs of about those days ([What a criterion reads](#what-a-criterion-reads)).
 
 ## The measurement
 

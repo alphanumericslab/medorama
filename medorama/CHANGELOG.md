@@ -1,5 +1,66 @@
 # Changelog: medorama
 
+## 0.3.3 (2026-11-18, pre-release)
+
+Opening a patient no longer makes the server print "database is locked"; a measurement's dates are sent to the
+database, and a search's reasons are written out for the page shown only. Every result is as in
+0.3.2. A 0.3.2 installation updates in place.
+
+- **"database is locked" fixed** (`recordings.rs` `sync_persons`, `keep`, `writer`). A patient's
+  page asks in several requests at once (its summary, journey and report); each read the
+  patient's recordings again and wrote the workspace's `recordings.sqlite` in a deferred
+  transaction that read first, then wrote, with the files checked inside it (slow on a network
+  share). In WAL mode the request that lost failed at once with SQLITE_BUSY_SNAPSHOT (error 517,
+  "database is locked"). Now the files are checked before the transaction; the server writes a
+  database's recordings index one writer at a time; every workspace write transaction starts
+  `IMMEDIATE` (`variables.rs`, `persons.rs`, `recordings.rs`, `derived.rs`,
+  `cohorts/members.rs`), so that another process waits on SQLite's busy timeout instead of
+  failing; and a page's simultaneous requests share one read (a request takes a read that
+  finished after it asked; a later request reads again).
+- **A workspace on a network file system is told** (`workspace::network_fs`): on Linux,
+  `medorama serve` warns in its banner when the workspace is on NFS, SMB/CIFS, sshfs, Lustre,
+  GPFS, BeeGFS, Ceph, GlusterFS or 9p (as `/proc/self/mounts` says), where SQLite's locking is not
+  reliable. Keep the workspace on a local disk; the connected databases may stay on a share
+  ([docs/administration.md, The control store and the workspace](../docs/administration.md#the-control-store-and-the-workspace)).
+- **A measurement's dates are sent to the database** (`sources::Find.from_day`, `until_day`;
+  `cohorts/in_sources.rs` `with_days`): SQLite databases only, as days in the database's time
+  zone, two days wider on each side. Only times written as ISO 8601 text (`YYYY-MM-DD…`) are
+  compared there; a time written as a number, or as text of another form, is read whatever its
+  date. Medorama still tests every row read exactly. PostgreSQL is asked as before
+  ([docs/todo.md, S6](../docs/todo.md#s6-criteria-dates-sent-to-postgresql)).
+- **Reasons written for the page shown** (`cohorts/evaluate.rs` `Why`): a search's reasons
+  ("QTc 478 ms on 2024-01-01") are kept as values and written out only for the rows of the page
+  shown, not for each of the hundreds of thousands of patients a search may find.
+- **The demo on Linux:** `medorama init --demo` found no demo, because `.venv/bin/medorama` is a
+  link to `target/release/medorama`, which Linux resolves the running program to, while the
+  installer's `medorama.demo` is in `.venv/bin`. It is now found as the viewer's choice is
+  (`viewer::installer_choice`).
+- **The installers check what the build needs first** (`tools/preflight.sh`, sourced by
+  `tools/install-medorama.sh` and `tools/install.sh`): Python 3.9 or later (`$PYTHON`, else
+  `python3`), and for a Rust build `make` and a Perl with `IPC::Cmd` (OpenSSL's build; `install.sh --py`
+  and `--cpp` check Python alone, as before). Every problem is told at
+  once, with what to do with administrator rights and without (a Python from uv, a relocatable
+  Perl: [docs/install.md](../docs/install.md#linux-without-administrator-rights-an-old-python-a-minimal-perl)),
+  and the installer stops.
+- **The VitalStream tab with no recording:** opened directly, not from a patient's page, it
+  showed the last recording the viewer remembered (perhaps another user's patient, on a shared
+  computer). It now says "Open a recording (ICU monitoring, a Holter, a sleep study, an EEG …)
+  from a patient's page." until one is opened, as the ECG and PACS tabs do, and the viewer is
+  not started empty.
+- **A search under way is seen:** the Cohorts tab's *Searching…*, in the muted grey of the
+  count, was hard to spot; it is now *Searching… please wait* in an amber pill (the colour of
+  work in progress, not red) with a pulsing dot, readable in light (5.5:1) and dark (9.8:1)
+  mode, and told to screen readers.
+- **The demo:** a fifth example cohort, *Long QTc since 2022* (`demo_muse.QTc > 450 ms` from
+  2022-01-01): a criterion whose dates are sent to `demo_muse` (its times are ISO 8601 text).
+- **Tests:** `tests/connected.rs`
+  `a_pages_requests_read_a_patients_recordings_at_once_without_a_lock_refused` (fails with error
+  517 without the fix); `tests/criteria_reads.rs`
+  `a_criterions_dates_sent_to_the_database_find_what_every_row_tested_finds` (times as ISO text,
+  Unix seconds and `MM/DD/YYYY`); `viewer.rs` `the_installers_files_are_read_from_the_clones_venv`;
+  `workspace.rs` `a_folder_on_a_network_mount_is_told`; the web tests of the VitalStream tab with
+  no recording and of the search under way.
+
 ## 0.3.2 (2026-11-17, pre-release)
 
 Searches read less of a connected database, and read it once while its data stay the same

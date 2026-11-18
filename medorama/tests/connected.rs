@@ -208,3 +208,29 @@ fn a_criterion_reads_more_rows_than_it_keeps() {
     assert_eq!(one(lactate(">", 4.0, true)), [ann]);
     assert_eq!(one(Criterion { kind: "has".into(), category: "lab".into(), ..Default::default() }), both);
 }
+
+#[test]
+fn a_pages_requests_read_a_patients_recordings_at_once_without_a_lock_refused() {
+    // a patient's page asks in several requests at once (summary, journey, report): each read of
+    // the recordings succeeds, none refused with "database is locked"
+    let s = Setup::new();
+    let a = hospital(&s);
+    let id = s.connect("hospa", &a);
+    let src = medorama::sources::get(&s.db.get().unwrap(), id).unwrap().unwrap();
+    std::thread::scope(|sc| {
+        let done: Vec<_> = (0..8)
+            .map(|_| {
+                sc.spawn(|| {
+                    let c = s.db.get().unwrap();
+                    medorama::recordings::sync_persons(&s.cfg, &c, &src, &["a1".to_string(), "a2".to_string()])
+                })
+            })
+            .collect();
+        for d in done {
+            d.join().unwrap().unwrap();
+        }
+    });
+    let c = s.db.get().unwrap();
+    let ann = medorama::persons::known(&s.cfg, &c, id, &["a1".into()]).unwrap()["a1"];
+    assert!(!medorama::recordings::of_patient(&s.cfg, &c, &s.user("boss"), ann).unwrap().is_empty());
+}

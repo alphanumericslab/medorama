@@ -239,18 +239,51 @@ pub fn sync(cfg: &Config, c: &Connection, s: &Source) -> anyhow::Result<SyncRepo
         return Ok(SyncReport::default());
     }
     let listed = s.all_recordings(s.zone(&cfg.timezone))?;
+    let lock = writer(s.id);
+    let _one = lock.lock().unwrap_or_else(|e| e.into_inner());
     keep(cfg, c, s, &listed, None)
 }
 
 /// Read these persons' recordings from the database now, and keep what Medorama needs of each
 /// (their files checked): what a patient's page, a job or a cohort's selection reads.  Their
 /// recordings the database no longer lists go.
+///
+/// A page asks for a patient's recordings in several requests at once (its summary, journey and
+/// report): one reads them, and the others, waiting meanwhile, take what it read (it was read
+/// after they asked); a request that comes later reads them again.
 pub fn sync_persons(cfg: &Config, c: &Connection, s: &Source, persons: &[String]) -> anyhow::Result<SyncReport> {
     if persons.is_empty() || !s.has_recordings() {
         return Ok(SyncReport::default());
     }
+    let key = format!("{}\u{1}{}\u{1}{}", s.id, s.url, persons.join("\u{1}"));
+    let asked = std::time::Instant::now();
+    let lock = writer(s.id);
+    let _one = lock.lock().unwrap_or_else(|e| e.into_inner());
+    // (read by another request since this one asked: what it read is as new)
+    if lately().lock().unwrap().get(&key).is_some_and(|done| *done >= asked) {
+        return Ok(SyncReport::default());
+    }
     let listed = s.recordings(persons, s.zone(&cfg.timezone))?;
-    keep(cfg, c, s, &listed, Some(persons))
+    let rep = keep(cfg, c, s, &listed, Some(persons))?;
+    let mut l = lately().lock().unwrap();
+    // (only the reads of the last minute matter: requests wait seconds at most)
+    l.retain(|_, t| t.elapsed() < std::time::Duration::from_secs(60));
+    l.insert(key, std::time::Instant::now());
+    Ok(rep)
+}
+
+/// When the recordings of persons were last read, by database and persons.
+fn lately() -> &'static std::sync::Mutex<HashMap<String, std::time::Instant>> {
+    static L: std::sync::OnceLock<std::sync::Mutex<HashMap<String, std::time::Instant>>> = std::sync::OnceLock::new();
+    L.get_or_init(Default::default)
+}
+
+/// One writer of a database's `recordings.sqlite` at a time in this server (another process,
+/// a command run beside it, waits on SQLite's lock: the transactions are immediate).
+fn writer(database: i64) -> std::sync::Arc<std::sync::Mutex<()>> {
+    static W: std::sync::OnceLock<std::sync::Mutex<HashMap<i64, std::sync::Arc<std::sync::Mutex<()>>>>> =
+        std::sync::OnceLock::new();
+    W.get_or_init(Default::default).lock().unwrap().entry(database).or_default().clone()
 }
 
 /// Keep these recordings, as listed: each file checked, the rows added or updated; the rows the
@@ -264,16 +297,37 @@ fn keep(
     persons: Option<&[String]>,
 ) -> anyhow::Result<SyncReport> {
     let mut rep = SyncReport::default();
+    // each file checked first (on a network share, the slow part), the index then written in
+    // one short transaction
+    struct Checked {
+        path: std::path::PathBuf,
+        problem: String,
+        kind: String,
+        fp: String,
+        size: i64,
+    }
+    let checked: Vec<Checked> = listed
+        .iter()
+        .map(|r| {
+            let path = crate::config::real(&s.recording_path(&r.file));
+            let problem = problem_of(cfg, &path);
+            let present = problem.is_empty();
+            Checked {
+                kind: if present { kind_of(&path).unwrap_or_default() } else { String::new() },
+                fp: if present { cache_key(&path) } else { String::new() },
+                size: if present { size_of(&path) } else { 0 },
+                problem,
+                path,
+            }
+        })
+        .collect();
     let mut w = open(cfg, c, s.id)?;
-    let tx = w.transaction()?;
+    let tx = w.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let t = now();
-    for r in listed {
+    for (r, ck) in listed.iter().zip(checked) {
         rep.recordings += 1;
-        let path = crate::config::real(&s.recording_path(&r.file));
-        let problem = problem_of(cfg, &path);
+        let Checked { path, problem, kind, fp, size } = ck;
         let present = problem.is_empty();
-        let kind = if present { kind_of(&path).unwrap_or_default() } else { String::new() };
-        let fp = if present { cache_key(&path) } else { String::new() };
         let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let category = if r.category.trim().is_empty() {
             "icu".to_string()
@@ -325,7 +379,7 @@ fn keep(
                 path.to_string_lossy(),
                 kind,
                 name,
-                if present { size_of(&path) } else { 0 },
+                size,
                 fp,
                 r.start,
                 r.end,
@@ -614,8 +668,10 @@ pub fn apply_index_meta(cfg: &Config, c: &Connection, id: i64, text: &str) -> an
 /// Replace a recording's derived series (derived.rs).
 pub fn store_series(cfg: &Config, c: &Connection, id: i64, series: &[crate::derived::Derived]) -> anyhow::Result<()> {
     let (db, n) = split(id);
+    let lock = writer(db);
+    let _one = lock.lock().unwrap_or_else(|e| e.into_inner());
     let mut w = open(cfg, c, db)?;
-    let tx = w.transaction()?;
+    let tx = w.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute("DELETE FROM series WHERE recording = ?1", [n])?;
     for s in series {
         tx.execute(

@@ -48,9 +48,12 @@ The viewer's tab then shows the file. Each viewer keeps its state while the user
 screens, and shows another file without reloading when it is sent one. The \ui{ECG}
 and \ui{PACS} tabs are dimmed until something is opened in them (``Opens what a patient's page
 sends here''); until then, they say ``Open an ECG, an echo or an image from a patient's page.''
-The \ui{VitalStream} tab can be opened directly: it shows the viewer's own page, with its
-\ui{Open record\dots} and \ui{Open multiple records\dots} dialogs, limited by the gateway's
-rules (\cref{sec:viewers-in-medorama-gateway}).
+Until a recording is opened from a patient's page, the \ui{VitalStream} tab says ``Open a
+recording (ICU monitoring, a Holter, a sleep study, an EEG \ldots) from a patient's page.'' and
+starts no viewer: started empty, it would open again the recording it showed last, perhaps
+another user's patient on a shared computer. Once one is open, the viewer's own
+\ui{Open record\dots} and \ui{Open multiple records\dots} dialogs open others, limited by the
+gateway's rules (\cref{sec:viewers-in-medorama-gateway}).
 
 \paragraph{Which viewer shows which file.} Every file is a recording of a recording database
 (\cref{sec:recordings-databases}). The server decides, from the recording's category
@@ -101,8 +104,8 @@ parts:
 Medorama passes this context in the viewer's address (\code{who}, \code{what}, \code{pos},
 \code{nav}; \cref{chap:viewer-api}). When one of these buttons is used, the viewer only reports
 it to the page, by a message to its host of the same origin, and the page navigates. The viewer
-never sees patient IDs or addresses. A viewer opened without a patient (the VitalStream tab
-opened directly) shows the file's name.
+never sees patient IDs or addresses. A file opened without a patient (with VitalStream's own
+\ui{Open record\dots} dialog) shows the file's name.
 
 \paragraph{Themes.} Medorama's page and every viewer have a light and a dark theme. The three
 viewers take the page's theme from their address (\code{theme=light} or \code{dark},

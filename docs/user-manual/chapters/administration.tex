@@ -79,8 +79,8 @@ Home folder & \file{medorama.toml} (the settings), \file{medorama.sqlite} (the c
 Workspace & One folder per connected database, \file{db-NNNN/} (with its recordings' indexes,
   \file{index.sqlite}), and one file per cohort, in \file{cohorts/}: what Medorama generates,
   encrypted (\cref{sec:administration-workspace}) &
-  Required. Never a folder that holds recordings or a connected database's files. Kept apart
-  from the master key. Room for the indexes, roughly 1 to 5\,\% of the recordings' size. \\
+  Required. On a \textbf{local disk} too (\cref{sec:administration-workspace}). Never a folder
+  that holds recordings or a connected database's files. Kept apart from the master key. Room for the indexes, roughly 1 to 5\,\% of the recordings' size. \\
 \end{xltabular}
 
 \cmd{medorama init} sets Medorama up:
@@ -132,8 +132,9 @@ installation's Privacy Mode dictionary, or exported from it.
 \item \textbf{Every command} (and \cmd{medorama serve}) checks first that the installation holds
   no database of the other kind; listing and removing databases stay open, to put it right.
 \item \cmd{init -{}-demo} connects the demo's databases, adds its example action plug-in, and
-  makes four example cohorts: \emph{ICU stays} (\code{icu}), \emph{Long QTc}
-  (\code{demo\_muse.QTc > 450 ms}), \emph{Women over 65 with an ECG} (\code{female AND age > 65
+  makes five example cohorts: \emph{ICU stays} (\code{icu}), \emph{Long QTc}
+  (\code{demo\_muse.QTc > 450 ms}), \emph{Long QTc since 2022} (the same, from 2022-01-01),
+  \emph{Women over 65 with an ECG} (\code{female AND age > 65
   AND has ecg}) and \emph{Sepsis} (\code{dx sepsis}).
 \item \textbf{What a user sees}: a band on every page, ``Demo $\cdot$ every patient here is
   invented: this installation holds no real patient's data'', in neutral colours; the browser
@@ -644,6 +645,13 @@ with their database's key; the viewer Medorama runs has its own store,
 \file{viewer/index.sqlite}, with a key of its own. Only the output folders of action plug-ins
 (\file{db-NNNN/results/<action>/}) are not encrypted: keep the workspace on an encrypted disk for
 them. The details are in \cref{sec:protecting-workspace}.
+
+\paragraph{Keep the workspace on a local disk of the server.} Its SQLite files are written while
+people use Medorama (a patient's page writes the recordings it reads), and SQLite's locking is not
+reliable on a network file system (NFS, SMB, Lustre, GPFS and the like): writers may fail with
+\code{database is locked}, or worse. On Linux, \cmd{medorama serve} warns at start when the
+workspace is on one. The connected databases and their recordings may stay on a share: Medorama
+only reads them.
 
 \subsection{The master key}
 \label{sec:administration-keys}

@@ -133,7 +133,7 @@ pub fn read(cfg: &Config, c: &Connection, s: &Source, version: &str) -> anyhow::
     drop(st);
     let recording_categories = s.recording_categories().map_err(|e| anyhow::anyhow!("{}: {e}", s.name))?;
     let mut w = open(cfg, c, s.id)?;
-    let tx = w.transaction()?;
+    let tx = w.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute("DELETE FROM variables", [])?;
     {
         let mut ins = tx.prepare(
@@ -183,7 +183,7 @@ pub fn count(cfg: &Config, c: &Connection, s: &Source) -> anyhow::Result<usize> 
         .map_err(|e| anyhow::anyhow!("{}: {e}", s.name))?;
     drop(st);
     let mut w = open(cfg, c, s.id)?;
-    let tx = w.transaction()?;
+    let tx = w.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute("UPDATE variables SET entries = 0, persons = 0", [])?;
     {
         // the variables read before, counted (a category two names share is summed)

@@ -129,7 +129,7 @@ The installation is a demo installation for good: it never becomes a site's.
 \cmd{init} asks twice for the password of the first user, \code{admin}, who has the PHI
 permission. The password needs at least 10 characters. \cmd{init} then says where each part is
 and connects the demo's databases as that administrator, who is granted each, with the key of
-the encrypted one from its key file; it also adds the demo's example action plug-in and four
+the encrypted one from its key file; it also adds the demo's example action plug-in and five
 example cohorts:
 \begin{lstlisting}[style=text]
 Medorama set up in /home/user/medorama-demo (a demo installation: invented patients only)
@@ -148,6 +148,7 @@ Connected the demo database demo_muse (invented patients); ... recording(s) to i
 Connected the demo database demo_secure (invented patients)
 Made the demo cohort ICU stays (icu)
 Made the demo cohort Long QTc (demo_muse.QTc > 450 ms)
+Made the demo cohort Long QTc since 2022 (demo_muse.QTc > 450 ms, from 2022-01-01)
 Made the demo cohort Women over 65 with an ECG (female AND age > 65 AND has ecg)
 Made the demo cohort Sepsis (dx sepsis)
 \end{lstlisting}
@@ -257,8 +258,9 @@ angiography run, which open in the \ui{PACS} tab.
 \label{sec:quickstart-cohort}
 
 A \emph{cohort} is a named set of patients, found across the connected databases by criteria
-and kept. The demo comes with four example cohorts: \emph{ICU stays} (\code{icu}), \emph{Long
-QTc} (\code{demo\_muse.QTc > 450 ms}), \emph{Women over 65 with an ECG} (\code{female AND age > 65
+and kept. The demo comes with five example cohorts: \emph{ICU stays} (\code{icu}), \emph{Long
+QTc} (\code{demo\_muse.QTc > 450 ms}), \emph{Long QTc since 2022} (the same, from 2022-01-01),
+\emph{Women over 65 with an ECG} (\code{female AND age > 65
 AND has ecg}) and \emph{Sepsis} (\code{dx sepsis}). To build one of your own:
 \begin{enumerate}
 \item Open \ui{Cohorts}. The page opens on a new cohort, with the criteria builder, one empty

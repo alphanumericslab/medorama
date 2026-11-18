@@ -357,6 +357,44 @@ pub fn make_dir(d: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The network file system a folder is on (`nfs`, `cifs`, `lustre` …), if it is one, as the
+/// mounts say (Linux; elsewhere none): SQLite's locking is not reliable there, and the workspace
+/// belongs on a local disk (docs/administration.md, "The control store and the workspace").
+pub fn network_fs(dir: &Path) -> Option<String> {
+    let real = crate::config::real(dir);
+    let mounts = std::fs::read_to_string("/proc/self/mounts").ok()?;
+    network_fs_in(&mounts, &real)
+}
+
+fn network_fs_in(mounts: &str, dir: &Path) -> Option<String> {
+    const NETWORK: &[&str] =
+        &["nfs", "nfs4", "cifs", "smb3", "smbfs", "fuse.sshfs", "lustre", "gpfs", "beegfs", "ceph", "glusterfs", "9p"];
+    // the mount holding the folder: the longest mount point it is within
+    let (_, kind) = mounts
+        .lines()
+        .filter_map(|l| {
+            let mut f = l.split_whitespace();
+            let (_, point, kind) = (f.next()?, f.next()?, f.next()?);
+            // (spaces in a mount point are written \040)
+            let point = PathBuf::from(point.replace("\\040", " "));
+            dir.starts_with(&point).then(|| (point.components().count(), kind.to_string()))
+        })
+        .max_by_key(|(n, _)| *n)?;
+    NETWORK.iter().any(|n| kind == *n || kind.starts_with(&format!("{n}."))).then_some(kind)
+}
+
+#[cfg(test)]
+mod network_tests {
+    #[test]
+    fn a_folder_on_a_network_mount_is_told() {
+        let mounts = "/dev/sda1 / ext4 rw 0 0\nserver:/home /home nfs4 rw 0 0\n/dev/sdb1 /home/me/local xfs rw 0 0\n";
+        let at = |p: &str| super::network_fs_in(mounts, std::path::Path::new(p));
+        assert_eq!(at("/home/me/medorama-workspace").as_deref(), Some("nfs4"));
+        assert_eq!(at("/home/me/local/ws"), None, "a local disk mounted inside the share");
+        assert_eq!(at("/var/medorama"), None);
+    }
+}
+
 /// Open (or create) an encrypted SQLite file of the workspace with its owner's key.  A file
 /// that does not open with the key is an error, never a new empty database.
 pub fn open(path: &Path, k: &Key, create: bool) -> anyhow::Result<rusqlite::Connection> {

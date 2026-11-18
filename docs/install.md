@@ -67,6 +67,58 @@ medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --dem
 medorama --home ~/medorama-demo serve            # then open http://127.0.0.1:8095 and sign in as admin
 ```
 
+### Linux without administrator rights (an old Python, a minimal Perl)
+
+Use this when the steps above stop with one of these messages and you cannot install system
+packages (no `sudo`), as on a shared server with RHEL 8 or Rocky 8:
+
+- `Python 3.9 or later is needed (Python 3.6.8)`: the system's Python is too old;
+- `Perl lacks IPC::Cmd, which OpenSSL's build needs` (or, in a build by hand,
+  `Can't locate IPC/Cmd.pm in @INC` while building `openssl-sys`): the system's Perl lacks the
+  modules OpenSSL's build needs.
+
+The installers check Python, and for a Rust build `make` and Perl, before they build anything
+([tools/preflight.sh](../tools/preflight.sh)), tell every problem at once, and print these steps
+for what is missing; then they stop. A recent Python from [uv](https://docs.astral.sh/uv/) and a complete Perl in your home folder
+replace them, for the installer alone. Run these in one terminal, in your medorama clone.
+
+**uv**, if `uv --version` does not answer (uv's own installer, into `~/.local/bin`):
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source $HOME/.local/bin/env
+```
+
+**A recent Python:**
+
+```bash
+uv python install 3.12
+```
+
+**A complete Perl** (a relocatable Perl, in `~/opt`):
+
+```bash
+mkdir -p ~/opt
+curl -fsSL https://github.com/skaji/relocatable-perl/releases/latest/download/perl-linux-amd64.tar.xz | tar xJf - -C ~/opt
+export PATH=~/opt/perl-linux-amd64/bin:$PATH
+unset PERL5LIB PERL_LOCAL_LIB_ROOT
+perl -MIPC::Cmd -e 'print "IPC::Cmd ok\n"'           # should print: IPC::Cmd ok
+```
+
+**Install, with that Python:**
+
+```bash
+PYTHON="$(uv python find 3.12)" tools/install-medorama.sh --viewer rs --accept-license
+source .venv/bin/activate
+medorama --version
+```
+
+- `--viewer rs` builds the Rust waveform viewer. Add `--demo` for the demo, as above.
+- A `BuildBackendWarning: Compat editable installs` message during "The database tools" is
+  harmless.
+- The Perl is needed only while building: Medorama does not use it once built. For a later
+  update, run the `export PATH=…` and `unset …` lines again before the installer.
+
 ### macOS
 
 ```bash

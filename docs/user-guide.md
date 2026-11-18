@@ -45,7 +45,10 @@ The top bar has three groups of tabs:
 - **Cohorts, Patient Catalog and Databases** are three ways to reach patients. Medorama opens
   on the Cohorts tab.
 - **ECG, PACS and VitalStream** are the viewers. The ECG and PACS tabs are always shown, and
-  they stay dimmed until a patient's page sends something to them.
+  they stay dimmed until a patient's page sends something to them. Until a recording is opened
+  from a patient's page, the VitalStream tab says "Open a recording (ICU monitoring, a Holter, a
+  sleep study, an EEG …) from a patient's page." and starts no viewer: started empty, it would
+  open again the recording it showed last, perhaps another user's patient on a shared computer.
 - **History, Actions, Jobs and Admin**, at the right, are for work on the data. Some of them are
   shown only to the roles that may use them.
 
@@ -171,6 +174,11 @@ written as text and checked as you type, for example:
 ```text
 (age > 18 AND age < 85 AND female) OR (age > 18 AND age < 65 AND male AND QT > 400ms)
 ```
+
+**While a search runs**, the place of the count shows *Searching… please wait* in an amber
+pill with a pulsing dot, in light and dark mode alike; the count replaces it when the answer
+arrives. A search over large databases may take a few seconds: wait for the count before
+reading the list.
 
 **No condition is left out silently.** While a condition cannot be read (an expression with an
 error, or a row not complete, such as a measurement without its name or **Sex** not chosen),

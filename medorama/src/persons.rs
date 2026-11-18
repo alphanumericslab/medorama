@@ -136,7 +136,7 @@ pub fn link(
         None
     };
     c.lock_in_transaction(crate::sql::Lock::Identity)?;
-    let wt = w.unchecked_transaction()?;
+    let wt = rusqlite::Transaction::new_unchecked(&w, rusqlite::TransactionBehavior::Immediate)?;
     for p in persons {
         let hashes: Vec<String> = pairs(s, p).iter().map(|(i, v)| hash(&secret, i, v)).collect();
         let found: BTreeSet<i64> = c
@@ -293,7 +293,7 @@ pub fn sync(cfg: &Config, c: &Connection, s: &Source, user: Option<&User>) -> an
 pub fn encounters_read(cfg: &Config, c: &Connection, s: &Source) -> anyhow::Result<usize> {
     let visits = s.every_visit(s.zone(&cfg.timezone))?;
     let mut w = open(cfg, c, s.id)?;
-    let tx = w.transaction()?;
+    let tx = w.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute("DELETE FROM encounters", [])?;
     {
         let mut ins = tx.prepare(

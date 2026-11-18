@@ -47,7 +47,8 @@ Agreed with the project lead, 2026-11-17:
 - **Every command** (and `medorama serve`) checks first that the installation holds no database
   of the other kind; listing and removing databases stay open, to put it right.
 - `medorama init --demo` connects the demo's databases, adds its example action plug-in, and
-  makes its example cohorts (ICU stays; long QTc; women over 65 with an ECG; sepsis).
+  makes its example cohorts (ICU stays; long QTc; long QTc since 2022; women over 65 with an
+  ECG; sepsis).
 
 ## A demo database says so
 

@@ -4,7 +4,7 @@
 # not either.
 [package]
 name = "db-builder"
-version = "0.3.2"
+version = "0.3.3"
 description = "db-builder: tables, known exports and folders of recordings made into one open SQLite database"
 readme = "README.md"
 edition.workspace = true

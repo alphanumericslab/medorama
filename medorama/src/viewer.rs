@@ -540,6 +540,21 @@ impl Drop for Supervisor {
 mod tests {
     use super::*;
 
+    /// The installer's files (`medorama.viewer`, `medorama.demo`) are read from the clone's
+    /// `.venv/bin`, whatever the program resolves to: on Linux, `.venv/bin/medorama` is a link
+    /// that the running program's path resolves to `target/release` (a test: `target/debug/deps`).
+    #[test]
+    fn the_installers_files_are_read_from_the_clones_venv() {
+        let exe = std::fs::canonicalize(std::env::current_exe().unwrap()).unwrap();
+        let root = exe.ancestors().find(|a| a.join("medorama").join("Cargo.toml").is_file()).unwrap().to_path_buf();
+        let venv = root.join(".venv").join(if cfg!(windows) { "Scripts" } else { "bin" });
+        let looked: Vec<PathBuf> = search_dirs().into_iter().take(4).collect();
+        assert!(
+            looked.iter().any(|d| std::fs::canonicalize(d).unwrap_or(d.clone()) == venv || *d == venv),
+            "{looked:?}"
+        );
+    }
+
     /// A supervisor of a "viewer" that is a process which never answers (as a viewer busy with
     /// a large recording), on a port nobody listens on.
     fn busy() -> (tempfile::TempDir, Supervisor, u16) {

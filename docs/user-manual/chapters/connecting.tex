@@ -674,6 +674,15 @@ Medorama asks the views only for what it needs:
   too. A database that cannot compare a bound (a PostgreSQL view whose \code{value\_num} is
   text) is asked again without it. The units written into the SQL come from the database's own
   catalog, the values are parameters, and a criterion's text never becomes SQL.
+\item \textbf{A measurement's dates are sent} to a SQLite database (since 0.3.3): days in the
+  database's time zone, two days wider on each side (a time with an offset, dates as shown in
+  Privacy Mode). Only times written as ISO 8601 text (\code{YYYY-MM-DD\dots}) are compared
+  there; a time written as a number, or as text of another form, is read whatever its date.
+  Medorama tests the dates of every row read exactly, so the patients found are the same. A
+  PostgreSQL database is asked without the dates, and every value of the name is read.
+\item \textbf{Reasons for the page shown} (since 0.3.3). A search's reasons (``QTc 478 ms on
+  2024-01-01'') are kept as values and written out only for the rows of the page shown, not for
+  each of the hundreds of thousands of patients a search may find.
 \item \textbf{Answers kept.} Each criterion's read (a measurement's numbers, the persons with a
   category, the entries a filter finds) is kept in memory, keyed by the database, its time zone,
   the read and the data's version: a search repeated, or a cohort edited one criterion at a time,
@@ -727,9 +736,13 @@ A diagnosis by code, a drug by name & On the code, on the name \\
 \paragraph{A measurement.} On a synthetic SQLite copy shaped like a MUSE ECG metadata database
 (\cref{sec:connecting-muse}), 2.5 million invented ECGs on a laptop, \code{QTc > 450} took
 15.6\,s before 0.3.2, and \code{has ecg} 53\,s. In 0.3.2, with one covering index per
-measurement and a \code{has} view, \code{QTc > 450} takes 4.7\,s (3.0\,s repeated),
-\code{QTc > 500} 2.1\,s, \code{QTc > 600} 0.3\,s and \code{has ecg} 4.3\,s. Most of what remains
-is Medorama's handling of about 500\,000 matches (their reasons, the result page).
+measurement and a \code{has} view, \code{QTc > 450} took 4.7\,s (3.0\,s repeated),
+\code{QTc > 500} 2.1\,s, \code{QTc > 600} 0.3\,s and \code{has ecg} 4.3\,s. In 0.3.3, which
+writes the reasons for the page shown only, \code{QTc > 450} takes 4.4\,s (2.4\,s repeated),
+\code{QTc > 500} 2.1\,s, \code{QTc > 600} 0.3\,s and \code{has ecg} 4.4\,s (3.3\,s
+repeated); with its dates sent, \code{QTc > 450} from 2024-01-01 (32\,350 patients) takes
+0.7\,s (0.5\,s repeated). Most of what remains is Medorama's handling of about 500\,000
+matches, not the database's reading (\file{docs/performance.md}).
 
 \subsection{A MUSE ECG metadata database}
 \label{sec:connecting-muse}

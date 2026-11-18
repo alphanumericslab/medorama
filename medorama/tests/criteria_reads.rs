@@ -328,3 +328,45 @@ fn a_threshold_runs_in_postgresql_too_and_a_text_value_is_compared_in_medorama()
     }
     pg.execute_batch_native(&format!("DROP SCHEMA {schema} CASCADE")).unwrap();
 }
+
+#[test]
+fn a_criterions_dates_sent_to_the_database_find_what_every_row_tested_finds() {
+    let s = Setup::new();
+    let (d, _) = ecgs(&s, "ecg.sqlite");
+    // times as ISO text (db-builder), as Unix seconds, and as text of another form
+    let cols = "entry_key, person_key, visit_key, category";
+    let rest = "end_time, name, code, vocabulary, value_num, value_text, unit, ref_low, ref_high, flag, author, text";
+    let a = s.connect("dbb", &d);
+    let b = connect_views(
+        &s,
+        "unix",
+        &d,
+        views(&format!("SELECT {cols}, CAST(strftime('%s', time) AS INTEGER) AS time, {rest} FROM entries")),
+    );
+    let c = connect_views(
+        &s,
+        "slash",
+        &d,
+        views(&format!(
+            "SELECT {cols}, substr(time, 6, 2) || '/' || substr(time, 9, 2) || '/' || substr(time, 1, 4) || substr(time, 11) AS time, {rest} FROM entries"
+        )),
+    );
+    // February's ECGs only (each person's second), over 450 ms
+    let feb: Vec<(String, f64, &str)> = measurements()
+        .into_iter()
+        .filter(|m| m.3 == "QTc" && m.2.starts_with("2024-02"))
+        .map(|m| (m.1, m.4, m.5))
+        .collect();
+    for db in [a, b, c] {
+        let k = Criterion {
+            database: Some(db),
+            from: "2024-02-01".into(),
+            to: "2024-02-28".into(),
+            ..qtc(">", 450.0, "ms")
+        };
+        assert_eq!(found(&s, db, &keys(), &one(k.clone())).unwrap(), expected(&feb, &k), "{db}");
+        // and `latest`, in the dates: each person's February value
+        let latest = Criterion { latest: true, ..k };
+        assert_eq!(found(&s, db, &keys(), &one(latest.clone())).unwrap(), expected(&feb, &latest), "{db} latest");
+    }
+}

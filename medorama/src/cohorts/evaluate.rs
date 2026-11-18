@@ -12,8 +12,43 @@ use super::*;
 /// A patient found: why, and the databases whose answers say so.
 #[derive(Debug, Clone, Default)]
 pub struct Hit {
-    pub why: Vec<String>,
+    pub why: Vec<Why>,
     pub from: BTreeSet<i64>,
+}
+
+/// Why a patient meets a criterion, written out only when it is shown (a search's page): a
+/// search may find hundreds of thousands of patients and shows fifty, and a measurement's
+/// reason holds its value and time, not their words.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Why {
+    Text(std::sync::Arc<str>),
+    /// A measurement's value: `QTc 478 ms on 2024-01-01` (the date in Medorama's time zone).
+    Value {
+        name: std::sync::Arc<str>,
+        value: f64,
+        unit: std::sync::Arc<str>,
+        time: Option<f64>,
+    },
+}
+
+impl Why {
+    pub fn text(&self, zone: chrono_tz::Tz) -> String {
+        match self {
+            Why::Text(t) => t.to_string(),
+            Why::Value { name, value, unit, time } => {
+                let on = time
+                    .map(|t| format!(" on {}", crate::util::fmt_local(t, zone).get(..10).unwrap_or("")))
+                    .unwrap_or_default();
+                format!("{name} {} {unit}{on}", fmt_num(*value)).replace("  ", " ")
+            }
+        }
+    }
+}
+
+impl From<String> for Why {
+    fn from(t: String) -> Why {
+        Why::Text(t.into())
+    }
 }
 
 pub type Hits = HashMap<i64, Hit>;
@@ -73,7 +108,7 @@ pub(super) struct Cx<'a> {
     pub(super) timezone: &'a str,
     pub(super) scope: &'a Scope,
     /// Each criterion's answers.
-    sources: std::cell::RefCell<HashMap<String, HashMap<i64, (String, BTreeSet<i64>)>>>,
+    sources: std::cell::RefCell<HashMap<String, HashMap<i64, (Why, BTreeSet<i64>)>>>,
     /// Each database's persons as kept (the registry's criteria).
     persons: std::cell::RefCell<HashMap<i64, std::sync::Arc<Vec<crate::persons::Known>>>>,
     /// Values left out (their unit does not compare), in words, each once.
@@ -186,8 +221,8 @@ pub(super) fn everyone(cx: &Cx) -> anyhow::Result<HashMap<i64, BTreeSet<i64>>> {
 }
 
 /// The patients the registry says meet a criterion of its own: sex, age, a database.
-fn meets_registry(cx: &Cx, k: &Criterion) -> anyhow::Result<HashMap<i64, (String, BTreeSet<i64>)>> {
-    let mut out: HashMap<i64, (String, BTreeSet<i64>)> = HashMap::new();
+fn meets_registry(cx: &Cx, k: &Criterion) -> anyhow::Result<HashMap<i64, (Why, BTreeSet<i64>)>> {
+    let mut out: HashMap<i64, (Why, BTreeSet<i64>)> = HashMap::new();
     if k.kind == "age" && !cx.user.phi && !cx.user.privacy {
         anyhow::bail!("age comes from the date of birth: it needs the PHI permission");
     }
@@ -203,18 +238,16 @@ fn meets_registry(cx: &Cx, k: &Criterion) -> anyhow::Result<HashMap<i64, (String
             && crate::deid::load(cx.c)?.hides("age_over_89");
         for p in cx.persons_of(*db)?.iter() {
             let why = match k.kind.as_str() {
-                "sex" if !p.sex.is_empty() && p.sex.eq_ignore_ascii_case(k.text.trim()) => format!("sex {}", p.sex),
+                "sex" if !p.sex.is_empty() && p.sex.eq_ignore_ascii_case(k.text.trim()) => {
+                    Why::from(format!("sex {}", p.sex))
+                }
                 "age" => match patient::age(&p.birth_date).map(|a| if capped { a.min(90) } else { a }) {
                     Some(a) if test_value(k, a as f64, "")? => {
-                        if capped && a >= 90 {
-                            "age 90+".to_string()
-                        } else {
-                            format!("age {a}")
-                        }
+                        Why::from(if capped && a >= 90 { "age 90+".to_string() } else { format!("age {a}") })
                     }
                     _ => continue,
                 },
-                "database" => format!("in {name}"),
+                "database" => Why::from(format!("in {name}")),
                 _ => continue,
             };
             let e = out.entry(p.patient).or_insert_with(|| (why, BTreeSet::new()));
@@ -240,7 +273,7 @@ fn may_hold(cx: &Cx, k: &Criterion, s: &crate::sources::Source) -> anyhow::Resul
 /// The patients meeting one criterion (before `not`), each with a reason and its databases.
 /// Each part is found once per evaluation; a measurement's `latest` is each patient's latest
 /// value across the scope.
-pub(super) fn meets(cx: &Cx, k: &Criterion) -> anyhow::Result<HashMap<i64, (String, BTreeSet<i64>)>> {
+pub(super) fn meets(cx: &Cx, k: &Criterion) -> anyhow::Result<HashMap<i64, (Why, BTreeSet<i64>)>> {
     if matches!(k.kind.as_str(), "sex" | "age" | "database") {
         return meets_registry(cx, k);
     }
@@ -254,7 +287,7 @@ pub(super) fn meets(cx: &Cx, k: &Criterion) -> anyhow::Result<HashMap<i64, (Stri
     let f = if k.kind == "measurement" && k.latest {
         latest_across(cx, k)?
     } else {
-        let mut f: HashMap<i64, (String, BTreeSet<i64>)> = HashMap::new();
+        let mut f: HashMap<i64, (Why, BTreeSet<i64>)> = HashMap::new();
         for s in &cx.scope.sources {
             if k.database.is_some_and(|d| d != s.id) || !may_hold(cx, k, s)? {
                 continue;
@@ -272,7 +305,7 @@ pub(super) fn meets(cx: &Cx, k: &Criterion) -> anyhow::Result<HashMap<i64, (Stri
 
 /// Criteria written as text: as saved; the text read again only to say when it now means
 /// something else.
-fn meets_expression(cx: &Cx, k: &Criterion) -> anyhow::Result<HashMap<i64, (String, BTreeSet<i64>)>> {
+fn meets_expression(cx: &Cx, k: &Criterion) -> anyhow::Result<HashMap<i64, (Why, BTreeSet<i64>)>> {
     let now = parse_text(cx.c, cx.cfg, cx.user, &k.text);
     let e = match (&k.resolved, now) {
         (Some(saved), Ok(now)) => {
@@ -296,13 +329,16 @@ fn meets_expression(cx: &Cx, k: &Criterion) -> anyhow::Result<HashMap<i64, (Stri
         (None, now) => now?,
     };
     let all = everyone(cx)?;
-    Ok(eval(cx, &e, &all)?.into_iter().map(|(p, h)| (p, (h.why.join(", "), h.from))).collect())
+    let zone = tz(cx.timezone);
+    Ok(eval(cx, &e, &all)?
+        .into_iter()
+        .map(|(p, h)| (p, (Why::from(h.why.iter().map(|w| w.text(zone)).collect::<Vec<_>>().join(", ")), h.from)))
+        .collect())
 }
 
 /// `latest`, for a measurement: each patient's values in every database of the scope that
 /// holds it (or the one named), the latest of them tested.
-fn latest_across(cx: &Cx, k: &Criterion) -> anyhow::Result<HashMap<i64, (String, BTreeSet<i64>)>> {
-    let zone = tz(cx.timezone);
+fn latest_across(cx: &Cx, k: &Criterion) -> anyhow::Result<HashMap<i64, (Why, BTreeSet<i64>)>> {
     // (patient, name, value, unit, time, database)
     let mut rows: Vec<(i64, String, f64, String, Option<f64>, i64)> = vec![];
     for s in &cx.scope.sources {
@@ -332,15 +368,14 @@ fn latest_across(cx: &Cx, k: &Criterion) -> anyhow::Result<HashMap<i64, (String,
         if has_value_test(k) && !test_value(k, *v, unit)? {
             continue;
         }
-        let when =
-            t.map(|t| format!(" on {}", crate::util::fmt_local(t, zone).get(..10).unwrap_or(""))).unwrap_or_default();
-        out.insert(*p, (format!("{name} {} {unit}{when}", fmt_num(*v)).replace("  ", " "), BTreeSet::from([*db])));
+        let why = Why::Value { name: name.as_str().into(), value: *v, unit: unit.as_str().into(), time: *t };
+        out.insert(*p, (why, BTreeSet::from([*db])));
     }
     skipped.done(k, cx)?;
     Ok(out)
 }
 
-pub(super) fn push(why: &mut Vec<String>, more: impl IntoIterator<Item = String>) {
+pub(super) fn push(why: &mut Vec<Why>, more: impl IntoIterator<Item = Why>) {
     for w in more {
         if why.len() < MAX_REASONS && !why.contains(&w) {
             why.push(w);
@@ -353,10 +388,11 @@ pub(super) fn eval(cx: &Cx, e: &Expr, all: &HashMap<i64, BTreeSet<i64>>) -> anyh
     Ok(match e {
         Expr::Leaf(k) => {
             let found = meets(cx, k)?;
+            let no = Why::from(format!("no {}", describe(k)));
             if k.not {
                 all.iter()
                     .filter(|(p, _)| !found.contains_key(p))
-                    .map(|(p, dbs)| (*p, Hit { why: vec![format!("no {}", describe(k))], from: dbs.clone() }))
+                    .map(|(p, dbs)| (*p, Hit { why: vec![no.clone()], from: dbs.clone() }))
                     .collect()
             } else {
                 found.into_iter().map(|(p, (w, from))| (p, Hit { why: vec![w], from })).collect()
@@ -399,12 +435,13 @@ pub(super) fn eval(cx: &Cx, e: &Expr, all: &HashMap<i64, BTreeSet<i64>>) -> anyh
             }
             "not" => {
                 let mut inner: Hits = HashMap::new();
+                let not = Why::from("not the group".to_string());
                 for x in &g.of {
                     inner.extend(eval(cx, x, all)?);
                 }
                 all.iter()
                     .filter(|(p, _)| !inner.contains_key(p))
-                    .map(|(p, dbs)| (*p, Hit { why: vec!["not the group".to_string()], from: dbs.clone() }))
+                    .map(|(p, dbs)| (*p, Hit { why: vec![not.clone()], from: dbs.clone() }))
                     .collect()
             }
             op => anyhow::bail!("unknown group {op:?} (and, or, not)"),
@@ -539,6 +576,7 @@ pub fn search_page(
     excluded_limit: usize,
 ) -> anyhow::Result<Found> {
     let ev = evaluate_full(c, cfg, user, &q.as_written_by(c, cfg, user)?, chosen)?;
+    let zone = tz(&cfg.timezone);
     let page = |of: &Hits, limit: usize, offset: usize| -> anyhow::Result<(usize, Vec<Match>, Vec<i64>)> {
         let ids: HashSet<i64> = of.keys().copied().filter(|p| within.is_none_or(|w| w.contains(p))).collect();
         let (total, rows) = patient::list_in(c, cfg, user, "", &[], Some(&ids), limit, offset)?;
@@ -546,7 +584,11 @@ pub fn search_page(
         all.sort();
         let rows = rows
             .into_iter()
-            .map(|p| Match { reasons: of.get(&p.id).map(|h| h.why.clone()).unwrap_or_default(), patient: p })
+            // (the reasons written out for the page's rows only)
+            .map(|p| Match {
+                reasons: of.get(&p.id).map(|h| h.why.iter().map(|w| w.text(zone)).collect()).unwrap_or_default(),
+                patient: p,
+            })
             .collect();
         Ok((total, rows, all))
     };

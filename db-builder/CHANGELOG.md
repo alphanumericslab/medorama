@@ -1,5 +1,9 @@
 # Changelog: db-builder
 
+## 0.3.3 (2026-11-18, pre-release)
+
+No changes; the version follows Medorama's.
+
 ## 0.3.2 (2026-11-17, pre-release)
 
 - Two indexes on `entries`, for the searches a reader sends ([docs/schema.md](docs/schema.md#indexes)):

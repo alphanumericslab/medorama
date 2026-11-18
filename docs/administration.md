@@ -72,7 +72,7 @@ Medorama's data on one server live in two places, chosen when it is set up:
 | Folder | What goes there | Advice |
 |---|---|---|
 | **Home folder** | `medorama.toml` (the settings), `medorama.sqlite` (the control store, unless it is in PostgreSQL), `master.key` (the master key, unless it comes from elsewhere: [Keys](#keys)), `actions/` (action plug-ins), `viewer/` (the waveform viewer's settings). | Put it on a **local disk**, because SQLite's locking is unreliable on network file systems such as NFS or SMB home folders. Make it private to the account that runs Medorama. The default is `~/.local/share/medorama` (Windows: `%LOCALAPPDATA%\medorama`). |
-| **Workspace** | One folder per connected database (`db-NNNN/`, with its recordings' indexes in `index.sqlite`), the cohorts (`cohorts/`), and the viewer's own index store (`viewer/`). Its SQLite files are encrypted. | Leave room for the indexes, roughly 1 to 5 % of the recordings' size. Never choose a folder that holds recordings or a connected database. Keep it apart from the master key. |
+| **Workspace** | One folder per connected database (`db-NNNN/`, with its recordings' indexes in `index.sqlite`), the cohorts (`cohorts/`), and the viewer's own index store (`viewer/`). Its SQLite files are encrypted. | On a **local disk** too ([The control store and the workspace](#the-control-store-and-the-workspace)). Leave room for the indexes, roughly 1 to 5 % of the recordings' size. Never choose a folder that holds recordings or a connected database. Keep it apart from the master key. |
 
 To set up Medorama in the default home folder, or in a home folder of your own, run one of:
 
@@ -102,7 +102,7 @@ ends by naming the next step: `medorama databases connect`, then `medorama serve
 | `--port N` | 8090; 8095 with `--demo` | The port of the web page and the API (a demo installation's apart from a site's, so that both run at once). |
 | `--password-stdin` | | Reads the password from standard input, for scripts. |
 | `--database-url URL`, `--database-password-file FILE` | SQLite in the home folder | Puts the control store in PostgreSQL ([Put the control store in PostgreSQL](#put-the-control-store-in-postgresql)). |
-| `--demo` | | Makes a **demo installation**, for good: it connects the demo databases that the installer made with `--demo`, and only demo databases; it makes four example cohorts; its home is never remembered ([The demo](#the-demo)). Without that installer option there is nothing to connect, and `init` says so. Without `--demo`, `init` makes a site's installation, which never connects a demo database. |
+| `--demo` | | Makes a **demo installation**, for good: it connects the demo databases that the installer made with `--demo`, and only demo databases; it makes five example cohorts; its home is never remembered ([The demo](#the-demo)). Without that installer option there is nothing to connect, and `init` says so. Without `--demo`, `init` makes a site's installation, which never connects a demo database. |
 
 **Which home folder a command uses.** A command uses the first of these that applies:
 1. the `--home DIR` option;
@@ -859,6 +859,12 @@ server's (an encrypted disk or cloud volume), and `key_file` is refused.
 **Several users at once.** One server process serves all users, and its workers and the commands
 share the control store safely.
 
+**Keep the workspace on a local disk of the server.** Its SQLite files are written while people
+use Medorama (a patient's page writes the recordings it reads), and SQLite's locking is not
+reliable on a network file system (NFS, SMB, Lustre, GPFS and the like): writers may fail with
+`database is locked`, or worse. On Linux, `medorama serve` warns at start when the workspace is on
+one. The connected databases and their recordings may stay on a share: Medorama only reads them.
+
 ## Deployment
 
 Choose the arrangement that fits how people will reach Medorama. Before real patient data are
@@ -1157,9 +1163,9 @@ from its key file, so a new demo database needs no change in Medorama. It also a
 `actions` folder (the example plug-in **Recording summary**, run with the installer's Python) to
 `actions_dirs`. A demo folder made before that file existed connects as before: `demo` and
 `demo_omop`. It reads every recording of the demo's databases (as `medorama databases index`
-does: connecting alone reads none), and `serve` indexes them in the background. It makes four
-example cohorts: *ICU stays* (`icu`), *Long QTc* (`demo_muse.QTc > 450 ms`), *Women over 65 with
-an ECG* (`female AND age > 65 AND has ecg`) and *Sepsis* (`dx sepsis`). Sign in, open **Patient
+does: connecting alone reads none), and `serve` indexes them in the background. It makes five
+example cohorts: *ICU stays* (`icu`), *Long QTc* (`demo_muse.QTc > 450 ms`), *Long QTc since
+2022* (the same, from 2022-01-01), *Women over 65 with an ECG* (`female AND age > 65 AND has ecg`) and *Sepsis* (`dx sepsis`). Sign in, open **Patient
 Catalog**, and click a patient. Running the installer again without `--demo` removes
 `medorama.demo`, and `init --demo` then has nothing to connect.
 
@@ -1238,6 +1244,7 @@ wfdb-x first:
 | `the password is too short` | Passwords need at least 10 characters. |
 | `Use at least 8 characters.` (a viewer's `--set-password`) | The VitalStream viewers' own passwords need at least 8 characters. |
 | `init`: `cannot create the database` | Most often, the home folder is on a network file system. Use `--home` with a folder on a local disk. |
+| `database is locked` (a patient's page, a job) | Before 0.3.3, a page's simultaneous requests could refuse each other; update. Otherwise, most often, the workspace is on a network file system (`medorama serve` says so at start): move it to a local disk ([The control store and the workspace](#the-control-store-and-the-workspace)). |
 | `cannot listen on 127.0.0.1:8090` | Another program uses the port. Use `--port N`, or set `port` in `medorama.toml`. |
 | Connect: `the file is outside the folders data may come from (data_roots)` | Add the database's folder to `data_roots` (an empty list allows any folder), and restart the server. |
 | Connect: `that file is in Medorama's workspace` | A connected database may not lie inside the workspace. Keep databases elsewhere. |

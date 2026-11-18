@@ -400,6 +400,9 @@ table.grid td.nowrap, table.grid th.nowrap { white-space: nowrap; }
 .dot.none { background: transparent; border: 1px dashed var(--faint); }
 .dot.file { background: transparent; border: 2px solid var(--faint); }
 @keyframes pulse { 50% { opacity: .35; } }
+/* a cohort search under way: a pill in the busy colour (not red), seen at a glance in both themes */
+.searching { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; background: var(--busy); color: var(--on-busy); font-weight: 600; }
+.searching .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--on-busy); animation: pulse 1.2s ease-in-out infinite; }
 .status { white-space: nowrap; } .status small { color: var(--muted); margin-left: 4px; }
 .bar { display: inline-block; width: 80px; height: 6px; border-radius: 3px; background: var(--soft); vertical-align: middle; overflow: hidden; }
 .bar > i { display: block; height: 100%; background: var(--busy); }

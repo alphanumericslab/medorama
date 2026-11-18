@@ -335,8 +335,14 @@ written in C++) exists only with `VS_WFDB=ON`.
 
 ## Without administrator rights
 
-Only the compiler can need an administrator. Rust, CMake, Ninja, the Python packages and every
-program built here install in your own account.
+Rust, CMake, Ninja, the Python packages and every program built here install in your own
+account. What can need an administrator is the system's compiler, Python and Perl.
+
+**Python older than 3.9, or a Perl without `IPC::Cmd`** (RHEL 8, Rocky 8): a Python from uv and
+a relocatable Perl in your home folder replace them, for the installer alone
+([install.md, Linux without administrator rights](install.md#linux-without-administrator-rights-an-old-python-a-minimal-perl)).
+The installers check for them, and for `make`, before they build anything, and print these steps
+when something is missing.
 
 **Linux (a shared server or a cluster).** If `g++ --version` reports 12 or later, nothing more is
 needed. Otherwise, use the first of these that your machine offers:
@@ -466,11 +472,12 @@ workspace are where `init` put them. Connected databases and recordings are neve
 | Message | Cause and remedy |
 |---|---|
 | `command not found: medorama` | The program is in `.venv/bin`. Run `source .venv/bin/activate`, call `.venv/bin/medorama`, or run `cargo install --path medorama --locked`. |
-| `perl: command not found`, `Can't locate … .pm in @INC` while building `openssl-sys` | Perl, or one of its standard modules, is missing; OpenSSL's build needs it. Install `perl` ([Prerequisites](#prerequisites)); on Windows, Strawberry Perl, in a new PowerShell window. On Linux without administrator rights (RHEL and Rocky 8 lack `IPC::Cmd`), install the module into your home folder: `curl -L https://cpanmin.us \| perl - -l ~/perl5 App::cpanminus local::lib`, `eval "$(perl -I ~/perl5/lib/perl5 -Mlocal::lib)"`, `cpanm IPC::Cmd`, then build again in that shell. |
+| `Perl is missing`, `Perl lacks IPC::Cmd` (the installer), `perl: command not found`, `Can't locate … .pm in @INC` while building `openssl-sys` | Perl, or one of its standard modules, is missing; OpenSSL's build needs it. Install `perl` ([Prerequisites](#prerequisites)); on Windows, Strawberry Perl, in a new PowerShell window. On Linux without administrator rights (RHEL and Rocky 8 lack `IPC::Cmd`), use a complete Perl in your home folder: [install.md, Linux without administrator rights](install.md#linux-without-administrator-rights-an-old-python-a-minimal-perl). |
+| `Python 3.9 or later is needed` | The system's Python is too old (RHEL and Rocky 8 have 3.6). Install a newer one ([Prerequisites](#prerequisites)), or, without administrator rights, use one from uv: [install.md, Linux without administrator rights](install.md#linux-without-administrator-rights-an-old-python-a-minimal-perl). |
 | `linker 'cc' not found` (Linux) | No C toolchain is installed. Install `build-essential` or `gcc` ([Prerequisites](#prerequisites)), or see [Without administrator rights](#without-administrator-rights). |
 | `linker 'link.exe' not found`, `No CMAKE_CXX_COMPILER could be found` (Windows) | The Build Tools are missing, or lack **Desktop development with C++**. For C++, use a Developer PowerShell. |
 | `exit status: 69`, `You have not agreed to the Xcode license agreements` (macOS) | Run `sudo xcodebuild -license accept`, or `export DEVELOPER_DIR=/Library/Developer/CommandLineTools`. |
-| `Command 'make' not found` while building `openssl-sys` | OpenSSL's build needs `make`. Install it (`sudo dnf install make`, `sudo apt install make`); without administrator rights, build GNU make into your home folder, which needs only a C compiler: unpack `make-4.4.1.tar.gz` from <https://ftp.gnu.org/gnu/make/>, run `./configure --disable-dependency-tracking` and `./build.sh` (neither needs `make`), then `mkdir -p ~/.local/bin && cp make ~/.local/bin/` and `export PATH=$HOME/.local/bin:$PATH`, and build again. |
+| `make is missing` (the installer), `Command 'make' not found` while building `openssl-sys` | OpenSSL's build needs `make`. Install it (`sudo dnf install make`, `sudo apt install make`); without administrator rights, build GNU make into your home folder, which needs only a C compiler: unpack `make-4.4.1.tar.gz` from <https://ftp.gnu.org/gnu/make/>, run `./configure --disable-dependency-tracking` and `./build.sh` (neither needs `make`), then `mkdir -p ~/.local/bin && cp make ~/.local/bin/` and `export PATH=$HOME/.local/bin:$PATH`, and build again. |
 | `feature 'edition2024' is required`, `requires rustc 1.88` | Rust is too old. Run `rustup update`; a distribution's packaged Rust is often old. |
 | `cargo: command not found` after installing Rust | Open a new shell, or run `. "$HOME/.cargo/env"`. |
 | `failed to get … from crates.io` | There is no internet access. [Vendor the dependencies](#without-internet-access). |

@@ -7,6 +7,7 @@ import { answer, el, install, wait } from './dom.mjs';
 
 install({ hash: '#/cohorts' });
 const searches = [];
+let hold = null;
 globalThis.fetch = async (url, init = {}) => {
   const path = new URL(url, 'http://x/').pathname.replace(/^\/api\/v1\//, '');
   const body = init.body ? JSON.parse(init.body) : null;
@@ -15,6 +16,7 @@ globalThis.fetch = async (url, init = {}) => {
   }
   if (path === 'cohorts/search') {
     searches.push(body);
+    if (hold) await hold;
     return answer({ total: 2, ids: [1, 2], items: [], excluded_total: 0, excluded: [], searched: [[1, 'hosp']], left_out: [] });
   }
   if (path === 'patients') return answer({ categories: [['lab', 'Labs']], items: [], total: 0 });
@@ -87,4 +89,19 @@ test("a redraw for new data keeps a cohort's open panel", async () => {
   // a visit of the page (not a redraw): the panel closed
   await show('#/cohorts/7');
   assert.equal(el('#co-panel').innerHTML, '');
+});
+
+test('a search under way is said in the busy pill until its answer arrives', async () => {
+  let go;
+  hold = new Promise((r) => { go = r; });
+  const shown = show('#/cohorts');
+  await wait(50);
+  const pill = el('#co-count').innerHTML;
+  assert.match(pill, /class="searching"/);
+  assert.match(pill, /Searching… please wait/);
+  go(); hold = null;
+  await shown;
+  await wait(50);
+  assert.doesNotMatch(el('#co-count').innerHTML, /searching/);
+  assert.match(el('#co-count').innerHTML, /<b>2<\/b> patients match/);
 });

@@ -35,7 +35,7 @@ come in any order after the subcommand.
 \item[-h, --help] Prints the usage of the program, or of a subcommand
   (\cmd{medorama databases connect -{}-help}), and exits. \cmd{medorama help} \textit{COMMAND}
   does the same.
-\item[-V, --version] Prints the version (\code{medorama 0.3.2}) and exits.
+\item[-V, --version] Prints the version (\code{medorama 0.3.3}) and exits.
 \item[--home DIR] Medorama's home folder, which holds \file{medorama.toml}, the SQLite control
   store, the master key file (by default) and the folder \file{actions/}. It is accepted by every
   subcommand, before or after it (\cmd{medorama -{}-home DIR serve},
@@ -244,7 +244,7 @@ apart from the workspace's backups (\cref{sec:protecting-backups}).
   installer made (\cmd{tools/install-medorama.sh -{}-demo}, named in the file
   \file{medorama.demo} next to the programs), as the first admin's: every database its
   \file{demo-databases.json} lists, six in all (\cref{chap:quickstart}), and adds the demo's
-  example action plug-in and four example cohorts. It then reads every recording of the demo's
+  example action plug-in and five example cohorts. It then reads every recording of the demo's
   databases, as \cmd{medorama databases index} does (connecting alone reads none), and prints how
   many are to be indexed: \code{serve} indexes them. Without the installer's demo it says so,
   and connects nothing. Give it a home and workspace of its own (\opt{-{}-home} before
@@ -994,7 +994,7 @@ without serving. The options override the settings file, which overrides the def
 \item[--keys-on-stdin] Read the index stores and their keys on the standard input, one line of
   JSON each (\cref{sec:formats-reference-writing}). Medorama starts the viewer it runs with it; a
   key is never given on the command line.
-\item[-V, --version] Print the program's name and version (\code{vitalstream-py 0.3.2}), then
+\item[-V, --version] Print the program's name and version (\code{vitalstream-py 0.3.3}), then
   exit.
 \end{params}
 \begin{lstlisting}[style=shell]

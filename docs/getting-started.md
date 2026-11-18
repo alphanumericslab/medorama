@@ -130,7 +130,7 @@ workspace on an encrypted disk).
 1. Set the demo up as an installation of its own. The command asks twice for the password of
    the first administrator, who is named `admin`; use at least 10 characters. With `--demo`, it
    makes a *demo installation*: it connects the demo's six databases, which the installer made,
-   adds its example action plug-in, and makes four example cohorts:
+   adds its example action plug-in, and makes five example cohorts:
 
    ```bash
    medorama --home ~/medorama-demo init --workspace ~/medorama-demo-workspace --demo
@@ -247,8 +247,8 @@ The first time you open a recording, it may still be indexing. Its status appear
 
 A *cohort* is a named set of patients, found across the databases by criteria and kept.
 
-The demo comes with four example cohorts: *ICU stays* (`icu`), *Long QTc*
-(`demo_muse.QTc > 450 ms`), *Women over 65 with an ECG* (`female AND age > 65 AND has ecg`) and
+The demo comes with five example cohorts: *ICU stays* (`icu`), *Long QTc*
+(`demo_muse.QTc > 450 ms`), *Long QTc since 2022* (the same, from 2022-01-01), *Women over 65 with an ECG* (`female AND age > 65 AND has ecg`) and
 *Sepsis* (`dx sepsis`). Open one from **Cohorts**, or make your own:
 
 1. Open **Cohorts** and click **New / Edit cohort**. **Search in** ticks the databases to search

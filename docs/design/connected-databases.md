@@ -215,9 +215,10 @@ whom the subject index holds every one of).
 
 ## Searching a database
 
-0.3.2 ([medorama/src/cohorts/in_sources.rs](../../medorama/src/cohorts/in_sources.rs),
+0.3.2 and 0.3.3 ([medorama/src/cohorts/in_sources.rs](../../medorama/src/cohorts/in_sources.rs),
 [sources/mod.rs](../../medorama/src/sources/mod.rs) `find_sql`, `Source::find_values`,
-[sources/reads.rs](../../medorama/src/sources/reads.rs)). Every result is as in 0.3.1; the
+[sources/reads.rs](../../medorama/src/sources/reads.rs),
+[cohorts/evaluate.rs](../../medorama/src/cohorts/evaluate.rs) `Why`). Every result is as in 0.3.1; the
 database reads less, and is read once while its data stay the same. What each criterion asks
 for, and the measurement, are in [performance.md, What a criterion
 reads](../performance.md#what-a-criterion-reads).
@@ -236,6 +237,15 @@ reads](../performance.md#what-a-criterion-reads).
   rows read); a catalog read at another version than the database's current one (checked
   against the live `version` view, `variables::read_at`): the criterion is then read as
   written. Values of a unit that does not compare are read whole, and counted as left out.
+- **A measurement's dates are sent** (0.3.3; SQLite only: `Find.from_day`, `until_day`,
+  `in_sources.rs` `with_days`). The criterion's dates become days in the database's time zone,
+  two days wider on each side (a time with an offset, dates as shown in Privacy Mode), and a row
+  is read when its time is on or after the first (`time >= ?`) and before the last. Only a time
+  written as ISO 8601 text (`YYYY-MM-DD…`, `typeof(time) = 'text'` and a `GLOB` of its form) is
+  compared there; a time as a number or as text of another form is read whatever its date.
+  Medorama tests the dates of every row read exactly. PostgreSQL is asked without the dates: its
+  time columns' types differ from one database to another
+  ([todo.md, S6](../todo.md#s6-criteria-dates-sent-to-postgresql)).
 - **Units a `variables` view does not list** are read too, in a query of their own. A database
   that cannot compare a bound (a PostgreSQL view whose `value_num` is text) is asked again
   without the bounds.
@@ -260,6 +270,10 @@ reads](../performance.md#what-a-criterion-reads).
   once.
 - **From the matches.** A search's evaluation starts from the patients matched, not from
   everyone, and its result page gathers only those.
+- **Reasons for the page shown** (0.3.3). Each patient's reasons are kept as values (a
+  measurement's name, value, unit and time; `Why`) and written out ("QTc 478 ms on 2024-01-01")
+  only for the rows of the page shown, not for each of the hundreds of thousands of patients a
+  search may find.
 
 ## Replacing a database's views
 
@@ -307,5 +321,5 @@ fingerprinted every file: hours. In 0.3:
 - **Reading only what changed** at a refresh, by a watermark the database states.
 - **Indexes inside a recording database**, read before indexing.
 - **Progress** of a long refresh, shown in the Databases tab.
-- **Searching:** date ranges sent to the database with the threshold; a match's reasons
-  formatted only for the page shown ([todo.md, S6](../todo.md#s6-criteria-dates-sent-and-reasons-for-the-page-shown)).
+- **Searching:** a measurement's dates sent to a PostgreSQL database too, as they are to SQLite
+  since 0.3.3 ([todo.md, S6](../todo.md#s6-criteria-dates-sent-to-postgresql)).

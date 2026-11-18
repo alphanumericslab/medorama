@@ -561,8 +561,50 @@ headers, records and annotations, for adapters written in C++) exists only with
 \section{Without administrator rights}
 \label{sec:installation-no-admin}
 
-Only the compiler may need an administrator. Rust, CMake, Ninja, the Python packages and every
-program built here install in the user's account.
+Rust, CMake, Ninja, the Python packages and every program built here install in the user's
+account. What may need an administrator is the system's compiler, Python and Perl.
+
+\paragraph{Linux: an old Python, a minimal Perl.} Use this when the installer stops with one of
+these messages and system packages cannot be installed (no \cmd{sudo}), as on a shared server
+with RHEL 8 or Rocky 8:
+\begin{itemize}
+\item \code{Python 3.9 or later is needed (Python 3.6.8)}: the system's Python is too old;
+\item \code{Perl lacks IPC::Cmd, which OpenSSL's build needs} (or, in a build by hand,
+  \code{Can't locate IPC/Cmd.pm in @INC} while building \code{openssl-sys}): the system's Perl
+  lacks the modules OpenSSL's build needs.
+\end{itemize}
+The installers check Python, and for a Rust build \cmd{make} and Perl, before they build anything
+(\file{tools/preflight.sh}), tell every problem at once, and print these steps for what is
+missing; then they stop.
+A recent Python from uv (\url{https://docs.astral.sh/uv/}) and a complete Perl in the home
+folder replace them, for the installer alone. Run these in one terminal, in the medorama
+clone. First uv, if \cmd{uv --version} does not answer (uv's own installer, into
+\file{\textasciitilde/.local/bin}), and a recent Python:
+\begin{lstlisting}[style=shell]
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source $HOME/.local/bin/env
+uv python install 3.12
+\end{lstlisting}
+Then a complete Perl, a relocatable one, in \file{\textasciitilde/opt} (the last line prints
+\code{IPC::Cmd ok}):
+\begin{lstlisting}[style=shell]
+mkdir -p ~/opt
+base=https://github.com/skaji/relocatable-perl/releases/latest/download
+curl -fsSL $base/perl-linux-amd64.tar.xz | tar xJf - -C ~/opt
+export PATH=~/opt/perl-linux-amd64/bin:$PATH
+unset PERL5LIB PERL_LOCAL_LIB_ROOT
+perl -MIPC::Cmd -e 'print "IPC::Cmd ok\n"'
+\end{lstlisting}
+Then the installer, with that Python:
+\begin{lstlisting}[style=shell]
+PYTHON="$(uv python find 3.12)" tools/install-medorama.sh --viewer rs --accept-license
+source .venv/bin/activate
+medorama --version
+\end{lstlisting}
+\opt{-{}-viewer rs} builds the Rust waveform viewer (add \opt{-{}-demo} for the demo). A
+\code{BuildBackendWarning: Compat editable installs} message during ``The database tools'' is
+harmless. The Perl is needed only while building, not by Medorama once built: for a later
+update, run the \cmd{export PATH=\ldots} and \cmd{unset \ldots} lines again before the installer.
 
 \paragraph{Linux (a shared server, a cluster).} \cmd{g++ --version} 12 or later is enough.
 Otherwise, use the first of the ways in \cref{tab:installation-gcc} that the machine offers.

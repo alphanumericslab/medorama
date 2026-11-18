@@ -56,6 +56,10 @@ as the programs print them; \code{...} stands for the part that varies.
   encrypted; recordings are indexed again into it \\
 \code{unknown time zone ...} & \code{timezone} (or \opt{-{}-timezone}) takes an IANA name, such
   as \code{America/New\_York} \\
+\code{database is locked} (a patient's page, a job) & Before 0.3.3, a page's simultaneous
+  requests could refuse each other: update. Otherwise, most often, the workspace is on a network
+  file system (\cmd{medorama serve} says so at start): move it to a local disk
+  (\cref{sec:administration-workspace}) \\
 \code{cannot listen on 127.0.0.1:8090} & Another program uses the port: \opt{-{}-port N}, or
   \code{port} in \file{medorama.toml} \\
 \cmd{serve}: \code{WARNING: reachable from other machines without HTTPS} & \code{host} is not a

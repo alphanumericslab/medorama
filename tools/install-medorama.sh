@@ -80,10 +80,12 @@ need_compiler() {  # $1: the compiler command
   fi
 }
 
-# --- .venv: where the programs go (and, for some viewers, their tools) ---------------------
+# --- what the build needs, checked before anything is built (tools/preflight.sh) ----------
 PY=${PYTHON:-python3}
-command -v "$PY" >/dev/null || { echo "python3 not found: install Python 3.9 or later"; exit 1; }
-"$PY" -c 'import sys; sys.exit(sys.version_info < (3, 9))' || { echo "Python 3.9 or later is needed ($("$PY" -V))"; exit 1; }
+. "$ROOT/tools/preflight.sh"
+preflight rust
+
+# --- .venv: where the programs go (and, for some viewers, their tools) ---------------------
 step "Environment .venv (the programs are linked into .venv/bin)"
 [ -d .venv ] || "$PY" -m venv .venv
 .venv/bin/python -m pip install --quiet --upgrade pip

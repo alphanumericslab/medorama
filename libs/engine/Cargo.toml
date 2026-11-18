@@ -1,6 +1,6 @@
 [package]
 name = "recording-engine"
-version = "0.3.2"
+version = "0.3.3"
 description = "The recording engine of Medorama and VitalStream: read, index and query physiological recordings (WFDB records and folders, EDF, EDF+ and BDF files; other formats through adapters)"
 readme = "README.md"
 edition.workspace = true

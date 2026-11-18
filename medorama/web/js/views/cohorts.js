@@ -278,7 +278,8 @@ async function search() {
   const ctl = new AbortController();
   co.searching = ctl;
   $('#co-count').classList.remove('err');
-  $('#co-count').textContent = 'Searching…';
+  // a search may take seconds: said where the count appears, in the colour of work in progress
+  $('#co-count').innerHTML = '<span class="searching" role="status"><span class="dot" aria-hidden="true"></span>Searching… please wait</span>';
   let r;
   try {
     r = await api('cohorts/search', { method: 'POST', json: { criteria: query(), ...scope(), limit: PAGE, offset: co.offset }, signal: ctl.signal });

@@ -910,6 +910,12 @@ pub struct Find {
     pub other_units: bool,
     /// Of a unit other than these (how [`Source::find_values`] reads `other_units`).
     pub not_units: Vec<String>,
+    /// Of a time on or after this day, or before this one (`YYYY-MM-DD`, in the database's time
+    /// zone), when the time is written as ISO 8601 text: a criterion's dates, widened, so that
+    /// only those rows are read (SQLite; a time of another form is read whatever its date, and
+    /// tested in Medorama).
+    pub from_day: Option<String>,
+    pub until_day: Option<String>,
     /// Whose code starts with this, or whose name contains it (conditions).
     pub code_or_name: Option<String>,
     /// Whose name, value or text contains this.
@@ -1048,6 +1054,16 @@ impl Source {
                 any.push(format!("COALESCE(unit, '') NOT IN ({})", units.join(", ")));
             }
             wh.push(if any.len() == 1 { any.remove(0) } else { format!("({})", any.join(" OR ")) });
+        }
+        if !pg {
+            // (a time as text of another form, or as a number, is not compared here: read)
+            let iso = "typeof(time) <> 'text' OR time NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'";
+            if let Some(d) = &f.from_day {
+                wh.push(format!("({iso} OR time >= {})", arg(d.clone().into(), &mut args)));
+            }
+            if let Some(d) = &f.until_day {
+                wh.push(format!("({iso} OR time < {})", arg(d.clone().into(), &mut args)));
+            }
         }
         if !f.not_units.is_empty() {
             let units: Vec<String> = f.not_units.iter().map(|u| literal(u)).collect();

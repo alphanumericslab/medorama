@@ -84,7 +84,7 @@ pub(crate) fn add(
     by: Option<i64>,
 ) -> anyhow::Result<Vec<i64>> {
     let mut w = open(cfg, c, cohort)?;
-    let tx = w.transaction()?;
+    let tx = w.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let t = now();
     let mut added = vec![];
     {
@@ -116,7 +116,7 @@ pub(crate) fn remove(
     by: Option<i64>,
 ) -> anyhow::Result<usize> {
     let mut w = open(cfg, c, cohort)?;
-    let tx = w.transaction()?;
+    let tx = w.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let mut n = 0;
     for p in patients {
         n += tx.execute("DELETE FROM members WHERE patient = ?1", [p])?;
@@ -137,7 +137,7 @@ pub(crate) fn remove(
 pub(crate) fn copy(cfg: &Config, c: &Connection, from: i64, to: i64) -> anyhow::Result<()> {
     let src = open(cfg, c, from)?;
     let mut dst = open(cfg, c, to)?;
-    let tx = dst.transaction()?;
+    let tx = dst.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     {
         let mut st = src.prepare("SELECT patient, how, added_by, added_at FROM members")?;
         let mut ins =
@@ -187,7 +187,7 @@ pub fn purge_database(cfg: &Config, c: &Connection, database: i64, derived: &[i6
             continue;
         }
         let mut w = open(cfg, c, id)?;
-        let tx = w.transaction()?;
+        let tx = w.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         n += tx.execute(
             &format!(
                 "DELETE FROM members WHERE patient IN (SELECT patient FROM provenance WHERE database IN ({marks}))"

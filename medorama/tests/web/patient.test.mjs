@@ -148,3 +148,12 @@ test('the allergies come first in the left column; the conditions name their voc
   drawSummary(summary({ allergies: [] }));
   assert.match(shown('#pp-info').innerHTML, /No allergy recorded/);
 });
+
+test("the VitalStream tab, opened with no recording, says so: it does not start the viewer (nor show the last one)", async () => {
+  core.st.cfg = { ...core.st.cfg, viewer: { mode: 'embedded' } };
+  const viewer = await import('../../web/js/views/viewer.js');
+  await viewer.default.show({ params: new URLSearchParams('') });
+  assert.equal(shown('#viewer-msg').textContent, viewer.NOTHING);
+  assert.ok(shown('#viewer-frame').classList.contains('hidden'));
+  assert.equal(shown('#viewer-frame').getAttribute('src'), null, 'not started');
+});

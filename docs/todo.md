@@ -48,7 +48,7 @@ the rest of CLIF, HL7 v2 files) is tracked in [db-builder/](../db-builder/README
 - **Scalability:**
   [S4 The Patient Catalog's text search in SQL](#s4-the-patient-catalogs-text-search-in-sql) ·
   [S5 Files in object storage](#s5-files-in-object-storage) ·
-  [S6 Criteria: dates sent, and reasons for the page shown](#s6-criteria-dates-sent-and-reasons-for-the-page-shown)
+  [S6 Criteria: dates sent to PostgreSQL](#s6-criteria-dates-sent-to-postgresql)
 - **Clients:** [G1 A Python client](#g1-a-python-client)
 - [Suggested order](#suggested-order)
 
@@ -716,25 +716,21 @@ backend (`s3://bucket/prefix/…` paths in the recording databases), which reads
 under the same `data_roots` rule (allowed prefixes). It needs a decision first: which stores, and
 how Medorama authenticates to them (instance roles, keys in files).
 
-### S6 Criteria: dates sent, and reasons for the page shown
+### S6 Criteria: dates sent to PostgreSQL
 
-**Status: parked** (after 0.3.2; no date set).
+**Status: parked** (after 0.3.3; no date set).
 
-**Why.** On a synthetic database of 2.5 million ECGs, `QTc > 450` takes 3 to 5 s
-([performance.md, A MUSE-shaped database](performance.md#a-muse-shaped-database)), most of it
-in Medorama handling about 500,000 matches, not in the database.
+**Why.** Since 0.3.3, a measurement's dates are sent to a SQLite database (its times written as
+ISO 8601 text), and each search's reasons are written out for the page shown only
+([performance.md, What a criterion reads](performance.md#what-a-criterion-reads)). A PostgreSQL
+database is still asked without the dates, and every value of the measurement is read.
 
-**Design.**
-- **Reasons for the page shown.** Each match's reason (the value and the time that matched) is
-  formatted for every match; format it only for the result page shown (and for an export, when
-  asked), keeping what is needed to format it later.
-- **Date ranges sent.** A criterion's date range (`QTc > 450 in 2024`) is tested in Medorama;
-  send it with the threshold (`time >= ? AND time < ?`), a little wider than the range, since
-  times are read in each database's time zone and Privacy Mode's dates move per patient. Keep
-  testing every row read.
+**Design.** Send the dates to PostgreSQL too (`time >= ? AND time < ?`, two days wider than the
+range, as on SQLite), by the type of the time column: `timestamp`, `timestamptz`, `date`, text
+or a number, which differ from one database or view to another. Keep testing every row read.
 
-**Tests.** In `tests/criteria_reads.rs`: the same patients and the same reasons, with and
-without each change.
+**Tests.** In `tests/criteria_reads.rs`, when `MEDORAMA_TEST_POSTGRES` is set: the dates sent
+find what testing every row finds, for each type of time column.
 
 ---
 

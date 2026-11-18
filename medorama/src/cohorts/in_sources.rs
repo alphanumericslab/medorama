@@ -38,17 +38,34 @@ pub(super) fn read_of(cx: &Cx, k: &Criterion, s: &Source) -> anyhow::Result<Opti
             }
             (Read::Entries(Find { text: Some(t.into()), notes: cx.user.reads_notes(), ..Default::default() }), vec![])
         }
-        // `latest` reads every value (each person's latest is tested), and by its name in full
+        // `latest` reads every value in the dates (each person's latest is tested), and by its
+        // name in full
         "measurement" if k.latest => {
             let (f, _) = measurement_find(cx, k, s, true, false)?;
-            (Read::Values(f), vec![])
+            (Read::Values(with_days(cx, k, s, f)?), vec![])
         }
         "measurement" => {
             let (f, pushed) = measurement_find(cx, k, s, exact, true)?;
-            (Read::Values(f), pushed)
+            (Read::Values(with_days(cx, k, s, f)?), pushed)
         }
         _ => return Ok(None),
     }))
+}
+
+/// A criterion's dates as the days its rows' times may be on, in the database's time zone, two
+/// days wider on each side (a time with an offset, dates as shown in Privacy Mode: tested exactly
+/// in Medorama, after the read).
+fn with_days(cx: &Cx, k: &Criterion, s: &Source, f: Find) -> anyhow::Result<Find> {
+    let (from, to) = Dates::of(cx.c, k, tz(cx.timezone))?.wide();
+    let zone = s.zone(cx.timezone);
+    let day = |t: f64| {
+        chrono::DateTime::from_timestamp(t as i64, 0).map(|d| d.with_timezone(&zone).format("%Y-%m-%d").to_string())
+    };
+    Ok(Find {
+        from_day: from.and_then(|t| day(t - 2.0 * 86400.0)),
+        until_day: to.and_then(|t| day(t + 2.0 * 86400.0)),
+        ..f
+    })
 }
 
 /// A measurement's filters: its name, as the database's variables spell it, and, `values`
@@ -148,7 +165,7 @@ impl Cx<'_> {
 /// The patients a connected database's data say meet a criterion.  Its filters are run there;
 /// values, units, `latest` and dates are tested here.  Sex, age and "data in that database" are
 /// the registry's (evaluate.rs): they are answered from the persons Medorama keeps.
-pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &Source) -> anyhow::Result<HashMap<i64, String>> {
+pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &Source) -> anyhow::Result<HashMap<i64, Why>> {
     let (c, user, timezone) = (cx.c, cx.user, cx.timezone);
     let (czone, zone) = (tz(timezone), s.zone(timezone));
     // the bounds on real times (widened for dates as shown, which each patient's own offset
@@ -159,11 +176,9 @@ pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &Source) -> anyhow::Result
         |t: Option<f64>| from.is_none_or(|f| t.is_some_and(|t| t >= f)) && to.is_none_or(|e| t.is_some_and(|t| t < e));
     // each found row's times, for dates as shown: (start, end), tested for the person's patient
     let mut spans: Vec<Option<(f64, f64)>> = vec![];
-    let on = |t: Option<f64>| {
-        t.map(|t| format!(" on {}", crate::util::fmt_local(t, czone).get(..10).unwrap_or(""))).unwrap_or_default()
-    };
     let exact = k.database == Some(s.id);
-    let mut found: Vec<(String, String)> = vec![];
+    // (person, why): the reasons written out only when shown (evaluate.rs `Why`)
+    let mut found: Vec<(String, Why)> = vec![];
     // the database's data are shown de-identified (Privacy Mode, or granted without `phi`):
     // what a criterion finds in text is tested in the text as shown, and its reasons are as shown
     let deid = user.privacy || !crate::grants::can(c, user, &format!("db:{}", s.id), "phi")?;
@@ -172,7 +187,7 @@ pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &Source) -> anyhow::Result
     match k.kind.as_str() {
         "has" => {
             let cat = categories::named(&k.category).ok_or_else(|| anyhow::anyhow!("no category {:?}", k.category))?;
-            let why = format!("has {}", categories::label(cat));
+            let why = Why::from(format!("has {}", categories::label(cat)));
             // visits, entries, and the recordings the database lists of that category
             if let Some((r, _)) = read_of(cx, k, s)? {
                 if let Answer::Persons(keys) = cx.read(s, &r)? {
@@ -217,12 +232,12 @@ pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &Source) -> anyhow::Result
                 let unit = if v.unit.is_empty() { String::new() } else { format!(" ({})", v.unit) };
                 spans.resize(found.len(), None);
                 spans.push(Some((a, b)));
-                found.push((v.person, format!("encounter in {}{unit}", s.name)));
+                found.push((v.person, Why::from(format!("encounter in {}{unit}", s.name))));
             }
         }
         "diagnosis" => {
             for e in entries_of(cx, k, s)?.iter() {
-                found.push((e.person.clone(), format!("{} {}", e.code, e.name).trim().to_string()));
+                found.push((e.person.clone(), Why::from(format!("{} {}", e.code, e.name).trim().to_string())));
             }
         }
         "measurement" => {
@@ -239,10 +254,14 @@ pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &Source) -> anyhow::Result
                 skipped.pushed();
             }
             // (person, time, why); one per person when the dates are everyone's
-            let mut held: Vec<(String, Option<f64>, String)> = vec![];
+            let mut held: Vec<(String, Option<f64>, Why)> = vec![];
             let mut seen: HashSet<String> = HashSet::new();
             {
-                let mut test = |person: &str, time: Option<f64>, name: &str, value: Option<f64>, unit: &str| {
+                let mut test = |person: &str,
+                                time: Option<f64>,
+                                name: &std::sync::Arc<str>,
+                                value: Option<f64>,
+                                unit: &std::sync::Arc<str>| {
                     if !in_range(time) {
                         return Ok(());
                     }
@@ -254,15 +273,18 @@ pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &Source) -> anyhow::Result
                     if !per_patient && !seen.insert(person.to_string()) {
                         return Ok(());
                     }
-                    let why = format!("{name} {} {unit}{}", fmt_num(v), on(time)).replace("  ", " ");
-                    held.push((person.to_string(), time, why));
+                    held.push((
+                        person.to_string(),
+                        time,
+                        Why::Value { name: name.clone(), value: v, unit: unit.clone(), time },
+                    ));
                     anyhow::Ok(())
                 };
                 for e in rows.iter() {
                     test(&e.person, e.time, &e.name, e.value, &e.unit)?;
                 }
                 for e in result_entries(cx, s, k, exact)? {
-                    test(&e.person, e.time, &e.name, e.value_num, &e.unit)?;
+                    test(&e.person, e.time, &e.name.as_str().into(), e.value_num, &e.unit.as_str().into())?;
                 }
             }
             one_unit(k, &units.into_iter().collect::<Vec<_>>())?;
@@ -284,7 +306,7 @@ pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &Source) -> anyhow::Result
                 }
                 spans.resize(found.len(), None);
                 spans.push(Some((e.time.unwrap_or(f64::NEG_INFINITY), end.unwrap_or(f64::INFINITY))));
-                found.push((e.person.clone(), e.name.clone()));
+                found.push((e.person.clone(), Why::from(e.name.clone())));
             }
         }
         "text" => {
@@ -295,7 +317,7 @@ pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &Source) -> anyhow::Result
                 }
                 found.push((
                     e.person.clone(),
-                    format!("“{t}” in {} ({})", categories::label(&e.category).to_lowercase(), e.name),
+                    Why::from(format!("“{t}” in {} ({})", categories::label(&e.category).to_lowercase(), e.name)),
                 ));
             }
         }
@@ -331,8 +353,8 @@ pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &Source) -> anyhow::Result
                 }
                 if !user.privacy {
                     // (in Privacy Mode the answer's gate does this)
-                    let w = g.note(&why, &names, &birth);
-                    why = g.dict.scrub_any_names(&w).unwrap_or(w);
+                    let w = g.note(&why.text(czone), &names, &birth);
+                    why = Why::from(g.dict.scrub_any_names(&w).unwrap_or(w));
                 }
             }
             out.entry(*p).or_insert(why);
