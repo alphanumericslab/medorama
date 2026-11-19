@@ -542,6 +542,12 @@ kind \code{views} gives its own.
   \code{numeric}: one row per variable the database holds, its catalog (below) & No \\
 \code{has} & \code{person\_key}, \code{category}: one row per person and category of data they
   have (below) & No \\
+\code{indexes} & \code{recording\_key}, \code{index\_dir}, \code{size}, \code{mtime\_ns},
+  \code{adapter}: a recording's index made ahead of time (\cref{sec:connecting-held}) & No (a
+  recording database) \\
+\code{signals} & \code{recording\_key}, \code{name}, \code{group\_name}, \code{label},
+  \code{kind}, \code{unit}, \code{fs}: the signals each recording holds, by name
+  (\cref{sec:connecting-held}) & No (a recording database) \\
 \bottomrule
 \end{tabularx}
 \end{table}
@@ -579,6 +585,55 @@ database's \code{MIN} and \code{MAX} of its acquisition times). They are kept wi
 the subject index (the encrypted \file{persons.sqlite}), and the Patient Catalog is sorted by the
 latest, with the encounters' (\cref{sec:patients-catalog}): a database without visits lists its
 patients newest first. Without them, its patients have no date to sort by.
+
+\subsection{Indexes and signals a recording database holds}
+\label{sec:connecting-held}
+
+A recording database may hold two optional tables (in a database of kind \code{views}, two
+optional views, set with the keys \code{indexes} and \code{signals} of the views file). Medorama
+only reads them; \cmd{db-builder new} does not make them.
+
+\paragraph{Indexes made ahead of time.} The table \code{recording\_indexes} (view
+\code{indexes}) names, for each recording indexed ahead of time: \code{index\_dir}, its index
+folder (\file{meta.json} and its arrays, as an add-on's \cmd{index} command or the engine's
+format-2 build writes it), absolute or relative to the \code{files\_root} setting, else to the
+SQLite file's folder; \code{size} and \code{mtime\_ns}, the recording file's size and
+modification time (integer nanoseconds since 1970, UTC) when it was indexed; and
+\code{adapter}, who made it: \code{<add-on name> <version>} as its \cmd{describe} states them
+(\code{stp 0.1.0}), or \code{recording-engine <version>} for EDF and BDF. A db-builder table
+also has \code{md5} and \code{indexed\_at}, which Medorama does not read.
+
+When the recording is opened in the viewer (before the viewer is asked to open it, so that it
+does not index it again) and in the recording's index job (which then only records the index's
+times and format), Medorama takes that index instead of indexing the file: it copies it into the
+database's encrypted index store in the workspace, adds the recording's path, name and key to its
+\file{meta.json}, and checks it as a reader would. It does so only when:
+\begin{itemize}
+\item the file has the same size and modification time now;
+\item the program that made the index is the one that reads the recording now (the installed
+  add-on's name and version, or this engine's version);
+\item the index reads;
+\item the recording is one file (an EDF or BDF file, an add-on's file such as \file{.Stp}): a
+  WFDB record or folder is always indexed by Medorama, since a header's size and time do not say
+  whether its signal files changed.
+\end{itemize}
+Otherwise Medorama indexes the recording itself, as before, and writes why to the server log.
+The database's index folder is only read. \cmd{db-builder indexes} makes such folders and fills
+the table (\cref{sec:importing-indexes}). For BedMasterEx \file{.Stp} files, the stp-adapter
+add-on includes a tool that builds such a database for a whole archive of \file{.Stp} files on a
+compute cluster.
+
+\paragraph{Signals.} The table \code{recording\_signals} (view \code{signals}) lists each
+recording's signals: \code{name}, the name a search finds it by (\code{icu-ecg-II},
+\code{icu-bp-ART}, \code{icu-hr-HR}); \code{group\_name}, its group (\code{icu-ecg},
+\code{icu-bp}, \code{icu-spo2}, \code{icu-resp}, \code{icu-co2}, \code{icu-temp},
+\code{icu-eeg}, \code{icu-other}; the prefix \code{icu-} tells ICU monitoring signals from other
+data); \code{label}, as the file names it; \code{kind}, \code{wave} or \code{vital};
+\code{unit}; and \code{fs}, the sampling rate, or NULL. Connecting and \ui{Refresh} read the
+distinct names and group names into the database's variables (category ICU, vocabulary
+\code{signal}, no values), and \ui{Count now} counts the recordings that hold each and their
+persons. A cohort finds them with \code{has icu-bp-ART} (\cref{sec:cohorts-expressions}), and a
+patient's page lists a recording's signals in its detail.
 
 \paragraph{Replacing the views.} \cmd{medorama databases views NAME -{}-views FILE}
 (\cref{chap:cli}; an admin who manages the database) replaces the views of a database of kind

@@ -77,15 +77,20 @@ Control store & Medorama's own database, in SQLite or PostgreSQL, with the same 
 \end{tabularx}
 \end{table}
 
-\section{Version 0.3.3}
+\section{Version 0.4.0}
 \label{sec:introduction-version}
 
-This manual describes Medorama 0.3.3, a pre-release of November 2026. 0.3.3 ends the
-``database is locked'' errors of a patient's page, whose simultaneous requests wrote the same
-workspace file, and \cmd{medorama serve} warns when the workspace is on a network file system
+This manual describes Medorama 0.4.0, a pre-release of November 2026, which a 0.3.3
+installation updates to in place. In 0.4.0 a recording database may hold its recordings' indexes,
+made ahead of time (\cmd{db-builder indexes}), which Medorama takes instead of indexing the
+recordings itself, and may list each recording's signals by name, so that \code{has icu-bp-ART}
+finds the patients with a recording of arterial pressure and a patient's page lists a recording's
+signals (\cref{sec:connecting-held}). 0.3.3 ended the
+``database is locked'' messages the server printed when a patient was opened, whose simultaneous
+requests wrote the same workspace file, and \cmd{medorama serve} warns when the workspace is on a network file system
 (\cref{sec:administration-workspace}). A measurement's dates are sent to a SQLite database, and a
 search's reasons are written out for the page shown only (\cref{sec:connecting-performance}).
-The installers check Python, \cmd{make} and Perl before they build anything, and say what to do
+Its installers check Python (and for a Rust build \cmd{make} and Perl) before they build anything, and say what to do
 (\cref{sec:installation-no-admin}). The \ui{VitalStream} tab, opened directly, asks for a
 recording from a patient's page instead of showing the last one the viewer opened
 (\cref{chap:viewers-in-medorama}). 0.3.2 made searches read less of each database, with the
@@ -348,7 +353,7 @@ medorama --version
 \end{lstlisting}
 and what a program prints, when it matters, in a listing of its own:
 \begin{lstlisting}[style=text]
-medorama 0.3.3
+medorama 0.4.0
 \end{lstlisting}
 
 Three kinds of boxes set text apart:
@@ -372,14 +377,14 @@ Commands for Linux and macOS are given first, and their Windows equivalents wher
 The file \file{CITATION.cff} at the root of the repository says how to cite Medorama (or
 VitalStream): Reza Sameni, \emph{Medorama: A unified patient-journey research platform
 linking EHR data, physiological waveforms, imaging and laboratory results across databases},
-version 0.3.3 (a pre-release), released 2026-11-18, license PolyForm Noncommercial 1.0.0,
+version 0.4.0 (a pre-release), released 2026-11-18, license PolyForm Noncommercial 1.0.0,
 \url{https://github.com/alphanumericslab/medorama}. In BibTeX:
 \begin{lstlisting}[style=text]
 @software{sameni_medorama,
   author  = {Sameni, Reza},
   title   = {Medorama: A unified patient-journey research platform linking EHR data,
              physiological waveforms, imaging and laboratory results across databases},
-  version = {0.3.3},
+  version = {0.4.0},
   date    = {2026-11-17},
   license = {PolyForm-Noncommercial-1.0.0},
   url     = {https://github.com/alphanumericslab/medorama}

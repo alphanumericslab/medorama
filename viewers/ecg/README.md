@@ -263,7 +263,7 @@ This command installs a package that serves at most `/data/ecg`, with password s
 VIEWER_ROOT=/data/ecg VIEWER_PASSWORD=1 pip install ./viewers/ecg/python/muse
 ```
 
-An editable install (`pip install -e`, as `tools/install-medorama.sh` makes) serves the page
+An editable install (`pip install -e`, as `tools/install.sh` makes for development) serves the page
 from the clone instead of a copy. The two variables still apply when they are given at install
 time: they are written into the clone, in a file git ignores. Without them, the root is the
 whole file system, with password support.

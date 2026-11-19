@@ -1,5 +1,9 @@
 # Changelog: vitalstream_py
 
+## 0.4.0 (2026-11-18, pre-release)
+
+No changes; the version follows Medorama's.
+
 ## 0.3.3 (2026-11-18, pre-release)
 
 No changes; the version follows Medorama's.

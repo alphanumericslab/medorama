@@ -135,3 +135,43 @@ fn a_collection_is_one_recording() {
     assert_eq!(r.recordings, 1, "{:?}", r.warnings);
     assert_eq!(rows(&g.open("UTC"), "SELECT recording_key, format FROM recordings"), [["1:1", "WFDB collection"]]);
 }
+
+#[test]
+fn indexes_made_ahead_of_time_for_the_recordings_that_are_one_file() {
+    let f = Fx::new();
+    let data = f.root().join("data");
+    wfdb_record(&data.join("icu"), "rec1", 0);
+    f.write("data/sleep/P3_night.edf", edf_file());
+    let table = f.write("patients.csv", "file,patient_id,issuer\nicu/rec1.hea,P1,SITE\nsleep/P3_night.edf,P3,SITE\n");
+    let mut c = f.open("UTC");
+    add_folder(&mut c, &f.db(), &data, &Patients { table: Some(table), pattern: None }, &Default::default()).unwrap();
+    let dir = f.root().join("indexes");
+    let r = db_builder::indexes::make(&mut c, &f.db(), &dir, &[]).unwrap();
+    // the EDF file indexed; the WFDB record left to Medorama, which indexes it when opened
+    assert_eq!((r.made, r.kept), (1, 0));
+    assert!(
+        r.skipped.iter().any(|(file, why)| file.ends_with("rec1.hea") && why.contains("WFDB record")),
+        "{:?}",
+        r.skipped
+    );
+    let got = rows(&c, "SELECT index_dir, size > 0, mtime_ns > 0, adapter FROM recording_indexes");
+    assert_eq!(got.len(), 1);
+    assert!(got[0][0].starts_with("indexes/"), "relative to the database's folder: {}", got[0][0]);
+    assert_eq!(got[0][1..3], ["1", "1"]);
+    assert!(got[0][3].starts_with("recording-engine "), "{}", got[0][3]);
+    assert!(f.root().join(&got[0][0]).join("meta.json").is_file());
+    // again: kept; the file changed: made again
+    assert_eq!(db_builder::indexes::make(&mut c, &f.db(), &dir, &[]).unwrap().kept, 1);
+    let edf = data.join("sleep/P3_night.edf");
+    std::fs::File::options()
+        .write(true)
+        .open(&edf)
+        .unwrap()
+        .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(60))
+        .unwrap();
+    assert_eq!(db_builder::indexes::make(&mut c, &f.db(), &dir, &[]).unwrap().made, 1);
+    // a category not asked for: nothing
+    assert_eq!(db_builder::indexes::make(&mut c, &f.db(), &dir, &["eeg".into()]).unwrap().made, 0);
+    // no folder half written left behind
+    assert!(std::fs::read_dir(&dir).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().ends_with(".tmp")));
+}

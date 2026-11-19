@@ -1,5 +1,74 @@
 # Changelog: medorama
 
+## 0.4.0 (2026-11-18, pre-release)
+
+A minor release. A recording database may hold its recordings' indexes, made ahead of time,
+which Medorama takes instead of indexing the recordings itself, and may list each recording's
+signals by name, which searches find (`has icu-bp-ART`) and a patient's page lists
+([docs/databases.md, Indexes and signals a recording database
+holds](../docs/databases.md#indexes-and-signals-a-recording-database-holds)). A database without
+them is read as before; every search of 0.3.3 gives the same result. The installers no longer
+print setuptools' "Compat editable installs" warning. A 0.3.3 installation updates in place.
+
+- **Indexes held by a recording database** (`sources::INDEX_COLS`, `Source::held_index`,
+  `recordings::take_held_index`, `take_held_before_opening`; `actions::run_index`): an optional
+  table `recording_indexes` of a db-builder database, or an optional view `indexes` of a
+  database of kind `views` (views file key `indexes`), names a recording's index folder made
+  ahead of time (`recording_key, index_dir, size, mtime_ns, adapter`; `index_dir` relative to
+  `files_root`, else to the SQLite file's folder). When the recording is opened in the viewer
+  (the gateway, before `POST api/v1/open`) and in its index job (which then only records the
+  index's times and format), Medorama copies the index into the database's encrypted index store
+  (`recording_engine::index::import_into_store`) instead of indexing the file, when the file has
+  the same size and modification time, the program that made it is the one that reads it now
+  (the installed adapter's name and version, or this engine's), the index reads, and the
+  recording is one file (EDF, BDF, an adapter's file such as `.Stp`). A WFDB record or folder is
+  always indexed by Medorama: a header's size and time do not say whether its signal files
+  changed. Otherwise the recording is indexed as before, and the server log says why. The
+  database's folder is only read. `db-builder indexes` makes such indexes
+  ([db-builder/CHANGELOG.md](../db-builder/CHANGELOG.md)); for BedMasterEx `.Stp` files, the
+  stp-adapter add-on includes a tool that builds such a database for a whole archive of `.Stp`
+  files on a compute cluster.
+- **Signals a recording database lists, searchable by name** (`sources::SIGNAL_COLS`;
+  `variables.rs` `SIGNAL`; `expr.rs`, `cohorts/resolve.rs`, `cohorts/in_sources.rs`,
+  `cohorts/words.rs`): an optional table `recording_signals` (view `signals`: `recording_key,
+  name, group_name, label, kind, unit, fs`) names each recording's signals (`icu-ecg-II`,
+  `icu-bp-ART`, `icu-hr-HR`) and their groups (`icu-ecg`, `icu-bp`, `icu-spo2`, `icu-resp`,
+  `icu-co2`, `icu-temp`, `icu-eeg`, `icu-other`; `icu-` tells ICU monitoring signals from
+  other data), `wave` or `vital`. Connecting and **Refresh** read the distinct names and group
+  names into the variables (category ICU, vocabulary `signal`, no values); **Count now** counts
+  the recordings that hold each and their persons. A search finds them by `has icu-bp-ART`,
+  `has icu-bp` (any signal of the group), the name alone, or `has stp.icu-ecg` (one database), in
+  any letter case: a signal is the same in every database that lists it (unlike a
+  measurement). A name after `has` that is neither a category nor a signal is an error, never
+  searched as nothing; comparing a signal (`icu-ecg-II > 3`) is an error ("it has no values:
+  write has icu-ecg-II"). Dates on the criterion are compared with the recording's start and
+  end, as a visit's are. The definition says "has a recording with icu-bp-ART".
+- **A recording's signals on the patient's page** (`patient/detail.rs` `signals`,
+  `web/js/patient/detail.js` `signalsList`): the detail of a recording whose database lists its
+  signals shows them by group, each name in code style, under "Signals — search them with has
+  and the name".
+- **The demo:** `demo.sqlite` holds indexes made ahead of time for its sleep studies and EEGs
+  (`db-builder indexes … --category sleep --category eeg`, folder `indexes/`) and the ICU
+  recordings' signals (`recording_signals`: `icu-ecg-I`, `-II`, `-III`, `icu-bp-ART`,
+  `icu-spo2-Pleth`, `icu-resp-Resp`; vital signs `icu-hr-HR`, `icu-spo2-SpO2`,
+  `icu-bp-ART-S`, `-D`, `-M`, `icu-resp-RR`): the features `ready-made-indexes` and
+  `recording-signals` of `tools/make-demo-data.py`. Try `has icu-bp-ART`.
+- **No setuptools warning while installing** (`tools/install-medorama.sh`, `.ps1`): the
+  database tools `muse-py` and `dicom-py` were installed editable in setuptools' `compat` mode,
+  which setuptools warns will be removed (`BuildBackendWarning: Compat editable installs`). They
+  are now installed as ordinary packages, each with a copy of its viewer's page; the installer,
+  run again after each update, installs them again. The Python viewer (`--viewer py`) stays
+  editable, so that it still reads its settings from the clone, in setuptools' default mode. The
+  development installers (`tools/install.sh`, `.ps1`) and CI install editable in the default
+  mode too: `compat` was needed only when each package folder had the package's name.
+- **Tests:** `tests/connected.rs` `a_ready_made_index_the_database_holds_is_taken_instead_of_indexing`
+  (taken when opened and by the index job; not taken when the file changed, when another program
+  made it, or for a WFDB record), `a_recordings_signals_are_found_by_name_and_shown_with_it`
+  (`has icu-bp-ART`, `has icu-bp`, the bare name, any case, qualified; errors for a name that is
+  no signal and for a signal compared; the recording's detail; Count now); the engine's
+  `a_ready_made_index_is_taken_as_the_stores_own`; db-builder's
+  `indexes_made_ahead_of_time_for_the_recordings_that_are_one_file`.
+
 ## 0.3.3 (2026-11-18, pre-release)
 
 Opening a patient no longer makes the server print "database is locked"; a measurement's dates are sent to the

@@ -153,8 +153,7 @@ case "$VIEWER" in
     step "The Python viewer (vitalstream-py) and its packages"
     unset CONDA_PREFIX || true
     env -u VITALSTREAM_ROOT -u VITALSTREAM_PASSWORD \
-      .venv/bin/pip install --quiet -e "./viewers/vitalstream/python/vitalstream$([ "$WFDB" = 1 ] && echo '[wfdb]')" \
-      --config-settings editable_mode=compat
+      .venv/bin/pip install --quiet -e "./viewers/vitalstream/python/vitalstream$([ "$WFDB" = 1 ] && echo '[wfdb]')"
     if [ "$WFDB" = 0 ] && .venv/bin/python -c 'import wfdbx' 2>/dev/null; then
       echo "note: .venv already holds wfdb-x (installed earlier), which the Python viewer then uses;"
       echo "      .venv/bin/pip uninstall wfdb-x leaves it out"
@@ -167,7 +166,9 @@ esac
 # --- the database tools (muse-py, dicom-py; pydicom) ------------------------------------------
 if [ "$TOOLS" = 1 ]; then
   step "The database tools (muse-py, dicom-py)"
-  .venv/bin/pip install --quiet -e ./viewers/ecg/python/muse -e ./viewers/pacs/python/dicom --config-settings editable_mode=compat
+  # installed, not editable: the installer runs again after each update (git pull), which
+  # installs them again (setuptools' editable modes all print a warning)
+  .venv/bin/pip install --quiet ./viewers/ecg/python/muse ./viewers/pacs/python/dicom
   COMMANDS="$COMMANDS muse-py dicom-py"
 fi
 

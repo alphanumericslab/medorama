@@ -35,7 +35,7 @@ come in any order after the subcommand.
 \item[-h, --help] Prints the usage of the program, or of a subcommand
   (\cmd{medorama databases connect -{}-help}), and exits. \cmd{medorama help} \textit{COMMAND}
   does the same.
-\item[-V, --version] Prints the version (\code{medorama 0.3.3}) and exits.
+\item[-V, --version] Prints the version (\code{medorama 0.4.0}) and exits.
 \item[--home DIR] Medorama's home folder, which holds \file{medorama.toml}, the SQLite control
   store, the master key file (by default) and the folder \file{actions/}. It is accepted by every
   subcommand, before or after it (\cmd{medorama -{}-home DIR serve},
@@ -913,6 +913,7 @@ db-builder new OUT.sqlite [--timezone TZ] [--demo]
 db-builder add OUT.sqlite INPUT... [--mapping FILE] [--issuer NAME] [--mrn-authority NAME]
     [--timezone TZ] [--category KEY] [--format KEY] [--formats PATH]... [--day-first]
 db-builder recordings OUT.sqlite FOLDER [--patients TABLE] [--pattern PATTERN] [--issuer NAME] ...
+db-builder indexes OUT.sqlite --dir DIR [--category KEY]...
 db-builder check OUT.sqlite
 db-builder remove-source OUT.sqlite ID...
 db-builder info OUT.sqlite
@@ -923,7 +924,9 @@ db-builder serve --set-password [--user NAME] [--home DIR]
 \end{lstlisting}
 \cmd{new -{}-demo} marks the new database a demo database (invented patients), with a table
 \code{medorama\_demo}: Medorama connects it to a demo installation only, and a site's installation
-refuses it (\cref{sec:administration-demo}). \cmd{recordings} needs \opt{-{}-patients}, \opt{-{}-pattern} or both. \cmd{add} and
+refuses it (\cref{sec:administration-demo}). \cmd{recordings} needs \opt{-{}-patients}, \opt{-{}-pattern} or both. \cmd{indexes} makes the
+indexes of the recordings that are one file ahead of time, which Medorama takes instead of
+indexing them (\cref{sec:importing-indexes}). \cmd{add} and
 \cmd{recordings} take \opt{-{}-rules FILE} (rewrite rules) and \opt{-{}-dry-run} (say what would be
 added, writing nothing). \cmd{serve} runs db-builder's web interface on its own port (8091), with
 its own sign-in, confined to its root folder (\cref{sec:importing-web}). Every command takes
@@ -994,7 +997,7 @@ without serving. The options override the settings file, which overrides the def
 \item[--keys-on-stdin] Read the index stores and their keys on the standard input, one line of
   JSON each (\cref{sec:formats-reference-writing}). Medorama starts the viewer it runs with it; a
   key is never given on the command line.
-\item[-V, --version] Print the program's name and version (\code{vitalstream-py 0.3.3}), then
+\item[-V, --version] Print the program's name and version (\code{vitalstream-py 0.4.0}), then
   exit.
 \end{params}
 \begin{lstlisting}[style=shell]

@@ -84,6 +84,15 @@ pub struct Settings {
     /// entries and the recordings.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub has: String,
+    /// Kind `views`, optional: a recording's ready-made index ([`INDEX_COLS`]: an index folder
+    /// made ahead of time, docs/databases.md, "Indexes and signals a recording database holds"),
+    /// taken when the recording is opened or indexed instead of indexing it.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub indexes: String,
+    /// Kind `views`, optional: the signals each recording holds, by name ([`SIGNAL_COLS`]), so
+    /// that `has icu-bp-ART` finds the patients with one.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub signals: String,
     /// A demo database (invented patients): it holds the marker table (installation.rs), read
     /// when it is connected.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -138,6 +147,11 @@ pub struct Views {
     pub variables: String,
     /// Who has data of each category (optional: empty, read from the entries and recordings).
     pub has: String,
+    /// Recordings' ready-made indexes (optional: a db-builder database's `recording_indexes`).
+    pub indexes: String,
+    /// The signals of each recording, by name (optional: a db-builder database's
+    /// `recording_signals`).
+    pub signals: String,
 }
 
 const COLS: &str = "id, name, kind, url, password_file, password_wrapped, ca_file, settings, created_at";
@@ -430,6 +444,8 @@ impl Source {
                 version: "SELECT value FROM meta WHERE key = 'version'".into(),
                 variables: String::new(),
                 has: String::new(),
+                indexes: format!("SELECT {INDEX_COLS} FROM recording_indexes"),
+                signals: format!("SELECT {SIGNAL_COLS} FROM recording_signals"),
             },
             _ => Views {
                 persons: self.settings.persons.clone(),
@@ -440,6 +456,8 @@ impl Source {
                 version: self.settings.version.clone(),
                 variables: self.settings.variables.clone(),
                 has: self.settings.has.clone(),
+                indexes: self.settings.indexes.clone(),
+                signals: self.settings.signals.clone(),
             },
         }
     }
@@ -489,9 +507,12 @@ impl Source {
             ("stays", if self.kind == "views" { &v.stays } else { &none }, STAY_COLS),
             ("variables", &v.variables, VARIABLE_COLS),
             ("has", &v.has, HAS_COLS),
+            ("indexes", &v.indexes, INDEX_COLS),
+            ("signals", &v.signals, SIGNAL_COLS),
         ] {
-            // a db-builder database without recordings, or recordings without entries
-            if self.kind == "dbb" && !self.has_table(&db, name)? {
+            // a db-builder database without recordings, or recordings without entries (or
+            // without the optional tables)
+            if self.kind == "dbb" && !self.has_table(&db, dbb_table(name))? {
                 continue;
             }
             if sql.trim().is_empty() {
@@ -534,6 +555,17 @@ impl Source {
             })
             .map_err(|e| anyhow::anyhow!("{}: {e}", self.name))?
             > 0)
+    }
+
+    /// An optional view, when the database has it (a db-builder database: when it has its table).
+    fn optional(&self, sql: &str, view: &str) -> anyhow::Result<Option<String>> {
+        if sql.trim().is_empty() {
+            return Ok(None);
+        }
+        if self.kind == "dbb" && !self.has_table(&*self.db()?, dbb_table(view))? {
+            return Ok(None);
+        }
+        Ok(Some(sql.to_string()))
     }
 
     /// Whether it is a recording database (it has the `recordings` view).
@@ -616,6 +648,22 @@ const DBB_STAYS: &str = "SELECT b.stay_key, v.person_key, b.visit_key, b.start_t
 pub const VARIABLE_COLS: &str = "category, name, vocabulary, code, unit, numeric";
 /// The optional `has` view: one row per person and category of data they have.
 pub const HAS_COLS: &str = "person_key, category";
+/// The optional `indexes` view: a recording's ready-made index (an index folder, as an adapter's
+/// `index` command writes it, relative to `files_root`, else the SQLite file's folder), the size
+/// and modification time (integer nanoseconds) of the file it was made from, and who made it
+/// (`<adapter> <version>`, or `recording-engine <version>`).
+pub const INDEX_COLS: &str = "recording_key, index_dir, size, mtime_ns, adapter";
+/// The optional `signals` view: each recording's signals, by name (`icu-ecg-II`), with their
+/// group's name (`icu-ecg`), their label as the file names it, `wave` or `vital`, unit and rate.
+pub const SIGNAL_COLS: &str = "recording_key, name, group_name, label, kind, unit, fs";
+/// The table of a db-builder database that answers a view.
+fn dbb_table(view: &str) -> &str {
+    match view {
+        "indexes" => "recording_indexes",
+        "signals" => "recording_signals",
+        v => v,
+    }
+}
 const RECORDING_COLS: &str =
     "recording_key, person_key, visit_key, file, format, start_time, end_time, label, category, size, fingerprint";
 
@@ -1437,6 +1485,32 @@ pub struct Recording {
     pub fingerprint: String,
 }
 
+/// A recording's ready-made index, as its database lists it ([`Source::held_index`]).
+#[derive(Debug, Clone)]
+pub struct HeldIndex {
+    /// The index folder (`meta.json` and arrays).
+    pub dir: std::path::PathBuf,
+    /// The size and modification time (integer nanoseconds since 1970, UTC) of the file it was
+    /// made from.
+    pub size: i64,
+    pub mtime_ns: i64,
+    /// Who made it: `<adapter> <version>`, or `recording-engine <version>`.
+    pub made_by: String,
+}
+
+/// A signal a recording holds ([`Source::signals`]).
+#[derive(Debug, Clone, Serialize)]
+pub struct Signal {
+    #[serde(skip)]
+    pub recording: String,
+    pub name: String,
+    pub group: String,
+    pub label: String,
+    pub kind: String,
+    pub unit: String,
+    pub fs: Option<f64>,
+}
+
 fn recording_of(r: &crate::sql::Row, zone: chrono_tz::Tz) -> crate::sql::Result<Recording> {
     let g = |i: usize| -> crate::sql::Result<Value> { r.get::<_, Value>(i) };
     let t = |i: usize| -> crate::sql::Result<String> { Ok(text_of(&g(i)?).trim().to_string()) };
@@ -1525,6 +1599,135 @@ impl Source {
             })
             .map(|(p, _)| p)
             .collect())
+    }
+
+    /// The ready-made index the database holds for a recording (its `indexes` view, a db-builder
+    /// database's `recording_indexes`), if any: taken instead of indexing the recording when the
+    /// file still has the size and modification time it was made from.
+    pub fn held_index(&self, recording_key: &str) -> anyhow::Result<Option<HeldIndex>> {
+        let Some(v) = self.optional(&self.views().indexes, "indexes")? else { return Ok(None) };
+        let p = if self.dialect() == Dialect::Postgres { "$1" } else { "?1" };
+        let db = self.db()?;
+        let mut st = db.prepare_native(&format!("SELECT {INDEX_COLS} FROM ({v}) i WHERE recording_key = {p}"))?;
+        let mut rows = st.query_map([recording_key], |r| {
+            let g = |i: usize| -> crate::sql::Result<Value> { r.get::<_, Value>(i) };
+            let int = |v: Value| match v {
+                Value::Integer(i) => Some(i),
+                Value::Real(x) if x.is_finite() && x.fract() == 0.0 => Some(x as i64),
+                Value::Text(s) => s.trim().parse().ok(),
+                _ => None,
+            };
+            Ok((text_of(&g(1)?).trim().to_string(), int(g(2)?), int(g(3)?), text_of(&g(4)?).trim().to_string()))
+        })?;
+        let Some(row) = rows.next() else { return Ok(None) };
+        let (dir, size, mtime_ns, made_by) = row.map_err(|e| anyhow::anyhow!("{}: the indexes: {e}", self.name))?;
+        let (Some(size), Some(mtime_ns)) = (size, mtime_ns) else { return Ok(None) };
+        if dir.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(HeldIndex { dir: self.recording_path(&dir), size, mtime_ns, made_by }))
+    }
+
+    /// The signals of these recordings (their `signals` view), in the order of their names.
+    pub fn signals(&self, recording_keys: &[String]) -> anyhow::Result<Vec<Signal>> {
+        let Some(v) = self.optional(&self.views().signals, "signals")? else { return Ok(vec![]) };
+        if recording_keys.is_empty() {
+            return Ok(vec![]);
+        }
+        let db = self.db()?;
+        let mut out = db.query_in_native(
+            &format!("SELECT {SIGNAL_COLS} FROM ({v}) s WHERE recording_key IN ({{}})"),
+            recording_keys,
+            |r| {
+                let t =
+                    |i: usize| -> crate::sql::Result<String> { Ok(text_of(&r.get::<_, Value>(i)?).trim().to_string()) };
+                Ok(Signal {
+                    recording: t(0)?,
+                    name: t(1)?,
+                    group: t(2)?,
+                    label: t(3)?,
+                    kind: t(4)?,
+                    unit: t(5)?,
+                    fs: num_of(&r.get::<_, Value>(6)?),
+                })
+            },
+        )?;
+        out.sort_by(|a, b| a.recording.cmp(&b.recording).then(a.group.cmp(&b.group)).then(a.name.cmp(&b.name)));
+        Ok(out)
+    }
+
+    /// Every signal name the database holds, and every group's name (its `signals` view): what
+    /// `has NAME` may name, kept with its variables (variables.rs).
+    pub fn signal_names(&self) -> anyhow::Result<Vec<String>> {
+        let Some(v) = self.optional(&self.views().signals, "signals")? else { return Ok(vec![]) };
+        let db = self.db()?;
+        let mut st = db.prepare_native(&format!(
+            "SELECT name FROM ({v}) s GROUP BY name UNION SELECT group_name FROM ({v}) g GROUP BY group_name"
+        ))?;
+        let mut names: Vec<String> = st
+            .query_map([], |r| Ok(text_of(&r.get::<_, Value>(0)?).trim().to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow::anyhow!("{}: the signals: {e}", self.name))?;
+        names.retain(|n| !n.is_empty());
+        names.sort();
+        names.dedup();
+        Ok(names)
+    }
+
+    /// For each signal name and group name: how many recordings hold it, and how many persons
+    /// they belong to (the variables' **Count now**).
+    pub fn signal_counts(&self) -> anyhow::Result<Vec<(String, i64, i64)>> {
+        let Some(s) = self.optional(&self.views().signals, "signals")? else { return Ok(vec![]) };
+        let r = self.views().recordings;
+        let db = self.db()?;
+        let mut st = db.prepare_native(&format!(
+            "SELECT n, COUNT(DISTINCT k), COUNT(DISTINCT p) FROM
+               (SELECT s.name AS n, s.recording_key AS k, r.person_key AS p FROM ({s}) s LEFT JOIN ({r}) r ON r.recording_key = s.recording_key
+                UNION ALL
+                SELECT s.group_name, s.recording_key, r.person_key FROM ({s}) s LEFT JOIN ({r}) r ON r.recording_key = s.recording_key) x
+             WHERE n IS NOT NULL AND n <> '' GROUP BY n"
+        ))?;
+        let rows = st
+            .query_map([], |row| {
+                let g = |i: usize| -> crate::sql::Result<Value> { row.get::<_, Value>(i) };
+                Ok((
+                    text_of(&g(0)?).trim().to_string(),
+                    num_of(&g(1)?).unwrap_or(0.0) as i64,
+                    num_of(&g(2)?).unwrap_or(0.0) as i64,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow::anyhow!("{}: the signals: {e}", self.name))?;
+        Ok(rows)
+    }
+
+    /// The persons with a recording that holds a signal of this name, or of this group
+    /// (`has icu-bp-ART`, `has icu-bp`), with the recording's start and end.
+    pub fn signal_persons(
+        &self,
+        name: &str,
+        zone: chrono_tz::Tz,
+    ) -> anyhow::Result<Vec<(String, Option<f64>, Option<f64>)>> {
+        let Some(s) = self.optional(&self.views().signals, "signals")? else { return Ok(vec![]) };
+        let r = self.views().recordings;
+        if r.trim().is_empty() || !self.has_recordings() {
+            return Ok(vec![]);
+        }
+        let p = if self.dialect() == Dialect::Postgres { "$1" } else { "?1" };
+        let db = self.db()?;
+        let mut st = db.prepare_native(&format!(
+            "SELECT DISTINCT r.person_key, r.start_time, r.end_time FROM ({r}) r
+             WHERE r.person_key IS NOT NULL AND r.recording_key IN
+                   (SELECT recording_key FROM ({s}) s WHERE s.name = {p} OR s.group_name = {p})"
+        ))?;
+        let rows = st
+            .query_map([name], |row| {
+                let g = |i: usize| -> crate::sql::Result<Value> { row.get::<_, Value>(i) };
+                Ok((text_of(&g(0)?), time_of(&g(1)?, zone), time_of(&g(2)?, zone)))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| anyhow::anyhow!("{}: the signals: {e}", self.name))?;
+        Ok(rows)
     }
 
     /// The persons who have data of a category (`has`: cohorts, the patient list's filters):

@@ -118,6 +118,18 @@ enum Cmd {
         #[command(flatten)]
         common: Common,
     },
+    /// Make each recording's index ahead of time (recordings that are one file: EDF, BDF, an
+    /// adapter's), into a folder, named in `recording_indexes`: Medorama takes them instead of
+    /// indexing the recordings itself.  Run again, only new or changed recordings are indexed.
+    Indexes {
+        out: PathBuf,
+        /// The folder of the indexes (one folder per recording).
+        #[arg(long, value_name = "DIR")]
+        dir: PathBuf,
+        /// Only the recordings of this category (repeatable; default: all).
+        #[arg(long, value_name = "KEY")]
+        category: Vec<String>,
+    },
     /// Report what a reader cannot rely on: missing issuers, shared identifiers, dangling keys, missing files.
     Check { out: PathBuf },
     /// Take sources out (their ids: `db-builder info`).
@@ -363,6 +375,17 @@ fn run() -> anyhow::Result<i32> {
             }
             db::bump(&tx)?;
             tx.commit()?;
+        }
+        Cmd::Indexes { out, dir, category } => {
+            let mut c = db::open(&out, &how)?;
+            let r = db_builder::indexes::make(&mut c, &out, &dir, &category)?;
+            println!("indexes: {} made, {} current (kept), {} not indexed ahead", r.made, r.kept, r.skipped.len());
+            for (file, why) in r.skipped.iter().take(20) {
+                println!("  {file}: {why}");
+            }
+            if r.skipped.len() > 20 {
+                println!("  … and {} more", r.skipped.len() - 20);
+            }
         }
         Cmd::Info { out } => {
             let c = db::open(&out, &how)?;

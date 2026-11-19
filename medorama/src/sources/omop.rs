@@ -227,5 +227,7 @@ pub fn views(st: &Settings, d: Dialect) -> Views {
         version,
         variables: String::new(),
         has: String::new(),
+        indexes: String::new(),
+        signals: String::new(),
     }
 }

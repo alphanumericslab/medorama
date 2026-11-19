@@ -1,5 +1,24 @@
 # Changelog: db-builder
 
+## 0.4.0 (2026-11-18, pre-release)
+
+- **`db-builder indexes DB --dir DIR [--category KEY]...`** (`src/indexes.rs`): makes the index
+  of each recording that is one file (an EDF or BDF file, a file an installed adapter reads)
+  ahead of time, one folder per recording in `DIR` named by a digest of its key, and names them
+  in a new optional table `recording_indexes` (`recording_key, index_dir, size, mtime_ns, md5,
+  adapter, indexed_at`; `index_dir` relative to the database's folder when `DIR` is inside it),
+  which Medorama takes instead of indexing the recordings
+  ([docs/schema.md](docs/schema.md#recording_indexes-and-recording_signals-optional),
+  [docs/databases.md](../docs/databases.md#indexes-and-signals-a-recording-database-holds)).
+  `adapter` is `<adapter> <version>` or `recording-engine <version>`. Each index is built beside
+  and moved in. Run again, the current indexes (same size, time and maker, folder present) are
+  kept and the changed ones made again; WFDB records and folders, missing files and files no
+  reader reads are skipped and listed. Test: `tests/recordings.rs`
+  `indexes_made_ahead_of_time_for_the_recordings_that_are_one_file`.
+- `docs/schema.md` names the optional table `recording_signals` (`recording_key, name,
+  group_name, label, kind, unit, fs`), read by Medorama and not made by db-builder. No table of
+  the schema changed: its version stays 1.
+
 ## 0.3.3 (2026-11-18, pre-release)
 
 No changes; the version follows Medorama's.

@@ -1,5 +1,18 @@
 # Changelog: recording-engine
 
+## 0.4.0 (2026-11-18, pre-release)
+
+- **`index::import_into_store(path, folder, made_by, store)`**: takes a ready-made index of a
+  recording (a folder as an adapter's `index` command writes it: `meta.json` and arrays) into an
+  index store (format 3). Its arrays are copied into a private temporary folder, its `meta.json`
+  gets the recording's reader fields, path, name and key as a build writes them, it is checked as
+  a reader would check it, and packed in one transaction; the folder itself is only read. It is
+  refused for a WFDB record or folder, and when `made_by` is not the program that reads the
+  recording now. Test: `tests/store.rs` `a_ready_made_index_is_taken_as_the_stores_own`.
+- **`sources::reader_of(path)`**: what a build of the file writes about its reader (`kind`,
+  `format`, an adapter's `adapter`), and who must have made a ready-made index of it:
+  `recording-engine <version>`, or `<adapter> <version>` as its `describe` states them.
+
 ## 0.3.3 (2026-11-18, pre-release)
 
 No changes; the version follows Medorama's.

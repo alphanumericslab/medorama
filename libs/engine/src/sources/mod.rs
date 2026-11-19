@@ -81,6 +81,23 @@ pub fn format_label(p: &Path) -> String {
     adapters::for_file(p).map(|(_, f)| f.label).unwrap_or_default()
 }
 
+/// What a build of `p` writes about its reader into `meta.json` (`kind`, `format`, and an
+/// adapter's `adapter`), and who must have made a ready-made index of it to be taken as one
+/// ([`crate::index::import_into_store`]): `recording-engine <version>` for the formats this
+/// engine reads, `<adapter> <version>` (as its `describe` states them) for a file an adapter reads.
+pub fn reader_of(p: &Path) -> Result<(Vec<(&'static str, String)>, String)> {
+    let engine = format!("recording-engine {}", env!("CARGO_PKG_VERSION"));
+    if p.is_dir() || wfdb_folder::is_record(p) {
+        return Ok((vec![("kind", "wfdb".into()), ("format", wfdb_folder::format_label(p).into())], engine));
+    }
+    if edf::is_edf(p) {
+        return Ok((vec![("kind", "edf".into()), ("format", edf::format_label(p).into())], engine));
+    }
+    let (adapter, format) = adapters::for_file(p).ok_or_else(|| Error::Value(not_a_recording(p)))?;
+    let made_by = format!("{} {}", adapter.name, adapter.version);
+    Ok((vec![("kind", format.kind), ("format", format.label), ("adapter", adapter.name)], made_by))
+}
+
 /// The index of a WFDB folder (built here), or of a file an adapter reads (the adapter writes
 /// the index files into `dir`; its `meta.json` is returned with the arrays left on disk).
 pub(crate) enum Building {

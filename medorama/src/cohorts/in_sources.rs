@@ -235,6 +235,19 @@ pub(super) fn meets_source(cx: &Cx, k: &Criterion, s: &Source) -> anyhow::Result
                 found.push((v.person, Why::from(format!("encounter in {}{unit}", s.name))));
             }
         }
+        "signal" => {
+            // the recordings that hold it: their times are the criterion's dates' test, as a
+            // visit's are (a recording without an end lasts its start)
+            for (person, a, b) in s.signal_persons(&k.name, zone)? {
+                let (a, b) = (a.unwrap_or(f64::NEG_INFINITY), b.or(a).unwrap_or(f64::INFINITY));
+                if from.is_some_and(|f| b < f) || to.is_some_and(|e| a >= e) {
+                    continue;
+                }
+                spans.resize(found.len(), None);
+                spans.push(Some((a, b)));
+                found.push((person, Why::from(format!("{} in {}", k.name, s.name))));
+            }
+        }
         "diagnosis" => {
             for e in entries_of(cx, k, s)?.iter() {
                 found.push((e.person.clone(), Why::from(format!("{} {}", e.code, e.name).trim().to_string())));

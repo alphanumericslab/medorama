@@ -1,5 +1,6 @@
-//! What names in criteria text refer to: a connected database, or a measurement of one, read
-//! from the variables Medorama keeps of each database (variables.rs), offline ones included.
+//! What names in criteria text refer to: a connected database, a measurement of one, or a signal
+//! its recordings hold (`icu-bp-ART`), read from the variables Medorama keeps of each database
+//! (variables.rs), offline ones included.
 
 use super::*;
 
@@ -15,6 +16,7 @@ pub fn resolver<'a>(
     let user = user.clone();
     let mut dbs: Option<Vec<(i64, String)>> = None;
     let mut names: HashMap<i64, Result<Vec<(String, String, bool)>, String>> = HashMap::new();
+    let mut signals: HashMap<i64, Vec<String>> = HashMap::new();
     move |qual: Option<&str>, name: &str| {
         if dbs.is_none() {
             let granted = crate::databases::granted(c, &user, "search")?;
@@ -71,8 +73,10 @@ pub fn resolver<'a>(
                 return Ok(Criterion { kind: "database".into(), database: Some(pick[0].0), ..Default::default() });
             }
         }
-        // a measurement: a name a database holds, else the one name containing it
+        // a measurement: a name a database holds, else the one name containing it; else a signal
+        // a database's recordings hold, by its whole name (any case)
         let mut hits: Vec<(i64, String)> = vec![];
+        let mut signal_hits: Vec<(i64, String)> = vec![];
         let mut unread = vec![];
         for (id, dname) in &pick {
             let held = match names
@@ -91,6 +95,11 @@ pub fn resolver<'a>(
                 hits.push((*id, n.to_string()));
                 continue;
             }
+            let sig = signals.entry(*id).or_insert_with(|| crate::variables::signals(cfg, c, *id).unwrap_or_default());
+            if let Some(n) = sig.iter().find(|n| n.to_lowercase() == w) {
+                signal_hits.push((*id, n.clone()));
+                continue;
+            }
             let mut like: Vec<&String> = numeric.into_iter().filter(|n| n.to_lowercase().contains(&w)).collect();
             like.dedup();
             match like.len() {
@@ -105,6 +114,15 @@ pub fn resolver<'a>(
             }
         }
         let label = |i: i64| dbs.iter().find(|d| d.0 == i).map(|d| d.1.clone()).unwrap_or_default();
+        // a signal (no values: presence only) is the same in every database that holds it
+        if hits.is_empty() && !signal_hits.is_empty() {
+            return Ok(Criterion {
+                kind: "signal".into(),
+                name: signal_hits[0].1.clone(),
+                database: (signal_hits.len() == 1 || qual.is_some()).then(|| signal_hits[0].0),
+                ..Default::default()
+            });
+        }
         match hits.len() {
             0 => anyhow::bail!(
                 "nothing is named {name:?}{}{}",

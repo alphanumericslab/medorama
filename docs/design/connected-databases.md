@@ -163,21 +163,32 @@ making thousands of queries.
 - **The Recordings tab** lists the recordings Medorama keeps: those opened or indexed.
 - **A cohort's `has` criterion** asks the database (`SELECT DISTINCT person_key, category` over
   its recordings), not the recordings kept.
-- **Indexes inside the database (later):** a recording database may hold its recordings'
-  indexes itself. Medorama will read an index from it when it has one, and otherwise index the
-  recording and keep the index in the workspace, as now.
+- **Indexes inside the database (0.4.0):** a recording database may hold its recordings'
+  indexes, made ahead of time (`recording_indexes`, or an `indexes` view; `db-builder indexes`
+  makes them). When a recording is opened (`take_held_before_opening`, before the viewer is
+  asked) or indexed (`actions::run_index`), Medorama copies its index into the workspace's index
+  store (`recording_engine::index::import_into_store`), if the file has the same size and
+  modification time, the program that made it is the one that reads it now, the index reads,
+  and the recording is one file (never a WFDB record or folder). Otherwise it indexes the
+  recording itself, as before, and logs why. The database's folder is only read
+  ([databases.md, Indexes and signals a recording database
+  holds](../databases.md#indexes-and-signals-a-recording-database-holds)).
+- **Signals (0.4.0):** a recording database may list each recording's signals by name
+  (`recording_signals`, or a `signals` view). Their names and group names are kept with the
+  catalog (vocabulary `signal`), so that `has icu-bp-ART` asks the database for the persons with
+  a recording that holds one.
 
 ## What is read when
 
 | When | Read from the database | Kept |
 |---|---|---|
-| Connecting, a new version, **Refresh** | Its persons, its visits; the catalog (a `variables` view, else one grouped query); its recordings' categories | The subject index, the catalog |
+| Connecting, a new version, **Refresh** | Its persons, its visits; the catalog (a `variables` view, else one grouped query); its recordings' categories; the names of their signals (a `signals` view or table) | The subject index, the catalog |
 | Every check (60 s) | Each view answers; the version query (else a count of persons and recordings) | Status |
 | The patient list | For the page shown (50 rows): each online database's entries and recordings of those persons, grouped | Nothing |
 | A filter on the list (`has ECG`), a cohort's `has` | Each online database: the persons with data of that kind (its `has` view when it has one) | The answer, in memory, while the version stays |
 | A patient's page | Their entries, visits, stays and recordings, from every database granted | The recordings (checked and kept) |
 | A cohort, a search | The criteria, sent to each database that may hold them ([Searching a database](#searching-a-database)) | Each criterion's answer, in memory, while the version stays; the cohort's members (its own store) |
-| **Count now** | One grouped count over the entries | The counts |
+| **Count now** | One grouped count over the entries (and over the signals, when listed) | The counts |
 | **Index all recordings** | Every recording it lists | The recordings, then their indexes |
 
 ## The patient list
@@ -319,7 +330,6 @@ fingerprinted every file: hours. In 0.3:
 ## Later
 
 - **Reading only what changed** at a refresh, by a watermark the database states.
-- **Indexes inside a recording database**, read before indexing.
 - **Progress** of a long refresh, shown in the Databases tab.
 - **Searching:** a measurement's dates sent to a PostgreSQL database too, as they are to SQLite
   since 0.3.3 ([todo.md, S6](../todo.md#s6-criteria-dates-sent-to-postgresql)).

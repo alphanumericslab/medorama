@@ -616,7 +616,7 @@ checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
 name = "db-builder"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1227,7 +1227,7 @@ dependencies = [
 
 [[package]]
 name = "medorama"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -1734,7 +1734,7 @@ dependencies = [
 
 [[package]]
 name = "recording-engine"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "indexmap",
  "memmap2",
@@ -2094,7 +2094,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 
 [[package]]
 name = "signal-core"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "indexmap",
 ]
@@ -2602,7 +2602,7 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
 name = "vitalstream-rs"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "axum",
  "chrono-tz",

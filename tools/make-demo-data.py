@@ -246,6 +246,10 @@ feature('muse-db', "A MUSE ECG archive and its ECG metadata database, connected 
 feature('catalog', 'A catalog view: what demo_muse holds, named without reading its entries', 'muse/views.toml')(
     lambda out: 'variables' in (_db(out, 'demo_muse') or {}).get('settings', {})
     and 'variables =' in (Path(out) / 'muse/views.toml').read_text(encoding='utf-8'))
+feature('ready-made-indexes', "Indexes made ahead of time (db-builder indexes): the sleep studies' and EEGs', taken by Medorama",
+        'indexes/')(lambda out: any(s[0] == 'indexes' for d in _manifest(out)['databases'] for s in d.get('build', [])))
+feature('recording-signals', 'The ICU recordings\' signals by name, searchable (has icu-bp-ART)', 'demo.sqlite')(
+    lambda out: any(s[0] == 'signals' for d in _manifest(out)['databases'] for s in d.get('build', [])))
 feature('demo-marked', 'Every demo database marked as invented: only a demo installation connects it', 'demo-databases.json')(
     lambda out: all(_marked(out, d) for d in _manifest(out)['databases'] if not d.get('encrypt')))
 feature('person-dates', "Each MUSE patient's first and latest ECG, from the persons view (the list's dates without visits)", 'muse/views.toml')(
@@ -2650,7 +2654,11 @@ def manifest(out, full, tables):
     ]}]
     if full:
         dbs[0]['build'] += [['recordings', '@demo.sqlite', '@sleeplab', '--pattern', '{patient}_*.edf', '--issuer', 'DEMO', '--category', 'sleep'],
-                            ['recordings', '@demo.sqlite', '@eeglab', '--pattern', '{patient}_*.bdf', '--issuer', 'DEMO', '--category', 'eeg']]
+                            ['recordings', '@demo.sqlite', '@eeglab', '--pattern', '{patient}_*.bdf', '--issuer', 'DEMO', '--category', 'eeg'],
+                            # the sleep studies' and EEGs' indexes made ahead of time (Medorama takes them)
+                            ['indexes', '@demo.sqlite', '--dir', '@indexes', '--category', 'sleep', '--category', 'eeg'],
+                            # the ICU recordings' signals, by name (has icu-bp-ART)
+                            ['signals', '@demo.sqlite']]
         dbs.append({'name': 'demo_north', 'kind': 'dbb', 'file': 'north/north.sqlite', 'build': [
             ['new', '@north/north.sqlite', '--timezone', tz, '--demo'],
             ['add', '@north/north.sqlite', '@north/patients.csv', '@north/encounters.csv', '@north/labs.csv', '@north/notes.csv',
@@ -2675,6 +2683,36 @@ def manifest(out, full, tables):
     return m
 
 
+# the ICU recordings' signals (recording(): the waveforms, then the vital signs), as a recording
+# database lists them for search (docs/databases.md, "Indexes and signals a recording database holds")
+ICU_SIGNALS = [('icu-ecg-I', 'icu-ecg', 'I', 'wave', 'mV', 240), ('icu-ecg-II', 'icu-ecg', 'II', 'wave', 'mV', 240),
+               ('icu-ecg-III', 'icu-ecg', 'III', 'wave', 'mV', 240), ('icu-bp-ART', 'icu-bp', 'ART', 'wave', 'mmHg', 120),
+               ('icu-spo2-Pleth', 'icu-spo2', 'Pleth', 'wave', 'adu', 60), ('icu-resp-Resp', 'icu-resp', 'Resp', 'wave', 'adu', 60),
+               ('icu-hr-HR', 'icu-hr', 'HR', 'vital', 'bpm', None), ('icu-spo2-SpO2', 'icu-spo2', 'SpO2', 'vital', '%', None),
+               ('icu-bp-ART-S', 'icu-bp', 'ART-S', 'vital', 'mmHg', None), ('icu-bp-ART-D', 'icu-bp', 'ART-D', 'vital', 'mmHg', None),
+               ('icu-bp-ART-M', 'icu-bp', 'ART-M', 'vital', 'mmHg', None), ('icu-resp-RR', 'icu-resp', 'RR', 'vital', '/min', None)]
+
+
+def icu_signals(db):
+    """The table `recording_signals` of a db-builder database: the signals of its ICU recordings
+    (every demo ICU recording holds the same).  How many rows."""
+    import sqlite3
+    c = sqlite3.connect(db)
+    try:
+        c.executescript("""CREATE TABLE IF NOT EXISTS recording_signals (recording_key TEXT NOT NULL, name TEXT NOT NULL,
+            group_name TEXT NOT NULL DEFAULT '', label TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT '',
+            unit TEXT NOT NULL DEFAULT '', fs REAL, PRIMARY KEY (recording_key, name));
+            CREATE INDEX IF NOT EXISTS recording_signals_name ON recording_signals (name, recording_key);
+            CREATE INDEX IF NOT EXISTS recording_signals_group ON recording_signals (group_name, recording_key);
+            DELETE FROM recording_signals;""")
+        keys = [k for (k,) in c.execute("SELECT recording_key FROM recordings WHERE category = 'icu'")]
+        c.executemany('INSERT INTO recording_signals VALUES (?, ?, ?, ?, ?, ?, ?)', [(k, *s) for k in keys for s in ICU_SIGNALS])
+        c.commit()
+        return len(keys) * len(ICU_SIGNALS)
+    finally:
+        c.close()
+
+
 def build(out, exe):
     """Builds the demo's db-builder databases (demo-databases.json's steps) with `exe`."""
     m = json.loads((out / 'demo-databases.json').read_text(encoding='utf-8'))
@@ -2693,6 +2731,11 @@ def build(out, exe):
                 shutil.rmtree(args[2], ignore_errors=True)
                 shutil.move(args[1], args[2])
                 continue
+            if step[0] == 'signals':
+                print(f'  {d["name"]}: signals: {icu_signals(Path(args[1]))} signals of the ICU recordings')
+                continue
+            if step[0] == 'indexes':
+                shutil.rmtree(args[3], ignore_errors=True)
             cmd = [exe] + (['--encrypt'] if d.get('encrypt') else []) + args
             r = subprocess.run(cmd, env=env, capture_output=True, text=True, encoding='utf-8', errors='replace')
             if r.returncode:

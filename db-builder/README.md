@@ -12,6 +12,7 @@ connects any other database, read-only and in place.
 | A CLIF folder (CSV or Parquet tables of CLIF 2.1, and five of 3.0) | The same tables: patients, hospitalizations as visits, ADT as bed stays, vitals, labs, drugs, support ... |
 | A site's export described in a TOML file (a *declared* format) | The same tables, through the columns the file describes |
 | A folder of recordings (WFDB records, EDF and BDF files, files an installed adapter reads) | `recordings`: file, format, patient, start, end, size, fingerprint |
+| Its recordings that are one file, indexed ahead of time (`indexes`) | `recording_indexes`: each recording's index folder, the file's size and time, who made it |
 
 db-builder reads its inputs where they are and writes only its output database, never into the
 folders it reads.
@@ -122,6 +123,26 @@ Adds the recordings of a folder and its subfolders, as one source ([Folders of
 recordings](#folders-of-recordings)). It takes `--patients TABLE` or `--pattern PATTERN` (or both:
 the table first), and `--mapping`, `--issuer`, `--mrn-authority`, `--timezone`, `--category`,
 `--day-first` as `add` does.
+
+### indexes
+
+```bash
+db-builder indexes study.sqlite --dir /data/psg/indexes --category sleep --category eeg
+```
+
+Makes the index of each recording that is one file (an EDF or BDF file, a file an installed
+adapter reads), ahead of time, into `--dir` (one folder per recording, named by a digest of its
+key), and names them in the table `recording_indexes` ([docs/schema.md,
+recording_indexes](docs/schema.md#recording_indexes)). `--category KEY` (repeatable) indexes
+only the recordings of those categories; all by default. Medorama takes these indexes instead of
+indexing the recordings itself, as long as the files still have the size and time they were
+indexed at and the same program reads them
+([docs/databases.md](../docs/databases.md#indexes-and-signals-a-recording-database-holds)).
+
+Each index is built beside and moved in. Run again, a recording whose index is current (same
+size, time and maker, its folder present) is kept, and only new or changed recordings are
+indexed. WFDB records and folders are not indexed ahead (Medorama indexes them when they are
+opened): `indexes` lists them, with the missing files, among those it skipped.
 
 ### check
 

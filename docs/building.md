@@ -284,7 +284,7 @@ viewer's page and the licence, and a wheel built from that sdist alone. Building
 setuptools 77 or later, which pip fetches into the isolated build environment.
 
 For development, install the packages in editable mode
-(`pip install -e … --config-settings editable_mode=compat`) with their `[test]` extras (and
+(`pip install -e …`) with their `[test]` extras (and
 `[test,wfdb]` for `vitalstream-py`), as `tools/install.sh` does.
 
 ## Without WFDB

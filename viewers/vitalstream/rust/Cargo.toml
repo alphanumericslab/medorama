@@ -1,6 +1,6 @@
 [package]
 name = "vitalstream-rs"
-version = "0.3.3"
+version = "0.4.0"
 description = "VitalStream viewer (Rust): browse physiological recordings (WFDB folders; other formats through adapters) in a web browser"
 readme = "README.md"
 edition.workspace = true

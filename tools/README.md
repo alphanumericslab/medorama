@@ -126,6 +126,8 @@ demo](../docs/administration.md#the-demo) says how to install it and what to try
 | `ecg-median` | MUSE ECGs with their median beats and P, QRS and T onsets | `ecg/*.xml` |
 | `encrypted` | An encrypted db-builder database, its key in a file | `secure/, keys/` |
 | `actions` | The example action plug-in, for the Actions tab | `actions/` |
+| `ready-made-indexes` | Indexes made ahead of time (db-builder indexes): the sleep studies' and EEGs', taken by Medorama instead of indexing them | `indexes/` |
+| `recording-signals` | The ICU recordings' signals by name, searchable (`has icu-bp-ART`) and listed in a recording's detail | `demo.sqlite` (`recording_signals`) |
 | `cohorts` | Enough patients and values for cohort criteria (creatinine, lactate, troponin, ICU, sex, age) | `databases/labs.csv` |
 
 ## Refresh the screenshots

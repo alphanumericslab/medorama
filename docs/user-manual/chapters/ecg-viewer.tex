@@ -632,7 +632,7 @@ environment:
 VIEWER_ROOT=/data/ecg VIEWER_PASSWORD=1 pip install ./viewers/ecg/python/muse
 \end{lstlisting}
 
-An editable install (\cmd{pip install -e}, as \cmd{tools/install-medorama.sh} makes) serves the
+An editable install (\cmd{pip install -e}, as \cmd{tools/install.sh} makes for development) serves the
 page from the clone instead of a copy. The two variables still apply when they are given at
 install time (they are written into the clone, in a file git ignores); without them, its root is
 the whole file system, with password support.

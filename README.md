@@ -4,15 +4,21 @@
 waveforms, imaging and laboratory results across databases.**
 
 [![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)](LICENSE)
-![Version 0.3.3, pre-release](https://img.shields.io/badge/version-0.3.3%20pre--release-informational)
+![Version 0.4.0, pre-release](https://img.shields.io/badge/version-0.4.0%20pre--release-informational)
 
-**Version 0.3.3 (pre-release, November 2026).** Opening a patient no longer makes the server
+**Version 0.4.0 (pre-release, November 2026).** A recording database may hold its recordings'
+indexes, made ahead of time with `db-builder indexes`, which Medorama takes instead of indexing
+the recordings itself, and may list each recording's signals by name, so that `has icu-bp-ART`
+finds the patients with a recording of arterial pressure
+([databases.md](docs/databases.md#indexes-and-signals-a-recording-database-holds)); the installers
+no longer print setuptools' "Compat editable installs" warning, and a 0.3.3 installation updates
+in place. In 0.3.3, opening a patient stopped making the server
 print "database is locked" (the page's simultaneous requests wrote the same workspace file), and
 `medorama serve` warns when the workspace is on a network file system
 ([administration.md](docs/administration.md#the-control-store-and-the-workspace)). A
 measurement's dates are sent to the database, and a search's reasons are written out for the
 page shown only ([performance.md](docs/performance.md#what-a-criterion-reads)). The installers
-check Python (and for a Rust build `make` and Perl) before they build anything, and say what to do. The VitalStream
+check Python (and for a Rust build `make` and Perl) before they build anything, and say what to do; the VitalStream
 tab, opened directly, asks for a recording from a patient's page instead of showing the last
 one the viewer opened, and a cohort search under way shows *Searching… please wait* in an amber
 pill. 0.3.2 made searches read less of each database: a threshold sent to the
@@ -85,7 +91,7 @@ Medorama brings these sources together without moving them:
   ([user guide](docs/user-guide.md)).
 - **Cohorts across the databases you choose.** Researchers tick the databases to search and find
   patients by results, ECG and imaging measurements, diagnoses, medications, stays, age, sex,
-  text and the results of actions, see why each patient matched and which databases were
+  text, the signals of their recordings (`has icu-bp-ART`) and the results of actions, see why each patient matched and which databases were
   searched and which left out, and then keep, refresh, combine and export the cohort
   ([user guide](docs/user-guide.md)).
 - **Viewers for long recordings, ECGs and images.** VitalStream shows weeks of ICU monitoring,
@@ -241,6 +247,7 @@ collections' attributions. Everything else, and every identifier and text, is in
 | Identity conflicts | **Databases** › `demo_north` › **Identity conflicts**, or `medorama databases conflicts demo_north` |
 | Cohorts | **Cohorts**: the five example cohorts; `demo.creatinine > 1.5 OR has icu`, `female AND age > 70`, `demo.troponin > 100`, `demo_muse.QRS > 100 ms`, `has eeg`; after ticking a page of matches, **Tick all** |
 | Searches sent to a database | `demo_muse.QTc > 450 ms` asks `demo_muse` only for the QTc values over 450 (served by its index on the QTc column), and `has ecg` reads its `has` view; the same search again is answered from what was read, while its data stay the same ([performance.md](docs/performance.md#what-a-criterion-reads)) |
+| Signals of the ICU recordings, indexes made ahead | **Cohorts**: `has icu-bp-ART` (or `has icu-ecg`) finds the patients with an ICU recording that holds it; open one: the recording's detail lists its signals by group. The sleep studies' and EEGs' indexes are in `demo` already ([databases.md](docs/databases.md#indexes-and-signals-a-recording-database-holds)) |
 | Privacy Mode | Turn **Privacy Mode** on: names become `[Patient Name]` (in notes too), dates move, the patient over 89 shows as `90+` |
 | Recordings and viewers | A patient's ICU monitoring, Holter, sleep study or EEG opens VitalStream; a 12-lead ECG opens the ECG viewer (a MUSE ECG with its median beats; Eva Lindqvist's 2019 ECG of `demo_muse`, without its sampling rate, by sample number); CT, radiographs, echo and angiography open PACS |
 | Actions and jobs | **Actions**: run **Index** or the example plug-in **Recording summary** on all recordings; watch **Jobs** |

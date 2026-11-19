@@ -25,7 +25,7 @@ import re
 import struct
 import xml.etree.ElementTree as ET
 
-__version__ = '0.3.3'
+__version__ = '0.4.0'
 
 # measurements: element of RestingECGMeasurements -> (name, unit), as the ECG viewer names them
 MEASUREMENTS = [

@@ -92,6 +92,7 @@ export function renderDetail(el, d, ctx) {
     h += rowsTable(d, ctx.terms);
   }
   if (d.monitoring) h += monitoring(d, ctx);
+  if (d.signals?.length) h += signalsList(d.signals);
   if (d.ecg) h += ecg(d);
   if (d.fields.length) h += `<dl class="fields">${d.fields.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${mark(v, ctx.terms)}</dd>`).join('')}</dl>`;
   // free text may still name the patient: in Privacy Mode it is marked, as files are
@@ -145,6 +146,21 @@ function ecg(d) {
       ${m.series.length > 1 ? spark(m.series, null, null, { w: 150, h: 24, stroke: color('c-ecg'), mark: [d.time, m.value] }) : ''}</div>`).join('')}</div>`;
   }
   return h;
+}
+
+/**
+ * A recording's signals, as its database lists them: by group, each with the name a search
+ * finds it by (`has icu-bp-ART`; the group's name finds any of its signals).
+ */
+function signalsList(signals) {
+  const groups = new Map();
+  for (const x of signals) {
+    const g = x.group || x.name;
+    if (!groups.has(g)) groups.set(g, []);
+    if (x.name !== g) groups.get(g).push(x);
+  }
+  const one = (x) => `<code>${esc(x.name)}</code>${x.unit ? ` <span class="faint">${esc(x.unit)}</span>` : ''}`;
+  return `<div class="label">Signals <span>search them with has and the name</span></div><dl class="fields signals">${[...groups].map(([g, xs]) => `<dt><code>${esc(g)}</code></dt><dd>${xs.length ? xs.map(one).join(' · ') : '—'}</dd>`).join('')}</dl>`;
 }
 
 function monitoring(d, ctx) {

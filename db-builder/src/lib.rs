@@ -20,6 +20,7 @@ pub mod categories;
 pub mod check;
 pub mod db;
 pub mod formats;
+pub mod indexes;
 pub mod parquet_rows;
 pub mod recordings;
 pub mod root;

@@ -114,8 +114,6 @@ medorama --version
 ```
 
 - `--viewer rs` builds the Rust waveform viewer. Add `--demo` for the demo, as above.
-- A `BuildBackendWarning: Compat editable installs` message during "The database tools" is
-  harmless.
 - The Perl is needed only while building: Medorama does not use it once built. For a later
   update, run the `export PATH=…` and `unset …` lines again before the installer.
 

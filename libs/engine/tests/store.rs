@@ -139,3 +139,47 @@ fn what_a_killed_program_left_is_removed_a_day_later() {
     drop(Store::open(&file, None).unwrap());
     assert!(!old.exists() && fresh.exists());
 }
+
+/// A ready-made index (a folder a database lists): taken into a store, it answers as the store's
+/// own build does; refused when it was made by another program than the one that reads the
+/// recording now, or when it does not read, leaving nothing behind.
+#[test]
+fn a_ready_made_index_is_taken_as_the_stores_own() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = testdata("edf").join("gappy_plus.edf");
+    // the ready-made index: an index folder, as a tool that indexes ahead of time writes it
+    let made = dir.path().join("made");
+    let key2 = index::build_index(&path, &made, &|_| {}).unwrap();
+    let folder = made.join(&key2);
+    let engine = format!("recording-engine {}", env!("CARGO_PKG_VERSION"));
+    let built = Store::open(&dir.path().join("built.sqlite"), None).unwrap();
+    let key = index::build_into_store(&path, &built, &|_| {}, &|| false).unwrap();
+    let store = Store::open(&dir.path().join("taken.sqlite"), Some(&[3u8; 32])).unwrap();
+    assert_eq!(index::import_into_store(&path, &folder, &engine, &store).unwrap(), key);
+    let (m1, a1) = built.load(&key).unwrap();
+    let (m2, a2) = store.load(&key).unwrap();
+    let strip = |m: &signal_core::value::Dict| {
+        let mut m = m.clone();
+        m.shift_remove("indexed_s");
+        Value::Dict(m).to_json()
+    };
+    assert_eq!(strip(&m1), strip(&m2));
+    same_answers(&Dataset::new(m1, a1), &Dataset::new(m2, a2));
+    assert_eq!(std::fs::read_dir(store.tmp_dir()).unwrap().count(), 0);
+    // made by another program (another engine, an adapter's older version): refused, not taken
+    let other = Store::open(&dir.path().join("other.sqlite"), None).unwrap();
+    let e = index::import_into_store(&path, &folder, "recording-engine 0.0.1", &other).unwrap_err();
+    assert!(e.to_string().contains("made by"), "{e}");
+    // an index that does not read (an array cut short): refused
+    let broken = dir.path().join("broken");
+    std::fs::create_dir(&broken).unwrap();
+    for e in std::fs::read_dir(&folder).unwrap().flatten() {
+        std::fs::copy(e.path(), broken.join(e.file_name())).unwrap();
+    }
+    std::fs::write(broken.join("vit_t.f64"), [0u8; 3]).unwrap();
+    assert!(index::import_into_store(&path, &broken, &engine, &other).is_err());
+    assert!(other.keys().is_empty());
+    assert_eq!(std::fs::read_dir(other.tmp_dir()).unwrap().count(), 0);
+    // the folder itself is only read
+    assert!(index::load_index(&made, &key2).is_some());
+}

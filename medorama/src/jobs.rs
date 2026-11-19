@@ -372,14 +372,16 @@ pub fn execute(
         // indexing: into its database's index store (opened here, with the database's key)
         let store =
             if job.action == "index" { Some(crate::workspace::index_store(cfg, &c, rec.database)?) } else { None };
+        // indexing: the ready-made index its database may hold, taken instead of building one
+        let held = if job.action == "index" { recordings::held_index(&c, &rec) } else { None };
         // its patient's pseudonym only: a database's identifiers may be MRNs (docs/security.md)
         let patient = match rec.patient {
             Some(p) => crate::patient::pseudonym_of(&c, p)?,
             None => String::new(),
         };
-        Ok((rec, patient, store))
+        Ok((rec, patient, store, held))
     })();
-    let (rec, patient, store) = match prepared {
+    let (rec, patient, store, held) = match prepared {
         Ok(x) => x,
         Err(e) => {
             // failed before it ran (its recording gone, its key unreadable): written as failed,
@@ -431,7 +433,7 @@ pub fn execute(
         let r = match reg.get(&job.action) {
             None => Err(format!("action {} is no longer installed", job.action)),
             Some(a) if a.builtin && a.name == "index" => match &store {
-                Some(st) => run_index(st, &rec, &progress, &cancel),
+                Some(st) => run_index(st, &rec, held.as_ref(), &progress, &cancel),
                 None => Err("no index store".into()),
             },
             Some(a) => {

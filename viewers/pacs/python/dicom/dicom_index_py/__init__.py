@@ -21,7 +21,7 @@ from pathlib import Path
 import pydicom
 from pydicom.errors import InvalidDicomError
 
-__version__ = '0.3.3'
+__version__ = '0.4.0'
 
 ECG_SOPS = {'1.2.840.10008.5.1.4.1.1.9.1.1', '1.2.840.10008.5.1.4.1.1.9.1.2'}
 HOLTER_SOPS = {'1.2.840.10008.5.1.4.1.1.9.1.3'}

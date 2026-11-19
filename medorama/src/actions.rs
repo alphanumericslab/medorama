@@ -266,17 +266,26 @@ pub struct Outcome {
 }
 
 /// Run the built-in index action: into the index store of the recording's database (index format
-/// 3, encrypted with its key).
+/// 3, encrypted with its key).  A ready-made index its database holds (`held`) is taken when it
+/// still matches the file and its reader; otherwise the recording is indexed here.
 pub fn run_index(
     store: &recording_engine::store::Store,
     rec: &Recording,
+    held: Option<&crate::sources::HeldIndex>,
     progress: &Progress,
     cancel: &AtomicBool,
 ) -> Result<Outcome, String> {
-    let key = recording_engine::index::build_into_store(Path::new(&rec.path), store, &|x| progress.set(x), &|| {
-        cancel.load(Ordering::Relaxed)
-    })
-    .map_err(|e| e.to_string())?;
+    let taken = held.and_then(|h| crate::recordings::take_held_index(Path::new(&rec.path), h, store));
+    let key = match taken {
+        Some(k) => {
+            progress.set(1.0);
+            k
+        }
+        None => recording_engine::index::build_into_store(Path::new(&rec.path), store, &|x| progress.set(x), &|| {
+            cancel.load(Ordering::Relaxed)
+        })
+        .map_err(|e| e.to_string())?,
+    };
     let text = store.meta(&key).unwrap_or_default();
     let meta: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
     let summary = serde_json::json!({

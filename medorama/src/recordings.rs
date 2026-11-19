@@ -27,6 +27,55 @@ use recording_engine::store::STORE_FORMAT;
 fn cache_key(path: &Path) -> String {
     cache_key_of(path, STORE_FORMAT)
 }
+
+/// The ready-made index a recording's database holds for it (docs/databases.md, "Indexes and
+/// signals a recording database holds"), if any; a database that cannot be asked now holds none
+/// (the recording is indexed as any other).
+pub fn held_index(c: &Connection, rec: &Recording) -> Option<crate::sources::HeldIndex> {
+    let s = crate::sources::get(c, rec.database).ok().flatten()?;
+    match s.held_index(&rec.key) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("medorama: {}: its ready-made indexes could not be read: {e}", s.name);
+            None
+        }
+    }
+}
+
+/// Take a recording's ready-made index into its database's index store, when the file still has
+/// the size and modification time it was made from, and the program that made it is the one that
+/// reads the recording now: its key (also when the store already holds it), else `None` (the
+/// recording is then indexed as any other).  Why it was not taken is written to the log.
+pub fn take_held_index(
+    path: &Path,
+    held: &crate::sources::HeldIndex,
+    store: &recording_engine::store::Store,
+) -> Option<String> {
+    let m = std::fs::metadata(path).ok()?;
+    let mtime_ns = m
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos() as i128);
+    if m.len() as i128 != held.size as i128 || mtime_ns != held.mtime_ns as i128 {
+        eprintln!(
+            "medorama: {}: its ready-made index was made from another version of the file (size or time): indexed here",
+            path.display()
+        );
+        return None;
+    }
+    let key = cache_key(path);
+    if store.meta(&key).is_some() {
+        return Some(key);
+    }
+    match recording_engine::index::import_into_store(path, &held.dir, &held.made_by, store) {
+        Ok(k) => Some(k),
+        Err(e) => {
+            eprintln!("medorama: {}: its ready-made index is not taken ({e}): indexed here", path.display());
+            None
+        }
+    }
+}
 use recording_engine::sources::{kind_of, unreadable};
 use serde::Serialize;
 
@@ -537,6 +586,34 @@ fn read(cfg: &Config, c: &Connection, s: &Source, filter: &str, args: &[String])
             r
         })
         .collect())
+}
+
+/// Before the viewer opens a recording at `path`: the ready-made index its database holds, taken
+/// into that database's index store when the store has none of it yet, so that the viewer, which
+/// reads the stores first, does not index it again.  (Its index job, when it runs, finds it there
+/// and only records what the index says.)  How many were taken.
+pub fn take_held_before_opening(cfg: &Config, c: &Connection, paths: &[String]) -> anyhow::Result<usize> {
+    let mut taken = 0;
+    for s in crate::sources::list(c)? {
+        let Ok(recs) = read(cfg, c, &s, "path IN (?1, ?2)", &[paths[0].clone(), paths.last().unwrap().clone()]) else {
+            continue;
+        };
+        for rec in recs.into_iter().filter(|r| r.present && r.index_key.is_none()) {
+            let held = match s.held_index(&rec.key) {
+                Ok(Some(h)) => h,
+                Ok(None) => continue,
+                Err(e) => {
+                    eprintln!("medorama: {}: its ready-made indexes could not be read: {e}", s.name);
+                    continue;
+                }
+            };
+            let store = crate::workspace::index_store(cfg, c, s.id)?;
+            if take_held_index(Path::new(&rec.path), &held, &store).is_some() {
+                taken += 1;
+            }
+        }
+    }
+    Ok(taken)
 }
 
 /// One recording, by its number (none if its database is gone or being removed).

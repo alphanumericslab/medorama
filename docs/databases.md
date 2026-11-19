@@ -34,6 +34,7 @@ database) and [design/sources.md](design/sources.md); the settings are summarize
   - [Indexes for searches](#indexes-for-searches)
   - [A MUSE ECG metadata database](#a-muse-ecg-metadata-database)
 - [Files: recordings, ECGs and images](#files-recordings-ecgs-and-images)
+  - [Indexes and signals a recording database holds](#indexes-and-signals-a-recording-database-holds)
 - [Check the result](#check-the-result)
 - [Checklist](#checklist)
 - [Troubleshooting](#troubleshooting)
@@ -177,12 +178,12 @@ and when:
 
 | When | Read from the database |
 |---|---|
-| Connecting, a new version, **Refresh**, new views | Every person (however many: `--max-rows` bounds criteria, not this), every visit, the catalog (its `variables` view, else one grouped query over the entries, with no counting), and the categories of its recordings (`SELECT DISTINCT category`). No recording file is read. |
+| Connecting, a new version, **Refresh**, new views | Every person (however many: `--max-rows` bounds criteria, not this), every visit, the catalog (its `variables` view, else one grouped query over the entries, with no counting), the categories of its recordings (`SELECT DISTINCT category`), and the names of the signals they hold (its `signals` view, when it has one). No recording file is read. |
 | Every check (each minute) | Whether each view answers; the version (without a version query, a count of its persons and recordings). |
 | The Patient Catalog | For the page shown, what each online database holds of those patients (the **Data** and **Entries** columns); a filter on a kind of data (`has ECG`) asks each online database (its `has` view when it has one). |
 | A patient's page, a job, a cohort's selection | Their entries, visits, stays and recordings. Their recordings' files are checked then, kept, and queued for indexing. |
 | A cohort, a search | The criteria, sent to each database that may hold them; `has` too. A threshold asks only for the values that may pass ([performance.md, What a criterion reads](performance.md#what-a-criterion-reads)). Each row is tested as it is read and only those that hold are kept, so a criterion reads a database of millions of rows (`QTc > 450 ms` over every ECG; `latest` keeps each person's latest value). Each answer is kept while the database's version stays. |
-| **Count now** (`medorama databases count NAME`) | One grouped count over the entries: how many entries and persons hold each variable, kept until the catalog is read again. Counts from 1 to 10 are shown as "< 11" (the page, the command, the API). |
+| **Count now** (`medorama databases count NAME`) | One grouped count over the entries: how many entries and persons hold each variable (for a signal, how many recordings hold it and their persons), kept until the catalog is read again. Counts from 1 to 10 are shown as "< 11" (the page, the command, the API). |
 | **Index all recordings** (`medorama databases index NAME`) | Every recording it lists (at most `--max-rows`): their files checked, and the new or changed ones queued for indexing. For a database of ICU recordings that should all be indexed ahead of time; `medorama init --demo` does it for the demo's databases. |
 
 An offline database's patients stay listed, with their encounters; their data show as offline,
@@ -197,7 +198,7 @@ and the recordings kept from before are shown.
 | `--url` | (required) | `postgres://user@host/db?sslmode=require` without a password, or `sqlite:/path/to/file` (a `dbb` database is always a SQLite file). |
 | `--password-file`, `--password-stdin` | none | The password, from a file, or from standard input (then kept wrapped by the master key). `$MEDORAMA_SOURCE_PASSWORD_<NAME>` (the name in capitals, other characters as `_`) takes precedence. |
 | `--ca-file` | none | Certificate authorities (PEM) for the server's certificate, besides the system's. |
-| `--views` | none | Kind `views`: the TOML file with the views (`persons`, `visits`, `entries`, `recordings`, `stays`, `version`, `variables`, `has`). |
+| `--views` | none | Kind `views`: the TOML file with the views (`persons`, `visits`, `entries`, `recordings`, `stays`, `version`, `variables`, `has`, `indexes`, `signals`). |
 | `--schema`, `--vocabulary-schema` | the default schema | OMOP's CDM tables, and its vocabulary when apart. |
 | `--identifier` | `mrn` | OMOP: what `person_source_value` holds: `mrn`, `patient_id` or `none`. |
 | `--issuer` | empty: the database itself | Who issued the database's patient IDs, for rows that name none. Empty: its patient IDs link only its own persons. |
@@ -453,8 +454,8 @@ contract between Medorama and the database:
 
 The views and their columns are defined in
 [medorama/src/sources/mod.rs](../medorama/src/sources/mod.rs) (`PERSON_COLS`, `VISIT_COLS`,
-`ENTRY_COLS`, `RECORDING_COLS`, `STAY_COLS`, `VARIABLE_COLS`). A db-builder database's tables
-have the same columns.
+`ENTRY_COLS`, `RECORDING_COLS`, `STAY_COLS`, `VARIABLE_COLS`, `HAS_COLS`, `INDEX_COLS`,
+`SIGNAL_COLS`). A db-builder database's tables have the same columns.
 
 | View | Required | One row per |
 |---|---|---|
@@ -466,6 +467,8 @@ have the same columns.
 | `version` | No | (one row, one value: the data's version) |
 | `variables` | No | variable the database holds (its catalog: names and units) |
 | `has` | No | person and category of data they have |
+| `indexes` | No: a recording database | recording indexed ahead of time ([below](#indexes-and-signals-a-recording-database-holds)) |
+| `signals` | No: a recording database | signal a recording holds ([below](#indexes-and-signals-a-recording-database-holds)) |
 
 A recording database read through views still gives an `entries` view; it may return no rows
 (`SELECT … WHERE 1 = 0`).
@@ -772,6 +775,89 @@ workspace (`db-NNNN/index.sqlite`), encrypted with the database's key. The file 
 (relative paths, data roots, which files Privacy Mode sends) are in
 [importing.md, Files](importing.md#files). The stp-adapter is a private add-on, available to
 institutions under agreement ([adapters.md](adapters.md)).
+
+### Indexes and signals a recording database holds
+
+A recording database may hold two optional tables (in a database of kind `views`, two optional
+views): the indexes of its recordings, made ahead of time, and the signals each recording holds.
+Medorama only reads them; `db-builder new` does not make them.
+
+| db-builder table | View (kind `views`) | Columns Medorama reads | What it gives |
+|---|---|---|---|
+| `recording_indexes` | `indexes` | `recording_key, index_dir, size, mtime_ns, adapter` | A recording's index, made ahead: opening or indexing it takes this index instead of indexing the file. |
+| `recording_signals` | `signals` | `recording_key, name, group_name, label, kind, unit, fs` | The signals of each recording, by name: `has icu-bp-ART` finds the patients with one. |
+
+**`recording_indexes`** (view `indexes`)
+
+| Column | Type | Content |
+|---|---|---|
+| `recording_key` | any | The recording (as in `recordings`). |
+| `index_dir` | text | The index folder, as an adapter's `index` command (or the engine's format-2 build) writes it: `meta.json` and its arrays. Absolute, or relative to the `files_root` setting (else to a SQLite database's own folder). |
+| `size`, `mtime_ns` | integer | The recording file's size in bytes and its modification time (integer nanoseconds since 1970, UTC) when it was indexed. |
+| `md5` | text | Optional: the file's MD5 (written by db-builder as empty; not read). |
+| `adapter` | text | Who made the index: `<adapter name> <version>` as its `describe` states them (`stp 0.1.0`), or `recording-engine <version>` for EDF and BDF. |
+| `indexed_at` | text | Optional: when it was made (not read). |
+
+Medorama takes a ready-made index when the recording is opened in the viewer (before the
+viewer is asked to open it, so that the viewer does not index it again) and in the recording's
+index job, which then only records the index's times and format. It copies the index into the
+database's encrypted index store in the workspace, adds the recording's path, name and key to its
+`meta.json` (the key is computed as for any other recording), and checks it as a reader would.
+An index is taken only when:
+
+| Condition | Why |
+|---|---|
+| The file has the same `size` and `mtime_ns` now | Otherwise the index was made from another version of the file. |
+| `adapter` names the program that reads the recording now (the installed adapter's name and version, or this engine's version) | An index made by another version may not be what this one reads. |
+| The index reads (its `meta.json` and arrays check as a reader's) | A folder half written or damaged is not taken. |
+| The recording is one file (an EDF or BDF file, an adapter's file such as `.Stp`) | A WFDB record's header (or a folder) does not say by its size and time whether its signal files changed: Medorama always indexes it itself. |
+
+Otherwise Medorama indexes the recording itself, as before, and writes why to the server log.
+The database's index folder is only read, never written.
+
+`db-builder indexes DB --dir DIR [--category KEY]...` makes these folders and fills
+`recording_indexes`. It indexes every recording that is one file (of these categories; all when
+none is given), one folder per recording in `DIR`, named by a digest of its key; `index_dir` is
+written relative to the database's folder when `DIR` is inside it. Each index is built beside
+and moved in, so a folder half written is never named. Run again, it keeps the indexes that are
+current (same size, time and maker, folder present), remakes the changed ones, and lists those it
+skipped (WFDB records and folders, missing files, files no reader reads):
+
+```bash
+db-builder indexes /data/psg/psg.sqlite --dir /data/psg/indexes --category sleep --category eeg
+```
+
+For BedMasterEx `.Stp` files, the stp-adapter add-on includes a tool that builds such a database
+(db-builder's schema with these two tables) for a whole archive of `.Stp` files on a compute
+cluster.
+
+**`recording_signals`** (view `signals`)
+
+| Column | Type | Content |
+|---|---|---|
+| `recording_key` | any | The recording (as in `recordings`). |
+| `name` | text | The signal's name, which searches find it by: `icu-ecg-II`, `icu-bp-ART`, `icu-hr-HR`. |
+| `group_name` | text | Its group: `icu-ecg`, `icu-bp`, `icu-spo2`, `icu-resp`, `icu-co2`, `icu-temp`, `icu-eeg`, `icu-other`. The prefix `icu-` tells ICU monitoring signals from other data. |
+| `label` | text | Its label as the file names it (`II`, `ART`). |
+| `kind` | text | `wave` (a waveform) or `vital` (a vital sign's series). |
+| `unit` | text | Its unit, or empty. |
+| `fs` | number, or NULL | Its sampling rate in Hz (a waveform's), or NULL. |
+
+Connecting and **Refresh** read the distinct names and group names into the database's
+variables (category ICU, vocabulary `signal`, no values); **Count now** counts the recordings
+that hold each and their persons. A search names a signal or a group with `has` (`has
+icu-bp-ART`, `has icu-bp`, `has stp.icu-ecg`) or by the name alone, in any letter case; a
+signal is the same in every database that lists it, so it needs no database's name. A signal has
+no values: `icu-ecg-II > 3` is refused ([user-guide.md, Cohorts](user-guide.md#cohorts)). A
+patient's page lists a recording's signals by group in its detail.
+
+In a database of kind `views`, the two views return the same columns, set with the keys
+`indexes` and `signals` of the views file:
+
+```toml
+indexes = "SELECT rec_id AS recording_key, idx_path AS index_dir, file_size AS size, file_mtime_ns AS mtime_ns, made_by AS adapter FROM rec_index"
+signals = "SELECT rec_id AS recording_key, sig_name AS name, sig_group AS group_name, label, kind, unit, fs FROM rec_signal"
+```
 
 ## Check the result
 

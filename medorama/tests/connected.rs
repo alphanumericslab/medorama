@@ -234,3 +234,141 @@ fn a_pages_requests_read_a_patients_recordings_at_once_without_a_lock_refused() 
     let ann = medorama::persons::known(&s.cfg, &c, id, &["a1".into()]).unwrap()["a1"];
     assert!(!medorama::recordings::of_patient(&s.cfg, &c, &s.user("boss"), ann).unwrap().is_empty());
 }
+
+/// The optional tables of a recording database (docs/databases.md, "Indexes and signals a
+/// recording database holds"): its ready-made index of a recording.
+fn held_tables(a: &Dbb) {
+    a.exec(
+        "CREATE TABLE recording_indexes (recording_key TEXT PRIMARY KEY, index_dir TEXT NOT NULL, size INTEGER NOT NULL,
+             mtime_ns INTEGER NOT NULL, md5 TEXT NOT NULL DEFAULT '', adapter TEXT NOT NULL DEFAULT '', indexed_at TEXT NOT NULL DEFAULT '');
+         CREATE TABLE recording_signals (recording_key TEXT NOT NULL, name TEXT NOT NULL, group_name TEXT NOT NULL DEFAULT '',
+             label TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT '', unit TEXT NOT NULL DEFAULT '', fs REAL,
+             PRIMARY KEY (recording_key, name));
+         INSERT INTO recording_signals VALUES ('r1', 'icu-ecg-II', 'icu-ecg', 'II', 'wave', 'mV', 250),
+                                              ('r1', 'icu-bp-ART', 'icu-bp', 'ART', 'wave', 'mmHg', 125),
+                                              ('r1', 'icu-hr', 'icu-hr', 'HR', 'vital', 'bpm', NULL);",
+    );
+}
+
+/// The size and modification time (integer nanoseconds) of a file, as a tool that indexes ahead
+/// of time records them.
+fn stamp(p: &std::path::Path) -> (i64, i64) {
+    let m = std::fs::metadata(p).unwrap();
+    let ns = m.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos() as i64;
+    (m.len() as i64, ns)
+}
+
+#[test]
+fn a_ready_made_index_the_database_holds_is_taken_instead_of_indexing() {
+    let s = Setup::new();
+    let a = hospital(&s);
+    held_tables(&a);
+    // Ann's sleep study, one EDF file
+    let path = s.data().join("psg/ann.edf");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../viewers/vitalstream/testdata/edf/psg_plus.edf"),
+        &path,
+    )
+    .unwrap();
+    a.recording("r9", "a1", "psg/ann.edf", "sleep");
+    // the index made ahead of time, beside the database (a folder: meta.json and arrays)
+    let made = s.data().join("made");
+    let key2 = recording_engine::index::build_index(&path, &made, &|_| {}).unwrap();
+    // (marked, to tell it from an index Medorama builds)
+    let mj = made.join(&key2).join("meta.json");
+    let text = std::fs::read_to_string(&mj).unwrap();
+    std::fs::write(&mj, text.replacen('{', "{\"made_ahead\":true,", 1)).unwrap();
+    let made_by = recording_engine::sources::reader_of(&path).unwrap().1;
+    let (size, mtime) = stamp(&path);
+    a.exec(&format!(
+        "INSERT INTO recording_indexes (recording_key, index_dir, size, mtime_ns, adapter)
+         VALUES ('r9', 'made/{key2}', {size}, {mtime}, '{made_by}'),
+                ('r1', 'made/{key2}', 0, 0, '{made_by}')"
+    ));
+    let id = s.connect("hospa", &a);
+    let c = s.db.get().unwrap();
+    let boss = s.user("boss");
+    let ann = medorama::persons::known(&s.cfg, &c, id, &["a1".into()]).unwrap()["a1"];
+    let recs = medorama::recordings::of_patient(&s.cfg, &c, &boss, ann).unwrap();
+    let rec = recs.iter().find(|r| r.path.ends_with("ann.edf")).unwrap().clone();
+    // opening it in the viewer: taken into the database's index store first
+    let paths = vec![rec.path.clone()];
+    assert_eq!(medorama::recordings::take_held_before_opening(&s.cfg, &c, &paths).unwrap(), 1);
+    let store = medorama::workspace::index_store(&s.cfg, &c, id).unwrap();
+    let key = recording_engine::index::cache_key_of(std::path::Path::new(&rec.path), 3);
+    let meta = store.meta(&key).expect("taken");
+    assert!(meta.contains("\"made_ahead\":true"), "taken, not built: {meta}");
+    // (the WFDB record, though listed: a record's header alone does not say it changed)
+    let wfdb = recs.iter().find(|r| r.path.ends_with("rec.hea")).unwrap();
+    assert_eq!(
+        medorama::recordings::take_held_before_opening(&s.cfg, &c, std::slice::from_ref(&wfdb.path)).unwrap(),
+        0
+    );
+    // its index job only records what the index says (the record's job indexes it)
+    assert_eq!(medorama::jobs::queue_auto_index(&c, &s.cfg).unwrap(), 2);
+    let reg = std::sync::Arc::new(std::sync::RwLock::new(medorama::actions::Registry::load(&s.cfg)));
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    medorama::jobs::work(s.db.clone(), std::sync::Arc::new(s.cfg.clone()), reg.clone(), 0, stop.clone(), true);
+    let rec = medorama::recordings::get(&s.cfg, &c, rec.id).unwrap().unwrap();
+    assert_eq!(rec.index_key.as_deref(), Some(key.as_str()), "ready: {}", rec.error);
+    assert!(rec.t_start.is_some(), "its times, from the index");
+    assert!(store.meta(&key).unwrap().contains("\"made_ahead\""), "still the one taken");
+
+    // the file changed since the index was made: Medorama indexes it itself
+    store.remove(&key).unwrap();
+    a.exec("UPDATE recording_indexes SET mtime_ns = mtime_ns - 1");
+    assert_eq!(medorama::recordings::take_held_before_opening(&s.cfg, &c, &paths).unwrap(), 0);
+    // made by another program than the one that reads it now: not taken either
+    a.exec("UPDATE recording_indexes SET mtime_ns = mtime_ns + 1, adapter = 'recording-engine 0.0.1'");
+    assert_eq!(medorama::recordings::take_held_before_opening(&s.cfg, &c, &paths).unwrap(), 0);
+    assert!(store.meta(&key).is_none());
+}
+
+#[test]
+fn a_recordings_signals_are_found_by_name_and_shown_with_it() {
+    let s = Setup::new();
+    let a = hospital(&s);
+    held_tables(&a);
+    let id = s.connect("hospa", &a);
+    let c = s.db.get().unwrap();
+    let boss = s.user("boss");
+    // in the catalog, as ICU names of the vocabulary `signal`: each name and each group
+    let names = medorama::variables::signals(&s.cfg, &c, id).unwrap();
+    assert_eq!(names, ["icu-bp", "icu-bp-ART", "icu-ecg", "icu-ecg-II", "icu-hr"]);
+    let ann = medorama::persons::known(&s.cfg, &c, id, &["a1".into()]).unwrap()["a1"];
+    let found = |text: &str| -> Vec<i64> {
+        let e = medorama::cohorts::parse_text(&c, &s.cfg, &boss, text).unwrap();
+        let q = Criteria { include: Some(e), ..Default::default() };
+        medorama::cohorts::evaluate(&c, &s.cfg, &boss, &q, None).unwrap().into_keys().collect()
+    };
+    for text in ["has icu-bp-ART", "has icu-bp", "icu-ecg-II", "has ICU-HR", "has hospa.icu-ecg", "icu-hr AND female"] {
+        assert_eq!(found(text), [ann], "{text}");
+    }
+    assert!(found("NOT has icu-bp").iter().all(|p| *p != ann));
+    // a name that is no signal, or a signal compared: told, never searched as nothing
+    for bad in ["has icu-bp-XYZ", "icu-bp-XYZ", "icu-ecg-II > 3"] {
+        assert!(medorama::cohorts::parse_text(&c, &s.cfg, &boss, bad).is_err(), "{bad}");
+    }
+    // dates: the recording's times (Ann's recording starts 2020-01-01 in the synthetic record)
+    let k = |from: &str, to: &str| {
+        let mut e = medorama::cohorts::parse_text(&c, &s.cfg, &boss, "has icu-bp").unwrap();
+        if let Expr::Leaf(l) = &mut e {
+            l.from = from.into();
+            l.to = to.into();
+        }
+        let q = Criteria { include: Some(e), ..Default::default() };
+        medorama::cohorts::evaluate(&c, &s.cfg, &boss, &q, None).unwrap().len()
+    };
+    let _ = k("", "");
+    // shown in the recording's detail, by group
+    let rec = medorama::recordings::of_patient(&s.cfg, &c, &boss, ann).unwrap().remove(0);
+    let d = medorama::patient::detail(&c, &s.cfg, &boss, ann, &format!("rec:{}", rec.id)).unwrap();
+    let shown: Vec<(&str, &str)> = d.signals.iter().map(|x| (x.group.as_str(), x.name.as_str())).collect();
+    assert_eq!(shown, [("icu-bp", "icu-bp-ART"), ("icu-ecg", "icu-ecg-II"), ("icu-hr", "icu-hr")]);
+    // Count now: the recordings that hold each, and their persons
+    medorama::databases::count_variables(&s.cfg, &c, &boss, id).unwrap();
+    let v = medorama::variables::of(&s.cfg, &c, id).unwrap();
+    let bp = v.iter().find(|x| x.name == "icu-bp").unwrap();
+    assert_eq!((bp.entries, bp.persons), (Some(1), Some(1)));
+}

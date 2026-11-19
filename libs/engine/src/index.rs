@@ -150,6 +150,72 @@ pub fn build_into_store(
     Ok(key)
 }
 
+/// Take a ready-made index of `path` into an index store (format 3): `folder` holds what an
+/// adapter's `index` command writes (its `meta.json` and arrays; a recording database may list it,
+/// docs/databases.md, "Indexes and signals a recording database holds").  Its array files are
+/// copied into a private temporary folder, its `meta.json` gets the recording's path, name and
+/// key as a build writes them, it is checked as a reader would check it, and packed in one
+/// transaction; the folder itself is only read.  `made_by` is who the database says made it: it
+/// must be the program that would read the recording now ([`sources::reader_of`]: an adapter's
+/// name and version, or this engine's), else the index is refused (the caller indexes the
+/// recording itself).  Returns the key.
+pub fn import_into_store(
+    path: &Path,
+    folder: &Path,
+    made_by: &str,
+    store: &crate::store::Store,
+) -> signal_core::Result<String> {
+    let (reader, wanted) = sources::reader_of(path)?;
+    // a file's size and time say whether it changed; a WFDB record's header alone does not
+    if !path.is_file() || reader.iter().any(|(k, v)| *k == "kind" && v == "wfdb") {
+        return Err(signal_core::Error::Value(format!(
+            "{}: only a recording that is one file is taken indexed ahead (a WFDB record is indexed where it is read)",
+            path.display()
+        )));
+    }
+    if made_by.trim() != wanted {
+        return Err(signal_core::Error::Value(format!(
+            "{}: made by {:?}, not by {wanted:?}, which reads the recording here",
+            folder.display(),
+            made_by.trim()
+        )));
+    }
+    let key = cache_key_of(path, crate::store::STORE_FORMAT);
+    let lock = key_lock(&format!("{}\u{1}{key}", store.path().display()));
+    let _writing = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let text = std::fs::read_to_string(folder.join("meta.json")).map_err(signal_core::Error::io(folder))?;
+    let Ok(Value::Dict(mut meta)) = Value::from_json(&text) else {
+        return Err(signal_core::Error::Format(format!("{}: meta.json is not a JSON object", folder.display())));
+    };
+    let tmp_root = store.tmp_dir();
+    crate::store::private_dir(&tmp_root).map_err(signal_core::Error::io(&tmp_root))?;
+    let tmp = Removed(unique(&tmp_root, &key, "tmp"));
+    std::fs::create_dir_all(&tmp.0).map_err(signal_core::Error::io(&tmp.0))?;
+    for e in std::fs::read_dir(folder).map_err(signal_core::Error::io(folder))?.flatten() {
+        let p = e.path();
+        let array = p.extension().is_some_and(|x| ["f32", "f64", "i16", "i32", "i64"].contains(&&*x.to_string_lossy()));
+        if array && p.is_file() {
+            std::fs::copy(&p, tmp.0.join(e.file_name())).map_err(signal_core::Error::io(&p))?;
+        }
+    }
+    for (k, v) in reader {
+        meta.insert(k.into(), v.into());
+    }
+    let real = real_path(path);
+    meta.insert("path".into(), real.to_string_lossy().to_string().into());
+    meta.insert("name".into(), path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default().into());
+    meta.insert("key".into(), key.clone().into());
+    meta.insert("index_version".into(), crate::store::STORE_FORMAT.into());
+    meta.insert("engine".into(), env!("CARGO_PKG_VERSION").into());
+    std::fs::write(tmp.0.join("meta.json"), clean(Value::Dict(meta)).to_json())
+        .map_err(signal_core::Error::io(&tmp.0))?;
+    if let Err(why) = load_files(&tmp.0, crate::store::STORE_FORMAT) {
+        return Err(signal_core::Error::Format(format!("{}: the index cannot be read: {why}", folder.display())));
+    }
+    store.pack(&key, &tmp.0)?;
+    Ok(key)
+}
+
 /// Write the index files of `path` (its arrays and `meta.json`, index format `version`) into the
 /// new folder `dir`, and check them as a reader would.
 fn build_files(

@@ -695,6 +695,13 @@ new key, and is indexed again.
   store with its key, on a pipe (\cref{sec:viewers-in-medorama-vitalstream}), and reads the indexes there. What
   it indexes itself goes into a store of its own, \file{<workspace>/viewer/index.sqlite}, with a
   key of its own.
+\item \textbf{Made ahead of time.} When the recording database holds the recording's index
+  (\cmd{db-builder indexes}, or an \code{indexes} view), Medorama takes it into the store when
+  the recording is opened or its index job runs, instead of indexing the file, which saves the
+  workspace's indexing time on a large archive. It is taken only when the file has the size and
+  time it was indexed at, the same program reads it, the index reads, and the recording is one
+  file (never a WFDB record or folder); otherwise the recording is indexed here and the server log
+  says why (\cref{sec:connecting-held}). The database's folder is only read.
 \item \textbf{Times.} Once a recording is indexed, its start and end are its real ones, and its
   format is the index's (\code{WFDB records}, \code{EDF+}, or the add-on's label).
 \item \textbf{Encrypted.} Indexes hold waveform envelopes and vital-sign series: patient data.

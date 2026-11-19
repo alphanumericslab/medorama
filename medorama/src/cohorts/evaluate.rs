@@ -266,6 +266,7 @@ fn may_hold(cx: &Cx, k: &Criterion, s: &crate::sources::Source) -> anyhow::Resul
         "measurement" => v(&k.name, k.database != Some(s.id))?,
         "diagnosis" => cat("dx")?,
         "medication" => cat("med")? || cat("blood")?,
+        "signal" => v(&k.name, false)?,
         _ => true,
     })
 }

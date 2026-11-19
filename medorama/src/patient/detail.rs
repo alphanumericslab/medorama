@@ -125,6 +125,9 @@ pub struct Detail {
     pub ecg: Option<Ecg>,
     /// Notes of the same encounter around this moment (or during the stay).
     pub notes: Vec<NoteBrief>,
+    /// A recording's signals, as its database lists them (`recording_signals`): by group.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub signals: Vec<crate::sources::Signal>,
 }
 
 /// Whether an entry's text is free text that "the text of notes and reports" covers (Admin ›
@@ -238,6 +241,12 @@ pub fn detail(c: &Connection, cfg: &Config, user: &User, id: i64, key: &str) -> 
                 recorded: None,
             }))
         };
+        // the signals its database lists (names, not values); none when it cannot be asked now
+        let signals = crate::sources::get(c, r.database)
+            .ok()
+            .flatten()
+            .and_then(|s| s.signals(std::slice::from_ref(&r.key)).ok())
+            .unwrap_or_default();
         return Ok(Detail {
             key: key.into(),
             title: recording_title(&r.category).into(),
@@ -253,6 +262,7 @@ pub fn detail(c: &Connection, cfg: &Config, user: &User, id: i64, key: &str) -> 
             monitoring,
             ecg: None,
             notes,
+            signals,
         });
     }
     if kind == "enc" {
@@ -280,6 +290,7 @@ pub fn detail(c: &Connection, cfg: &Config, user: &User, id: i64, key: &str) -> 
             monitoring: None,
             ecg: None,
             notes,
+            signals: vec![],
         });
     }
     let items = &data.items;
@@ -312,6 +323,7 @@ pub fn detail(c: &Connection, cfg: &Config, user: &User, id: i64, key: &str) -> 
         monitoring: None,
         ecg: None,
         notes: vec![],
+        signals: vec![],
     };
     if kind == "labs" || kind == "vit" {
         d.title = if kind == "vit" {

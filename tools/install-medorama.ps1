@@ -182,7 +182,7 @@ switch ($Viewer) {
     Step "The Python viewer (vitalstream-py) and its packages"
     Remove-Item Env:CONDA_PREFIX, Env:VITALSTREAM_ROOT, Env:VITALSTREAM_PASSWORD -ErrorAction SilentlyContinue
     $package = './viewers/vitalstream/python/vitalstream' + $(if ($NoWfdb) { '' } else { '[wfdb]' })
-    Run $vpip install --quiet -e $package --config-settings editable_mode=compat
+    Run $vpip install --quiet -e $package
     $commands += ' vitalstream-py'
   }
   'none' { }
@@ -191,7 +191,8 @@ switch ($Viewer) {
 # --- the database tools (muse-py, dicom-py; pydicom) ------------------------------------------
 if (-not $NoTools) {
   Step "The database tools (muse-py, dicom-py)"
-  Run $vpip install --quiet -e ./viewers/ecg/python/muse -e ./viewers/pacs/python/dicom --config-settings editable_mode=compat
+  # installed, not editable: the installer runs again after each update (git pull)
+  Run $vpip install --quiet ./viewers/ecg/python/muse ./viewers/pacs/python/dicom
   $commands += ' muse-py dicom-py'
 }
 

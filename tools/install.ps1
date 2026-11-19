@@ -78,7 +78,7 @@ if (-not (Test-Path .venv)) { Run $python[0] @pyArgs -m venv .venv }
 $vpy = Join-Path $Root '.venv\Scripts\python.exe'
 $vpip = Join-Path $Root '.venv\Scripts\pip.exe'
 Run $vpy -m pip install --quiet --upgrade pip
-Run $vpip install --quiet -e "./viewers/vitalstream/python/vitalstream[test,wfdb]" -e ./viewers/ecg/python/muse -e ./viewers/pacs/python/dicom --config-settings editable_mode=compat
+Run $vpip install --quiet -e "./viewers/vitalstream/python/vitalstream[test,wfdb]" -e ./viewers/ecg/python/muse -e ./viewers/pacs/python/dicom
 Run $vpip install --quiet pytest httpx
 
 $commands = 'vitalstream-py muse-py dicom-py'

@@ -4,4 +4,4 @@ Reads WFDB folders itself and other formats through installed adapters (docs/ada
 Patient names and dates of birth are never read.
 """
 
-__version__ = '0.3.3'
+__version__ = '0.4.0'

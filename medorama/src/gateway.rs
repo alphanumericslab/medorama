@@ -522,6 +522,18 @@ pub async fn handle(State(app): State<Shared>, req: Request) -> Response {
                 if !g.allowed(&app, &user, &rp, true) {
                     return Err(deny(StatusCode::FORBIDDEN, "not a recording you may open"));
                 }
+                // a ready-made index its database holds: into the store before the viewer looks
+                {
+                    let (app2, paths) = (app.clone(), vec![rp.to_string_lossy().to_string(), p.clone()]);
+                    let taken = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+                        let c = app2.db.get()?;
+                        crate::recordings::take_held_before_opening(&app2.cfg, &c, &paths)
+                    })
+                    .await;
+                    if let Ok(Err(e)) = taken {
+                        eprintln!("medorama: a ready-made index could not be taken: {e}");
+                    }
+                }
                 let resp = forward(&app, by_token, method, "api/v1/open", None, body.clone(), ctype.clone()).await?;
                 let (status, mut v) = json_of(resp).await?;
                 if by_token {

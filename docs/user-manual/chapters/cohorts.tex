@@ -258,6 +258,11 @@ optionally after \code{=} or \code{contains}: \code{dx I21}, \code{dx = I21},
   \code{has ecg}, \code{icu}, \code{holter}, \code{sleep}, \code{eeg}, \code{echo} and so on
   (any word of a category, \cref{tab:patients-categories}), or a recording of that category in
   a recording database (each database is asked, whether or not its recordings were opened) \\
+\code{has} \emph{signal}, or a signal's name alone & They have a recording that holds that
+  signal, or any signal of that group, as a recording database lists them
+  (\cref{sec:connecting-held}): \code{has icu-bp-ART}, \code{has icu-bp}, \code{icu-ecg-II},
+  \code{has stp.icu-ecg} (one database only); in any case. A signal has no values; dates on the
+  condition are compared with the recording's start and end, as a visit's are \\
 \code{diagnosis}, \code{dx}, \code{condition} \emph{text} & A condition's code starts with the
   text, compared without dots and in any case (\code{I21.4}, \code{I214} and \code{i21} find
   \code{I21.4}), or, for a word (three characters or more, with a letter, not shaped like a
@@ -283,9 +288,17 @@ optionally after \code{=} or \code{contains}: \code{dx I21}, \code{dx = I21},
   (\code{demo.QTc > 470ms}) \\
 \end{xltabular}
 
-A word that is neither a keyword nor a category must be followed by a comparison or
+A word that is neither a keyword, a category nor a signal must be followed by a comparison or
 \code{contains}: \code{zzz} alone is the error ``what is "zzz"? (a name needs a comparison:
 zzz > 1)''.
+
+\paragraph{Signals.} A signal a recording database lists (\code{icu-ecg-II}, its group
+\code{icu-ecg}) is the same in every database that lists it, so, unlike a measurement, it needs
+no database's name when several hold it; \code{has stp.icu-ecg} asks one. It is found by its
+whole name, in any letter case. It has no values: \code{icu-ecg-II > 3} is the error
+``"icu-ecg-II" is a recording's signal: it has no values (write has icu-ecg-II)''. After
+\code{has}, a name that is neither a category nor a signal is an error, never searched as
+nothing. A cohort's definition says it in words: ``has a recording with icu-bp-ART''.
 
 \subsection{Names: databases and measurements}
 \label{sec:cohorts-names}
@@ -400,7 +413,9 @@ The errors include:
 \item ``a comparison (>, <, >=, <=, =, !=) is expected''; ``a number is expected'';
 \item ``what is "\dots"? (a name needs a comparison: \dots{} > 1)'';
 \item ``this is not understood (an AND or OR missing?)'';
-\item ``no category "\dots" (ecg, icu, holter, imaging \dots)'';
+\item ``no category or signal "\dots" (ecg, icu, holter, imaging \dots; a recording's signal:
+  icu-bp-ART)'';
+\item ``"\dots" is a recording's signal: it has no values (write has \dots)'';
 \item ``age is in years''; ``latest applies to a measurement'';
 \item ``text is compared with = or contains'';
 \item ``no database "\dots" (databases: \dots)''; ``"\dots" names several databases: \dots'';
@@ -418,6 +433,7 @@ latest demo.QTc >= 470                         only each patient's latest ECG co
 demo."R axis" < -30                            a name with a space, in quotes
 has holter AND NOT has icu
 has sleep OR has eeg                           a sleep study or an EEG recording
+has icu-bp-ART                                 an ICU recording with arterial pressure
 dx I21 OR diagnosis "myocardial infarction"
 medication heparin AND in demo
 text "pulmonary edema"

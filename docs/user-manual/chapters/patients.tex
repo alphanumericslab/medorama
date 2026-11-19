@@ -483,6 +483,11 @@ shows it at a glance:
   sleep study, shows \ui{Recorded}, \ui{Leads}, \ui{Heart rate} (the mean, in bpm) and
   \ui{Range}, and the heart rate over the whole recording.
 \end{itemize}
+When the recording's database lists its signals (\cref{sec:connecting-held}), the detail also
+lists them by group under \ui{Signals} (``search them with has and the name''), each by the name
+a search finds it by, in code style, with its unit: \code{icu-bp-ART} under \code{icu-bp}.
+\code{has icu-bp-ART} finds the patients with a recording that holds it
+(\cref{sec:cohorts-conditions}).
 A click on the chart (\ui{Whole recording}: ``click to open the viewer at that moment'') opens
 VitalStream there, on a minute around the moment clicked. \ui{Open in VitalStream} opens the
 recording at its start. Before the recording is indexed, the detail says ``Not indexed yet: its

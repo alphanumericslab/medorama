@@ -193,6 +193,7 @@ each expression's meaning or error as they change.
 | `female`, `male` (or `F`, `M`) | The patient's sex. |
 | `age > 18`, `age > 18 years` | The patient's age today, not at a visit or a result: `age > 65 AND QT > 470` finds patients over 65 now who once had a long QT, perhaps at 50. You can also write `y`, `yr` or `yrs`, and use `<`, `>=`, `<=`, `=` and `!=`. Age needs the PHI permission and Privacy Mode turned off; otherwise the builder grays out Age. A date of birth known only by its year (OMOP's `year_of_birth`) is read as 1 July of that year, and by its year and month as the 15th: such ages are within six months. |
 | `has ecg`, or a category alone: `icu`, `holter`, `sleep` | The patient has data of that category, or a recording of that category in a recording database (each database is asked, whether or not its recordings were opened). `has icu`: a visit the database marks as an intensive-care stay, in a unit named like an intensive-care unit (ICU, MICU, CCU …; not a step-down, post-ICU or intermediate-care unit), or with a stay in one. |
+| `has icu-bp-ART`, `has icu-bp`, or the name alone: `icu-ecg-II` | The patient has a recording that holds that signal, or any signal of that group (`icu-bp`: arterial pressure), as a recording database lists its recordings' signals ([databases.md](databases.md#indexes-and-signals-a-recording-database-holds)). Any letter case. A signal is the same in every database that lists it; `has stp.icu-ecg` asks one database only. A signal has no values: `icu-ecg-II > 3` is an error ("write has icu-ecg-II"). A name that is neither a category nor a signal is an error, never searched as nothing. Dates on the condition are compared with the recording's start and end, as a visit's are. |
 | `dx I21`, `diagnosis "sepsis"` | A condition whose code starts with the text, compared without dots and in any case (`I21.4`, `I214` and `i21` all find `I21.4`), or, for a word (three characters or more, with a letter, not shaped like a code), whose name contains it. Codes of every vocabulary are compared alike: `dx 410` finds an ICD-9 `410.1`. |
 | `medication heparin` | A drug whose name contains the text. |
 | `text "pulmonary edema"` | An entry whose text contains the words. |
@@ -374,7 +375,9 @@ from one ECG of the patient to the next.
 **Recordings and files.** The recordings and files of a patient come from the recording
 databases you may view. A 12-lead ECG, a picture, a PDF, an echo or a cath lab study is shown in
 the detail and opens in the ECG or PACS viewer; an ICU recording, a Holter ECG, an EEG or a sleep
-study opens in VitalStream.
+study opens in VitalStream. When the recording's database lists its signals, its detail lists
+them by group under **Signals**, each by the name a search finds it by (`icu-bp-ART`): `has
+icu-bp-ART` finds the patients with a recording that holds it.
 
 The journey's columns follow the clinical categories: ICU, Vitals, Labs, Microbiology,
 Pathology, ECG, Holter, **EEG**, **Sleep**, Echo, Cath lab, Imaging, Procedures, Medications,
@@ -447,10 +450,10 @@ data version and when it was connected, and then:
 |---|---|---|
 | **Check now** | Checks whether the database answers. When its version changed, what Medorama keeps of it (its persons, their encounters and its catalog of variables) is read again. | Granted |
 | **Refresh** | Reads its persons, their encounters and its catalog again now. No recording is read. | Who manages it |
-| **Count now** | Counts how many entries and persons hold each variable: one pass over all its entries, which takes a while on a large database. The counts are kept until the catalog is read again (a new version, **Refresh**). | Who manages it |
+| **Count now** | Counts how many entries and persons hold each variable (for a signal, the recordings that hold it and their persons): one pass over all its entries, which takes a while on a large database. The counts are kept until the catalog is read again (a new version, **Refresh**). | Who manages it |
 | **Index all recordings** | A recording database: reads every recording it lists, checks its files, and indexes the new or changed ones in the background. Otherwise a patient's recordings are read, checked and indexed when the patient is opened. | Who manages it |
 | **Remove…** | Removes the database and every trace of it from Medorama (below). You confirm by typing its name. | Who manages it |
-| Variables | What it holds: each measurement, diagnosis, drug or other name by category, with its unit, its code and vocabulary; once counted (**Count now**), its number of entries and its number of persons, with when they were counted ("—" before). A count from 1 to 10 is shown as "< 11". | Granted |
+| Variables | What it holds: each measurement, diagnosis, drug or other name by category, with its unit, its code and vocabulary (the signals its recordings hold, such as `icu-bp-ART` and their groups, are ICU variables of the vocabulary `signal`, with no values); once counted (**Count now**), its number of entries and its number of persons, with when they were counted ("—" before). A count from 1 to 10 is shown as "< 11". | Granted |
 | Who may use it | The users granted the database and their permissions; a form to grant a user `search`, `view`, `phi` or `manage`; **Revoke all** to take a user's grants away. | Who manages it |
 | Identity conflicts | Persons of the database whose identifiers name two different patients, by the database's own key. They are not linked until the database is corrected; Medorama never merges patients. | Who manages it |
 | **Grant it to me** | An administrator is not granted a database by being an administrator. One who is not granted it can grant it to themselves; this is recorded in the audit log (`grant_self`). | Administrators |

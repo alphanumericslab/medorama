@@ -16,6 +16,7 @@ their names.
 - [extras](#extras)
 - [sources](#sources)
 - [row_sources](#row_sources)
+- [recording_indexes and recording_signals (optional)](#recording_indexes-and-recording_signals-optional)
 - [Keys](#keys)
 - [Times](#times)
 - [Indexes](#indexes)
@@ -34,6 +35,8 @@ their names.
 | `extras` | input cell that is none of the columns above, as it came |
 | `sources` | file or folder added |
 | `row_sources` | (persons and visits) source that names the row |
+| `recording_indexes` | (optional, made by `indexes`) recording indexed ahead of time: its index folder ([below](#recording_indexes)) |
+| `recording_signals` | (optional, not made by db-builder) signal a recording holds, by name ([below](#recording_signals)) |
 | `medorama_demo` | (only in a demo database, made with `new --demo`) one row: "A demo database: every patient in it is invented." Medorama connects such a database to a demo installation only ([docs/design/demo.md](../../docs/design/demo.md)) |
 
 `persons`, `visits` and `entries` have the columns of Medorama's canonical views
@@ -173,6 +176,42 @@ out.
 
 The primary key is the three columns. A person or a visit may be named by several sources; it is
 removed with the last of them, unless a row of another source still refers to it.
+
+## recording_indexes and recording_signals (optional)
+
+Two optional tables, read by Medorama and not made by `new`
+([docs/databases.md](../../docs/databases.md#indexes-and-signals-a-recording-database-holds)).
+`db-builder indexes` makes `recording_indexes`; `recording_signals` is written by the program
+that knows each recording's signals (the demo's builder; for `.Stp` archives, a tool of the
+stp-adapter add-on). A reader that does not know them ignores them ([The version
+rule](#the-version-rule)).
+
+### recording_indexes
+
+| Column | Type | Content |
+|---|---|---|
+| `recording_key` | TEXT PRIMARY KEY | The recording (as in `recordings`). |
+| `index_dir` | TEXT | Its index folder (`meta.json` and arrays, as an adapter's `index` command writes it): relative to the database file's folder (`/` between folders) when it lies inside that folder, else absolute. |
+| `size` | INTEGER | The recording file's size in bytes when it was indexed. |
+| `mtime_ns` | INTEGER | Its modification time then, in integer nanoseconds since 1970, UTC. |
+| `md5` | TEXT | The file's MD5, or empty (`indexes` writes it empty). |
+| `adapter` | TEXT | Who made the index: `<adapter name> <version>` (`stp 0.1.0`), or `recording-engine <version>` for EDF and BDF. |
+| `indexed_at` | TEXT | When it was made (UTC). |
+
+### recording_signals
+
+| Column | Type | Content |
+|---|---|---|
+| `recording_key` | TEXT | The recording (as in `recordings`). |
+| `name` | TEXT | The signal's name, as searches name it: `icu-ecg-II`, `icu-bp-ART`. |
+| `group_name` | TEXT | Its group: `icu-ecg`, `icu-bp`, `icu-spo2`, `icu-resp`, `icu-co2`, `icu-temp`, `icu-eeg`, `icu-other`. |
+| `label` | TEXT | Its label as the file names it (`II`). |
+| `kind` | TEXT | `wave` or `vital`. |
+| `unit` | TEXT | Its unit, or empty. |
+| `fs` | REAL, or NULL | Its sampling rate in Hz, or NULL. |
+
+Indexes on `(name, recording_key)` and `(group_name, recording_key)` keep `has icu-bp-ART`
+fast (the demo's table has them, and the primary key `(recording_key, name)`).
 
 ## Keys
 

@@ -6,7 +6,7 @@ describes what Medorama protects, against whom, how, and what it leaves to the d
 institution. Each control names the code that implements it and the test that checks it, so
 that every claim can be verified rather than taken on trust.
 
-It describes Medorama 0.3.3 (a pre-release). Medorama is research software, not a medical device,
+It describes Medorama 0.4.0 (a pre-release). Medorama is research software, not a medical device,
 and it holds no certification. To report a vulnerability, see [SECURITY.md](../SECURITY.md).
 
 A plain-language explanation of how identifiers are hidden is

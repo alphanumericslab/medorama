@@ -39,7 +39,10 @@ period), and every text; the installer makes its tables and files into databases
   Patient \code{P900004} has a 24-hour Holter and an overnight sleep study
   (\file{sleep/P900004\_psg\_20240305.edf}) with its own visit in the sleep laboratory, starting
   at 22:30 New York time, and a \emph{Sleep study report}; other sleep studies and the EEGs are
-  added as folders of recordings, by a pattern on their file names;
+  added as folders of recordings, by a pattern on their file names, with their indexes made
+  ahead of time (\cmd{db-builder indexes}, \file{indexes/}), which Medorama takes instead of
+  indexing them; the ICU recordings' signals are listed by name (\code{recording\_signals}), so
+  that \code{has icu-bp-ART} finds them (\cref{sec:connecting-held});
 \item \code{demo\_north}, a second hospital (kind \code{dbb}): some of the same patients, by the
   same MRN authority \code{DEMO} (one MRN written in lower case, matched ignoring case), one
   identity conflict (one patient's MRN with another patient's ID), patient IDs normalised by
@@ -242,7 +245,8 @@ Try the following on patient \code{P900001}:
 \item Type \code{creatinine} in the report's search box. The report keeps the entries that
   mention it, with the words highlighted.
 \item Click an \emph{ICU monitoring} entry. The detail shows the recording's main vital signs
-  over its whole length, and a click on them opens VitalStream at that moment
+  over its whole length, and its signals by group (\code{icu-ecg-II}, \code{icu-bp-ART} and
+  so on); a click on the vital signs opens VitalStream at that moment
   (\cref{sec:quickstart-recording}).
 \item Click a visit on the left. The journey then shows only that visit, unfolded, and the
   visit's chip above the journey (with $\times$) shows all of them again.
@@ -281,6 +285,7 @@ the demo:
 \begin{lstlisting}[style=text]
 has holter
 has eeg
+has icu-bp-ART
 female AND age > 70
 in demo_omop AND NOT has icu
 \end{lstlisting}

@@ -38,6 +38,7 @@ pub fn describe(k: &Criterion) -> String {
         "medication" => format!("medication {}", k.text),
         "text" => format!("“{}”", k.text),
         "database" => "in that database".into(),
+        "signal" => format!("has a recording with {}", k.name),
         x => x.into(),
     }
 }

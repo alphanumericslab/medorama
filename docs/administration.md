@@ -545,6 +545,18 @@ removed from the store. A **check** (`medorama check`,
 and every `check_interval_s`) finds missing and changed recordings and lost indexes. A recording
 file that changes in place is a new recording: databases should not change files in place.
 
+**Indexes made ahead of time.** A recording database may hold its recordings' indexes, made
+ahead of time (`db-builder indexes`, or an `indexes` view:
+[databases.md, Indexes and signals a recording database
+holds](databases.md#indexes-and-signals-a-recording-database-holds)). Medorama then copies a
+recording's index into its index store when the recording is opened or its index job runs,
+instead of indexing it, which saves the workspace's indexing time on a large archive. It is taken
+only when the file has the size and modification time it was indexed at, the program that made
+it is the one that reads the recording here, the index reads, and the recording is one file (an
+EDF or BDF file, an adapter's file): a WFDB record or folder is always indexed here. Otherwise
+the recording is indexed here, as before, and the server log says why. The database's index
+folder is only read; it must lie where Medorama can read it.
+
 **How a folder is read.** A folder named as a recording is itself a recording when it is a WFDB
 folder. It is then read with its subfolders, as the recording engine reads it, within the
 engine's folder limits: 5000 records, 20 levels, and 10 seconds to count them. Medorama has no
@@ -1176,7 +1188,9 @@ patients linked across databases (Eva Lindqvist and Richard Roe are in `demo`, `
 demo_north`); an ECG of `demo_muse` compared with the patient's previous one (every patient
 there has two ECGs or more; its patients listed by their latest ECG, and a test ECG whose patient
 ID is a word left out by its views); the example cohorts, and others
-(`demo.creatinine > 1.5 OR has icu`, `female AND age > 70`, `has eeg`); Privacy Mode (names in
+(`demo.creatinine > 1.5 OR has icu`, `female AND age > 70`, `has eeg`, `has icu-bp-ART`: a
+recording's signal, listed in its detail); the sleep studies and EEGs, whose indexes `demo`
+holds made ahead of time; Privacy Mode (names in
 notes replaced, dates moved, a patient over 89 shown as `90+`); trends, the Recordings tab, the
 viewers, **Actions** (Index and the example plug-in) and **Jobs**, and **History**.
 

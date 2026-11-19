@@ -131,6 +131,19 @@ pub fn read(cfg: &Config, c: &Connection, s: &Source, version: &str) -> anyhow::
         .collect::<Result<_, _>>()
         .map_err(|e| anyhow::anyhow!("{}: {e}", s.name))?;
     drop(st);
+    // the signals its recordings hold (`has icu-bp-ART`), by name and by group: ICU variables of
+    // the vocabulary `signal`, with no values
+    let mut rows = rows;
+    rows.extend(s.signal_names()?.into_iter().map(|name| Variable {
+        category: "icu".into(),
+        name,
+        vocabulary: SIGNAL.into(),
+        code: String::new(),
+        unit: String::new(),
+        entries: None,
+        persons: None,
+        numeric: false,
+    }));
     let recording_categories = s.recording_categories().map_err(|e| anyhow::anyhow!("{}: {e}", s.name))?;
     let mut w = open(cfg, c, s.id)?;
     let tx = w.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -182,6 +195,7 @@ pub fn count(cfg: &Config, c: &Connection, s: &Source) -> anyhow::Result<usize> 
         .collect::<Result<_, _>>()
         .map_err(|e| anyhow::anyhow!("{}: {e}", s.name))?;
     drop(st);
+    let signals = s.signal_counts()?;
     let mut w = open(cfg, c, s.id)?;
     let tx = w.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     tx.execute("UPDATE variables SET entries = 0, persons = 0", [])?;
@@ -193,6 +207,10 @@ pub fn count(cfg: &Config, c: &Connection, s: &Source) -> anyhow::Result<usize> 
         )?;
         for (cat, name, voc, code, unit, e, p) in &rows {
             up.execute(rusqlite::params![cat, name, voc, code, unit, e, p])?;
+        }
+        // a signal: the recordings that hold it, and their persons
+        for (name, e, p) in &signals {
+            up.execute(rusqlite::params!["icu", name, SIGNAL, "", "", e, p])?;
         }
     }
     tx.execute(
@@ -262,6 +280,15 @@ pub fn names(cfg: &Config, c: &Connection, database: i64) -> anyhow::Result<Vec<
         }
     });
     Ok(v)
+}
+
+/// The vocabulary of the signals a database's recordings hold (its `signals` view), kept with its
+/// variables: `has icu-bp-ART` finds the patients with a recording that holds one.
+pub const SIGNAL: &str = "signal";
+
+/// The signal names (and group names) a database's recordings hold, as kept.
+pub fn signals(cfg: &Config, c: &Connection, database: i64) -> anyhow::Result<Vec<String>> {
+    Ok(of(cfg, c, database)?.into_iter().filter(|x| x.vocabulary == SIGNAL).map(|x| x.name).collect())
 }
 
 /// Whether a database holds a variable of this name (any case; `contains`: a part of it).

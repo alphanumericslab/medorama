@@ -101,6 +101,9 @@ db-builder} builds it on its own (\file{target/release/db-builder}).
   (\cref{sec:importing-cli}). \\
 \cmd{db-builder recordings OUT FOLDER} & Adds a folder of recordings, with their patients from a
   table or from a pattern of their names (\cref{sec:importing-recordings}). \\
+\cmd{db-builder indexes OUT -{}-dir DIR} & Makes the indexes of the recordings that are one file
+  ahead of time, named in \code{recording\_indexes}, which Medorama takes instead of indexing
+  them (\cref{sec:importing-indexes}). \\
 \cmd{db-builder check OUT} & Reports what a reader cannot rely on (\cref{sec:importing-check}).
   Exit status 0 when nothing is found, 1 when something is. \\
 \cmd{db-builder info OUT} & The database's schema, version, time zone and maker, its tables'
@@ -673,6 +676,28 @@ A patients table for the first command:
 file,patient_id,issuer,encounter_id
 icu/rec1.hea,P900001,HOSP,E9100002
 sleep/P900004_psg.edf,P900004,HOSP,
+\end{lstlisting}
+
+\section{Indexes made ahead of time}
+\label{sec:importing-indexes}
+
+\begin{lstlisting}[style=signature]
+db-builder indexes OUT --dir DIR [--category KEY]...
+\end{lstlisting}
+Makes the index of each recording that is one file (an EDF or BDF file, a file an installed
+add-on reads) ahead of time, into \code{DIR}, one folder per recording named by a digest of its
+key, and names them in the table \code{recording\_indexes} (\code{index\_dir} relative to the
+database's folder when \code{DIR} is inside it; \cref{sec:connecting-held}).
+\opt{-{}-category KEY} (repeatable) indexes only the recordings of those categories; all by
+default. Medorama takes these indexes instead of indexing the recordings itself, while each file
+keeps the size and time it was indexed at and the same program reads it. Each index is built
+beside and moved in, so that a folder half written is never named. Run again, \cmd{indexes}
+keeps the indexes that are current (same size, time and maker, the folder present) and remakes
+the changed ones. It skips, and lists, WFDB records and folders (Medorama indexes them when they
+are opened: a header's size and time do not say whether its signal files changed), missing files
+and files no reader reads.
+\begin{lstlisting}[style=shell]
+db-builder indexes psg.sqlite --dir /data/psg/indexes --category sleep --category eeg
 \end{lstlisting}
 
 \section{Known exports}

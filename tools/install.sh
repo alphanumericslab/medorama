@@ -77,7 +77,7 @@ step "Python environment (.venv) and the Python packages"
 [ -d .venv ] || "$PY" -m venv .venv
 .venv/bin/python -m pip install --quiet --upgrade pip
 .venv/bin/pip install --quiet -e "./viewers/vitalstream/python/vitalstream[test,wfdb]" -e ./viewers/ecg/python/muse \
-  -e ./viewers/pacs/python/dicom --config-settings editable_mode=compat
+  -e ./viewers/pacs/python/dicom
 .venv/bin/pip install --quiet pytest httpx
 COMMANDS="vitalstream-py muse-py dicom-py"
 

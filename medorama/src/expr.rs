@@ -12,6 +12,7 @@
 //! | `female`, `male` (`F`, `M`) | the patient's sex |
 //! | `age > 18` (`<`, `>=`, `<=`, `=`, `!=`) | age now (PHI permission) |
 //! | `has ecg`, or a category alone: `icu`, `holter`, `echo` … | has data of that category |
+//! | `has icu-bp-ART`, `has icu-ecg`, or the name alone | has a recording that holds that signal, or a signal of that group (a recording database's signals) |
 //! | `diagnosis "I21"`, `dx sepsis` | a condition's code starts with it, or its name contains it |
 //! | `medication heparin` (`med`, `drug`) | a drug named like it |
 //! | `text "pulmonary edema"` (`mentions`) | an item's text contains it |
@@ -341,12 +342,22 @@ impl P<'_, '_> {
                 }
                 "has" => {
                     let t = self.words("has")?;
-                    let cat = crate::categories::named(&t).ok_or_else(|| {
-                        anyhow::anyhow!("at {start}: no category {t:?} (ecg, icu, holter, imaging …)")
-                    })?;
-                    k.kind = "has".into();
-                    k.category = cat.into();
-                    return Ok(k);
+                    if let Some(cat) = crate::categories::named(&t) {
+                        k.kind = "has".into();
+                        k.category = cat.into();
+                        return Ok(k);
+                    }
+                    // a signal of a recording (`has icu-bp-ART`, `has stp.icu-ecg`)
+                    let (qual, name) = match t.find('.').filter(|d| *d > 0 && *d + 1 < t.len()) {
+                        Some(dot) => (Some(&t[..dot]), &t[dot + 1..]),
+                        None => (None, t.as_str()),
+                    };
+                    return match (self.resolve)(qual, name) {
+                        Ok(c) if c.kind == "signal" => Ok(c),
+                        _ => anyhow::bail!(
+                            "at {start}: no category or signal {t:?} (ecg, icu, holter, imaging …; a recording's signal: icu-bp-ART)"
+                        ),
+                    };
                 }
                 "diagnosis" | "dx" | "condition" => {
                     k.kind = "diagnosis".into();
@@ -409,9 +420,21 @@ impl P<'_, '_> {
                 k.category = cat.into();
                 return Ok(k);
             }
+            // a recording's signal, by its name alone (`icu-bp-ART`)
+            if let Ok(c) = (self.resolve)(None, &word) {
+                if c.kind == "signal" {
+                    return Ok(c);
+                }
+            }
             anyhow::bail!("at {start}: what is {word:?}? (a name needs a comparison: {word} > 1)");
         }
         let mut c = (self.resolve)(qual.as_deref(), &name).map_err(|e| anyhow::anyhow!("at {start}: {e}"))?;
+        if c.kind == "signal" {
+            if matches!(self.peek(), Some(Tok::Cmp(_) | Tok::Contains)) {
+                anyhow::bail!("at {start}: {name:?} is a recording's signal: it has no values (write has {name})");
+            }
+            return Ok(c);
+        }
         match self.peek() {
             Some(Tok::Contains) => {
                 self.i += 1;

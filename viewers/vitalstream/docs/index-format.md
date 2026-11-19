@@ -387,6 +387,13 @@ CREATE TABLE chunks (
   per array and its chunks. Adapters keep writing the version 2 files of their `index`
   command into the folder they are given ([docs/adapters.md](../../../docs/adapters.md)); the
   calling program packs them.
+- **Indexes made ahead of time.** A recording database may hold its recordings' indexes as
+  version 2 folders (`meta.json` and arrays, as an adapter's `index` command writes them), named
+  in its `recording_indexes` table or `indexes` view
+  ([docs/databases.md](../../../docs/databases.md#indexes-and-signals-a-recording-database-holds)).
+  Medorama copies such a folder's arrays into a temporary folder of its own, adds the
+  recording's `path`, `name` and `key` to `meta.json` (the key computed as usual), checks it as a
+  reader would, and packs it as it packs its own builds. The folder itself is only read.
 - **Keeping or replacing.** Within the transaction, an index of the key written by the same
   `engine` is kept and the new build discarded; any other is replaced. Readers see the old index
   or the new one, never a mixture.

@@ -246,9 +246,10 @@ nothing, and the same license applies (\cref{chap:licences}).
   \file{viewers/vitalstream/cpp/build/viewer}, after CMake and Ninja are installed into
   \file{.venv} (a build folder configured with another compiler is removed and made again); the
   Rust viewer is built in \file{target/release}; the Python viewer is installed as an editable
-  package in \file{.venv}.
+  package in \file{.venv}, which reads its settings from the clone.
 \item It installs the database tools \cmd{muse-py} and \cmd{dicom-py} into \file{.venv}, unless
-  \opt{--no-tools} is given.
+  \opt{--no-tools} is given: installed, not editable, each with a copy of its viewer's page; the
+  installer, run again after an update, installs them again.
 \item With \opt{--demo}, it makes the demo (\cref{sec:installation-demo}). Without it, it removes
   \file{.venv/bin/medorama.demo}, so that \cmd{medorama init -{}-demo} has nothing to connect.
 \item It records the viewer chosen in \file{.venv/bin/medorama.viewer}.
@@ -446,7 +447,7 @@ The \code{[wfdb]} extra installs wfdb-x from GitHub (the archive of the pinned c
 (\cref{sec:installation-no-wfdb}), and the installers always add it, except with
 \opt{--no-wfdb}. \cmd{muse-py} and \cmd{dicom-py} also serve the ECG and PACS viewers
 (\cmd{serve}: \cref{chap:viewers-alone}). For development, install them editable
-(\cmd{pip install -e \dots{} --config-settings editable\_mode=compat}) with their
+(\cmd{pip install -e \dots}) with their
 \code{[test]} extras (\code{[test,wfdb]} for \cmd{vitalstream-py}), as \file{tools/install.sh}
 does.
 
@@ -601,9 +602,7 @@ PYTHON="$(uv python find 3.12)" tools/install-medorama.sh --viewer rs --accept-l
 source .venv/bin/activate
 medorama --version
 \end{lstlisting}
-\opt{-{}-viewer rs} builds the Rust waveform viewer (add \opt{-{}-demo} for the demo). A
-\code{BuildBackendWarning: Compat editable installs} message during ``The database tools'' is
-harmless. The Perl is needed only while building, not by Medorama once built: for a later
+\opt{-{}-viewer rs} builds the Rust waveform viewer (add \opt{-{}-demo} for the demo). The Perl is needed only while building, not by Medorama once built: for a later
 update, run the \cmd{export PATH=\ldots} and \cmd{unset \ldots} lines again before the installer.
 
 \paragraph{Linux (a shared server, a cluster).} \cmd{g++ --version} 12 or later is enough.

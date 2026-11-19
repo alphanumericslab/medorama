@@ -261,7 +261,8 @@ The demo comes with five example cohorts: *ICU stays* (`icu`), *Long QTc*
 ![The Cohorts tab: criteria, the patients found and why](images/screens/cohorts.png)
 
 Expressions can combine results, ECG measurements, diagnoses, medications, age, sex and text,
-for example `QTc > 470ms`, `dx I21` or `medication heparin`. The
+for example `QTc > 470ms`, `dx I21` or `medication heparin`, and the signals of the ICU
+recordings: `has icu-bp-ART` finds the patients with a recording of arterial pressure. The
 [user guide](user-guide.md#cohorts) lists the whole syntax.
 
 ### Turn on Privacy Mode
